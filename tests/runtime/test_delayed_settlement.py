@@ -48,11 +48,15 @@ def test_producer_return_router_proposal_then_delayed_epoch_settlement():
     restored = make_runtime()
     restore_runtime(restored, runtime_state(rt))
     retired = restored.retired_routers[old.learner.id]
+    live = restored.routers['ProducerReturn'][0]
     before = retired.learner.inner.inner.state()
+    live_before = live.learner.inner.inner.state()
     restored.queue.settle(handle, channel='test', score=.9, status=SettleStatus.SETTLED,
                           definition_version='1', sampling_ref=None)
     restored._deliver_returns()
     assert not retired.learner.inner.state()['snapshots']
-    assert retired.learner.inner.inner.state() != before
+    # The settled round trains the live swap router that replaced its drawer.
+    assert retired.learner.inner.inner.state() == before
+    assert live.learner.inner.inner.state() != live_before
     assert old.learner.id not in restored.retired_routers
     assert handle not in restored.snapshot_keys

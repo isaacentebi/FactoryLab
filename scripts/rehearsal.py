@@ -14,8 +14,8 @@ import tomllib
 from pathlib import Path
 from uuid import uuid4
 
+from factorylab.charter.provenance import charter_digest, roster_hash
 from factorylab.runtime.worlds import load_manifest, manifest_from_dict
-from scripts.draft_edition1 import charter_digest, roster_hash
 
 
 def voted_charter(path: Path, manifest) -> dict:
@@ -43,7 +43,7 @@ def preflight(world: Path, charter_path: Path) -> dict:
     # (charter.ratified_sha256, charter.roster_sha256); the vote is on the cards.
     loaded = {k: v for k, v in (raw.get("charter") or {}).items()
               if k not in ("ratified_sha256", "roster_sha256")}
-    if not manifest.charter_explicit or loaded != charter:
+    if loaded != charter:
         raise ValueError("rehearsal did not load the exact voted charter")
     if manifest.exchange.kind != "hyperliquid" or manifest.exchange.mainnet:
         raise ValueError("live rehearsal requires Hyperliquid testnet")
@@ -61,7 +61,9 @@ def preflight(world: Path, charter_path: Path) -> dict:
                    c.acceptable_region else "absolute region; sample support still required"}
                   for c in manifest.charter.cards],
         "tick_interval_ns": manifest.tick_interval_ns,
-        "price_window_ns": manifest.novelty.window_ns,
+        # The price window is the price loop's derived period in ticks (time audit T1):
+        # at least timing.min_ratio ticks, drawn at run time from the measured loops.
+        "price_window_min_ticks": manifest.timing.min_ratio,
         "governance_floor_ns_at_declared_tick": manifest.timing.min_ratio
         * manifest.evaluation.consequence_backstop_events * manifest.tick_interval_ns,
         "duration": "10m", "deadline_semantics": "finish an in-progress cascade",
@@ -136,7 +138,7 @@ def main(argv=None) -> int:
     with marker.open("x") as stream:
         stream.write(str(args.out.resolve()) + "\n")
     code = run_command(["uv", "run", "factorylab", "run", "--world", str(args.world),
-                        "--duration", "10m", "--kill-at-end", "--no-drip"], args.out)
+                        "--duration", "10m", "--kill-at-end"], args.out)
     (args.out / "preflight.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return code
 

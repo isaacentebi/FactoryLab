@@ -16,10 +16,9 @@ class ScriptedProvider:
     """Deterministic stand-in for seed contracts and the A1 composition exercise.
 
     Producers cycle buy / hold / sell / hold on ticks (sized to the world wallet) and
-    occasionally propose registrations; every produce reply carries a low
-    ``payoff`` self-forecast, which the runtime seals only for antagonists.
-    Evaluators return a verdict, a payoff probability and two forecasts whose
-    probabilities depend on the evaluator's own prompt, so evaluators differ.
+    occasionally propose registrations. Evaluators return a verdict and two
+    forecasts whose probabilities depend on the evaluator's own prompt, so
+    evaluators differ.
     Metas return a conformity score. Token usage is declared so costs are
     exact. It exists to close the loop, not to be clever.
     """
@@ -48,24 +47,36 @@ class ScriptedProvider:
     def complete(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
+        # The only descriptions read are the ones this population wrote itself (its
+        # child requests). The world's own requests are told apart by structure.
         desc = _description_from_prompt(text)
+        form = request_form(req, text, inputs)
         if desc == "A1 helper":
             reply = ({"emits": "Finding", "answer": 1} if "tool_results" in inputs else {
                 "emits": "Finding", "requests": [{
-                    "target": "funding-watcher", "description": "A1 grandchild", "inputs": {},
+                    # A kind of work, never a peer's id (primitive audit F5).
+                    "target": "Funding", "description": "A1 grandchild", "inputs": {},
                     "outcome_schema": {"type": "object", "required": ["action"]}}]})
         elif desc == "A1 grandchild":
             reply = ({"action": "hold"} if "tool_results" in inputs else {
                 "tool_calls": [{"tool": "catalogue.search",
                                 "args": {"substring": "fake", "limit": 1}}]})
-        elif desc.startswith("Evaluate"):
+        elif form == "judge":
             reply = self._evaluate(req, inputs)
-        elif desc.startswith("Assess"):
+        elif form == "counter":
+            # An adversarial judge's counter-verdict: the other side of what it read.
+            read = (inputs.get("verdict") or {}).get("verdict")
+            q = 1 - read if isinstance(read, int | float) else 0.5
+            reply = {"verdict": q, "rationale": "scripted counter"}
+        elif form == "meta":
             reply = self._meta(inputs)
-        elif desc.startswith("Vote"):
+        elif form == "vote":
             reply = {"vote": True, "reason": "scripted yes"}
+        elif form == "testify":
+            reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
+        reply = names_declined_trade(reply, text, inputs, self._producer_calls)
         return ModelResponse(
             req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
         )
@@ -97,7 +108,7 @@ class ScriptedProvider:
     def _produce(self, desc: str, inputs: dict[str, Any]) -> dict[str, Any]:
         self._producer_calls += 1
         reply: dict[str, Any] = {"action": "hold", "payoff": 0.1}
-        if "event Tick" in desc:
+        if inputs.get("kind") == "Tick":
             try:
                 payload = inputs["payload"]
                 # Edition 3 (C4) removed the root-wallet-only impression: what a
@@ -210,7 +221,7 @@ class ScriptedProvider:
             ])
         if n == self.tool_at_calls[3]:
             reply["requests"] = [{
-                "target": "composition-helper", "description": "A1 helper", "inputs": {},
+                "target": "Finding", "description": "A1 helper", "inputs": {},
                 "outcome_schema": {"type": "object", "required": ["answer"]},
             }]
         # Offered on three calls rather than one: a registration carried by a child
@@ -235,7 +246,10 @@ class ScriptedProvider:
                     "timeout_s": 2,
                 }
             ]
-        if n == 55:
+        # Offered on three calls for the reason spread-check is: which seat a call
+        # belongs to moves with the reward line, and a seat whose entitlement is below
+        # the trial amount cannot propose. A second offer of the same id is refused.
+        if n in (55, 57, 59):
             reply["register"] = [
                 {
                     "kind": "amendment",
@@ -250,7 +264,6 @@ class ScriptedProvider:
                             "acceptable_region": "below 5",
                             "observation": "turnover",
                             "answers_for": "producer",
-                            "lambda": 0.6,
                         }
                     ],
                     "replace": [],
@@ -304,17 +317,18 @@ class ScriptedProvider:
     @staticmethod
     def _evaluate(req: ModelRequest, inputs: dict[str, Any]) -> dict[str, Any]:
         producer = inputs.get("producer", {})
-        status = producer.get("status")
+        # The judged return's kernel status; a diary recorded before it was renamed
+        # carries it as ``status``.
+        status = producer.get("kernel_status", producer.get("status"))
         action = (producer.get("outputs") or {}).get("action")
         verdict = 1.0 if status == "ok" and action in ("order", "hold") else 0.3
         if action in ("noop", "hold"):
             verdict = 0.9 if req.model_id == "fake-haiku" else 0.1
         style = int(hashlib.sha256(req.system.encode()).hexdigest(), 16) % 4
         q = (0.3, 0.45, 0.6, 0.75)[style]
+        # The haiku judge blesses inaction; the opus judge does not.
         return {
             "verdict": verdict,
-            # The haiku judge blesses inaction as paying off; the opus judge does not.
-            "payoff": verdict,
             "rationale": "scripted judgement",
             "forecasts": [
                 {"predicate": "wallet_up", "params": {"horizon_events": 10}, "q": q},
@@ -328,6 +342,244 @@ class ScriptedProvider:
         ok = isinstance(v.get("verdict"), int | float) and bool(v.get("rationale"))
         return {"conformity": 0.8 if ok else 0.1, "rationale": "scripted meta"}
 
+
+
+def listed_coin(inputs: dict[str, Any], schema: Any = None) -> str | None:
+    """A coin the prompt shows the world listing: BTC when shown, else the first shown.
+
+    Guarantees the coin is read from the listing the seat was shown, never assumed:
+    the coins the request's outcome schema publishes for ``counterfactual`` (the
+    instruments the venue lists, quoted or not), else the world's ``recent_mids``;
+    None when the prompt shows none.
+    """
+    shown = _published_coins(schema)
+    if not shown:
+        world = inputs.get("world")
+        mids = world.get("recent_mids") if isinstance(world, dict) else None
+        shown = {str(coin) for coin in mids} if isinstance(mids, dict) else set()
+    return "BTC" if "BTC" in shown else (min(shown) if shown else None)
+
+
+def _published_coins(schema: Any) -> set[str]:
+    """Every coin an outcome schema's ``counterfactual`` field enumerates, or none."""
+    found: set[str] = set()
+    if isinstance(schema, dict):
+        field = (schema.get("properties") or {}).get("counterfactual")
+        coin = ((field or {}).get("properties") or {}).get("coin") if isinstance(
+            field, dict) else None
+        if isinstance(coin, dict) and isinstance(coin.get("enum"), list):
+            found.update(str(c) for c in coin["enum"])
+        for key in ("anyOf", "oneOf"):
+            for shape in schema.get(key) or []:
+                found |= _published_coins(shape)
+    return found
+
+
+def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any],
+                         n: int) -> dict[str, Any]:
+    """``reply`` naming a declined trade when it is a final answer that orders nothing.
+
+    The return contract of a producing kind (``runtime.grounded``): a final answer
+    that executes no venue operation carries ``counterfactual {coin, side}``, and the
+    request's outcome schema publishes the field. The side alternates with ``n``, so
+    the scripted population names both. A reply to a schema that does not publish
+    the field, and one that already names a trade, places an answer order, declines,
+    or continues through tools or children, is unchanged. An ``order`` that only
+    reports a tool's write names one too: the write may have been refused.
+    """
+    schema = text.split("OUTCOME SCHEMA\n", 1)
+    if (len(schema) < 2 or '"counterfactual"' not in schema[1].split("\n", 1)[0]
+            or not isinstance(reply, dict) or "counterfactual" in reply
+            or (reply.get("action") == "order"
+                and all(k in reply for k in ("coin", "side", "size")))
+            or reply.get("tool_calls") or reply.get("requests")
+            or reply.get("status") == "cannot"):
+        return reply
+    try:
+        published = json.loads(schema[1].split("\n", 1)[0])
+    except ValueError:
+        published = None
+    coin = listed_coin(inputs, published)
+    if coin is None:
+        return reply
+    return {**reply, "counterfactual": {"coin": coin, "side": "buy" if n % 2 else "sell"}}
+
+
+#: The forms of request a scripted seat answers differently, read from structure.
+REQUEST_FORMS = ("judge", "counter", "meta", "vote", "testify", "produce")
+
+
+def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
+    """Every field some admitted answer shape requires, read from the request's contract.
+
+    Guarantees the fields come from the rendered ``OUTCOME SCHEMA`` section (a JSON
+    schema, possibly ``anyOf`` shapes), falling back to the request's wire
+    ``response_schema``; never from the request's prose. A request with neither
+    reads as requiring nothing.
+    """
+    schema: Any = None
+    marker = "OUTCOME SCHEMA\n"
+    tail = _kernel_tail(text)
+    if marker in tail:
+        line = tail.split(marker, 1)[1].split("\n", 1)[0]
+        try:
+            schema = json.loads(line)
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+    if not isinstance(schema, dict) and req is not None:
+        schema = req.response_schema
+    if not isinstance(schema, dict):
+        return frozenset()
+    return frozenset().union(*_shape_required(schema))
+
+
+def _shape_required(schema: dict) -> list[frozenset[str]]:
+    """Each admitted answer shape's required fields, read from the complete schema.
+
+    Guarantees every level is read, however deep: nested ``anyOf`` / ``oneOf``
+    alternatives are flattened (as ``_schema_definition`` recurses into them, with no
+    depth bound of its own), and each level's own ``required`` is merged into every
+    alternative beneath it, since an alternative is admitted only beside every
+    enclosing level's constraints (Codex on b1c8590 and b56e793).
+
+    A local ``$ref`` (``#/$defs/<name>``) binds together with its siblings, as the
+    kernel's ``validate_schema`` reads it. The walk is iterative, with an explicit
+    stack and a visited set, so a recursive union terminates; its shapes are the least
+    fixed point, and a union that only recurses admits no shape of its own (Codex on
+    3309478: a cut at depth 32 read a deeper ``verdict`` as absent)."""
+    defs = schema.get("$defs") if isinstance(schema.get("$defs"), dict) else {}
+
+    def target(node: dict) -> dict | None:
+        ref = node.get("$ref")
+        prefix = "#/$defs/"
+        if isinstance(ref, str) and ref.startswith(prefix):
+            found = defs.get(ref[len(prefix):])
+            return found if isinstance(found, dict) else None
+        return None
+
+    def alternatives(node: dict) -> list[dict]:
+        alts = node.get("anyOf") or node.get("oneOf")
+        return [a for a in alts if isinstance(a, dict)] if isinstance(alts, list) else []
+
+    nodes: dict[int, dict] = {}
+    stack = [schema]
+    while stack:
+        node = stack.pop()
+        if id(node) in nodes:
+            continue
+        nodes[id(node)] = node
+        stack.extend(alternatives(node))
+        if (ref := target(node)) is not None:
+            stack.append(ref)
+    shapes: dict[int, set[frozenset[str]]] = {key: set() for key in nodes}
+    changed = True
+    while changed:  # monotone over a finite lattice of field-name sets: it settles
+        changed = False
+        for key, node in nodes.items():
+            own = frozenset(f for f in node.get("required", ()) if isinstance(f, str))
+            alts = alternatives(node)
+            below = (set().union(*(shapes[id(a)] for a in alts)) if alts
+                     else {frozenset()})
+            ref = target(node)
+            through = shapes[id(ref)] if ref is not None else {frozenset()}
+            found = {own | a | t for a in below for t in through}
+            if not found <= shapes[key]:
+                shapes[key] |= found
+                changed = True
+    root = shapes[id(schema)]
+    own = frozenset(f for f in schema.get("required", ()) if isinstance(f, str))
+    return sorted(root, key=sorted) or [own]
+
+
+def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
+    """The fields EVERY admitted answer shape requires: what the contract obliges any
+    answer to carry, from the same trusted sources as ``outcome_required``. A mixed
+    contract (a producer's return or a verdict) obliges neither."""
+    schema: Any = None
+    marker = "OUTCOME SCHEMA\n"
+    tail = _kernel_tail(text)
+    if marker in tail:
+        try:
+            schema = json.loads(tail.split(marker, 1)[1].split("\n", 1)[0])
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+    if not isinstance(schema, dict) and req is not None:
+        schema = req.response_schema
+    if not isinstance(schema, dict):
+        return frozenset()
+    shapes = _shape_required(schema)
+    return frozenset.intersection(*shapes)
+
+
+#: The kernel-written preamble of a request's SCORING section (``Request.sections``).
+_SCORING_MARK = ("\nSCORING\nHow the answer to this request settles, as world.scoring "
+                 "publishes it.\n")
+
+
+def _kernel_tail(text: str) -> str:
+    """The part of a prompt after its INPUTS line: only the kernel writes there.
+
+    The description (``REQUEST``) is an author's for a commission and may hold any
+    text, headers included; the inputs are one JSON line, which holds no raw newline.
+    Everything after that line (the propensity, SCORING, OUTCOME SCHEMA, the outcome
+    contract, the completion criterion) is rendered by ``Request.sections``. Read from
+    the last INPUTS header, so a header an author wrote earlier never counts."""
+    head = text.rfind("\n\nINPUTS\n")
+    if head < 0:
+        return text
+    start = head + len("\n\nINPUTS\n")
+    newline = text.find("\n", start)
+    return "" if newline < 0 else text[newline:]
+
+
+def _scoring_keys(text: str) -> frozenset[str]:
+    """The keys of the request's SCORING section: how its answer settles, as the
+    kernel's judging steps state it (``_settlement_facts``: ``evaluator_return`` for a
+    Verdict, ``meta_return`` for a MetaVerdict, ``counter_return`` for a
+    CounterVerdict). Empty for a request that carries none."""
+    tail = _kernel_tail(text)
+    if _SCORING_MARK not in tail:
+        return frozenset()
+    line = tail.split(_SCORING_MARK, 1)[1].split("\n", 1)[0]
+    try:
+        facts = json.loads(line)
+    except (ValueError, json.JSONDecodeError):
+        return frozenset()
+    return frozenset(facts) if isinstance(facts, dict) else frozenset()
+
+
+def request_form(req: ModelRequest | None, text: str, inputs: dict[str, Any]) -> str:
+    """Which of ``REQUEST_FORMS`` a request is, from trusted request metadata alone.
+
+    Guarantees the form is a function of what the kernel wrote about the request: the
+    settlement a judging step attaches (its SCORING section, which names the judging
+    kind) and the outcome contract's required fields, never of the request's
+    description or of any input value, so neither rewording a commission nor an
+    author's ``kind``/``payload`` inputs can turn a judgement into a producer's wake
+    (Chapter II §I.b: the request is self-describing; Codex on 4a0f61c). ``inputs`` is
+    kept for the callers' signature and not read. A request whose contract obliges a
+    verdict (every admitted shape requires one) is answered with one, whoever asked
+    for it; a mixed contract (a seat woken on an event that may answer a producer's
+    return or a verdict) is a producer's wake.
+    """
+    del inputs  # author-controlled: never a classifier
+    scoring = _scoring_keys(text)
+    if "counter_return" in scoring:
+        return "counter"
+    if "meta_return" in scoring:
+        return "meta"
+    if "evaluator_return" in scoring:
+        return "judge"
+    required = contract_requires(req, text)
+    if "conformity" in required:
+        return "meta"
+    if "vote" in required:
+        return "vote"
+    if "assessment" in required:
+        return "testify"
+    if "verdict" in required:
+        return "judge"
+    return "produce"
 
 
 def _description_from_prompt(text: str) -> str:
@@ -369,11 +621,13 @@ def _world_from_prompt(text: str) -> dict[str, Any]:
 def _inputs_from_prompt(text: str) -> dict[str, Any]:
     try:
         start = text.index("INPUTS\n") + len("INPUTS\n")
-        # The request renders further sections after the inputs (a propensity
-        # declaration sits between the inputs and the schema); stop at whichever
-        # comes first.
+        # The request renders further sections after the inputs (the subject's
+        # propensity and the scoring facts sit between the inputs and the schema);
+        # stop at whichever comes first.
         end = min(
-            (text.index(header, start) for header in ("\n\nPROPENSITY", "\n\nOUTCOME SCHEMA")
+            (text.index(header, start)
+             for header in ("\n\nSUBJECT PROPENSITY", "\n\nPROPENSITY", "\n\nSCORING",
+                            "\n\nOUTCOME SCHEMA")
              if header in text[start:]),
             default=-1,
         )
@@ -468,7 +722,6 @@ def _with_seat_block(text: str, inputs: dict[str, Any]) -> dict[str, Any]:
                          "governance": charter.get("pending_changes")}
             public = update.get("public_observations")
             if isinstance(public, dict):
-                world = {**world, "pathologies": public.get("pathologies"),
-                         "recent_mids": public.get("recent_mids")}
+                world = {**world, "recent_mids": public.get("recent_mids")}
             inputs["world"] = world
     return inputs

@@ -1,6 +1,5 @@
 """C10 in the runtime: genesis split, routing feasibility, manifest field, resume."""
 
-from dataclasses import replace
 
 import pytest
 
@@ -69,11 +68,10 @@ def test_exhausted_entitlement_is_infeasible_for_routing_not_insolvency():
 
 
 def test_entitlements_restore_exactly_after_a_crash(tmp_path):
-    base = load_manifest("scripted")
-    m = replace(base, novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns))
+    m = load_manifest("scripted")
     path = tmp_path / "entitlement.jsonl"
     rt = Runtime(m, events=140, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 drip=True, router_gamma=.1)
+                 router_gamma=.1)
     rt.events_budget = 8
     stop_after(rt, lambda r, e: r.ticks_consumed == 5 and str(e.kind) == "Tick")
     before = rt.budget.state()
@@ -91,7 +89,7 @@ def test_entitlements_restore_exactly_after_a_crash(tmp_path):
 
 def test_a_stale_routing_estimate_is_bridged_by_the_pool_never_a_failed_return():
     rt = Runtime(load_manifest("scripted"), events=30, seed=1, initial_balance_micro=None,
-                 ledger_path=None, drip=False, router_gamma=.1)
+                 ledger_path=None, router_gamma=.1)
     items = []
     append = rt.ledger.append
 

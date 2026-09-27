@@ -71,7 +71,7 @@ def test_a_world_launched_at_its_floor_dies_before_its_first_event(tmp_path):
         manifest, termination=replace(manifest.termination, balance_floor_micro=10_000)
     )
     summary = run_world(manifest, events=6, seed=1, initial_balance_micro=10_000,
-                        ledger_path=str(path), drip=False)
+                        ledger_path=str(path))
     assert summary["terminated"] and summary["termination_reason"] == "balance_floor"
     assert summary["seal_key_released"] and summary["wallet_balance_micro"] == 10_000
     frozen = Ledger.open_read_only(path, manifest=json.loads(manifest.canonical_json()))
@@ -88,7 +88,7 @@ def test_a_world_launched_with_no_money_dies_as_balance_zero(tmp_path):
     path = tmp_path / "empty.jsonl"
     manifest = load_manifest("scripted")
     summary = run_world(manifest, events=6, seed=1, initial_balance_micro=0,
-                        ledger_path=str(path), drip=False)
+                        ledger_path=str(path))
     assert summary["terminated"] and summary["termination_reason"] == "balance_zero"
     assert summary["seal_key_released"]
     frozen = Ledger.open_read_only(path, manifest=json.loads(manifest.canonical_json()))

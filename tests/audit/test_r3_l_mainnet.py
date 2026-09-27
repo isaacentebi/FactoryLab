@@ -26,15 +26,36 @@ def _ratified() -> tuple[dict, dict[str, str]]:
     return tomllib.loads(text)["charter"], metadata
 
 
-def _funded() -> dict:
-    """The drafting roster as a funded mainnet manifest carrying its ratified provenance."""
+def _current_roster_sha256() -> str:
+    """The roster digest of the drafting roster as it stands today."""
+    from factorylab.charter.provenance import roster_hash
+
+    return roster_hash(manifest_from_dict(
+        tomllib.loads((WORLDS_DIR / f"{ROSTER}.toml").read_text())))
+
+
+def _funded(roster_sha256: str | None = None) -> dict:
+    """The drafting roster as a funded mainnet manifest carrying its ratified provenance.
+
+    W4 (primitive audit F12) edited this roster: its judges now accept Exposure. The
+    edition-1 ratification recorded the roster before that edit, so it no longer
+    admits this roster (``test_the_edition1_ratification_refuses_the_edited_roster``);
+    the admission path is exercised here against the charter it ratified and the
+    roster digest a re-ratification of today's roster would record.
+    """
     raw = tomllib.loads((WORLDS_DIR / f"{ROSTER}.toml").read_text())
     charter, metadata = _ratified()
     raw["name"] = "funded"
     raw["exchange"] = {**raw["exchange"], "mainnet": True, "client_namespace": uuid4().hex}
     raw["charter"] = {**charter, "ratified_sha256": metadata["charter_sha256"],
-                      "roster_sha256": metadata["roster_sha256"]}
+                      "roster_sha256": roster_sha256 or _current_roster_sha256()}
     return raw
+
+
+def test_the_edition1_ratification_refuses_the_edited_roster():
+    """A roster edit is a new world (R8): the roster the population voted on is gone."""
+    with pytest.raises(ValueError, match="mainnet roster differs"):
+        manifest_from_dict(_funded(_ratified()[1]["roster_sha256"]))
 
 
 def test_fake_mainnet_outside_funded_is_refused():
@@ -53,7 +74,7 @@ def test_mainnet_requires_a_client_namespace():
 
 def test_the_ratified_charter_and_its_roster_admit_the_funded_manifest():
     manifest = manifest_from_dict(_funded())
-    assert manifest.exchange.mainnet is True and manifest.charter_explicit is True
+    assert manifest.exchange.mainnet is True
     assert len(manifest.charter.cards) == len(_ratified()[0]["cards"])
 
 

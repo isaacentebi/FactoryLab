@@ -156,6 +156,9 @@ def topup_responses():
             {},
             BytesIO(json.dumps(quote).encode()),
         ),
+        # The chain head the write-ahead record takes as the authorization's start_block.
+        Response({"jsonrpc": "2.0", "id": 1, "result": hex(8453)}),
+        Response({"jsonrpc": "2.0", "id": 1, "result": hex(1_000)}),
         Response(settlement),
         Response({"balanceUsd": "5"}),
     ]
@@ -184,8 +187,9 @@ def test_topup_cli_prints_settlement_then_rereads_balance(keyfile, wire, capsys)
     assert first["settlement"]["transaction"] == "0x" + "ab" * 32
     assert second["venice_balance_micro"] == 5_000_000
     assert calls[0].full_url == "http://rpc.fake"
-    assert len(calls) == 4 and calls[-1].full_url.endswith("/" + first["address"])
-    headers = [{k.lower(): v for k, v in r.header_items()} for r in calls[1:]]
+    assert len(calls) == 6 and calls[-1].full_url.endswith("/" + first["address"])
+    assert [c.full_url for c in calls[2:4]] == ["http://rpc.fake", "http://rpc.fake"]
+    headers = [{k.lower(): v for k, v in r.header_items()} for r in calls[1:2] + calls[4:]]
     assert len({h["x-sign-in-with-x"] for h in headers}) == 3
     assert "x-402-payment" not in headers[0] and "x-402-payment" in headers[1]
     payment = json.loads(base64.b64decode(headers[1]["x-402-payment"]))
@@ -199,7 +203,7 @@ def test_topup_keeps_transaction_reference_if_balance_refresh_fails(keyfile, wir
     assert main(["reserve", "topup", "--usd", "5"]) == 1
     captured = capsys.readouterr()
     assert json.loads(captured.out)["settlement"]["transaction"] == "0x" + "ab" * 32
-    assert len(calls) == 4 and TEST_KEY[2:] not in captured.out + captured.err
+    assert len(calls) == 6 and TEST_KEY[2:] not in captured.out + captured.err
 
 
 @pytest.mark.parametrize("amount", ["4.999999", "5.000001", "10", "-5", "nan", "inf", "bad"])
@@ -320,3 +324,73 @@ def test_owner_only_openrouter_key_still_loads(tmp_path, monkeypatch):
     _load_dotenv()
     assert os.environ["OPENROUTER_API_KEY"] == "sk-fixture"
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+def test_topup_is_written_ahead_under_the_reserve_lock_or_refused(keyfile, wire, capsys):
+    # Every EIP-3009 signature passes x402.sign_transfer_authorization: the CLI's top-up
+    # too. While a capital-loop run holds the reserve it signs and sends nothing; free,
+    # its nonce is in the reserve's write-ahead record before the payment leaves.
+    from factorylab.runtime import capital_loop
+
+    reserve = Account.from_key(TEST_KEY).address
+    record = capital_loop.default_lock_dir() / f"{reserve.lower()}.authorizations.jsonl"
+    responses, calls = wire
+    responses.extend(topup_responses())
+    with capital_loop.ReserveLock(reserve):
+        assert main(["reserve", "topup", "--usd", "5"]) != 0
+    sent = [{k.lower(): v for k, v in r.header_items()} for r in calls]
+    assert not any("x-402-payment" in h for h in sent)
+    assert capital_loop.read_authorizations(record) == []
+    capsys.readouterr()
+    responses.clear()
+    calls.clear()
+    responses.extend(topup_responses())
+    seen = []
+    original = request.OpenerDirector.open
+
+    def watching(self, req, timeout):
+        headers = {k.lower(): v for k, v in req.header_items()}
+        if "x-402-payment" in headers:
+            seen.append([e["nonce"] for e in capital_loop.read_authorizations(record)])
+        return original(self, req, timeout)
+
+    request.OpenerDirector.open = watching
+    try:
+        assert main(["reserve", "topup", "--usd", "5"]) == 0
+    finally:
+        request.OpenerDirector.open = original
+    payment = json.loads(base64.b64decode(
+        {k.lower(): v for k, v in calls[4].header_items()}["x-402-payment"]))
+    nonce = payment["payload"]["authorization"]["nonce"]
+    assert seen == [[nonce]]  # recorded before it left
+    assert [(e["nonce"], e["origin"]) for e in capital_loop.read_authorizations(record)] == [
+        (nonce, "reserve_topup")]
+
+
+def test_a_mainnet_treasury_world_is_never_run_without_a_ledger(tmp_path, monkeypatch, capsys):
+    # Codex on fd1424e: a world whose rail signs with the mainnet reserve key must name
+    # its diary to the reserve's record, or no used authorization of it could be shown
+    # booked and no cancel could tell whether it ended.
+    from dataclasses import replace
+
+    from factorylab.runtime import cli
+    from factorylab.runtime.bootstrap import MainnetRailRequiresALedger
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+
+    base = load_manifest("scripted")
+    mainnet = replace(base, exchange=replace(base.exchange, kind="hyperliquid", mainnet=True),
+                      treasury=replace(base.treasury,
+                                       reserve_address="0x" + "12" * 20))
+    monkeypatch.chdir(tmp_path)  # no key file of the repo is read
+    monkeypatch.setattr(cli, "load_manifest", lambda world: mainnet)
+    assert cli.main(["run", "--world", "mainnet-treasury", "--events", "1"]) == cli.ARGUMENT_EXIT
+    assert "mainnet_rail_requires_a_ledger" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []  # nothing was created
+    with pytest.raises(MainnetRailRequiresALedger):
+        Runtime(mainnet, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                router_gamma=.1)
+    testnet = replace(mainnet, exchange=replace(mainnet.exchange, mainnet=False))
+    from factorylab.runtime.bootstrap import mainnet_rail
+
+    assert mainnet_rail(mainnet) and not mainnet_rail(testnet)

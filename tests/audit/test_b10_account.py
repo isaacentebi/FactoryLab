@@ -14,7 +14,7 @@ from factorylab.world.scripted import ScriptedProvider
 
 def test_resume_refuses_a_changed_venue_address_before_live_reads(tmp_path):
     base = load_manifest("scripted")
-    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"), drip=None)
+    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"))
     a, b = FakeExchange(), FakeExchange()
     a.address, b.address = "0x" + "11" * 20, "0x" + "22" * 20
     path = str(tmp_path / "account.jsonl")

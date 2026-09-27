@@ -246,6 +246,11 @@ def test_a_remote_kill_is_final_and_a_configured_remote_without_a_verdict_refuse
 def test_without_a_receiver_the_local_file_alone_decides(tmp_path, monkeypatch):
     """The weaker guarantee, stated in deploy/README.md: no receiver, no remote verdict."""
     m, path = _world(tmp_path)
+    # Launched without a receiver, the world never requires one afterwards.
+    launch = next(i for i in Ledger.open_read_only(
+        path, manifest=json.loads(m.canonical_json())).items()
+        if i["kind"] == "event" and i["event"]["kind"] == "Launch")
+    assert "witness_required" not in launch["event"]["payload"]
     shutil.copytree(path.parent, tmp_path / "earlier")
     earlier = tmp_path / "earlier" / path.name
     _kill_from_outside(m, path)
@@ -278,7 +283,7 @@ def test_the_cli_reports_witness_unavailable_with_the_retried_exit_code(tmp_path
 def test_a_checkpoint_cannot_revive_a_killed_runtime():
     m = load_manifest("scripted")
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 drip=True, router_gamma=.1)
+                 router_gamma=.1)
     rt.run()
     state = runtime_state(rt)
     # The fingerprint rides beside the mapping, never in it: two runs of one manifest
@@ -305,7 +310,7 @@ def test_a_memory_only_kill_touches_no_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     m = load_manifest("scripted")
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 drip=True, router_gamma=.1, kill_at_end=True)
+                 router_gamma=.1, kill_at_end=True)
     rt.run()
     assert rt.termination.final
     assert list(tmp_path.iterdir()) == []

@@ -273,19 +273,6 @@ def facilitator_from_items(items) -> str | None:
     return None
 
 
-def services_from_runtime(rt) -> dict[str, Service]:
-    """The registry's current service contracts, bound to the programs the runtime holds."""
-    services = {}
-    for contract in rt.registry.available("service"):
-        program_id = contract.input_schema["program_id"]
-        tool = rt.population_tools.get(program_id)
-        if tool is None:
-            continue
-        services[program_id] = Service(program_id, program_id, contract.price.units["call"],
-                                       contract.description, contract.version, tool)
-    return services
-
-
 # --- the seller ---------------------------------------------------------------
 
 Earn = Callable[[Service, int, str, str, int], Any]
@@ -386,42 +373,6 @@ class Seller:
                    error: str | None) -> tuple[int, dict[str, str], dict]:
         body = quote(service, self.pay_to, resource_url, error=error)
         return 402, {"PAYMENT-REQUIRED": _encode(body)}, body
-
-
-def seller_from_runtime(rt, **options) -> Seller:
-    """Bind a seller to a running world: its registry, its jail, its treasury."""
-    pay_to = getattr(rt.m.treasury, "reserve_address", None)
-    if pay_to is None:
-        raise ValueError("the manifest names no reserve address to be paid at")
-
-    def earn(service: Service, micro: int, tx: str, payer: str, served_ns: int):
-        """Book one paid call with the payment's full identity, in process.
-
-        The receipt carries chain, asset and recipient as well as the
-        transaction, so it deduplicates against the same payment arriving by any
-        other route (the host's spool, say) rather than only against itself. This
-        path books directly: the runtime performed the settlement itself, through
-        the facilitator, on an authorization it verified against the quoted
-        amount and the reserve address. The spool path has no such evidence and
-        books a claim instead.
-        """
-        item = rt.treasury.earn(service.id, micro, tx, payer=payer, program=service.program_id,
-                                version=service.version, served_ns=served_ns,
-                                chain="base", asset="USDC", recipient=pay_to)
-        if item is not None:
-            rt._book_income(item)  # A repeated receipt never credits money twice.
-        return item
-
-    def live() -> bool:
-        """Production alive, the world not final, the wallet not dead."""
-        from factorylab.runtime.winddown import KILLED
-
-        return (getattr(rt, "production_state", None) != KILLED
-                and not rt.termination.final and not rt.wallet.dead)
-
-    options.setdefault("live", live)
-    return Seller(services_from_runtime(rt), pay_to=pay_to, runner=rt.tool_runner,
-                  earn=earn, clock_ns=lambda: rt.clock.now_ns, **options)
 
 
 def world_is_dead(items) -> bool:

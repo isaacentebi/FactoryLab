@@ -28,10 +28,10 @@ from tests.conftest import make_runtime
 ORDER = {"action": "order", "coin": "BTC", "side": "buy", "size": "0.001"}
 
 
-def invoke(body, schema=None, *, validator=None):
+def invoke(body, schema=None, *, validator=None, emits=("ProducerReturn",)):
     wallet = Wallet(100000, Ledger())
     provider = FakeModel(default=json.dumps(body), fixed_input_tokens=1, fixed_output_tokens=1)
-    assembly = Assembly(AssemblySpec("a", 1, "v", max_tokens=16),
+    assembly = Assembly(AssemblySpec("a", 1, "v", max_tokens=16, emits=emits),
                         MeteredModel(provider, PriceTable({"v": TokenPrice(1, 1)}), Meter(wallet)),
                         validator=validator)
     req = Request("h", "test", {}, {}, schema or {}, 100, 100000, None, "JSON", "test", "h")
@@ -76,11 +76,13 @@ def test_one_bad_optional_section_is_dropped_and_the_order_stands(section, bad, 
 def test_only_the_bad_registrations_go_but_a_tool_batch_goes_whole():
     good = {"tool": "catalogue.search", "args": {"substring": "btc"}}
     ret = invoke({**ORDER, "tool_calls": [good, {"tool": 7, "args": {}}],
-                  "register": [{"kind": "router", "event_kind": "Tick"}, {"kind": "wish"}]},
+                  "register": [{"kind": "router", "event_kind": "Tick", "learner": "exp3"},
+                               {"kind": "wish"}]},
                  producer_schema())
     assert ret.status == "ok" and {k: ret.outputs[k] for k in ORDER} == ORDER
     # Registrations are admitted one by one; a tool batch never runs in part.
-    assert ret.outputs["register"] == [{"kind": "router", "event_kind": "Tick"}]
+    assert ret.outputs["register"] == [{"kind": "router", "event_kind": "Tick",
+                                        "learner": "exp3"}]
     assert ret.tool_calls == () and "tool_calls" not in ret.outputs
     assert sections(ret) == [("register", 1), ("tool_calls", None)]
     assert ret.dropped[1]["reason"].startswith("item 1: ")
@@ -91,16 +93,18 @@ def test_a_reply_with_nothing_valid_in_it_is_still_malformed():
     assert invoke({"working_state": "x", "rationale": {}}).status == "malformed"
 
 
-@pytest.mark.parametrize("core", [
-    {"action": "order", "coin": "BTC", "side": "up", "size": "0.001"},
-    {"action": "order", "coin": "BTC", "side": "buy", "size": "-1"},
-    {"action": "order", "coin": "BTC", "side": "buy"},
-    {"action": ["order"]},
-    {"verdict": 2},
-    {"vote": "yes"},
+@pytest.mark.parametrize("core,emits", [
+    ({"action": "order", "coin": "BTC", "side": "up", "size": "0.001"}, ("ProducerReturn",)),
+    ({"action": "order", "coin": "BTC", "side": "buy", "size": "-1"}, ("ProducerReturn",)),
+    ({"action": "order", "coin": "BTC", "side": "buy"}, ("ProducerReturn",)),
+    ({"action": ["order"]}, ("ProducerReturn",)),
+    ({"action": "order", "coin": "BTC", "side": "up", "size": "0.001"}, ("Exposure",)),
+    # Primitive audit F7: a seed role's field is strict on the kind that owns it.
+    ({"verdict": 2}, ("Verdict",)),
+    ({"conformity": -1}, ("MetaVerdict",)),
 ])
-def test_the_answer_itself_is_still_validated_strictly(core):
-    ret = invoke({**core, "working_state": "fine", "rationale": "because"})
+def test_the_answer_itself_is_still_validated_strictly(core, emits):
+    ret = invoke({**core, "working_state": "fine", "rationale": "because"}, emits=emits)
     assert ret.status == "malformed" and not ret.dropped
 
 
@@ -142,14 +146,15 @@ def test_unfinished_task_fields_remain_strict_on_the_final_turn():
     assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
 
 
-@pytest.mark.parametrize("body", [
-    {"verdict": 2},
-    {"action": "order", "coin": "BTC", "side": "buy", "size": "not-a-number"},
+@pytest.mark.parametrize("body,emits", [
+    ({"verdict": 2}, ("Verdict",)),
+    ({"action": "order", "coin": "BTC", "side": "buy", "size": "not-a-number"},
+     ("ProducerReturn",)),
 ])
-def test_continuation_does_not_strip_invalid_core_answer_fields(body):
+def test_continuation_does_not_strip_invalid_core_answer_fields(body, emits):
     call = {"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}
 
-    ret = invoke({**body, "tool_calls": [call]})
+    ret = invoke({**body, "tool_calls": [call]}, emits=emits)
 
     assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
 
@@ -264,7 +269,7 @@ class BadSectionProvider(ScriptedProvider):
 @pytest.mark.gate
 def test_in_a_world_the_order_stands_and_the_seat_reads_the_receipt(tmp_path):
     rt = Runtime(load_manifest("scripted"), events=30, seed=1, initial_balance_micro=None,
-                 ledger_path=str(tmp_path / "w.jsonl"), drip=True, router_gamma=.1,
+                 ledger_path=str(tmp_path / "w.jsonl"), router_gamma=.1,
                  provider=BadSectionProvider())
     rt.run()
     diary = rt.ledger._recovery_items()
@@ -274,8 +279,43 @@ def test_in_a_world_the_order_stands_and_the_seat_reads_the_receipt(tmp_path):
     assert all("working_state" not in json.loads(i["outputs"]) for i in orders)
     receipts = [i for i in diary if i["kind"] == "return.sections_dropped"]
     assert {i["handle"] for i in receipts} == {i["handle"] for i in orders}
-    assert all([d["section"] for d in i["dropped"]] == ["working_state", "register"]
+    # One receipt per decision; a decision that took a tool round made two calls,
+    # each with the same two bad sections, and each is reported.
+    assert all({d["section"] for d in i["dropped"]} == {"working_state", "register"}
                for i in receipts)
     addressed = {(i["assembly_id"], i["handle"]) for i in diary
                  if i["kind"] == "outcome.addressed"}
     assert all((i["assembly_id"], i["handle"]) in addressed for i in receipts)
+
+
+# PR121: four answers were voided for habits that change nothing they said.
+JUDGE = {"type": "object", "properties": {
+    "verdict": {"type": "number", "minimum": 0, "maximum": 1},
+    "payoff": {"type": "number"}, "status": {"enum": ["cannot"]},
+    "reason": {"type": "string"}, "rationale": {"type": "string"}},
+    "required": ["rationale"]}
+
+
+def test_null_for_an_optional_field_is_the_field_left_out():
+    ret = invoke({"verdict": None, "payoff": None, "rationale": "nothing committed"}, JUDGE)
+    assert ret.status == "ok" and "verdict" not in ret.outputs and "payoff" not in ret.outputs
+
+
+def test_null_in_a_required_field_is_still_malformed():
+    schema = {**JUDGE, "required": ["rationale", "verdict"]}
+    assert invoke({"verdict": None, "rationale": "x"}, schema).status == "malformed"
+
+
+def test_a_reason_stands_for_a_missing_required_rationale():
+    ret = invoke({"reason": "a hold with no commitment"}, JUDGE)
+    assert ret.status == "ok" and ret.outputs["rationale"] == "a hold with no commitment"
+    assert invoke({"reason": "  "}, JUDGE).status == "malformed"
+
+
+def test_status_is_the_refusal_flag_and_nothing_else():
+    """The envelope's status says one thing, "cannot" (Chapter II §II.b): any other value
+    is refused, whatever a contract of its own declares."""
+    ret = invoke({"status": "unmeasured", "reason": "a hold", "rationale": "r"}, JUDGE)
+    assert ret.status == "malformed" and "status" in ret.outputs["validation_error"]
+    loose = {**JUDGE, "properties": {**JUDGE["properties"], "status": {"type": "string"}}}
+    assert invoke({"status": "ok", "rationale": "r"}, loose).status == "malformed"

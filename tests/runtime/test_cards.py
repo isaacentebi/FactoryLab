@@ -2,10 +2,11 @@ from dataclasses import replace
 
 import pytest
 
-from factorylab.charter.charter import MetricCard, seed_charter
+from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion
 from factorylab.charter.windows import MetricWindow
 from factorylab.runtime.cards import parses, region_for
+from tests.seed_charter import seed_charter
 
 
 def card(region: str, units: str = "ratio", id: str = "c") -> MetricCard:

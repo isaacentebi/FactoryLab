@@ -23,6 +23,11 @@ from factorylab.world.x402 import (
     X402Error,
 )
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 # Public deterministic fixture only. No test reads any reserve key file.
 TEST_KEY = "0x" + "11" * 32
 MODEL = "x402:https://seller.test#model/flash"
@@ -111,6 +116,21 @@ def test_402_loop_one_payment_and_metering_equals_quote_not_usage():
     payment = json.loads(base64.b64decode(fake.payments[0][3]["PAYMENT-SIGNATURE"]))
     assert payment["payload"]["authorization"]["value"] == "1734"
     assert payment["accepted"] == fake.quote["accepts"][0]
+
+
+def test_a_seller_route_keeps_the_json_object_contract_when_a_schema_is_carried():
+    """A seller route has no json_schema contract: the body quoted and paid for asks
+    for a JSON object, exactly as before a request carried its schema."""
+    schema = {"type": "object", "properties": {"action": {"type": "string"}},
+              "required": ["action"], "additionalProperties": True}
+    fake = SellerHTTP()
+    model = MeteredModel(provider(fake), PriceTable({MODEL: TokenPrice(0, 0, 2000)}),
+                         Meter(Wallet(10_000, Ledger())))
+    model.complete(ModelRequest(MODEL, "system", (), 16, json_object=True,
+                                response_schema=schema), handle="decision-1")
+    quoted, paid = fake.calls[0], fake.payments[0]
+    assert quoted[:3] == paid[:3]
+    assert paid[2]["response_format"] == {"type": "json_object"}
 
 
 def test_ceiling_refusal_precedes_key_loading_balance_read_and_signing(monkeypatch):

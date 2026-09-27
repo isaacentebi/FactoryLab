@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 
+# Single writer is a kernel invariant: every owner path against every contender path
+# (the kill path contends in test_r3_f1_kill).
 @pytest.mark.parametrize("owner", ["run", "resume"])
 @pytest.mark.parametrize("contender", ["run", "resume"])
 @pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
@@ -26,7 +28,7 @@ if sys.argv[2] == 'resume':
     input()
 else:
     rt = Runtime(m, events=2, seed=1, initial_balance_micro=None,
-                 ledger_path=sys.argv[1], drip=False, router_gamma=.1)
+                 ledger_path=sys.argv[1], router_gamma=.1)
     original = rt._process_event
     def pause(event):
         result = original(event)

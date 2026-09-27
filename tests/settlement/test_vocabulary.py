@@ -6,7 +6,7 @@ from factorylab.kernel.events import EventKind
 from factorylab.settlement import SEED_VOCABULARY, Observer, Predicate, WindowFacts
 
 
-def test_seed_vocabulary_has_exactly_the_five_fixed_schemas():
+def test_seed_vocabulary_has_exactly_the_six_fixed_schemas():
     assert isinstance(SEED_VOCABULARY, tuple)
     assert tuple(predicate.id for predicate in SEED_VOCABULARY) == (
         "wallet_up",
@@ -14,6 +14,7 @@ def test_seed_vocabulary_has_exactly_the_five_fixed_schemas():
         "rejected_within",
         "liquidated_within",
         "drawdown_exceeds",
+        "failure_within",
     )
     for predicate in SEED_VOCABULARY:
         assert predicate.description

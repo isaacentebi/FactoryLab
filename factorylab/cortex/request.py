@@ -25,138 +25,31 @@ from typing import Any
 Money = int
 
 
-#: The capability whose payload is private even from the judge who prices the act.
-#: A message is addressed to a participant who may ignore it; a judge that reads
-#: every body turns a private channel into a broadcast, and a sender that knows it
-#: will be read writes for the judge instead of the recipient.
-ADDRESS_TOOL = "address.send"
-
-#: The argument names that carry a body rather than an address. Everything else an
-#: address call declares -- who it went to, what it cost, whether it was delivered
-#: -- survives the projection, because that a message occurred is a public fact and
-#: what it said is not.
-ADDRESS_BODY_FIELDS = frozenset({"text", "body", "message", "content", "payload"})
-
-#: Address-shaped child inputs do not always repeat the tool name: a parent can
-#: delegate the complete arguments of an address call as the child's task.
-_ADDRESS_RECIPIENT_FIELDS = frozenset({"recipient", "to"})
-
-#: Where an address call keeps its arguments, whatever the caller named them.
-_ARGUMENT_FIELDS = ("args", "arguments", "inputs")
-
-#: A projection walks model-authored JSON, which is shallow. Past this depth it
-#: drops the subtree rather than passing it through unread: a redaction that gives
-#: up quietly is not one.
-_PROJECTION_DEPTH = 24
-
-
-def _names_address(value: dict[str, Any]) -> bool:
-    """True when this mapping is a record of a call to the addressing capability."""
-    return any(value.get(key) == ADDRESS_TOOL for key in ("tool", "tool_id", "name"))
-
-
-def _address_shaped(value: dict[str, Any]) -> bool:
-    """True when a child-input mapping contains both an address and a body."""
-    return bool(_ADDRESS_RECIPIENT_FIELDS & value.keys()) and bool(
-        ADDRESS_BODY_FIELDS & value.keys()
-    )
-
-
-def _redact_projected_body(projected: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
-    """A projected mapping with raw body fields represented only by their receipt."""
-    kept = {k: v for k, v in projected.items() if k not in ADDRESS_BODY_FIELDS}
-    dropped = [k for k in raw if k in ADDRESS_BODY_FIELDS]
-    if dropped:
-        kept["body"] = {
-            "redacted": "the recipient holds the only readable copy",
-            "fields": sorted(dropped),
-            "bytes": sum(
-                len(json.dumps(raw[k], sort_keys=True, default=str).encode("utf-8"))
-                for k in dropped
-            ),
-        }
-    return kept
-
-
-def _project(value: Any, depth: int = 0, *, address_shapes: bool = False) -> Any:
-    """A structure with every addressed body redacted, at any nesting a return reached.
-
-    Guarantees an address call is redacted wherever it sits -- at the top of a
-    return, inside a list of calls, or inside the result a child handed back --
-    because a model chooses where to put it and a projection that only checked one
-    place would be a convention rather than a guarantee.
-    """
-    if depth >= _PROJECTION_DEPTH:
-        return {"omitted": "nested deeper than this projection reads"}
-    if isinstance(value, dict):
-        addressed = _names_address(value)
-        out = {k: _project(v, depth + 1, address_shapes=(
-                   address_shapes or (addressed and k in _ARGUMENT_FIELDS)))
-               for k, v in value.items()}
-        if addressed:
-            for field in _ARGUMENT_FIELDS:
-                if field in out:
-                    raw = value[field]
-                    projected = out[field]
-                    out[field] = (
-                        _redact_projected_body(projected, raw)
-                        if isinstance(raw, dict) and isinstance(projected, dict)
-                        else projected
-                    )
-            # A call that inlined its body beside the tool name rather than under
-            # arguments is the same call and is redacted the same way.
-            out = _redact_projected_body(out, value)
-        elif address_shapes and _address_shaped(value):
-            out = _redact_projected_body(out, value)
-        return out
-    if isinstance(value, (list, tuple)):
-        return [_project(item, depth + 1, address_shapes=address_shapes) for item in value]
-    return value
-
-
-def public_tool_calls(calls: Any) -> list[Any]:
-    """The executed tool calls of a return, as a reader across the boundary may see them.
-
-    Guarantees every call is still listed -- which capability ran, with what
-    address and at what price -- and that an addressed body is not among what is
-    listed. Nothing here is the caller's own record: a seat keeps what it wrote in
-    its own working state, which no projection touches.
-    """
-    if not isinstance(calls, (list, tuple)):
-        return []
-    return [_project(call) for call in calls]
+#: Continuity fields are the author's own record and never cross a contract boundary.
+_CONTINUITY_FIELDS = frozenset({"working_state", "ack_through", "raw"})
 
 
 def public_return(outputs: Any) -> dict[str, Any]:
     """Project a return across a contract boundary, excluding continuity internals.
 
-    Guarantees the continuity fields never cross, as before, and that the body of
-    an addressed message does not cross either, wherever in the return it was
-    written. What crosses is that the message happened: the capability, the
-    recipient and the size of what was said. A judge prices an act it can see the
-    shape of; it does not read the population's post.
+    Guarantees the continuity fields (``working_state``, ``ack_through``, ``raw``)
+    never cross: they are the author's private record, and a reader across the
+    boundary sees what the return published and nothing it kept.
     """
     if not isinstance(outputs, dict):
         return {"invalid_return": True}
-    visible = {k: v for k, v in outputs.items()
-               if k not in {"working_state", "ack_through", "raw"}}
-    return _project(visible)
+    return {k: v for k, v in outputs.items() if k not in _CONTINUITY_FIELDS}
 
 
 def public_child_inputs(inputs: Any) -> dict[str, Any]:
     """Project delegated inputs for a public child-evaluation event.
 
-    Guarantees an addressed body stays private even when the parent delegates raw
-    address arguments without naming ``address.send``. A mapping is treated as an
-    address only when it contains both ``recipient``/``to`` and a body field, so
-    ordinary task text remains visible to the evaluator.
+    Guarantees the same continuity fields ``public_return`` withholds are
+    withheld from delegated inputs; everything else is the task, and is visible.
     """
     if not isinstance(inputs, dict):
         return {"invalid_return": True}
-    visible = {
-        k: v for k, v in inputs.items() if k not in {"working_state", "ack_through", "raw"}
-    }
-    return _project(visible, address_shapes=True)
+    return {k: v for k, v in inputs.items() if k not in _CONTINUITY_FIELDS}
 
 
 def _utc(ns: Any) -> str | None:
@@ -197,7 +90,7 @@ def _outcome_id(item: Any) -> Any:
 # consecutive calls to one assembly begin with byte-identical text and a provider's
 # automatic prefix cache (DeepSeek and OpenAI cache on an identical prefix, with no
 # cache_control marker) can hit. Everything not named here moves — the account,
-# the mids, the pots, the note counts, the pathologies, the reserve, the card prices,
+# the mids, the pots, the reserve, the card prices,
 # the scoring values the runtime's own adaptation changes, the governance queue,
 # the measured tick — and is rendered after the block, inside ``INPUTS`` with the
 # request itself. A key absent from this set is treated as moving, which costs
@@ -207,7 +100,7 @@ def _outcome_id(item: Any) -> Any:
 # committed parameters and names the moving value rather than inlining it.
 STABLE_WORLD_KEYS = frozenset({
     "a_return_may_include", "accounting_facts", "action_labels", "addressing", "assemblies",
-    "catalogue", "charter", "charter_edition", "clock", "committee", "composition",
+    "catalogue", "charter", "charter_edition", "committee", "composition",
     "connectors", "contracts", "event_kinds", "event_schemas", "mechanics", "meta_input",
     "models", "observation_facts", "observations", "population_tools", "prices",
     "proposal_shapes", "reserved_return_fields", "routers", "scoring", "sellers", "tools",
@@ -251,6 +144,9 @@ PREFIX_INDEX_KEYS = frozenset({"tools", "proposal_shapes", "addressing"})
 #   them and a fact is rendered once;
 #   ``venue`` is the venue's own instrument record, re-read once a tick, so it is a
 #   reading of an outside system rather than a constant of this runtime;
+#   ``clock`` carries the measured and derived loop periods, which move with every
+#   loop that fires, so ``INPUTS`` renders it (a prefix that carried it would not
+#   hold still between two requests of one world);
 #   everything with an account, a pot, a price, a position, a timestamp, a count or
 #   a queue in it moves by construction and is named nowhere here.
 #
@@ -263,7 +159,7 @@ PREFIX_INDEX_KEYS = frozenset({"tools", "proposal_shapes", "addressing"})
 # after it.
 PREFIX_CONSTANT_KEYS = frozenset({
     "a_return_may_include", "accounting_facts", "action_labels", "assemblies", "catalogue",
-    "clock", "committee", "composition", "compute_supply", "connectors", "contracts",
+    "committee", "composition", "compute_supply", "connectors", "contracts",
     "event_kinds", "event_schemas", "mechanics", "meta_input", "models",
     "observation_facts", "observations", "population_tools", "prices",
     "reserved_return_fields", "routers", "scoring", "sellers", "trading_markets",
@@ -293,7 +189,7 @@ PREFIX_SOURCE_KEYS = PREFIX_INDEX_KEYS | PREFIX_CONSTANT_KEYS
 UPDATE_WORLD_KEY = "world_update"
 UPDATE_SOURCE_KEYS = frozenset({
     "charter", "charter_edition", "card_prices", "continuity", "governance",
-    "pathologies", "recent_mids",
+    "recent_mids",
 })
 
 # The world keys that are about the acting seat rather than about the world, and
@@ -334,48 +230,57 @@ YOU_HEADER = "YOU\n"
 
 WORLD_UPDATE_HEADER = "WORLD UPDATE\n"
 
-#: GPT-6's third reading, §8, verbatim: the outcome-schema text. It is rendered
-#: once per request, immediately after the schema it is about.
-OUTCOME_CONTRACT = """OUTCOME CONTRACT
+#: What every return must satisfy, rendered once per request immediately after the
+#: schema it is about: the tool-round protocol and the refusal form, and nothing
+#: else (smuggling audit D1, primitive audit F4; essay II.I.a, robust simplicity).
+#: The pause, monetary-unit, forecast and execution-claim paragraphs of GPT-6's §8
+#: were coaching no code read; a forecast's shape is its own schema's. The fidelity
+#: objection and its adjudication were deleted (evaluations U1), so there is no
+#: objection shape to state here or anywhere else.
+OUTCOME_CONTRACT_BODY = """OUTCOME CONTRACT
 
 Return the public result required by this request's schema. Optional private
 continuity fields are working_state and ack_through.
 
 Return exactly one JSON object for this turn. To use tools, submit tool_calls
-and end your response; omit final-answer fields you cannot fill yet.
-Actual results arrive in the next request under
-tool_results; earlier results may appear under seen_tool_results. Do not write
-imagined tool responses or additional turns. Use returned evidence to continue
-the investigation or answer the original request.
+and end your response; omit final-answer fields you cannot fill yet. Tool
+results arrive in the next request under tool_results; earlier results may
+appear under seen_tool_results."""
+#: The refusal form, for a schema that does not publish it as a form of its own. A
+#: schema that does (``judging_contract``) states it there, once (Chapter II §II.b).
+OUTCOME_CONTRACT_DECLINE = (
+    '\n\nTo decline the request, return {"status": "cannot", "reason": "<reason>"}.')
+OUTCOME_CONTRACT = OUTCOME_CONTRACT_BODY + OUTCOME_CONTRACT_DECLINE
 
-For an execution claim, distinguish:
-- intended: no operation has been submitted;
-- submitted: an operation identifier exists, but settlement is not known;
-- settled: an addressed receipt establishes the consequence;
-- rejected: an addressed receipt establishes refusal;
-- unknown: the necessary observation is unavailable.
 
-Reference the exact operation or outcome identifier. A narrative assertion does
-not establish execution or payment.
+def publishes_decline_form(schema: Any) -> bool:
+    """Whether ``schema`` is a union with a form of its own that requires ``status``."""
+    alternatives = schema.get("anyOf") if isinstance(schema, dict) else None
+    return isinstance(alternatives, list) and any(
+        isinstance(a, dict) and "status" in (a.get("required") or ()) for a in alternatives)
 
-For a forecast, identify the claim, observation rule, horizon, probability and
-the decision it concerns. Do not replace an unobserved outcome with false.
 
-For a fidelity objection, supply:
-{
-  "value": "<one fixed norm>",
-  "measurement": "<identified card or observation>",
-  "evidence": "<specific evidence of a mismatch>",
-  "uncertainty": <number from 0 to 1>
-}
-The objection is a contestable claim. The measurement it challenges cannot
-establish its own fidelity.
+def outcome_contract(schema: Any) -> str:
+    """The OUTCOME CONTRACT for ``schema``: the refusal form stated only where the
+    schema does not already publish it as a form."""
+    return OUTCOME_CONTRACT_BODY if publishes_decline_form(schema) else OUTCOME_CONTRACT
 
-For a pause, state the next relevant condition when you can identify one.
-Do not invent a condition merely to justify a pause.
 
-Use monetary quantities with an explicit asset, custody account and unit.
-Keep resource facts separate from learning scores."""
+#: Where the coalesced world update went when ``INPUTS`` renders the event without
+#: it: a pointer in its place, so the event is never shown hollow.
+COALESCED_UPDATE_POINTER = ("rendered in WORLD UPDATE as "
+                            "changes_since_last_successful_delivery")
+
+#: The header of the block that forwards the propensity of the decision a request
+#: is about: named so it cannot be read as the answer's own ``propensity`` field.
+SUBJECT_PROPENSITY_HEADER = "SUBJECT PROPENSITY"
+
+#: The header of the settlement facts a request carries about its own answer.
+SCORING_HEADER = "SCORING"
+
+#: Every moving block is rendered as compact JSON, like the stable prefix: the
+#: indentation carried no information and cost about an eighth of every prompt.
+_COMPACT = (",", ":")
 
 #: What a slot says when the source it would be rendered from is missing. It is a
 #: string and never a number, so no reader can mistake an absent fact for a zero.
@@ -470,6 +375,11 @@ class Request:
     # Whatever rebuilds this request keeps the pair — see ``continuation``.
     propensity: dict[str, float] | None = None
     propensity_chosen: str | None = None
+    # How the answer to this request settles, as the world's published scoring
+    # section states it (Chapter II §I.b: "the structures of requests and rewards"
+    # are public): the entries of ``world.scoring`` for this request's kind, verbatim.
+    # Rendered as its own SCORING section; None renders nothing.
+    settlement: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.handle:
@@ -585,6 +495,8 @@ class Request:
             "runway": (entry.get("your_resources") or {}).get(
                 "runway_at_observed_burn", UNAVAILABLE),
             "subscription": entry.get("subscription", UNAVAILABLE),
+            # Whether this seat holds a venue read slot: its own fact, nobody else's.
+            "venue_read_slot": entry.get("venue_read_slot", UNAVAILABLE),
             "open_commitments": entry.get("open_commitments", UNAVAILABLE),
             "outcomes": {
                 **{key: value for key, value in outcomes.items()
@@ -668,7 +580,7 @@ class Request:
         if not isinstance(self.inputs.get("world"), dict):
             return ""
         return (f"{WORLD_UPDATE_HEADER}"
-                f"{json.dumps(self.world_update_block(), sort_keys=True, indent=2)}\n\n")
+                f"{json.dumps(self.world_update_block(), sort_keys=True, separators=_COMPACT)}\n\n")
 
     def _coalesced_update(self) -> Any:
         """The fold of everything that happened while this seat slept, or None."""
@@ -679,7 +591,8 @@ class Request:
 
     def seat_text(self) -> str:
         """The rendered ``YOU`` block; empty only when there is no request to describe."""
-        return f"{YOU_HEADER}{json.dumps(self.seat_block(), sort_keys=True, indent=2)}\n\n"
+        body = json.dumps(self.seat_block(), sort_keys=True, separators=_COMPACT)
+        return f"{YOU_HEADER}{body}\n\n"
 
     def stable_prefix(self) -> str:
         """The leading text every request in this world renders identically.
@@ -724,19 +637,32 @@ class Request:
                   if k not in seat_input_keys and k != RECEIPTS_INPUT_KEY}
         payload = inputs.get("payload")
         if isinstance(payload, dict) and COALESCED_UPDATE in payload:
-            inputs = {**inputs,
-                      "payload": {k: v for k, v in payload.items() if k != COALESCED_UPDATE}}
+            # The fold is rendered once, in WORLD UPDATE; the event keeps a pointer to
+            # it, so INPUTS never shows the event hollow.
+            inputs = {**inputs, "payload": {**payload,
+                                            COALESCED_UPDATE: COALESCED_UPDATE_POINTER}}
         blocks = [
             ("request", f"REQUEST\n{self.description}"),
-            ("inputs", f"INPUTS\n{json.dumps(inputs, sort_keys=True, indent=2)}"),
+            ("inputs", f"INPUTS\n{json.dumps(inputs, sort_keys=True, separators=_COMPACT)}"),
         ]
         if self.propensity is not None:
+            subject = self.inputs.get("subject_handle")
+            owner = (f"the decision {subject} this request is about"
+                     if isinstance(subject, str) and subject else
+                     "the decision this request is about")
             blocks.append((
                 "propensity",
-                "PROPENSITY\nThe distribution the deciding agent says it drew from, and the "
-                f"action it took ({self.propensity_chosen}). The roads it did not take are "
-                "here so you can price them.\n"
-                f"{json.dumps(self.propensity, sort_keys=True, indent=2)}",
+                f"{SUBJECT_PROPENSITY_HEADER}\nThe distribution over its own actions that "
+                f"{owner} declared, and the action it took ({self.propensity_chosen}). It "
+                "is that decision's, not a field of this request's answer.\n"
+                f"{json.dumps(self.propensity, sort_keys=True, separators=_COMPACT)}",
+            ))
+        if self.settlement:
+            blocks.append((
+                "scoring",
+                f"{SCORING_HEADER}\nHow the answer to this request settles, as world.scoring "
+                "publishes it.\n"
+                f"{json.dumps(self.settlement, sort_keys=True, separators=_COMPACT)}",
             ))
         shapes = self.outcome_schema.get("anyOf", (self.outcome_schema,))
         tool_call_limits = [
@@ -748,21 +674,20 @@ class Request:
         }
         tool_call_instruction = (
             f"\nThis response may contain at most {next(iter(common_tool_call_limits))} "
-            "tool_calls; "
-            "prioritize the reads you need."
+            "tool_calls."
             if (len(tool_call_limits) == len(shapes)
                 and all(type(limit) is int for limit in tool_call_limits)
                 and len(common_tool_call_limits) == 1) else ""
         )
         blocks.extend([
             ("outcome_schema",
-             f"OUTCOME SCHEMA\n{json.dumps(self.outcome_schema, sort_keys=True, indent=2)}"
+             "OUTCOME SCHEMA\n"
+             f"{json.dumps(self.outcome_schema, sort_keys=True, separators=_COMPACT)}"
              f"{tool_call_instruction}"),
-            # §8's outcome-schema text, once per request and immediately after the
-            # schema it is about: what an execution claim must distinguish, what a
-            # forecast and an objection must carry, and that money names its asset,
-            # its custody account and its unit.
-            ("outcome_contract", OUTCOME_CONTRACT),
+            # What every return must satisfy, once per request and immediately
+            # after the schema it is about: the tool-round protocol and, unless the
+            # schema publishes it as a form, the refusal form (smuggling audit D1).
+            ("outcome_contract", outcome_contract(self.outcome_schema)),
             ("completion_criterion", f"COMPLETION CRITERION\n{self.completion_criterion}"),
         ])
         joined = [(name, text + ("\n\n" if index + 1 < len(blocks) else ""))
@@ -802,17 +727,23 @@ class Request:
 
 @dataclass(frozen=True)
 class ChildRequest:
-    """A neutral composition contract names a target capability and its complete task.
+    """A neutral composition contract names a kind of work and its complete task.
 
-    ``description`` is public task documentation shown to the child evaluator.
-    Private addressed content belongs in ``inputs``, where the public event applies
-    the same body projection as an executed ``address.send`` call.
+    ``target`` is a kind (one some live contract emits, else one it accepts), whose
+    request router draws the executor, or ``"self"``; never a peer's id (primitive
+    audit F5). ``description`` is public task documentation shown to the child
+    evaluator. ``propensity`` and ``chosen`` are the requester's own distribution
+    over the alternatives it chose among when it made this request, carried
+    forward on the child's request and recorded on its handle (information audit
+    M1; essay II.I.b: propensity "as a public part of a request").
     """
 
     target: str
     description: str
     inputs: dict[str, Any]
     outcome_schema: dict[str, Any]
+    propensity: dict[str, float] | None = None
+    chosen: str | None = None
 
 
 @dataclass(frozen=True)
@@ -834,3 +765,12 @@ class Return:
     # Optional sections of the reply that did not validate and were dropped while
     # the answer stood: ``{"section", "reason"[, "index"]}`` each, in section order.
     dropped: tuple[dict[str, Any], ...] = ()
+    # UTF-8 bytes per section of the prompt the runtime rendered for this invocation,
+    # plus ``total``: the same counts the invocation's ledger row carries as
+    # ``sections``. None when the runtime rendered no prompt for it.
+    prompt_sections: dict[str, int] | None = None
+    # Whether the request reached its executor: set by the assembly at the point of
+    # sending, True once the provider call or the program run was made (billed, or
+    # possibly billed). A request refused before that (over its ceiling, its
+    # reservation refused, the world terminal, no rendering) was read by nobody.
+    delivered: bool = False

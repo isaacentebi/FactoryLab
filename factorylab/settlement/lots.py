@@ -9,12 +9,25 @@ opener's entry price and the closer's exit price on the closed quantity): the
 opener's part is net of its opening fee and funding, the closer's net of its
 closing fee. A handle closing its own lot receives the whole profit once.
 Only a decision with an open account can own an order or a lot.
+
+An ``event`` lot is an outcome token of a binary event market (Polymarket). It
+is held long only and is marked like a spot lot, at the market's own midpoint:
+the price is the market's anticipatory settlement of the belief (essay II.IV.b),
+so the decision is scored at the backstop rather than waiting on a resolution
+that may come after its learner has moved on. The resolution itself closes the
+lot later (``redeem``) and its money reaches the owner as a late realization.
+
+A backstop mark values an open lot at what closing it would realise (wave 16, D7):
+the mid less the exit fee at the venue's taker rate for its market, so the acting
+road is charged the same round trip as the road not taken. The mark is never money:
+the real close is booked once, late, with the fee the venue actually charged.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from fractions import Fraction
+from typing import Any
 
 from factorylab.kernel.money import require_money
 from factorylab.settlement.scoring import _require_id
@@ -45,6 +58,9 @@ class Payoff:
     marked: bool = False
     liquidated: bool = False
     earned_micro: int = 0
+    # The exit fee a marked outcome deducted for its open quantity (wave 16, D7): an
+    # estimate at the venue's taker rate, never money.
+    exit_fee_micro: int = 0
     # The documented reason this outcome carries no fact at all (R4-C). A
     # censored outcome closes the account so later returns resolve, but its
     # ``y`` is not an observation: nothing is scored from it and no money moves
@@ -69,16 +85,13 @@ class Lot:
 class ReturnAccount:
     """Cost is unknown until all invocation rounds and tools have returned.
 
-    ``cost_micro`` is the return's own metered compute and tools, fixed once. A
-    liability the return keeps carrying afterwards — retained public storage
-    renewing each window — accrues separately in ``carried_micro`` while the
-    outcome is open, and the outcome's threshold is their sum.
+    ``cost_micro`` is the return's own metered compute and tools, fixed once, and
+    is the outcome's threshold. It holds only debits with a real counterparty.
     """
 
     handle: str
     opened_at_event: int
     cost_micro: int | None = None
-    carried_micro: int = 0
     realized_micro: Fraction = Fraction(0)
     opened_lots: int = 0
     closed_lots: int = 0
@@ -87,7 +100,9 @@ class ReturnAccount:
     closes: int = 0  # lots this return closed, in whole or in part, as the closer
     earned_micro: int = 0  # paid calls of the service this return registered, while open
     earnings: int = 0  # how many such receipts
-    late_micro: int = 0  # realised P&L already booked to the owner after the outcome was fixed
+    # Realised P&L already booked to the owner after the outcome was fixed, or at the
+    # world's end for an outcome never fixed (``realized_at_termination``).
+    late_micro: int = 0
     # A return no seat authored: a router abstention. It is kept so its handle can
     # never be admitted twice, but it owes no outcome — nothing resolves against it
     # and no payoff forecast may be sealed on it.
@@ -95,6 +110,9 @@ class ReturnAccount:
     # The world tick the return opened at, when the caller keeps a tick clock: the
     # consequence backstop is then counted in ticks, never in internal events.
     opened_at_tick: int | None = None
+    # The venue-clock nanosecond the return opened at, when the caller keeps one: the
+    # consequence horizon is then counted on the venue's clock (wave 16, D2).
+    opened_at_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +130,100 @@ class LotOrder:
     remaining: Fraction
     ordered: Fraction | None = None  # None: an order bound before sizes were tracked
     executed: Fraction = Fraction(0)
+    # Wave 17b: the quantity the venue's own order status reported filled when it said
+    # the order is terminal (filled, cancelled or rejected), or None while the venue
+    # has not said so. Only a venue-confirmed terminal order can no longer fill.
+    confirmed: Fraction | None = None
+    # The instrument the order was placed on (Codex on #152): which venue's fill stream
+    # it can fill on. None for an order bound before instruments were recorded.
+    coin: str | None = None
+
+
+#: The per-account counts ``released`` keeps for accounts no longer in ``returns``.
+RELEASED_COUNTS = ("accounts", "paid_off", "not_paid_off", "marked", "censored_outcomes",
+                   "voided", "lots_opened", "lots_closed", "closes_credited")
+#: What a fill naming a released account's order is: a late realization of its owner
+#: (``LotTable.fill``), booked and never graded.
+RELEASED_ORDER = "the order's return was settled and released"
+#: Why a return's outcome is censored at its horizon when the venue never stated the
+#: taker rate its open lots exit at (wave 16, ruling R10-i): uninformative, not pending.
+FEE_UNKNOWN = "fee_unknown"
+#: Why a return's outcome is censored when an instrument it holds was never priced by
+#: a venue mid at or after its horizon within its patience (Codex on #152): the same
+#: rule a named trade the venue never priced follows; uninformative, never pending.
+NO_MARK = "no_mark"
+
+
+#: The kernel-owned consequence account every kill wind-down (and seal) closing order is
+#: bound to (``LotTable.bind_wind_down``): no decision, no grade, no reward. Its fills
+#: close the lots the venue flattened, FIFO per instrument across owners; it is never a
+#: closer (each opener keeps its whole P&L and pays the closing fee), never opens a lot
+#: and holds no position of its own. What it closes that no lot holds is unattributed.
+WIND_DOWN = "kill:wind-down"
+
+#: The markets whose exit a venue's taker schedule prices (an event token's is not).
+VENUE_FEE_MARKETS = ("perp", "spot")
+
+#: Every stream of world facts a consequence can read (Codex on #152, ruling R10-o), by
+#: venue: each has its own fact-time and its own delivered-through watermark, stated by
+#: the runtime (``ReturnConsequences._stream_watermark``). Hyperliquid's mids, fills and
+#: funding payments (its funding-rate prints are ``hl:rates``, which only named trades
+#: read); Polymarket's events (its fills, cancels and resolutions, one feed) and each
+#: token's book (``pm:book:<instrument>``, its marks). Vault writes open no lot, so no
+#: consequence reads a vault stream.
+FACT_STREAMS = ("hl:mids", "hl:rates", "hl:fills", "hl:funding", "pm:events", "pm:book")
+
+
+def instrument_market(coin: str) -> str:
+    """The market a Hyperliquid instrument trades on: a pair (``BASE/QUOTE``) is spot,
+    anything else a perp; a Polymarket token (``PM:<id>``) is an event."""
+    if coin.startswith("PM:"):
+        return "event"
+    return "spot" if "/" in coin else "perp"
+
+
+def fill_stream(market: str) -> str:
+    """The stream an order on ``market`` fills on: Polymarket's events for an event
+    token, Hyperliquid's fills otherwise."""
+    return "pm:events" if market == "event" else "hl:fills"
+
+
+def instrument_streams(coin: str, market: str, *, acting: bool = True) -> tuple[str, ...]:
+    """The fact streams a consequence on ``coin`` on ``market`` is graded from: the ONE
+    selector both roads use (Codex on #152).
+
+    Guarantees, for a position the return holds (``acting``): its market's marks, its
+    fills and, on a perp, the funding payments charged to it. For a trade the return
+    named and did not take (a declined or attempted trade): its market's marks and, on
+    a perp, the funding-rate prints it is priced with; never fills, and never a
+    funding stream on a spot pair or an event token, which pay no funding.
+    """
+    if market == "event":
+        return (f"pm:book:{coin}", "pm:events") if acting else (f"pm:book:{coin}",)
+    if market == "spot":
+        return ("hl:mids", "hl:fills") if acting else ("hl:mids",)
+    return ("hl:mids", "hl:fills", "hl:funding") if acting else ("hl:mids", "hl:rates")
+
+
+def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, str | None]:
+    """The exit rate of each instrument ``lots`` hold, at the return's horizon.
+
+    A mapping is read per market as stated (a market it does not list carries no fee:
+    absent here). A callable ``(instrument, at_ns)`` is asked for each perp or spot
+    instrument's own rate at the account's opening plus ``horizon_ns`` on the venue's
+    clock, or at ``now_ns`` when either is unknown; an event token carries no venue
+    exit fee. Keyed by instrument (a lot's coin), never pooled across instruments.
+    With no instant to ask at, every perp or spot instrument's rate is None: unknown,
+    so the outcome is ``fee_unknown``, never marked free of its exit fee (fail closed).
+    """
+    if exit_rates is None:
+        return {}
+    if callable(exit_rates):
+        at = (account.opened_at_ns + horizon_ns
+              if account.opened_at_ns is not None and horizon_ns is not None else now_ns)
+        return {lot.coin: None if at is None else exit_rates(lot.coin, at) for lot in lots
+                if lot.market in VENUE_FEE_MARKETS}
+    return {lot.coin: exit_rates[lot.market] for lot in lots if lot.market in exit_rates}
 
 
 @dataclass(frozen=True)
@@ -122,6 +234,14 @@ class LotTable:
     returns: tuple[ReturnAccount, ...] = ()
     orders: tuple[LotOrder, ...] = ()
     services: tuple[tuple[str, str], ...] = ()  # (service id, registering return)
+    # Wave 17b: accounts released once closed and fully settled survive only as these
+    # counts (``RELEASED_COUNTS`` order); their orders as (order id, owning handle,
+    # the caller's release mark, the seat that authored the handle) until the caller
+    # forgets them; and what fills on those orders, or on lots they opened, realised
+    # after the release, as (handle, exact total, booked) until booked.
+    released: tuple[int, ...] = ()
+    released_orders: tuple[tuple[str, str, int, str | None], ...] = ()
+    released_late: tuple[tuple[str, Fraction, int], ...] = ()
 
     def seed_spot(self, coin: str, size: str, px: str) -> "LotTable":
         """Launch inventory has an exact basis and no decision receives opening credit."""
@@ -135,16 +255,20 @@ class LotTable:
             None, coin, True, quantity, price, Fraction(0), "spot",
         )))
 
-    def start(self, handle: str, event: int, tick: int | None = None) -> "LotTable":
+    def start(self, handle: str, event: int, tick: int | None = None,
+              ns: int | None = None) -> "LotTable":
         """Admit a unique return before its orders can produce fills."""
         _require_id(handle)
         _require_event_index(event, "event")
         if tick is not None:
             _require_event_index(tick, "tick")
+        if ns is not None:
+            _require_event_index(ns, "ns")
         if any(r.handle == handle for r in self.returns):
             raise ValueError("return already admitted")
         return replace(self, returns=(*self.returns,
-                                      ReturnAccount(handle, event, opened_at_tick=tick)))
+                                      ReturnAccount(handle, event, opened_at_tick=tick,
+                                                    opened_at_ns=ns)))
 
     def finish(self, handle: str, cost_micro: int) -> "LotTable":
         """Fix a return's nonnegative total compute cost exactly once."""
@@ -170,19 +294,6 @@ class LotTable:
             raise ValueError("only a return that authored nothing may be voided")
         return self._accounts({handle: replace(account, voided=True)})
 
-    def carry(self, handle: str, cost_micro: int) -> "LotTable":
-        """Add a nonnegative retained liability to a return whose outcome is still open.
-
-        Guarantees: a fixed outcome is never reopened, the charge is money, and
-        the return's own final compute cost is left exactly as it was recorded.
-        """
-        require_money(cost_micro, nonnegative=True)
-        account = self.account(handle)
-        if account.payoff is not None:
-            raise ValueError("return outcome already final")
-        return self._accounts({handle: replace(
-            account, carried_micro=account.carried_micro + cost_micro)})
-
     def bind_service(self, service: str, handle: str) -> "LotTable":
         """Bind a registered service to the return that registered it, so the service's
         paid calls are that return's economic consequence. A later version of the
@@ -206,7 +317,10 @@ class LotTable:
         handle = self.service_return(service)
         if handle is None:
             return self
-        account = self.account(handle)
+        try:
+            account = self.account(handle)
+        except KeyError:
+            return self  # released: its outcome was fixed long ago, and stays as it was
         if account.payoff is not None:
             return self
         return self._accounts({handle: replace(
@@ -229,7 +343,39 @@ class LotTable:
             if delta:
                 late[account.handle] = delta
                 updates[account.handle] = replace(account, late_micro=realized)
-        return self._accounts(updates), late
+        table = self._accounts(updates)
+        if not self.released_late:
+            return table, late
+        # What a released account's orders or lots realised after its release: its
+        # owner's money, booked late like any other and never graded (wave 17b).
+        rows = []
+        for handle, total, booked in self.released_late:
+            realized = total.numerator // total.denominator
+            if realized != booked:
+                late[handle] = late.get(handle, 0) + realized - booked
+            if any(lot.handle == handle for lot in self.lots):
+                rows.append((handle, total, realized))
+        return replace(table, released_late=tuple(rows)), late
+
+    def realized_at_termination(self) -> tuple["LotTable", dict[str, int]]:
+        """Hand back the realised P&L of every return whose outcome was never fixed.
+
+        The world is ending: an account with no payoff will never be graded, yet what
+        its lots realised (a close, the kill wind-down's included) is money. Each such
+        account's realised total, less what was handed back before, is its owner's,
+        once; the successor table records it (``late_micro``) so it is never handed
+        back twice. A voided account is no return and holds nothing.
+        """
+        updates, realized = {}, {}
+        for account in self.returns:
+            if account.payoff is not None or account.voided:
+                continue
+            total = account.realized_micro.numerator // account.realized_micro.denominator
+            delta = total - account.late_micro
+            if delta:
+                realized[account.handle] = delta
+                updates[account.handle] = replace(account, late_micro=total)
+        return self._accounts(updates), realized
 
     def account(self, handle: str) -> ReturnAccount:
         """Return the original account or fail for an unknown return."""
@@ -248,18 +394,38 @@ class LotTable:
         except KeyError:
             raise KeyError(handle) from None
 
-    def order(self, order_id: str, handle: str, size: str) -> "LotTable":
+    def order(self, order_id: str, handle: str, size: str, *,
+              coin: str | None = None) -> "LotTable":
         """Bind an accepted order to its calling return; ownership cannot be replaced."""
         _require_id(order_id)
         _require_id(handle)
         quantity = exact(size)
         if quantity <= 0:
             raise ValueError("order size must be positive")
-        if any(o.order_id == order_id for o in self.orders):
+        if any(o.order_id == order_id for o in self.orders) or any(
+                row[0] == order_id for row in self.released_orders):
             raise ValueError("order already attributed")
         if not any(r.handle == handle for r in self.returns):
             raise ValueError("order requires an open consequence account")
-        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity)))
+        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity,
+                                                            coin=coin)))
+
+    def bind_wind_down(self, order_id: str, size: str, *,
+                       coin: str | None = None) -> "LotTable":
+        """Bind a kill wind-down's closing order to the kernel's ``WIND_DOWN`` account.
+
+        Guarantees the same one-owner rule as ``order`` (an order already attributed
+        is refused), without a return account: the wind-down is no decision.
+        """
+        _require_id(order_id)
+        quantity = abs(exact(size))
+        if quantity <= 0:
+            raise ValueError("order size must be positive")
+        if any(o.order_id == order_id for o in self.orders) or any(
+                row[0] == order_id for row in self.released_orders):
+            raise ValueError("order already attributed")
+        return replace(self, orders=(*self.orders, LotOrder(order_id, WIND_DOWN, quantity,
+                                                            quantity, coin=coin)))
 
     def cancel(self, order_id: str) -> "LotTable":
         """Clear unfilled liability without deleting the order's historical ownership."""
@@ -270,6 +436,22 @@ class LotTable:
                 for o in self.orders
             ),
         )
+
+    def confirm(self, order_id: str, filled: str) -> "LotTable":
+        """Record that the venue's own order status says the order is terminal.
+
+        ``filled`` is the quantity that status reports filled. Guarantees the first
+        confirmation stays, an unknown order changes nothing, and nothing else moves:
+        a confirmation is the venue's word that the order can fill no more, and only
+        a confirmed order lets its account be released (``closed``).
+        """
+        quantity = exact(filled)
+        if quantity < 0:
+            raise ValueError("a filled quantity is nonnegative")
+        return replace(self, orders=tuple(
+            replace(o, confirmed=quantity)
+            if o.order_id == order_id and o.confirmed is None else o
+            for o in self.orders))
 
     def fill(
         self,
@@ -298,15 +480,18 @@ class LotTable:
         is not an allocation key: FIFO P&L is computed from actual
         opening/closing prices. A fill whose order belongs to no open account
         is refused rather than pooled, and so is one that would execute more
-        against its order than the order's original quantity.
+        against its order than the order's original quantity. A fill of a kill
+        wind-down's order (``WIND_DOWN``) closes lots like any fill but is never a
+        closer: each opener keeps its whole P&L and pays the closing fee, as under a
+        liquidation, and what matches no lot opens nothing (it is unattributed).
         """
         _require_id(order_id)
         if "/" in coin:
             market = "spot"
-        if market not in ("perp", "spot"):
+        if market not in ("perp", "spot", "event"):
             raise ValueError("unknown market")
-        if market == "spot" and liquidation:
-            raise ValueError("spot lots cannot be liquidated")
+        if market in ("spot", "event") and liquidation:
+            raise ValueError(f"{market} lots cannot be liquidated")
         _require_id(coin)
         if type(is_buy) is not bool or type(liquidation) is not bool:
             raise ValueError("fill side and liquidation must be booleans")
@@ -316,9 +501,29 @@ class LotTable:
         order = next((o for o in self.orders if o.order_id == order_id), None)
         owner = order.handle if order else None
         accounts = {r.handle: r for r in self.returns}
-        if not liquidation and owner not in accounts:
+        released_owner = None
+        if order is None:
+            released_owner = next((row[1] for row in self.released_orders
+                                   if row[0] == order_id), None)
+            if not liquidation and released_owner is not None:
+                # The venue confirmed this order terminal and its account was released,
+                # yet it filled: a venue error, and still real money. The fill moves
+                # the lots as the venue's position did, and what it realises is its
+                # owner's, booked late (``late_realizations``) and never graded.
+                owner = released_owner
+        # Accounts held only for this fill: a released owner's, and the owners of lots
+        # its released orders opened. Their credits go to ``released_late``.
+        transient = {row[1] for row in self.released_orders} | {
+            handle for handle, _total, _booked in self.released_late}
+        transient = {h for h in transient if h not in accounts
+                     and (h == owner or any(lot.handle == h for lot in self.lots))}
+        for handle in transient:
+            accounts[handle] = ReturnAccount(handle, 0)
+        # A kill wind-down's close (``WIND_DOWN``): no closer, no new lot (Sol on #152).
+        kernel = owner == WIND_DOWN
+        if not liquidation and not kernel and owner not in accounts:
             raise ValueError("fill without an open consequence account")
-        if market == "spot" and not is_buy and quantity > sum(
+        if not kernel and market in ("spot", "event") and not is_buy and quantity > sum(
             (lot.size for lot in self.lots if lot.coin == coin and lot.market == market),
             Fraction(0),
         ):
@@ -348,9 +553,10 @@ class LotTable:
             # did. A self-close, or a liquidation (which has no closer, so its
             # fee is the liquidated opener's own cost), leaves it all with the opener.
             closer_pnl = (pnl * price / (lot.px + price)
-                          if owner != lot.handle and not liquidation else Fraction(0))
-            net = pnl - closer_pnl - lot.charges_micro * share - (closing_fee if liquidation
-                                                                  else 0)
+                          if owner != lot.handle and not liquidation and not kernel
+                          else Fraction(0))
+            net = pnl - closer_pnl - lot.charges_micro * share - (
+                closing_fee if liquidation or kernel else 0)
             closer_net += closer_pnl - closing_fee
             closes += 1
             if lot.handle in accounts:
@@ -374,7 +580,7 @@ class LotTable:
                 realized_micro=accounts[owner].realized_micro + closer_net,
                 closes=accounts[owner].closes + closes,
             )
-        if remainder and not liquidation:
+        if remainder and not liquidation and not kernel:
             lots.append(Lot(owner, coin, is_buy, remainder, price,
                             fee * remainder / quantity, market))
             if owner in accounts:
@@ -388,7 +594,19 @@ class LotTable:
             else o
             for o in self.orders
         )
-        return replace(self._accounts(accounts), lots=tuple(lots), orders=orders)
+        table = replace(self._accounts(accounts), lots=tuple(lots), orders=orders)
+        return table._credit_released({h: accounts[h].realized_micro for h in transient})
+
+    def _credit_released(self, credits: Mapping[str, Fraction]) -> "LotTable":
+        """Add released handles' realised credits to ``released_late``, exactly."""
+        credits = {h: c for h, c in credits.items() if c}
+        if not credits:
+            return self
+        rows = {handle: [total, booked] for handle, total, booked in self.released_late}
+        for handle, credit in credits.items():
+            rows.setdefault(handle, [Fraction(0), 0])[0] += credit
+        return replace(self, released_late=tuple(
+            (handle, total, booked) for handle, (total, booked) in rows.items()))
 
     def funding(self, coin: str, paid_usd: str) -> "LotTable":
         """Allocate a signed observed funding payment by open quantity, without rounding."""
@@ -406,17 +624,99 @@ class LotTable:
             ),
         )
 
+    def redeem(self, coin: str, payout: str) -> tuple["LotTable", dict[str, Fraction]]:
+        """Close every event lot of ``coin`` at the price its market resolved to.
+
+        Guarantees each lot's owner is credited once with exactly what the
+        resolution paid for it, ``(payout - entry) * size`` net of the lot's
+        opening fee, and that no closer is credited: the market's resolution
+        closes the position, not another decision. ``payout`` is the price one
+        outcome token redeemed at, 0 to 1 inclusive (0.5 each on a 50-50
+        resolution). Only ``event`` lots move; a coin with none is unchanged.
+        Returns the successor table and the signed micro-USD credited per
+        handle, exact, for the caller's receipts.
+        """
+        _require_id(coin)
+        price = exact(payout)
+        if not 0 <= price <= 1:
+            raise ValueError("an event market pays between 0 and 1 per token")
+        accounts = {r.handle: r for r in self.returns}
+        lots, credited, late = [], {}, {}
+        for lot in self.lots:
+            if lot.coin != coin or lot.market != "event":
+                lots.append(lot)
+                continue
+            net = (price - lot.px) * lot.size * 1_000_000 - lot.charges_micro
+            if lot.handle in accounts:
+                account = accounts[lot.handle]
+                accounts[lot.handle] = replace(
+                    account, realized_micro=account.realized_micro + net,
+                    closed_lots=account.closed_lots + 1)
+                credited[lot.handle] = credited.get(lot.handle, Fraction(0)) + net
+            elif lot.handle is not None:
+                # A lot a released account's order opened after its release (wave 17b).
+                late[lot.handle] = late.get(lot.handle, Fraction(0)) + net
+        if len(lots) == len(self.lots):
+            return self, {}
+        table = replace(self._accounts(accounts), lots=tuple(lots))
+        return table._credit_released(late), credited
+
     def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
                 censored: Mapping[str, str] | None = None,
-                tick: int | None = None) -> "LotTable":
+                tick: int | None = None, now_ns: int | None = None,
+                horizon_ns: int | None = None,
+                exit_rates: Mapping[str, str | None] | None = None,
+                horizon_marks: Mapping[str, Mapping[str, str]] | None = None,
+                horizon_mark_ns: Mapping[str, Mapping[str, int]] | None = None,
+                patience_ns: int | None = None,
+                through_ns: int | None = None,
+                horizon_state: Mapping[str, Mapping[str, Any]] | None = None,
+                through_by_handle: Mapping[str, int | float | None] | None = None
+                ) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
         The backstop counts from the return's opening, including any time awaiting
-        a fill: in world ticks when the caller passes ``tick`` and the account
-        recorded the tick it opened at, in the caller's events otherwise. Accepted
+        a fill: on the venue's clock when the caller passes ``now_ns`` and
+        ``horizon_ns`` and the account recorded the nanosecond it opened at (wave 16,
+        D2), else in world ticks when the caller passes ``tick`` and the account
+        recorded the tick it opened at, else in the caller's events. Accepted
         unfilled orders defer early settlement. A return pays off when the realised
-        result credited to it, as opener or closer, exceeds its own cost, carried
-        liabilities included; a no-fill return cannot inherit anyone's P&L.
+        result credited to it, as opener or closer, exceeds its own cost; a no-fill
+        return cannot inherit anyone's P&L.
+
+        ``exit_rates`` marks every open lot to its liquidation value, the mid less
+        ``mid * size * rate`` (wave 16, D7): either a mapping (market -> the venue's
+        taker rate, a decimal fraction of notional; a market it does not list carries
+        no exit fee) or a callable ``(market, at_ns) -> rate``, asked for the rate at
+        the return's horizon (its opening plus ``horizon_ns``; ruling R10-i). The mid
+        is fixed when the horizon has passed whatever the rate read: a lot whose rate
+        is unknown (None) fixes the outcome censored, ``FEE_UNKNOWN``, never pending.
+        The deduction is an estimate at the mark, never booked as money.
+
+        ``horizon_marks`` (handle -> instrument -> mid): on the venue's clock a
+        return's open lots are marked at the first venue mid of each instrument
+        timestamped at or after its horizon (wave 16, D2), and it waits until every
+        instrument it holds has one; the latest cached ``mids`` never stand in for it.
+        With ``patience_ns``, it waits no longer than its opening plus that patience
+        on the venue's clock (a named trade's own rule): past it, an instrument still
+        without its mark fixes the outcome censored, ``NO_MARK``, uninformative, with
+        the lots that were marked still valued.
+
+        ``through_ns`` is the venue time through which every world fact has been
+        delivered, inclusive. With it, a return's horizon has passed once
+        ``through_ns`` reaches it, and its patience once ``through_ns`` is after it, so
+        an outcome never depends on how the venue's facts were batched or when this
+        runs. ``horizon_state`` (handle ->
+        ``{"lots", "realized", "set_aside", "earned"}``) is a return's economics at its
+        horizon, derived from its facts at or before H (``ReturnConsequences.
+        _states_at_horizon``): a fact after H is late money, never graded, so the
+        outcome values those lots and that money instead of the table's.
+
+        ``through_by_handle`` overrides ``through_ns`` per return: the watermark of
+        exactly the fact streams of what that return holds (``instrument_streams``).
+        ``horizon_mark_ns`` is each mark's own fact time: a mark is final only once the
+        return's streams are delivered through it, since an earlier price at or after
+        H could still arrive on a stream that lags.
 
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
@@ -427,51 +727,209 @@ class LotTable:
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
         updates = {}
+        default_through = through_ns
         for account in self.returns:
             if account.voided or account.cost_micro is None or account.payoff is not None:
                 continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
-            age = (tick - account.opened_at_tick
-                   if tick is not None and account.opened_at_tick is not None
-                   else event - account.opened_at_event)
-            if (lots or waiting) and age < backstop:
+            through_ns = (through_by_handle.get(account.handle, default_through)
+                          if through_by_handle is not None else default_through)
+            if (through_ns is not None and horizon_ns is not None
+                    and account.opened_at_ns is not None):
+                young = through_ns < account.opened_at_ns + horizon_ns
+            elif (now_ns is not None and horizon_ns is not None
+                    and account.opened_at_ns is not None):
+                young = now_ns - account.opened_at_ns < horizon_ns
+            else:
+                age = (tick - account.opened_at_tick
+                       if tick is not None and account.opened_at_tick is not None
+                       else event - account.opened_at_event)
+                young = age < backstop
+            if (lots or waiting) and young:
                 continue
-            net = account.realized_micro
+            state = (horizon_state or {}).get(account.handle)
+            if state is not None:
+                # Frozen before the first fill after H (Codex on #152): what the table
+                # moved since is late money.
+                lots = list(state["lots"])
+                net = state["realized"] + state["set_aside"]
+                earned = state.get("earned", account.earned_micro)
+            else:
+                net = account.realized_micro
+                earned = account.earned_micro
+            exit_fee = Fraction(0)
+            unknown = False
+            unmarked = False
             if lots:
-                if any(lot.coin not in mids for lot in lots):
+                marked = mids
+                if (horizon_marks is not None and horizon_ns is not None
+                        and account.opened_at_ns is not None):
+                    marked = horizon_marks.get(account.handle, {})
+                stamped = (horizon_mark_ns or {}).get(account.handle, {})
+                if through_ns is not None and any(
+                        stamped.get(lot.coin, float("-inf")) > through_ns for lot in lots):
+                    continue  # an earlier price at or after H may still be in flight
+                missing = any(lot.coin not in marked for lot in lots)
+                lapse_clock = through_ns if through_ns is not None else now_ns
+                if missing and not (patience_ns is not None and lapse_clock is not None
+                                    and account.opened_at_ns is not None
+                                    and lapse_clock > account.opened_at_ns + patience_ns):
                     continue
-                for lot in lots:
-                    mid = exact(mids[lot.coin])
-                    if mid <= 0:
+                unmarked = missing
+                valued = [lot for lot in lots if lot.coin in marked]
+                rates = _exit_rates_for(exit_rates, valued, account, now_ns, horizon_ns)
+                if any(rate is None for rate in rates.values()):
+                    unknown = True
+                for lot in valued:
+                    mid = exact(marked[lot.coin])
+                    # An event token resolved worthless is marked at its payout, 0.
+                    if mid < 0 or (mid == 0 and lot.market != "event"):
                         raise ValueError("mark must be positive")
                     net += (mid - lot.px) * lot.size * (
                         1 if lot.is_buy else -1
                     ) * 1_000_000 - lot.charges_micro
+                    if rates.get(lot.coin) is not None:
+                        exit_fee += mid * lot.size * exact(rates[lot.coin]) * 1_000_000
+                net -= exit_fee
             micro = net.numerator // net.denominator
-            # Everything the return cost: its own compute and tools, plus every
-            # liability it was still carrying when the outcome was fixed.
-            cost = account.cost_micro + account.carried_micro
+            # Everything the return cost: its own compute and tools.
+            cost = account.cost_micro
             acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
-            reason = (censored or {}).get(account.handle)
+            reason = ((censored or {}).get(account.handle)
+                      or (NO_MARK if unmarked else FEE_UNKNOWN if unknown else None))
             outcome = Payoff(
                 account.handle,
-                0 if reason else int(acted and micro + account.earned_micro > cost),
+                0 if reason else int(acted and micro + earned > cost),
                 micro,
                 cost,
                 event,
                 bool(lots),
                 account.liquidated,
-                account.earned_micro,
+                earned,
+                exit_fee_micro=-((-exit_fee.numerator) // exit_fee.denominator),
                 censored=reason,
             )
             # An unmarked outcome is settled money, booked to the owner when it is
             # fixed: the late baseline starts there. A marked outcome books nothing
             # at the mark, so everything its account realises, before or after the
-            # mark, is booked late once it is real.
+            # mark, is booked late once it is real. Which one is the graded state's
+            # (its lots at H), never the table's when this runs, so the late money
+            # does not depend on when the outcome was fixed (Codex on #152).
             updates[account.handle] = replace(account, payoff=outcome,
                                               late_micro=0 if lots else micro)
         return self._accounts(updates)
+
+    def closed(self, handle: str) -> bool:
+        """Whether ``handle``'s account can never change again: nothing is owed to it.
+
+        Guarantees True only for an account whose outcome is fixed (or that was
+        voided), whose realised money is all booked to its owner
+        (``late_realizations`` owes it nothing), that owns no open lot (a marked
+        outcome's lots still realise late money for it), and every order of which
+        the venue's own order status confirmed terminal (``confirm``) with no more
+        filled than has been accounted: a cancel acknowledgement, a wall clock or a
+        reward-chain horizon is never the venue's word that an order can fill no
+        more. A released or unknown handle is False.
+        """
+        try:
+            account = self.account(handle)
+        except KeyError:
+            return False
+        if account.payoff is None and not account.voided:
+            return False
+        realized = account.realized_micro.numerator // account.realized_micro.denominator
+        if account.payoff is not None and realized != account.late_micro:
+            return False  # realised money not yet booked to its owner (``late_realizations``)
+        if any(lot.handle == handle for lot in self.lots):
+            return False
+        return all(order.remaining == 0 and order.confirmed is not None
+                   and order.executed >= order.confirmed
+                   for order in self.orders if order.handle == handle)
+
+    def release(self, handles, mark: int, *,
+                authors: Mapping[str, str | None] | None = None) -> "LotTable":
+        """Release closed accounts into counts; their orders keep only their owner.
+
+        Essay II.IV.c: a consequence is "consumed ... and then discarded"; what
+        persists is aggregates. Guarantees every handle is ``closed`` (otherwise
+        ``ValueError`` and the table is unchanged), that ``released_counts`` plus
+        the retained accounts give exactly the counts the unreleased table gave,
+        and that each released account's orders survive as (order id, owner,
+        ``mark``, the owner's author in ``authors``), so a fill the venue still
+        reports on one is booked to its owner (``RELEASED_ORDER``) until
+        ``forget_released_orders`` passes ``mark``. Nothing else changes.
+        """
+        handles = list(dict.fromkeys(handles))
+        if not handles:
+            return self
+        for handle in handles:
+            if not self.closed(handle):
+                raise ValueError(f"account {handle} is open or unknown and cannot be released")
+        authors = authors or {}
+        gone = set(handles)
+        counts = dict(self.released_counts())
+        for account in self.returns:
+            if account.handle not in gone:
+                continue
+            payoff = account.payoff
+            observed = payoff is not None and payoff.censored is None
+            counts["accounts"] += 1
+            counts["paid_off"] += int(observed and payoff.y == 1)
+            counts["not_paid_off"] += int(observed and payoff.y != 1)
+            counts["marked"] += int(observed and payoff.marked)
+            counts["censored_outcomes"] += int(payoff is not None and payoff.censored is not None)
+            counts["voided"] += int(account.voided)
+            counts["lots_opened"] += account.opened_lots
+            counts["lots_closed"] += account.closed_lots
+            counts["closes_credited"] += account.closes
+        return replace(
+            self,
+            returns=tuple(r for r in self.returns if r.handle not in gone),
+            orders=tuple(o for o in self.orders if o.handle not in gone),
+            released=tuple(counts[name] for name in RELEASED_COUNTS),
+            released_orders=(*self.released_orders,
+                             *((o.order_id, o.handle, mark, authors.get(o.handle))
+                               for o in self.orders if o.handle in gone)),
+        )
+
+    def realized_by_handle(self) -> dict[str, Fraction]:
+        """What each handle has realised so far, exactly: a retained account's total,
+        and a released handle's since its release (``released_late``). A caller that
+        attributes realised money by venue diffs this around one operation, so money a
+        released decision realises keeps its venue as a retained one's does."""
+        realized = {r.handle: r.realized_micro for r in self.returns}
+        for handle, total, _booked in self.released_late:
+            realized[handle] = realized.get(handle, Fraction(0)) + total
+        return realized
+
+    def released_counts(self) -> dict[str, int]:
+        """The counts of every released account, by ``RELEASED_COUNTS`` name."""
+        values = self.released or (0,) * len(RELEASED_COUNTS)
+        return dict(zip(RELEASED_COUNTS, values, strict=True))
+
+    def order_owner(self, order_id: str) -> str | None:
+        """The handle that owns ``order_id``: a retained order's, or a released one's."""
+        order = next((o for o in self.orders if o.order_id == order_id), None)
+        if order is not None:
+            return order.handle
+        return next((row[1] for row in self.released_orders if row[0] == order_id), None)
+
+    def released_author(self, handle: str) -> str | None:
+        """The seat that authored a released handle, as its release named it."""
+        return next((row[3] for row in self.released_orders if row[1] == handle), None)
+
+    def forget_released_orders(self, before: int) -> "LotTable":
+        """Forget released orders marked before ``before``, except the orders of a handle
+        still owed late money or holding a lot; a later fill naming a forgotten order
+        is an order no account owns, refused as such and never pooled."""
+        owed = {handle for handle, _total, _booked in self.released_late} | {
+            lot.handle for lot in self.lots}
+        kept = tuple(row for row in self.released_orders
+                     if row[2] >= before or row[1] in owed)
+        if len(kept) == len(self.released_orders):
+            return self
+        return replace(self, released_orders=kept)
 
     def _accounts(self, updates: dict[str, ReturnAccount]) -> "LotTable":
         if not updates:

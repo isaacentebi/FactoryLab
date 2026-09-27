@@ -52,27 +52,26 @@ def inbox(archive):
     return OutcomeInbox(store, ledger, lambda: clock.ns)
 
 
-# ---- garbage collection never removes an owned or public blob ---------------------------
+# ---- garbage collection never removes an owned blob -------------------------------------
 
-def test_collection_removes_only_unreferenced_unpublished_blobs(archive):
+def test_collection_removes_only_unreferenced_blobs(archive):
     ledger, _, store = archive
     owned = store.put(b"a seat's working state", owner="alice", kind="working.state")
-    published = store.put(b"a note the population shares", owner="bob", kind="note",
-                          public=True)
     # An orphan: durable bytes whose reference never landed (a crash between the two).
     orphan_bytes = b"bytes that outlived their failed record"
     orphan = hashlib.sha256(orphan_bytes).hexdigest()
     store._write(orphan, orphan_bytes)
-    # A published record every reference released is still public, and still kept.
-    store.index[published]["refs"] = {}
-    store.index[published]["readers"] = []
 
-    assert store.collect() == [orphan]
+    # A leftover no ledger item ever named is removed without an item (a replay could
+    # not know it was on the disk, so ledgering it would make the two diaries differ).
+    ledger.recovering = True
+    assert store.collect() == [] and orphan in store._memory  # never while recovering
+    ledger.recovering = False
+    assert store.collect() == []
 
     assert store.get(owned) == b"a seat's working state"
-    assert store.get(published) == b"a note the population shares"
     assert orphan not in store._memory and orphan not in store.index
-    assert [row["sha"] for row in ledger.kinds("artifact.collected")] == [orphan]
+    assert ledger.kinds("artifact.collected") == []
     # Collection is idempotent and takes nothing on a second pass.
     assert store.collect() == []
 

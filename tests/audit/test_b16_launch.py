@@ -13,7 +13,7 @@ from factorylab.world.scripted import ScriptedProvider
 
 def test_adapter_construction_failure_creates_no_ledger(tmp_path, monkeypatch):
     base = load_manifest("scripted")
-    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"), drip=None)
+    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"))
     path = tmp_path / "startup.jsonl"
 
     def unavailable(**kwargs):
@@ -33,7 +33,7 @@ def test_crash_at_launch_boundary_has_a_recoverable_snapshot(tmp_path, cut):
     m = load_manifest("scripted")
     path = str(tmp_path / "launch.jsonl")
     rt = Runtime(m, events=2, seed=1, initial_balance_micro=None, ledger_path=path,
-                 drip=False, router_gamma=.1)
+                 router_gamma=.1)
     if cut == "snapshot":
         snapshot = rt._snapshot
 

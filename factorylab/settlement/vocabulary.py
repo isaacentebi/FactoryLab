@@ -11,7 +11,6 @@ from fractions import Fraction
 from factorylab.kernel.events import EventKind
 from factorylab.kernel.money import require_money
 from factorylab.kernel.registry import _freeze
-from factorylab.settlement.fidelity import objection_schema
 from factorylab.settlement.scoring import _require_id, _require_probability
 
 
@@ -38,10 +37,6 @@ class _Unobservable:
 UNOBSERVABLE = _Unobservable()
 
 
-#: An evaluation that could not be made. It is not a low score and not a
-#: censored decision: the commission was answered, and the answer is that the
-#: subject carries nothing this evaluator can measure (GPT-6 third reading,
-#: §6.B: an evaluation "may conclude unmeasured").
 #: Why a judging contract cannot be bought as a child. It is stated here, with
 #: the rest of what a judge may be asked, so the one line in the catalogue's
 #: addressing text and the runtime's refusal say the same thing.
@@ -52,8 +47,6 @@ COMMISSIONED_JUDGE_REFUSAL = (
     "through the router's sampling, the adversarial share and the cascade"
 )
 
-UNMEASURED = "unmeasured"
-UNMEASURED_DEFINITION = "unmeasured-v1"
 #: A seat declining a commission. Paid work may be declined; the call is the
 #: only cost (§6.B, and the deferral contract).
 DECLINED_DEFINITION = "declined-v1"
@@ -64,92 +57,17 @@ def commission_block(*, subject: str | None, scope: str, horizon: int, budget_mi
 
     Evaluation is work someone pays for, not an obligation a seat owes the
     world. The commission says what is being asked about, over what evidence, by
-    when, and for how much; the answer may be a verdict, ``unmeasured``, or a
-    refusal of the commission itself. Nothing here is a quota: a seat that keeps
-    answering ``cannot`` is not penalised for it.
+    when, and for how much. The answer's forms, the decline among them, are the
+    request's outcome schema (``cortex.assembly.judging_contract``), stated there
+    once and not again here (Chapter II §II.b). There is no kernel list of what may
+    be judged (evaluations S1): what a verdict is scored on is a schematic
+    (world.scoring).
     """
     return {
         "subject": subject,
         "scope": scope,
         "horizon_events": int(horizon),
         "budget_micro": int(budget_micro),
-        "you_may": (
-            'answer the commission, answer {"status": "unmeasured", "reason": ...} when the '
-            "subject carries no commitment this evidence can measure, or decline it with "
-            '{"status": "cannot", "reason": ...}; declining costs the call and nothing else'
-        ),
-    }
-
-
-def finding_schema() -> dict:
-    """A fresh schema fragment for an independent finding on a queued adjudication."""
-    return {
-        "type": "object",
-        "description": (
-            "Only when the request carries an adjudication: your independent finding on "
-            "another judge's fidelity objection. You did not write the verdict it rides on "
-            "and you do not own the measurement it challenges."
-        ),
-        "properties": {
-            "upheld": {"type": "boolean"},
-            "reason": {"type": "string"},
-        },
-        "required": ["upheld", "reason"],
-    }
-
-
-def evaluator_answer_schema(
-    forecasts: dict, register: dict, *, include_realized: bool = False
-) -> dict:
-    """The evaluator answer schema, including edition 3's structured fidelity objection.
-
-    It lives here rather than inline in ``runtime.loop`` so the charter's own
-    vocabulary owns what a judge is asked to say, and the loop names it once.
-
-    Edition 3's third round removes the last payoff privilege: ``payoff`` is an
-    optional field like any other forecast, so a judge with nothing to say about
-    the kernel's consequence predicate is not forced to invent a number for it
-    and is not penalised for leaving it out (§7: "Remove the remaining mandatory
-    payoff privilege"). ``status`` lets the same answer conclude that the
-    subject is unmeasured, or decline the commission outright.
-    """
-    properties = {
-        "verdict": {"type": "number", "minimum": 0, "maximum": 1},
-        "payoff": {"type": "number", "minimum": 0, "maximum": 1},
-        "status": {"enum": [UNMEASURED, "cannot"]},
-        "reason": {"type": "string"},
-        "rationale": {"type": "string"},
-        "propensity": {"type": "object"},
-        "forecasts": forecasts,
-        "register": register,
-        "about_handle": {"type": "string"},
-        "fidelity_objection": objection_schema(),
-        "fidelity_finding": finding_schema(),
-    }
-    if include_realized:
-        # The final grounded commission reads an already-fixed return outcome.
-        # A new payoff claim or optional forecast cannot settle before that fact
-        # and the grounded branch deliberately does not open either one.  Keep
-        # them on ordinary evaluator requests, but do not advertise dead fields
-        # here.
-        properties.pop("payoff")
-        properties.pop("forecasts")
-        properties["realized_consequence"] = {
-            "type": "object",
-            "properties": {
-                "status": {"enum": ["supported", "contrary", "unknown"]},
-                "score": {"type": "number", "minimum": 0, "maximum": 1},
-                "evidence": {"type": "array", "items": {"type": "string"}},
-                "reason": {"type": "string"},
-            },
-            "required": ["status", "reason"],
-            "additionalProperties": False,
-        }
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": (["rationale", "verdict", "realized_consequence"]
-                     if include_realized else ["rationale"]),
     }
 
 
@@ -206,6 +124,17 @@ SEED_VOCABULARY = (
         "Minimum window balance is below (1 - fraction) times balance at forecast.",
         drawdown=True,
     ),
+    # Essay II.III.b: "a judge that flagged some anomalous behavior should be duly
+    # incentivized only if that anomalous behavior preceded a true regression or
+    # caused a real failure in the world of the factory" (evaluations M2).
+    _seed(
+        "failure_within",
+        "At least one operational failure the world caused independently of the "
+        "forecaster occurred in the window: a chaos fault drawn for a tick (venue reads "
+        "unavailable, stale mids), or a chaos fault (a withheld tool result, a connector "
+        "timeout), an OrderRejected event or a liquidation fill on a decision outside "
+        "the forecaster's lineage.",
+    ),
 )
 
 # Kernel-only commitment: deliberately absent from SEED_VOCABULARY and Observer.
@@ -217,6 +146,40 @@ RETURN_PAID_OFF = Predicate(
     "horizon_events",
     proposable=False,
 )
+
+
+#: An outcome token's id as the Polymarket CLOB publishes it: decimal digits only.
+TOKEN_ID_PATTERN = r"[0-9]{1,100}"
+
+
+def _event(predicate_id: str, description: str, *, level: bool = False) -> Predicate:
+    properties = {"horizon_events": {"type": "integer", "minimum": 1},
+                  "token_id": {"type": "string", "pattern": f"^{TOKEN_ID_PATTERN}$"}}
+    if level:
+        properties["level"] = {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+    return Predicate(predicate_id, description, {
+        "type": "object", "properties": properties, "required": list(properties),
+        "additionalProperties": False}, "horizon_events")
+
+
+# Seed-logic claims about Polymarket event markets, offered only in a world whose
+# ``[polymarket]`` block is enabled (``PredicateBook(world=...)``). The world measures
+# both: a market's resolution is settled outside the factory (UMA's oracle) and its
+# midpoint is priced by outsiders' money, so a forecast on either is graded by
+# realized consequence and never by another model's reading (essay II.III.b; II.IV.a,
+# "vote on values, bet on beliefs"). The fact is read once, at settlement, from the
+# world's own Polymarket surface (``runtime.polymarket.event_facts``).
+EVENT_VOCABULARY = (
+    _event("event_pays",
+           "At settlement the Polymarket market listing outcome token token_id has "
+           "resolved and the token redeems for 1. A market still open, closed without a "
+           "final resolution, or resolved 50-50 (0.5 a token) does not satisfy it."),
+    _event("event_price_above",
+           "At settlement the price of Polymarket outcome token token_id exceeds level: "
+           "the midpoint of its CLOB book's best bid and ask while its market is open, "
+           "its redemption value once the market has resolved.", level=True),
+)
+EVENT_PREDICATE_IDS = frozenset(p.id for p in EVENT_VOCABULARY)
 
 
 def _require_event_index(value: int, name: str, *, positive: bool = False) -> None:
@@ -232,18 +195,34 @@ def _validate_params(
     _require_id(predicate_id)
     population = (predicate is not None and predicate.id == predicate_id
                   and predicate.code is not None and predicate.proposable)
-    if not population and not any(p.id == predicate_id for p in SEED_VOCABULARY) and not (
+    # An event predicate is known where the world offers it: to a caller holding
+    # that world's definition, or to the kernel sealing a forecast it admitted.
+    event = predicate_id in EVENT_PREDICATE_IDS and (kernel or (
+        predicate is not None and predicate.id == predicate_id and predicate.code is None))
+    if not population and not event and not any(
+            p.id == predicate_id for p in SEED_VOCABULARY) and not (
         kernel and predicate_id == RETURN_PAID_OFF.id
     ):
         raise ValueError(f"unknown predicate: {predicate_id}")
     required = {"horizon_events"}
     if predicate_id == "drawdown_exceeds":
         required.add("fraction")
+    if event:
+        required |= {"token_id", "level"} if predicate_id == "event_price_above" else {
+            "token_id"}
     if not isinstance(params, Mapping) or set(params) != required:
         raise ValueError("params must contain exactly the predicate's declared parameters")
     _require_event_index(params["horizon_events"], "horizon_events", positive=True)
     if predicate_id == "drawdown_exceeds":
         _require_probability(params["fraction"], "fraction")
+    if event:
+        token = params["token_id"]
+        if not isinstance(token, str) or re.fullmatch(TOKEN_ID_PATTERN, token) is None:
+            raise ValueError("token_id must be an outcome token id: decimal digits")
+        if "level" in params:
+            _require_probability(params["level"], "level")
+            if not 0 < params["level"] < 1:
+                raise ValueError("level must be strictly between 0 and 1")
 
 
 MAX_PREDICATE_CODE_CHARS = 8000
@@ -253,7 +232,7 @@ MAX_PREDICATE_DESCRIPTION_CHARS = 500
 def validate_predicate_definition(predicate_id: str, description: str, code: str) -> None:
     """Only bounded, synchronous resolver definitions can reach a jailed preflight."""
     if isinstance(predicate_id, str) and predicate_id in (
-        {p.id for p in SEED_VOCABULARY} | {RETURN_PAID_OFF.id}
+        {p.id for p in SEED_VOCABULARY} | {RETURN_PAID_OFF.id} | EVENT_PREDICATE_IDS
     ):
         raise ValueError("seed and kernel predicate ids cannot be redefined")
     if not isinstance(predicate_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,47}", predicate_id):
@@ -281,16 +260,22 @@ class PredicateBook:
     def __init__(
         self, registered: dict[str, list[dict]] | None = None, *,
         run: Callable[[str, dict], tuple[bool | None, str | None]] | None = None,
+        world: tuple[Predicate, ...] = (),
     ) -> None:
         self.registered = registered if registered is not None else {}
         self._run = run
+        # Seed-logic predicates about a surface this world enables (EVENT_VOCABULARY),
+        # fixed for the world's life by its manifest; empty in every other world.
+        if any(p not in EVENT_VOCABULARY for p in world):
+            raise ValueError("world predicates come from the kernel's event vocabulary")
+        self._world = tuple(world)
 
     def get(self, name: str, version: int | None = None) -> Predicate | None:
         """An explicit version resolves that definition, never a later replacement."""
         _require_id(name)
         if version is not None and (type(version) is not int or version < 1):
             raise ValueError("predicate version must be a positive integer")
-        seed = next((p for p in SEED_VOCABULARY if p.id == name), None)
+        seed = next((p for p in (*SEED_VOCABULARY, *self._world) if p.id == name), None)
         if seed is not None:
             return seed if version in (None, seed.version) else None
         history = self.registered.get(name, ())
@@ -299,8 +284,10 @@ class PredicateBook:
         return Predicate(**history[-1 if version is None else version - 1])
 
     def all(self) -> list[Predicate]:
-        """The current public vocabulary contains the seeds and each latest population version."""
-        return list(SEED_VOCABULARY) + [self.get(name) for name in sorted(self.registered)]
+        """The current public vocabulary: the seeds, this world's own, each latest population
+        version."""
+        return [*SEED_VOCABULARY, *self._world,
+                *(self.get(name) for name in sorted(self.registered))]
 
     def catalogue(self) -> list[dict]:
         """Public metadata retains versioned parameter schemas without private handles."""
@@ -375,6 +362,14 @@ class WindowFacts:
     min_balance_in_window: int
     events: tuple[dict, ...]
     public_window: dict | None = None
+    #: The failures in the window the forecaster's own lineage did not cause, as the
+    #: runtime counts them for ``failure_within`` (None when no runtime counted).
+    independent_failures: int | None = None
+    #: One outcome token as the world read it at settlement, for an event predicate:
+    #: ``listed``, ``closed``, ``payout`` (its redemption value once resolved, else
+    #: None) and ``midpoint`` (of the CLOB book's best bid and ask, read only for a
+    #: price claim on an unresolved market, else None), numbers as decimal strings.
+    event: dict | None = None
 
     def __post_init__(self) -> None:
         for balance in (
@@ -397,6 +392,28 @@ class WindowFacts:
             if not isinstance(self.public_window, Mapping):
                 raise ValueError("public_window must contain public observation facts")
             object.__setattr__(self, "public_window", _freeze(self.public_window))
+        if self.event is not None:
+            if not isinstance(self.event, Mapping) or type(self.event.get("listed")) is not bool:
+                raise ValueError("event must state whether the token is listed")
+            object.__setattr__(self, "event", _freeze(self.event))
+
+
+def _event_outcome(predicate_id: str, params: Mapping, event: Mapping | None) -> int | None:
+    """What the world's read of one token says about an event claim, or None.
+
+    None means no fact: no read was supplied, the token is not listed (the claim
+    named nothing the world lists), or a price claim met a market with neither a
+    redemption value nor a midpoint. Prices compare exactly, as fractions.
+    """
+    if event is None or not event.get("listed"):
+        return None
+    payout = event.get("payout")
+    if predicate_id == "event_pays":
+        return int(payout is not None and Fraction(str(payout)) == 1)
+    price = payout if payout is not None else event.get("midpoint")
+    if price is None:
+        return None
+    return int(Fraction(str(price)) > Fraction(str(params["level"])))
 
 
 class Observer:
@@ -422,6 +439,8 @@ class Observer:
             return None if value is None else int(value)
         if version not in (None, 1):
             raise ValueError("unknown seed predicate version")
+        if predicate_id in EVENT_PREDICATE_IDS:
+            return _event_outcome(predicate_id, params, facts.event)
         if predicate_id == "wallet_up":
             return int(facts.balance_at_settlement > facts.balance_at_forecast)
         if predicate_id == "drawdown_exceeds":
@@ -433,6 +452,18 @@ class Observer:
             )
         if predicate_id == "rejected_within":
             return int(any(event["kind"] == EventKind.ORDER_REJECTED for event in facts.events))
+        if predicate_id == "failure_within":
+            # The #132 review, item 4: a failure the forecaster could cause itself (a
+            # call it made that a fault struck, an order of its own refused) would let
+            # it manufacture its own outcome. The runtime counts only what its lineage
+            # did not cause; without that count, only the faults the kernel draws for a
+            # tick, which no seat's action can trigger, are evidence.
+            if facts.independent_failures is not None:
+                return int(facts.independent_failures > 0)
+            return int(any(
+                fault.get("seat") is None
+                for event in facts.events for fault in event.get("faults", ())
+                if isinstance(fault, Mapping)))
         return int(
             any(
                 event["kind"] == EventKind.FILL

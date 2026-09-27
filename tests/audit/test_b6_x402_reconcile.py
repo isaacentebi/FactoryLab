@@ -1,5 +1,7 @@
 """B6: an uncertain payment closes its hold and gets a reserve observation at the next tick."""
 
+import pytest
+
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.request import Request
 from factorylab.kernel.events import Event, EventKind
@@ -8,7 +10,13 @@ from factorylab.world.models import TokenPrice
 from tests.audit.test_audit_money_paths import MODEL, _seller_that_drops_the_paid_request
 from tests.conftest import make_runtime
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
 
+
+
+@pytest.mark.gate  # steps a world event through the runtime
 def test_next_tick_reconciles_uncertainty_without_recharging_or_inventing_a_refund(monkeypatch):
     rt = make_runtime()
     try:

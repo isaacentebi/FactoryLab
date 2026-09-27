@@ -48,13 +48,12 @@ def _live_runtime(namespace: str | None = NAMESPACE) -> Runtime:
     manifest = replace(
         manifest,
         exchange=replace(manifest.exchange, kind="hyperliquid", client_namespace=namespace),
-        drip=None,
-    )
+        )
     venue = IdentityVenue()
     if namespace is not None:
         venue._client_namespace = namespace
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                   ledger_path=None, drip=False, router_gamma=0.1,
+                   ledger_path=None, router_gamma=0.1,
                    exchange=venue, provider=ScriptedProvider())
 
 

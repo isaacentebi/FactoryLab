@@ -1,9 +1,11 @@
 """One bounded web search, bought at cost from the world's search-capable route.
 
 A seat that needs to know something the venue cannot tell it calls ``web.search``
-on purpose and pays for it: the manifest's flat call price plus the metered cost
-of exactly one model call on a route the provider searches with (OpenRouter's
-``:online`` web plugin, Venice's ``enable_web_search``). It is a kernel call, not
+on purpose and pays for it: the metered cost of exactly one model call on a
+route the provider searches with (OpenRouter's ``:online`` web plugin, whose
+per-request charge is in that cost, or Venice's ``enable_web_search``). Nothing
+is added on top: the provider is the only one paid, and the wallet moves only
+when money moves. It is a kernel call, not
 a wake — no propensity, no judgement, no return — so its cost lands on the
 calling seat's consequence account the way a connector read's does.
 
@@ -140,8 +142,8 @@ def _refused(rt, action_id: str, handle: str, reason: str, **fields) -> tuple[di
 def run(rt, action_id: str, handle: str, args: dict) -> tuple[dict, int]:
     """Reserve first, search once, return the bounded list only after the debit.
 
-    Guarantees the seat's entitlement covers the flat call price plus the whole
-    completion ceiling before the route is called; that a search whose ceiling
+    Guarantees the seat's entitlement covers the whole completion ceiling before
+    the route is called; that a search whose ceiling
     exceeds the manifest's ``max_call_usd`` is refused before any call; and that a
     failure is charged what the wallet was actually charged, never the ceiling it
     was refused at.
@@ -149,7 +151,7 @@ def run(rt, action_id: str, handle: str, args: dict) -> tuple[dict, int]:
     from factorylab.runtime.worlds import online_id
 
     spec = rt.m.web
-    error = _validate_args(web_search_spec(0, "0")["args_schema"], args)
+    error = _validate_args(web_search_spec("0")["args_schema"], args)
     if error is None:
         query = args["query"].strip()
         limit = args.get("max_results", DEFAULT_RESULTS)
@@ -169,8 +171,7 @@ def run(rt, action_id: str, handle: str, args: dict) -> tuple[dict, int]:
     )
     price = rt.prices.price(model_id)
     prompt_chars = len(req.system) + sum(len(str(m["content"])) for m in req.messages)
-    ceiling = spec.call_price_micro + price.cost(
-        int(prompt_chars * INPUT_SLACK) + 64, MAX_TOKENS)
+    ceiling = price.cost(int(prompt_chars * INPUT_SLACK) + 64, MAX_TOKENS)
     if ceiling > spec.max_call_micro:
         return _refused(rt, action_id, handle, REFUSALS["cap"], **fields)
     if ceiling > rt.wallet.available_for(handle, "tool:web.search"):
@@ -184,11 +185,9 @@ def run(rt, action_id: str, handle: str, args: dict) -> tuple[dict, int]:
         return response, parse_results(response.text, limit)
 
     def cost_of(answered: tuple[ModelResponse, list | None]) -> int:
-        response, results = answered
-        # A route that did not answer with a list sold nothing: the metered call is
-        # charged because the provider billed it, the tool's own price is not.
-        flat = 0 if results is None else spec.call_price_micro
-        return flat + _model_cost(rt.prices, price, response)
+        # What the provider billed, whether or not the route answered with a list.
+        response, _results = answered
+        return _model_cost(rt.prices, price, response)
 
     settlement = rt.bill_settlement
     try:

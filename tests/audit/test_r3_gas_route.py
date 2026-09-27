@@ -145,24 +145,31 @@ def test_r3_gas_route_is_ledgered_before_submission_and_forward_fees_are_window_
     assert treasury.transfer("to_reserve", "10", handle="d", now_ns=12)["status"] == "submitted"
 
 
-STRAND = "forwarded mint not delivered within treasury.forward_wait_windows"
+STRAND = "forwarded mint not delivered within treasury.forward_wait_ticks"
+
+
+def _tick(treasury, now_ns):
+    """The runtime states the world tick before each treasury tick (time audit T13)."""
+    treasury.tick_index = now_ns
+    return treasury.tick(now_ns)
 
 
 def test_r3_a_forward_never_delivered_strands_after_the_bound_stays_recoverable_and_unblocks():
-    treasury, rail, wallet, records = setup(forward_wait_windows=2)
+    treasury, rail, wallet, records = setup(forward_wait_ticks=7)
     treasury.open_window(1)
     treasury.transfer("to_reserve", "10", handle="a", now_ns=1)
-    treasury.tick(2)  # the burn confirms; the forwarder has not minted
-    assert treasury.state["index"] == 1 and treasury.state["pending"]["since_window"] == 1
+    _tick(treasury, 2)  # the burn confirms; the forwarder has not minted
+    assert treasury.state["index"] == 1 and treasury.state["pending"]["since_tick"] == 2
     treasury.open_window(2)
     for now_ns in range(3, 8):
-        treasury.tick(now_ns)
-    # One window boundary is not the bound: the wait goes on and the slot stays taken.
+        _tick(treasury, now_ns)
+    # A cap-window boundary is not the bound, and neither is a wait short of the ticks:
+    # the wait goes on and the slot stays taken.
     assert treasury.state["status"] == "submitted"
     assert treasury.transfer("to_reserve", "10", handle="b", now_ns=8) == {
         "status": "refused", "error": "a previous transfer is still pending or stranded"}
     treasury.open_window(3)
-    treasury.tick(9)
+    _tick(treasury, 9)
     assert treasury.state["status"] == "stranded" and treasury.state["recoverable"] is True
     assert "pending" not in treasury.state
     failed = next(i for i in records if i["kind"] == "treasury.failed")
@@ -170,7 +177,7 @@ def test_r3_a_forward_never_delivered_strands_after_the_bound_stays_recoverable_
     assert failed["reason"] == STRAND and failed["state"]["recoverable"] is True
     assert failed["waited"] == {"step": "mint_base", "phase": "prepare", "attempts": 7,
                                 "reason": "awaiting the Circle forwarder's Base mint",
-                                "since_ns": 2, "since_window": 1,
+                                "since_ns": 2, "since_window": 1, "since_tick": 2,
                                 "reference": {"scanned_to": 100}}
     # The burned principal is still held and public; the money pots observe again.
     assert wallet.balance == 99_000_000 and wallet.available == 89_000_000

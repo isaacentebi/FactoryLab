@@ -9,8 +9,13 @@ declared in ``factorylab.runtime.resume`` as derived (rebuilt on demand from
 checkpointed state), transient (belongs to this process, not the world) or
 unordered (a mapping whose order carries no meaning). A new field that is none of
 these fails here, naming its class and attribute.
+
+The same 100-tick world is the uninterrupted reference of a late crash: a world
+killed near its end resumes to the same diary and summary (the early crash points
+are test_retained_state_crash's, over 30 ticks).
 """
 
+import json
 from collections import deque
 from dataclasses import fields, is_dataclass
 from decimal import Decimal
@@ -20,9 +25,10 @@ from types import MappingProxyType
 
 import pytest
 
+from factorylab.kernel.ledger import Ledger
 from factorylab.runtime import resume
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.resume import restore_runtime, runtime_state
+from factorylab.runtime.resume import restore_runtime, resume_world, runtime_state
 from factorylab.runtime.worlds import load_manifest
 from tests.conftest import make_runtime
 
@@ -94,10 +100,31 @@ def restored_twin(rt):
     return twin
 
 
-@pytest.mark.gate
-def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
-    rt = Runtime(load_manifest("scripted"), events=100, seed=1, initial_balance_micro=None,
-                 ledger_path=str(tmp_path / "world.jsonl"), drip=True, router_gamma=.1)
+EVENTS = 100
+
+
+def _runtime(path):
+    return Runtime(load_manifest("scripted"), events=EVENTS, seed=1,
+                   initial_balance_micro=None, ledger_path=str(path), router_gamma=.1)
+
+
+def _items(path):
+    manifest = json.loads(load_manifest("scripted").canonical_json())
+    return Ledger.reopen(str(path), manifest=manifest)._recovery_items()
+
+
+def _summary(summary):
+    summary = json.loads(json.dumps(summary, default=str))
+    summary["stats"]["resumes"] = 0
+    return {k: v for k, v in summary.items() if k not in ("ledger_path", "ledger")}
+
+
+@pytest.fixture(scope="module")
+def world(tmp_path_factory):
+    """One 100-tick scripted world, walked against a restored twin at every 150th event
+    (the walk reads; it writes nothing the world or its diary sees)."""
+    path = tmp_path_factory.mktemp("coverage") / "world.jsonl"
+    rt = _runtime(path)
     original = rt._process_event
     differences: dict[str, tuple] = {}
     seen: set[str] = set()
@@ -120,7 +147,13 @@ def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
         return result
 
     rt._process_event = compare
-    rt.run()
+    summary = rt.run()
+    return {"differences": differences, "seen": seen, "stops": stops, "n": rt.n,
+            "summary": _summary(summary), "items": _items(path)}
+
+
+def test_every_attribute_a_world_carries_is_checkpointed_or_declared(world):
+    differences, seen, stops = world["differences"], world["seen"], world["stops"]
     assert len(stops) >= 8, stops
     assert not differences, (
         "state that is neither checkpointed nor declared derived/transient/unordered "
@@ -130,6 +163,46 @@ def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
     assert not declared - seen, f"declared state no runtime carries: {declared - seen}"
 
 
+class Crash(BaseException):
+    """The process dies here: nothing after it runs, nothing catches it."""
+
+
+def test_a_late_crash_resumes_to_the_uninterrupted_run(world, tmp_path):
+    """Killed between events at nine tenths of the world, long after every early
+    crash point and after its reserve windows have closed many times, the world
+    resumes to the uninterrupted one's diary and summary."""
+    path = tmp_path / "world.jsonl"
+    rt = _runtime(path)
+    late = world["n"] * 9 // 10
+    process = rt._process_event
+
+    def die_late(event):
+        result = process(event)
+        if rt.n == late:
+            raise Crash
+        return result
+
+    rt._process_event = die_late
+    with pytest.raises(Crash):
+        rt.run()
+    before = _items(path)
+    summary = resume_world(load_manifest("scripted"), str(path))
+    after = _items(path)
+    assert after[:len(before)] == before
+    assert _summary(summary) == world["summary"]
+    # Past the resume's own block (resume.begin, its reconciling read, and the items up
+    # to the closing ``resume``), the diary is the uninterrupted one's, item kind by
+    # item kind. Contents are not compared: an item may point at a sequence number,
+    # which the resume's own items shift.
+    kinds = [i["kind"] for i in after if i["kind"] != "snapshot"]
+    begin = kinds.index("resume.begin")
+    end = kinds.index("resume", begin)
+    assert set(kinds[begin:end + 1]) <= {"resume.begin", "io.call", "io.result",
+                                         "resume.reconcile", "resume.timeouts", "resume"}
+    assert kinds[:begin] + kinds[end + 1:] == [
+        i["kind"] for i in world["items"] if i["kind"] != "snapshot"]
+
+
 def test_declarations_say_why():
     for table in (resume._DERIVED_STATE, resume._TRANSIENT_STATE, resume._UNORDERED_STATE):
         for name, reason in table.items():
@@ -137,39 +210,59 @@ def test_declarations_say_why():
     assert len(resume._RUNTIME_FIELDS) == len(set(resume._RUNTIME_FIELDS))
 
 
-def test_objections_adjudications_receipts_waits_and_venue_deltas_survive_a_restore():
-    from factorylab.settlement.fidelity import FidelityObjection
-    from factorylab.settlement.receipts import Adjudication, ExecutionReceipt, LearningReceipt
+def test_receipts_waits_and_venue_deltas_survive_a_restore():
+    from factorylab.settlement.receipts import ExecutionReceipt, LearningReceipt
 
     rt = make_runtime()
-    adjudication = Adjudication(value="useful inquiry", measurement="well_formed_rate",
-                                evidence="counted, not read", objector="eval-a",
-                                objection_handle="decision-7", about_handle="decision-3",
-                                uncertainty=.25)
-    identity = rt.book.receipts.record(adjudication)
-    rt.book.receipts.record(LearningReceipt(
+    learning = LearningReceipt(
         handle="decision-7", assessed="eval-a", scoring_rule="brier", rule_version="v1",
-        horizon=3, outcome=1, score=.1))
+        horizon=3, outcome=1, score=.1)
+    identity = rt.book.receipts.record(learning)
     rt.consequences.receipts.record(ExecutionReceipt(
         kind="fill", handle="decision-3", owner="seed-decider", at_event=4,
         facts={"coin": "BTC"}))
-    rt.settler._Settler__objections["decision-7"] = FidelityObjection(
-        value="useful inquiry", measurement="well_formed_rate", evidence="counted, not read",
-        uncertainty=.25)
-    rt.open_adjudications["eval-b"] = identity
-    rt.meta_waiting_since["eval-a"] = 17
+    rt.consequence_scores["decision-9"] = (0.625, 17)
+    rt.world_outcomes["decision-3"] = {"state": "measured", "y": 1.0,
+                                       "kind": "return_paid_off", "tick": 17}
     rt.venue_deltas["decision-3"] = {"venue_perps": -20}
     twin = restored_twin(rt)
     assert list(twin.book.receipts) == list(rt.book.receipts)
     assert list(twin.consequences.receipts) == list(rt.consequences.receipts)
     assert twin.settler.receipts() is twin.book.receipts
-    assert twin.settler.objection("decision-7") == rt.settler.objection("decision-7")
-    assert twin.open_adjudications == {"eval-b": identity}
-    assert twin._adjudication_for("eval-b") == adjudication  # the finding still lands
-    assert twin.meta_waiting_since == {"eval-a": 17}
+    assert twin.consequence_scores == {"decision-9": (0.625, 17)}
+    assert twin.world_outcomes == rt.world_outcomes
     assert twin.venue_deltas == {"decision-3": {"venue_perps": -20}}
     # An identical re-record after the restore writes nothing, as it would have before.
     written = []
     twin.ledger.append = written.append
-    assert twin.book.receipts.record(adjudication) == identity
+    assert twin.book.receipts.record(learning) == identity
     assert written == []
+
+
+def test_a_checkpoint_carrying_the_deleted_adjudication_pipeline_restores_without_it():
+    """Evaluations U1: the fidelity adjudication is deleted; an older checkpoint's
+    adjudication receipt, open adjudication queue and settler objections are read and
+    ignored, and everything else restores exactly."""
+    from factorylab.settlement.receipts import LearningReceipt
+
+    rt = make_runtime()
+    rt.book.receipts.record(LearningReceipt(
+        handle="decision-7", assessed="eval-a", scoring_rule="brier", rule_version="v1",
+        horizon=3, outcome=1, score=.1))
+    state = runtime_state(rt)
+    adjudication = {"$record": "Adjudication", "fields": {
+        "value": "useful inquiry", "measurement": "well_formed_rate",
+        "evidence": "counted, not read", "objector": "eval-a",
+        "objection_handle": "decision-7", "about_handle": "decision-3",
+        "uncertainty": .25}}
+    books = dict(state["receipts"]["$map"])
+    books["book.receipts"].append(adjudication)
+    state["runtime"]["$map"].append(["open_adjudications", {"$map": [["eval-b", "adjud:x"]]}])
+    settler = dict(state["components"]["$map"])["settler"]["$map"]
+    settler.append(["objections", {"$map": [["decision-7", {
+        "$record": "FidelityObjection", "fields": {"value": "v"}}]]}])
+    twin = Runtime(rt.m, ledger_path=None, **state["config"])
+    restore_runtime(twin, state)
+    assert list(twin.book.receipts) == list(rt.book.receipts)
+    assert not hasattr(twin, "open_adjudications")
+    assert not hasattr(twin.settler, "_Settler__objections")

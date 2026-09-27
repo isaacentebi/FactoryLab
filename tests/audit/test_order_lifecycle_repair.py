@@ -66,11 +66,11 @@ def test_interruption_during_final_reconciliation_replays_once(tmp_path, cut_kin
     from factorylab.world.scripted import ScriptedProvider
 
     manifest = load_manifest("scripted")
-    manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"), drip=None)
+    manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"))
     path = str(tmp_path / "terminal.jsonl")
     exchange = FakeExchange()
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                 ledger_path=path, drip=False, router_gamma=.1, exchange=exchange,
+                 ledger_path=path, router_gamma=.1, exchange=exchange,
                  provider=ScriptedProvider(), clock_source=LiveClock(1, 0, now_ns=lambda: 0))
     rt.ledger.active = True
     rt._launch()

@@ -92,8 +92,7 @@ def runtime(openrouter, venice, *, path=None, roster=ROSTER, events=12):
                 treasury=replace(m.treasury, insolvency_events=3))
     provider = MultiProvider(openrouter=openrouter, venice=venice)
     return Runtime(m, events=events, seed=4, initial_balance_micro=None,
-                   ledger_path=str(path) if path else None, drip=False,
-                   router_gamma=.1, provider=provider)
+                   ledger_path=str(path) if path else None, router_gamma=.1, provider=provider)
 
 
 def test_unseeded_venice_cannot_rescue_an_empty_openrouter_population():

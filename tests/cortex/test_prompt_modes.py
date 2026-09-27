@@ -25,6 +25,7 @@ from factorylab.cortex.assembly import reserved_return_fields
 from factorylab.cortex.schematics import (
     INSTITUTION_INLINE_KEYS,
     INSTITUTION_SECTIONS,
+    MOVING_INSTITUTION_KEYS,
 )
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import PromptSpec, load_manifest, manifest_from_dict
@@ -42,7 +43,7 @@ def runtime(mode="reference", *, max_tool_calls=None):
     if max_tool_calls is not None:
         manifest = replace(manifest, tools=replace(manifest.tools, max_tool_calls=max_tool_calls))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+                   router_gamma=0.1, provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
 
 
@@ -55,7 +56,9 @@ def test_disabled_retrieval_keeps_the_exact_institutional_reference_inline():
     rt = runtime("compact", max_tool_calls=0)
     institutions = rt._institutional_block()
     _, body = rt._institution_text(institutions)
-    assert json.loads(body) == json.loads(json.dumps(institutions))
+    # Every institution but the ones whose values move, which INPUTS carries.
+    assert json.loads(body) == json.loads(json.dumps(
+        {k: v for k, v in institutions.items() if k not in MOVING_INSTITUTION_KEYS}))
     prefix = rt._stable_prefix_text()
     assert '"action_labels"' in prefix
     assert "sections_not_carried" not in prefix
@@ -72,31 +75,31 @@ def test_reference_is_the_default_and_renders_what_it_always_rendered(modes):
         assert f'"{section}"' in prefix
 
 
-def test_an_unnamed_mode_and_an_unpublished_address_leave_the_manifest_hash_alone():
-    raw = {"name": "scripted", "seed": 1, "initial_balance_usd": "10",
-           "exchange": {"kind": "fake"}}
+def test_the_prompt_mode_is_hashed_named_or_not():
+    """R8: the default mode is part of the identity too, not dropped to keep an old hash."""
     base = load_manifest("worlds/scripted.toml")
     assert base.manifest_hash() == replace(
         base, prompt=PromptSpec(mode="reference")).manifest_hash()
-    assert "prompt" not in base.canonical_json()
+    assert '"prompt":{"mode":"reference"}' in base.canonical_json()
+    # R11: there is no addressing capability for a manifest to name.
     assert "address_enabled" not in base.canonical_json()
-    assert base.tools.address_enabled is False
-    # A named mode is part of the world it defines, so it does change the identity.
+    assert not hasattr(base.tools, "address_enabled")
+    # A different mode is a different world.
     assert base.manifest_hash() != replace(base, prompt=PromptSpec(mode="compact")).manifest_hash()
-    assert raw  # the loader is exercised through load_manifest above
 
 
 def test_a_refused_mode_or_key_is_refused_at_load():
+    from tests.seed_charter import seed_charter_table
+
     def load(table):
         manifest_from_dict({"name": "w", "seed": 1, "initial_balance_usd": "1",
-                            "exchange": {"kind": "fake"}, **table})
+                            "exchange": {"kind": "fake"}, "charter": seed_charter_table(),
+                            "immune": {"price_step": 0.05}, **table})
 
     with pytest.raises(ValueError, match="prompt.mode"):
         load({"prompt": {"mode": "short"}})
     with pytest.raises(ValueError, match="prompt accepts only mode"):
         load({"prompt": {"mode": "compact", "max_bytes": 8000}})
-    with pytest.raises(ValueError, match="address_enabled"):
-        load({"tools": {"address_enabled": "true"}})
 
 
 def test_compact_keeps_the_norms_the_prices_and_everything_a_return_is_judged_by(modes):
@@ -121,13 +124,10 @@ def test_compact_names_every_section_it_does_not_carry(modes):
     block = reference._institutional_block()
     directory = compact._institutional_directory(block)
     named = set(directory["sections"])
-    assert named == set(block) - INSTITUTION_INLINE_KEYS
+    assert named == set(block) - INSTITUTION_INLINE_KEYS - MOVING_INSTITUTION_KEYS
     assert named  # a compaction that carried everything would prove nothing
     for section in directory["sections"]:
         assert section in INSTITUTION_SECTIONS
-        assert directory["sections"][section] == len(
-            json.dumps(block[section], sort_keys=True, indent=2).encode("utf-8")
-        )
     # Every handle the directory prints is a handle the reader can actually use.
     for section in named:
         assert compact.institution_section(section) == block[section]
@@ -253,7 +253,7 @@ def test_a_compact_request_drops_the_manual_and_keeps_the_request(modes):
     assert lean_inputs == rich_inputs
     limit = compact.m.tools.max_tool_calls
     instruction = (
-        f"This response may contain at most {limit} tool_calls; prioritize the reads you need."
+        f"This response may contain at most {limit} tool_calls."
     )
     assert instruction in dict(rich.sections())["outcome_schema"]
     assert instruction in dict(lean.sections())["outcome_schema"]

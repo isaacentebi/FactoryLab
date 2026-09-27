@@ -12,6 +12,22 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 
+# ---- checkpoints ---------------------------------------------------------
+
+
+def keep_every_checkpoint(monkeypatch):
+    """Keep every checkpoint file a run writes, instead of only the latest.
+
+    A world keeps one rolling checkpoint (``runtime/sidecar.py``): once a newer one is
+    in the diary, no resume can start from an older one. A test that cuts a finished
+    diary back to an older checkpoint, which no running world can do, uses this so the
+    checkpoint that prefix names is still beside it.
+    """
+    from factorylab.runtime.sidecar import CheckpointStore
+
+    monkeypatch.setattr(CheckpointStore, "retire_others", lambda self, reference: None)
+
+
 # ---- spot inventory ------------------------------------------------------
 
 
@@ -25,7 +41,7 @@ def spot_venue():
 def spot_runtime(exchange):
     """A scripted runtime with no ledger file, trading on ``exchange``."""
     return Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=False, router_gamma=.1, provider=ScriptedProvider(),
+                   ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
                    exchange=exchange)
 
 
@@ -44,8 +60,8 @@ def spot_producer(rt):
 def venue_runtime(*, venue_usd="1000", wallet_micro=1_000_000) -> Runtime:
     """A scripted world whose venue is rich and whose compute wallet is not."""
     rt = Runtime(load_manifest("scripted"), events=0, seed=1,
-                 initial_balance_micro=wallet_micro, ledger_path=None, drip=False,
-                 router_gamma=.1, provider=ScriptedProvider(),
+                 initial_balance_micro=wallet_micro, ledger_path=None, router_gamma=.1,
+                 provider=ScriptedProvider(),
                  exchange=FakeExchange(start_cash_usd=Decimal(venue_usd)))
     rt._manage_reserve_window()
     return rt

@@ -10,7 +10,7 @@ from factorylab.runtime.worlds import PromptSpec, load_manifest
 def runtime(mode="compact"):
     manifest = replace(load_manifest("scripted"), prompt=PromptSpec(mode=mode))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=False, router_gamma=0.1)
+                   ledger_path=None, router_gamma=0.1)
 
 
 def read(rt, section):

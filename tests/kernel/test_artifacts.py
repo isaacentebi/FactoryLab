@@ -61,11 +61,10 @@ def test_put_writes_bytes_before_ledgering_and_get_returns_the_same_bytes(tmp_pa
     assert archive.get(sha) == data
     assert archive.owner_for(sha) == "prog-a"
     assert archive.list() == [{"sha": sha, "owner": "prog-a", "kind": "program.state",
-                               "bytes": len(data), "ts": 8, "public": False,
+                               "bytes": len(data), "ts": 8,
                                "readers": ["prog-a"],
-                               "refs": {"prog-a": {"kind": "program.state", "ts": 8,
-                                                   "public": False}}}]
-    assert archive.entries() == [(sha, "prog-a", False, len(data), 8)]
+                               "refs": {"prog-a": {"kind": "program.state", "ts": 8}}}]
+    assert archive.entries() == [(sha, "prog-a", len(data), 8)]
 
 
 def test_put_is_idempotent_by_content_and_the_first_owner_stands(tmp_path):
@@ -125,8 +124,9 @@ def test_put_validates_its_arguments():
 def test_read_view_is_bounded_and_marks_binary(tmp_path):
     archive, _ = store(tmp_path)
     text = archive.put(b'{"n": 2}', owner="prog-a", kind="program.state")
-    assert archive.read(text) == {"sha": text, "owner": "prog-a", "kind": "program.state",
-                                  "bytes": 8, "public": False, "text": '{"n": 2}'}
+    # No view names an owner (AGENTS.md rule 5): only the reader's own kind.
+    assert archive.read(text) == {"sha": text, "kind": "program.state",
+                                  "bytes": 8, "text": '{"n": 2}'}
     binary = archive.put(b"\xff\xfe\x00", owner="a", kind="blob")
     assert archive.read(binary)["base64"] == "//4A"
     big = archive.put(b"x" * (MAX_TOOL_READ_BYTES + 1), owner="a", kind="blob")

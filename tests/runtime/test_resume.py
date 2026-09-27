@@ -13,6 +13,7 @@ from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import (
     ResumeError,
+    checkpoint_state,
     decode,
     encode,
     resume_runtime,
@@ -23,7 +24,8 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, Order
-from factorylab.world.scripted import ScriptedProvider
+from factorylab.world.scripted import ScriptedProvider, _inputs_from_prompt, names_declined_trade
+from tests.helpers import keep_every_checkpoint
 
 pytestmark = pytest.mark.slow
 
@@ -43,7 +45,6 @@ def make_runtime(manifest, path, **kwargs):
         seed=1,
         initial_balance_micro=None,
         ledger_path=str(path),
-        drip=True,
         router_gamma=0.1,
         **kwargs,
     )
@@ -51,6 +52,12 @@ def make_runtime(manifest, path, **kwargs):
 
 def items(path, manifest):
     return Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))._recovery_items()
+
+
+def state_of(path, manifest, snapshot):
+    """The checkpoint state a snapshot item names, read from beside the diary."""
+    ledger = Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))
+    return checkpoint_state(ledger, snapshot)
 
 
 @pytest.fixture(scope="module")
@@ -67,12 +74,12 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 
 rt = Runtime(load_manifest('scripted'), events=140, seed=1, initial_balance_micro=None,
-             ledger_path=sys.argv[1], drip=True, router_gamma=.1)
+             ledger_path=sys.argv[1], router_gamma=.1)
 original = rt._process_event
 def interrupt(event):
     result = original(event)
     stop = (rt.n == 250 if sys.argv[2] == 'event250' else
-            rt.ticks_consumed == 125 and str(event.kind) == 'Tick')
+            rt.ticks_consumed == 126 and str(event.kind) == 'Tick')
     if stop:
         os.kill(os.getpid(), signal.SIGKILL)
     return result
@@ -101,7 +108,8 @@ raise AssertionError('kill point was not reached')
         # With the scripted consequence backstop at 20 events the first activation lands
         # before this crash point, so the resume must carry the activated edition forward
         # (the snapshot was taken after the activation, between reserve windows).
-        assert decode(last["state"]["runtime"])["stats"].amendments_activated == 1
+        state = state_of(path, m, last)
+        assert decode(state["runtime"])["stats"].amendments_activated == 1
     resumed = resume_world(m, str(path))
     assert resumed["stats"]["resumes"] == 1
     resumed["stats"]["resumes"] = 0
@@ -112,12 +120,16 @@ raise AssertionError('kill point was not reached')
 
 
 class ClockAmendmentProvider(ScriptedProvider):
+    """Beside the scripted card motion, a clock motion of its own (charter audit P3, M6)."""
+
     def complete(self, request):
         response = super().complete(request)
         body = json.loads(response.text)
-        for proposal in body.get("register", []):
-            if proposal.get("kind") == "amendment":
-                proposal["tick_interval"] = "2s"
+        if any(p.get("kind") == "amendment" for p in body.get("register", [])):
+            body["register"].append({
+                "kind": "amendment", "id": "clock-2s", "tick_interval": "2s",
+                "predicted_effect": {"observation": "burn_per_window",
+                                     "direction": "increase", "window": 1}})
         return replace(response, text=json.dumps(body))
 
 
@@ -146,7 +158,7 @@ sys.path.insert(0, 'tests/runtime')
 from test_resume import ClockAmendmentProvider, clock_manifest
 from factorylab.runtime.loop import Runtime
 rt = Runtime(clock_manifest(), events=140, seed=1, initial_balance_micro=None,
-             ledger_path=sys.argv[1], drip=True, router_gamma=.1,
+             ledger_path=sys.argv[1], router_gamma=.1,
              provider=ClockAmendmentProvider())
 snapshot = rt._snapshot
 def interrupt_snapshot(boundary):
@@ -174,7 +186,7 @@ raise AssertionError('clock amendment kill point was not reached')
     before = items(path, m)
     assert sum(i["kind"] == "clock.changed" for i in before) == 1
     last = next(i for i in reversed(before) if i["kind"] == "snapshot")
-    assert last["state"]["tick_clock"]["interval_ns"] == (
+    assert state_of(path, m, last)["tick_clock"]["interval_ns"] == (
         2_000_000_000 if stop == "snapshot" else m.tick_interval_ns
     )
     restored = resume_runtime(m, str(path), provider=ClockAmendmentProvider())
@@ -240,7 +252,6 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
     base = load_manifest("scripted")
     m = replace(
         base,
-        novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns),
         assemblies=tuple(replace(a, memory_policy="handle-scoped") for a in base.assemblies),
     )
     if endowed:
@@ -250,10 +261,12 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
             (base.tick_interval_ns + 1, 1_000), (NS_PER_DAY, m.initial_balance_micro - 1_000))))
     path = tmp_path / "state.jsonl"
     rt = make_runtime(m, path)
-    rt.events_budget = 6
+    rt.events_budget = 9
     rt._build_router("Tick", "blum_mansour", 0.2)
     rt._build_router("Tick", "exp3", 0.3, replace=False)
-    stop_after(rt, lambda r, e: r.ticks_consumed == 4 and str(e.kind) == "Tick")
+    # A price window is at least min_ratio ticks (time audit T1): by tick seven two
+    # windows have opened after the launch, each a snapshot.
+    stop_after(rt, lambda r, e: r.ticks_consumed == 7 and str(e.kind) == "Tick")
     if endowed:
         assert rt.dormancy is not None and rt.wallet.released_tranches == 1
         assert rt.wallet.locked == m.initial_balance_micro - 1_000
@@ -291,12 +304,14 @@ def test_second_resume_replays_the_first_resume_items(tmp_path, scripted_run):
 
 
 def test_resume_before_first_decision_keeps_sample_handle_and_every_summary_field(
-    tmp_path, scripted_run,
+    tmp_path, monkeypatch,
 ):
     m = load_manifest("scripted")
-    record = scripted_run(m, 3, 1)
-    path = record.copy_to(tmp_path / "early")
-    expected = record.summary
+    path = tmp_path / "early" / "scripted.jsonl"
+    path.parent.mkdir()
+    keep_every_checkpoint(monkeypatch)  # the diary is cut back to its launch checkpoint
+    expected = run_world(m, events=3, seed=1, ledger_path=str(path))
+    monkeypatch.undo()
     snapshot = next(i for i in items(path, m) if i["kind"] == "snapshot")
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: snapshot["seq"] + 2])
     path.write_bytes(prefix)
@@ -332,7 +347,7 @@ class RecordedProvider:
 
 def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(tmp_path):
     base = load_manifest("scripted")
-    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"), drip=None)
+    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"))
     path = tmp_path / "unacknowledged.jsonl"
     provider, venue = RecordedProvider(), CountingVenue()
     run_world(
@@ -368,10 +383,12 @@ def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(t
     restored._ledger_lock.close()
 
 
-def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp_path):
+def test_live_resume_reconciles_open_position_and_an_outage_reaches_no_tick_cutoff(tmp_path):
+    """A cutoff counts world ticks (time audit T3): an outage consumed none, so a resume
+    past every wall-clock deadline times nothing out; the tick cutoffs still stand."""
     base = load_manifest("scripted")
     m = replace(
-        base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)), drip=None
+        base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",))
     )
     venue = CountingVenue()
     venue.place(Order("BTC", True, Decimal("0.0001")))
@@ -396,11 +413,12 @@ def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp
     assert venue.orders_sent == orders_sent  # replay made no duplicate venue submissions
     diary = items(path, m)
     timeouts = [i for i in diary if i["kind"] == "resume.timeouts"][-1]
-    assert set(timeouts["handles"]) == {d.handle for d in outstanding}
+    assert timeouts["handles"] == []
     for d in outstanding:
-        assert restored.queue.get(d.handle).status == SettleStatus.TIMED_OUT
+        assert restored.queue.get(d.handle).status == SettleStatus.PENDING
+        assert restored.queue.deadline_tick(d.handle) > restored.ticks_consumed
         history = restored.queue.history(d.handle)
-        assert sum(r.status == SettleStatus.TIMED_OUT for r in history) == 1
+        assert not any(r.status == SettleStatus.TIMED_OUT for r in history)
     reconcile = [i for i in diary if i["kind"] == "resume.reconcile"][-1]
     assert reconcile["positions"] and reconcile["venue_equity_usd"] is not None
     assert restored.stats.resumes == 1 and restored.wallet.check_conservation()
@@ -549,7 +567,7 @@ def test_resume_books_the_entire_venue_fill_batch_once(tmp_path, cut, recover_ca
                 "coin": "BTC", "paid_usd": "0.000005",
             })]
 
-    m = replace(load_manifest("scripted"), initial_balance_micro=10, drip=None)
+    m = replace(load_manifest("scripted"), initial_balance_micro=10)
 
     def world(path):
         rt = make_runtime(m, path, exchange=BatchVenue())
@@ -619,7 +637,11 @@ class CompositionProvider(ScriptedProvider):
                 'outcome_schema': {'type': 'object', 'properties': {'answer': {'type': 'integer'}},
                                    'required': ['answer']}}]}))
         if 'REQUEST\nchild task' in text:
-            return replace(response, text='{"answer":42}')
+            # A child's final answer that executes nothing names the trade it declined,
+            # on a coin its prompt shows listed, as every scripted producing answer does.
+            answer = names_declined_trade({'answer': 42}, text, _inputs_from_prompt(text),
+                                          self._producer_calls)
+            return replace(response, text=json.dumps(answer))
         return response
 
 
@@ -646,7 +668,10 @@ def test_child_dispatch_after_durable_intent_replays_without_duplicate_decisions
     assert restored.queue.get(child['handle']).parent_handle == child['resource_liability']
     calls = [i for i in restored.ledger._recovery_items()
              if i['kind'] == 'invocation' and i['handle'] == child['handle']]
-    assert len(calls) == 1 and json.loads(calls[0]['outputs']) == {'answer': 42}
+    assert len(calls) == 1
+    outputs = json.loads(calls[0]['outputs'])
+    assert outputs['answer'] == 42 and set(outputs) == {'answer', 'counterfactual'}
+    assert outputs['counterfactual']['coin'] in m.exchange.coins
     assert restored.run()['ledger_verify']
 
 
@@ -657,7 +682,7 @@ def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypa
     m = replace(base, treasury=replace(base.treasury, fake_fee_micro=1_000_000))
     path = tmp_path / 'treasury-shock.jsonl'
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=6_400_000,
-                 ledger_path=str(path), drip=False, router_gamma=.1)
+                 ledger_path=str(path), router_gamma=.1)
     poll = FakeRail.poll
 
     def cheaper_receipt(rail, step, state):
@@ -692,6 +717,60 @@ def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypa
     restored = resume_runtime(m, str(path))
     assert restored.treasury.state['status'] == 'confirmed'
     assert restored.treasury.state['fees_micro'] == 10_000
+    assert restored.wallet.check_conservation()
+    assert not restored.wallet.state()['reservations']
+    assert restored.run()['ledger_verify']
+
+
+@pytest.mark.parametrize('cut', ['treasury.advance', 'treasury.venice_authorized',
+                                 'treasury.step_submitted',
+                                 'treasury.confirmed'])
+def test_hybrid_conversion_killed_between_its_legs_resumes_without_a_second_spend(
+        tmp_path, cut):
+    """A kill anywhere in a hybrid conversion replays each leg once: one shadow send out
+    of the venue, one real top-up, one financing, whatever the cut point."""
+    sink = '0x000000000000000000000000000000000000dEaD'
+    payee = '0x2670b922ef37c7df47158725c0cc407b5382293f'
+    base = load_manifest('scripted')
+    m = replace(base, treasury=replace(base.treasury, venice_network='base-mainnet',
+                                       venice_shadow_sink=sink,
+                                       max_venice_total_micro=10_000_000,
+                                       venice_reserve_floor_micro=0,
+                                       venice_pay_to=payee))
+    m.validate()
+    path = tmp_path / 'hybrid-cut.jsonl'
+    rt = Runtime(m, events=4, seed=1, initial_balance_micro=None, ledger_path=str(path),
+                 router_gamma=.1)
+    assert rt.treasury.rail.name == 'scripted-hybrid'
+    cash = rt.exchange._cash
+    mainnet = rt.treasury.rail.hybrid_books['mainnet_reserve']
+    submitted = rt.treasury.transfer('to_venice', '5', handle='parent', now_ns=0)
+    assert submitted['status'] == 'submitted'
+    append = rt.ledger.append
+
+    def interrupt(entry):
+        seq = append(entry)
+        if entry['kind'] == cut:
+            raise ProcessDeath
+        return seq
+
+    rt.ledger.append = interrupt
+    with pytest.raises(ProcessDeath):
+        rt.run()
+    restored = resume_runtime(m, str(path))
+    now = restored.clock.now_ns
+    for step in range(1, 4):
+        if restored.treasury.state['status'] == 'confirmed':
+            break
+        restored.treasury.tick(now + step)
+    assert restored.treasury.state['status'] == 'confirmed'
+    books = restored.treasury.rail.hybrid_books
+    assert books['shadow_sent'] == 5_000_000 and restored.exchange._cash == cash - 5
+    assert books['mainnet_reserve'] == mainnet - 5_000_000
+    assert len(books['submissions']) == 1 and restored.treasury.rail.venice == 5_000_000
+    assert restored.treasury.venice_authorized_micro == 5_000_000  # counted once, kept
+    financing = [i for i in items(path, m) if i['kind'] == 'treasury.financing']
+    assert len(financing) == 1 and financing[0]['source'] == 'venue_perps'
     assert restored.wallet.check_conservation()
     assert not restored.wallet.state()['reservations']
     assert restored.run()['ledger_verify']
@@ -755,8 +834,7 @@ def test_live_order_process_cut_after_acceptance_recovers_original_handle(tmp_pa
             return result
 
     base = load_manifest('scripted')
-    m = replace(base, exchange=replace(base.exchange, kind='hyperliquid', coins=('BTC',)),
-                drip=None)
+    m = replace(base, exchange=replace(base.exchange, kind='hyperliquid', coins=('BTC',)))
     venue = Venue()
     args = {'coin': 'BTC'}
     if operation == 'cancel':

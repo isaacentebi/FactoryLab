@@ -8,6 +8,7 @@ integer micro-USD. Providers never touch the wallet; ``metering`` does.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from fractions import Fraction
@@ -100,18 +101,6 @@ class PriceTable:
         return self.price(model_id).cost(input_tokens, output_tokens)
 
 
-def anthropic_first_party_prices() -> PriceTable:
-    """First-party Anthropic prices as of the cached table (2026-06-24).
-
-    Opus 5: $5 / $25 per MTok. Sonnet 5: $2 / $10. Haiku 4.5: $1 / $5.
-    """
-    t = PriceTable()
-    t.register("claude-opus-5", TokenPrice.from_per_mtok("5", "25"))
-    t.register("claude-sonnet-5", TokenPrice.from_per_mtok("2", "10"))
-    t.register("claude-haiku-4-5", TokenPrice.from_per_mtok("1", "5"))
-    return t
-
-
 @dataclass(frozen=True)
 class ModelRequest:
     model_id: str
@@ -120,6 +109,28 @@ class ModelRequest:
     max_tokens: int = 4096
     effort: str = "medium"
     json_object: bool = False
+    #: The reply's contract as a JSON schema (``wire_schema``), for a route whose
+    #: manifest ``contract`` is ``json_schema`` (Chapter II §II.b: physics is
+    #: enforced, not announced). Any other route asks for a JSON object alone.
+    response_schema: dict[str, Any] | None = None
+    #: The call's own deadline in seconds, stated by whoever runs it (the runtime
+    #: states a ratio of its delivered tick, Chapter II §IV.c; time audit T8). None
+    #: leaves the adapter's own ceiling in force.
+    timeout_s: float | None = None
+
+
+def prompt_chars(req: ModelRequest) -> int:
+    """Characters a request sends as input, including its wire schema when it carries one.
+
+    Guarantees a reservation priced from this count covers the schema a host may bill
+    as prompt tokens. A route whose manifest contract is json_object never sends the
+    schema; it is counted there too, a small over-reservation, so the ceiling needs no
+    knowledge of the route.
+    """
+    chars = len(req.system) + sum(len(str(m.get("content", ""))) for m in req.messages)
+    if req.response_schema is not None:
+        chars += len(json.dumps(req.response_schema, separators=(",", ":")))
+    return chars
 
 
 @dataclass(frozen=True)
@@ -184,48 +195,3 @@ class FakeModel:
             else int(Decimal(len(reply)) * self.output_tokens_per_char) + 1
         )
         return ModelResponse(req.model_id, reply, itok, otok, "end_turn")
-
-
-class AnthropicProvider:
-    """First-party Anthropic models through the official SDK.
-
-    Adaptive thinking is on; effort comes from the request. Refusal fallbacks
-    are enabled by default through the server-side ``fallbacks: "default"``
-    beta so a policy decline reroutes inside the same call; the response
-    reports the model that actually served, which is what gets priced. Set
-    ``fallbacks=False`` to disable.
-    """
-
-    name = "anthropic"
-
-    def __init__(self, *, fallbacks: bool = True, client: Any | None = None) -> None:
-        import anthropic
-
-        self._client = client or anthropic.Anthropic()
-        self._fallbacks = fallbacks
-
-    def complete(self, req: ModelRequest) -> ModelResponse:
-        kwargs: dict[str, Any] = dict(
-            model=req.model_id,
-            max_tokens=req.max_tokens,
-            system=req.system,
-            messages=list(req.messages),
-            thinking={"type": "adaptive"},
-            output_config={"effort": req.effort},
-        )
-        if self._fallbacks:
-            resp = self._client.beta.messages.create(
-                betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs
-            )
-        else:
-            resp = self._client.messages.create(**kwargs)
-        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-        return ModelResponse(
-            model_id=resp.model,
-            text=text,
-            input_tokens=resp.usage.input_tokens,
-            output_tokens=resp.usage.output_tokens,
-            stop_reason=resp.stop_reason or "",
-            refused=resp.stop_reason == "refusal",
-            raw={"request_id": getattr(resp, "_request_id", None)},
-        )

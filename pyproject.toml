@@ -5,7 +5,6 @@ description = "A bounded experimental world informed by The Superdark Factory: o
 requires-python = ">=3.13"
 dependencies = [
     "hyperliquid-python-sdk>=0.24.0",
-    "anthropic>=0.80.0",
     "cryptography>=43.0",
 ]
 
@@ -29,12 +28,14 @@ packages = ["factorylab"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Tiers (tests/conftest.py assigns check/gate at collection):
-#   check  the inner loop and the default: no test runs a world; each call < 2 s
+#   check  the inner loop and the default: no test runs a world; each call under 2 s
+#          of CPU and 10 s of wall time
 #   gate   runs a world or reads a shared scripted run; run before a merge
 #   slow   kills and resumes real subprocesses
 # A bare `uv run pytest` runs `check` on 2 workers. The merge gate is
 # `uv run pytest -m "check or gate" -n 4`; more workers: `-n 8`, or `-n auto` for all
 # cores (hot on a laptop). The last `-m`/`-n` on the command line wins over these.
+# `--dist loadgroup` keeps a module that shares a world fixture on one worker.
 markers = [
     "check: the developer inner loop; runs no world (the default selection)",
     "gate: runs a world or consumes a shared scripted fixture",
@@ -43,7 +44,7 @@ markers = [
     "network: requires network access (deselected in CI)",
     "slow: kills and resumes real subprocesses; run before merging to main",
 ]
-addopts = "-m check -n 2"
+addopts = "-m check -n 2 --dist loadgroup"
 
 [tool.ruff]
 line-length = 100

@@ -34,6 +34,14 @@ class BanditFeedback:
 type Feedback = FullInfoFeedback | BanditFeedback
 
 
+#: The published prior for what a round that delivered nothing is worth, before a
+#: router has observed any settled round: 0.5, the score of no consequence on the
+#: midpoint scales. From the first settled round on, nothing delivered is credited the
+#: router's observed mean raw score instead (``RouterState.neutral``; wave 16, D4,
+#: ruling R-F; published in ``world.scoring.abstention``).
+NEUTRAL_REWARD = 0.5
+
+
 class ObservedRewards:
     """Running sums of the rewards a learner actually observed, per action.
 
@@ -41,12 +49,14 @@ class ObservedRewards:
     EXP3 a round skipped for want of an outcome is a round credited zero, so an
     arm whose outcomes are censored more often falls behind an arm of the same
     worth whose outcomes are read. ``neutral`` is the learner's best estimate of
-    an unobserved reward, the observed mean of the arm that was drawn, else of
-    every arm the learner has observed, else nothing: an unknown is imputed at
-    what the evidence says, never at zero, and never invented where there is no
-    evidence at all (with no observation yet, no arm has moved, so no update is
-    already neutral). The imputed value is used for the update only; it never
-    enters these sums, so the estimate is built from observations alone.
+    an unobserved reward: the observed mean of the arm that was drawn, else
+    ``default`` (``NEUTRAL_REWARD`` unless the caller knows the scale its rounds
+    are scored on). It is never borrowed from other
+    arms: an arm with no evidence of its own is worth zero consequence, not the
+    average its siblings earned, so an arm whose rounds are never scored cannot
+    ride the others' record (the free-average defect). The imputed value is used
+    for the update only; it never enters these sums, so the estimate is built
+    from observations alone.
     """
 
     def __init__(self, sums: dict[str, list] | None = None) -> None:
@@ -59,15 +69,12 @@ class ObservedRewards:
         total, count = self.sums.get(action, (0.0, 0))
         self.sums[action] = [total + reward, count + 1]
 
-    def neutral(self, action: str) -> float | None:
-        """The observed mean for ``action``, else across actions, else None."""
+    def neutral(self, action: str, default: float = NEUTRAL_REWARD) -> float:
+        """The observed mean for ``action`` clamped to [0, 1], else ``default``."""
         total, count = self.sums.get(action, (0.0, 0))
         if count:
             return min(1.0, max(0.0, total / count))
-        count = sum(c for _t, c in self.sums.values())
-        if not count:
-            return None
-        return min(1.0, max(0.0, sum(t for t, _c in self.sums.values()) / count))
+        return default
 
     def state(self) -> dict[str, list]:
         """Plain, JSON-serialisable sums: action -> [sum, count]."""

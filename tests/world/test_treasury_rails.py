@@ -87,7 +87,7 @@ class Chain:
     def logs(self, contract, topics, start):
         return self.log_rows
 
-    def scan(self, contract, topics, start, *, max_pages=None):
+    def scan(self, contract, topics, start, *, max_pages=None, end=None):
         self.scans.append((start, max_pages))
         return self.log_rows, self.scanned_to
 

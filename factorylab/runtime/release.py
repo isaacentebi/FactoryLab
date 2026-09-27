@@ -3,16 +3,19 @@
 A world's diary already binds its manifest and its venue account. It did not bind
 the release executing them, so a refreshed checkout could continue an old
 identity with new behaviour (cold audit F1). ``release_digest`` is computed once
-per process from three inputs and ledgered in ``Launch``:
+per process from the executable bytes alone and ledgered in ``Launch``:
 
-    sha256(git_head + sha256(uv.lock) + tree_hash(factorylab/))
+    sha256(sha256(uv.lock) + tree_hash(factorylab/))
 
 The tree hash covers every file under the package as it is on disk, so an
-uncommitted edit changes the digest exactly as a new commit does. Git supplies
-the head when a checkout is present; a droplet install without git reads the
-``RELEASE`` record that ``deploy/install.sh`` wrote at provisioning, and the
-identity says which of the two it used. Nothing here reads a key file: the tree
-walked is the package directory, never the run directory or the repository root.
+uncommitted edit changes the digest exactly as a new commit does. The git head is
+not an input (versioning S2; R8): Chapter II's version "cannot be Git", and a
+docs- or tests-only commit changes no kernel physics, so it must not kill a world.
+The head is still recorded beside the digest as forensic metadata: git supplies it
+when a checkout is present, and a droplet install without git reads the
+``RELEASE`` record that ``deploy/install.sh`` wrote at provisioning. Nothing here
+reads a key file: the tree walked is the package directory, never the run
+directory or the repository root.
 """
 
 from __future__ import annotations
@@ -150,12 +153,13 @@ def _info(root: str) -> dict:
         "git_head_source": source,
         "uv_lock_sha256": lock,
         "tree_sha256": tree,
-        "release_digest": _sha256((head + lock + tree).encode()),
+        # The head is forensic only: the executable tree and lock are the identity.
+        "release_digest": _sha256((lock + tree).encode()),
     }
 
 
 def release_info(root: Path | str | None = None) -> dict:
-    """The digest and its three inputs, plus where the head came from (git, RELEASE, none)."""
+    """The digest and its two inputs, plus the forensic head and where it came from."""
     return dict(_info(str(Path(root or ROOT).resolve())))
 
 

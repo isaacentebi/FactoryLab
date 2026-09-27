@@ -12,7 +12,7 @@ def diary():
     """Synthetic windows use exactly the runtime's persisted item shapes."""
 
     def make(rows):
-        manifest = {"immune": asdict(ImmuneSpec())}
+        manifest = {"immune": asdict(ImmuneSpec(price_step=0.05))}
         digest = hashlib.sha256(json.dumps(manifest, sort_keys=True,
                                            separators=(",", ":")).encode()).hexdigest()
         items = [{"kind": "event", "event": {"kind": "Launch", "payload": {
@@ -55,6 +55,6 @@ def diary():
 
 @pytest.fixture
 def immune_params():
-    values = asdict(ImmuneSpec())
-    return {name: values[name] for name in ("k", "bins", "tv_threshold", "gap_threshold",
+    values = asdict(ImmuneSpec(price_step=0.05))
+    return {name: values[name] for name in ("k", "tv_threshold", "gap_threshold",
                                            "registration_bins", "revision_bins")}

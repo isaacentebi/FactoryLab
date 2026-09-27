@@ -1,10 +1,7 @@
-"""The penalty ratchets while a violation lasts and relief waits for its window (defect 12).
+"""The penalty ratchets while a violation lasts (defect 12).
 
 The charter says a card's price ratchets while the violation lasts and decays when
-it stops. With eta = kappa = 0.5 a shrinking violation's damping outweighed its
-step, so the price fell while the card was still out of its region. And the
-immune organ's price relief, meant for the window after the one that diagnosed
-stable failure, was already halving the diagnosing window's own closing prices.
+it stops: a shrinking violation that is still out of its region never lowers it.
 """
 
 from factorylab.charter.controller import CardRegion, PriceController
@@ -12,7 +9,7 @@ from factorylab.kernel.ledger import Ledger
 
 
 def _controller(**changes):
-    params = dict(eta=0.5, kappa=0.5, decay=0.25, lambda_max=100.0, min_window_events=1)
+    params = dict(eta=0.5, decay=0.25, penalty_cap=0.9, min_window_events=1)
     params.update(changes)
     return PriceController(Ledger(), **params)
 
@@ -31,40 +28,86 @@ def test_price_never_falls_while_the_card_is_still_violating():
     assert prices.price("cost") == peak - 0.25
 
 
-def test_relief_does_not_reach_the_window_that_diagnosed_it(monkeypatch):
-    """A relief issued at window k's close applies to window k+1, not to k's own prices."""
-    import factorylab.runtime.pricing as pricing
-    from tests.conftest import make_runtime
+def test_a_spike_clips_the_price_and_never_cuts_the_accumulated_pressure():
+    """Wave 16, ruling R-E: the bound penalty_cap / v falls as v spikes, so the price
+    falls with it (the penalty stays at the cap); the integral is held, and the price
+    returns with the violation's old size."""
+    prices = _controller()
+    prices.register(CardRegion("cost", "max", None, 10.0, 2.0))
+    for event in range(2):
+        prices.observe("cost", 12, event)  # violation 1: 0.5, then the bound 0.9
+    assert prices.price("cost") == 0.9
+    prices.observe("cost", 100, 2)  # violation 45: bound 0.02
+    assert prices.price("cost") == 0.9 / 45
+    assert prices.snapshot()["cards"]["cost"]["integral"] == 0.9
+    prices.observe("cost", 12, 3)
+    assert prices.price("cost") == 0.9
 
-    rt = make_runtime()
-    cards = [card.id for card in rt.charter.cards]
-    for cid in cards:
-        region = CardRegion(cid, "max", None, 1.0, 1.0)
-        rt.regions[cid] = region
-        rt.controller.register(region)
-        rt.controller.set_price(cid, 1.0, amendment_id="test-start")
-    # Every card measured compliant, so the close itself leaves each price at 1 - decay.
-    monkeypatch.setattr(pricing, "measure_cards",
-                        lambda cards, *_a, **_k: {c.id: 0.0 for c in cards})
 
-    def diagnose(runtime, _values):  # the immune organ diagnosing stable failure
-        for cid in cards:
-            runtime.controller.relieve(cid, window=runtime.window.index + 1)
+def test_a_spike_of_any_length_keeps_the_integral_it_found():
+    """Ruling R10-n: v = 1, 45, 45, 45, 1. The integral is used at most at the largest
+    own bound of the failure episode (0.9, from v = 1), never the spike's own (0.02),
+    so after three spike windows it is exactly its pre-spike value, and the window
+    after the spike integrates from there. Clamping to the current bound, or to the
+    larger of the current and previous bounds, would cut it in the third window."""
+    prices = _controller()
+    prices.register(CardRegion("cost", "max", None, 10.0, 2.0))
+    prices.observe("cost", 12, 0)  # violation 1
+    before = prices.snapshot()["cards"]["cost"]["integral"]
+    assert before == 0.5
+    for event in (1, 2, 3):
+        prices.observe("cost", 100, event)  # violation 45
+        card = prices.snapshot()["cards"]["cost"]
+        assert card["integral"] == before and card["episode_bound"] == 0.9
+        assert prices.price("cost") == 0.9 / 45
+    prices.observe("cost", 12, 4)  # violation 1 again
+    assert prices.snapshot()["cards"]["cost"]["integral"] == 0.9
+    assert prices.price("cost") == 0.9
 
-    monkeypatch.setattr(pricing, "close_window", diagnose)
-    rt._close_price_window()
-    underlying = {cid: row["lambda"] for cid, row in rt.controller.snapshot()["cards"].items()}
-    assert set(rt.window.closed_prices) == set(cards)
-    for cid, price in rt.window.closed_prices.items():
-        assert price == underlying[cid] > 0, cid
-    # The relief is live for the next window's own pricing.
-    assert all(rt.controller.price(cid) == underlying[cid] / 2 for cid in cards)
 
-    # The relieved window itself closes on relieved prices, and the relief ends there.
-    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
-    rt.window.index += 1
-    rt._close_price_window()
-    underlying = {cid: row["lambda"] for cid, row in rt.controller.snapshot()["cards"].items()}
-    for cid, price in rt.window.closed_prices.items():
-        assert price == underlying[cid] / 2, cid
-    assert all(rt.controller.price(cid) == underlying[cid] for cid in cards)
+def test_the_episode_bound_resets_at_compliance():
+    """Ruling R10-n: the episode ends when the card complies. A spike in a new episode
+    is bounded by that episode's own bounds, never an earlier episode's."""
+    prices = _controller()
+    prices.register(CardRegion("cost", "max", None, 10.0, 2.0))
+    prices.observe("cost", 12, 0)  # violation 1: integral 0.5, episode bound 0.9
+    assert prices.snapshot()["cards"]["cost"]["episode_bound"] == 0.9
+    prices.observe("cost", 9, 1)  # compliant: the episode ends, the integral leaks
+    card = prices.snapshot()["cards"]["cost"]
+    assert card["episode_bound"] == 0.0 and card["integral"] == 0.25
+    prices.observe("cost", 100, 2)  # a new episode opens at violation 45
+    card = prices.snapshot()["cards"]["cost"]
+    assert card["episode_bound"] == 0.9 / 45
+    assert card["integral"] == 0.9 / 45  # the old episode's 0.9 bound no longer holds it
+
+
+def test_an_adopted_unbounded_price_unwinds_on_the_decay_schedule():
+    """Rulings R10-e refined and R10-n (Codex on #152): adopting 1e308 stores the price
+    as given, but the integral the PID uses is clamped to the failure episode's largest
+    own bound at its first violating observation (cap / v then). A violation at the
+    cap, then compliant windows: the price falls by ``decay`` each window from the
+    bound to zero, never locked at the cap (at 1e308, ``decay`` is a float no-op)."""
+    prices = _controller()
+    prices.register(CardRegion("cost", "max", None, 10.0, 2.0))
+    prices.set_price("cost", 1e308, amendment_id="unbounded")
+    assert prices.price("cost") == 1e308
+    prices.observe("cost", 12, 0)  # violation 1: pressure at the cap, bound 0.9
+    assert prices.price("cost") == 0.9
+    assert prices.snapshot()["cards"]["cost"]["integral"] == 0.9
+    seen = []
+    for event in range(1, 6):
+        prices.observe("cost", 9, event)  # compliant
+        seen.append(prices.price("cost"))
+    assert seen == [0.9 - 0.25, 0.9 - 0.5, 0.9 - 0.75, 0.0, 0.0]
+
+
+def test_an_adopted_unbounded_price_unwinds_when_its_last_window_violated():
+    """The same when the adoption is followed directly by compliance: the integral
+    leaks from the largest bound of the episode that compliance ends, never from
+    1e308."""
+    prices = _controller()
+    prices.register(CardRegion("cost", "max", None, 10.0, 2.0))
+    prices.observe("cost", 12, 0)  # violation 1
+    prices.set_price("cost", 1e308, amendment_id="unbounded")
+    prices.observe("cost", 9, 1)  # compliant
+    assert prices.price("cost") == 0.9 - 0.25

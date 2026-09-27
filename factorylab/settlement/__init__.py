@@ -1,9 +1,9 @@
 """Sealed forecasts receive observable, addressable consequence scores.
 
 Owns the forecast book and its seals, Brier scoring against a prevalence
-baseline, the lot table that turns fills into realised consequence, the four settlement
+baseline, the lot table that turns fills into realised consequence, the settlement
 objects edition 3's third round separates (``receipts``: execution receipts,
-learning receipts, commitments and adjudications), and the standing each judge
+learning receipts and commitments), and the standing each judge
 accumulates from how its own forecasts settled.
 
 Imports ``kernel`` and the standard library, and nothing else: a score must not
@@ -13,7 +13,6 @@ be able to reach the thing it is scoring.
 
 from factorylab.settlement.forecast import Forecast, ForecastBook, open_forecast_decision
 from factorylab.settlement.receipts import (
-    Adjudication,
     Commitment,
     ExecutionReceipt,
     LearningReceipt,
@@ -26,7 +25,6 @@ from factorylab.settlement.vocabulary import SEED_VOCABULARY, Observer, Predicat
 
 __all__ = (
     "SEED_VOCABULARY",
-    "Adjudication",
     "Commitment",
     "ConsequenceStanding",
     "ExecutionReceipt",

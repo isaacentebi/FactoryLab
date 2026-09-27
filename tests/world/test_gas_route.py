@@ -374,26 +374,26 @@ def test_a_reverted_fallback_mint_confirms_the_forwarder_delivery_instead_of_str
 
 
 def test_gas_view_reports_the_position_the_route_and_the_exact_blocker():
-    view = setup().gas_view({})
+    view = setup().gas_view({})["to_reserve"]
     assert view == {
         "mode": "on_empty_gas", "route": "forwarded", "reason": "no_base_eth",
         "core_hype": "1", "core_hype_required": "0.00004",
         "base_eth_wei": 0, "base_gas_remaining_wei": 10**16, "base_mint_estimate_wei": ESTIMATE,
         "forward_fee_micro": 200_000, "cctp_max_fee_micro": 200_000,
         "minimum_micro": 1_200_001, "refill_ready": True, "blocked_by": None}
-    view = setup(eth=10**17).gas_view({"base": 7})
+    view = setup(eth=10**17).gas_view({"base": 7})["to_reserve"]
     assert view["route"] == "self_mint" and view["reason"] == "base_eth_available"
     assert view["base_gas_remaining_wei"] == 10**16 - 7 and view["minimum_micro"] == 1_000_001
     assert view["forward_fee_micro"] == 200_000 and view["cctp_max_fee_micro"] == 0
     rail = setup()
     rail.exchange._info.hype = "0"
-    view = rail.gas_view({})
+    view = rail.gas_view({})["to_reserve"]
     assert not view["refill_ready"]
     assert view["blocked_by"] == "venue requires spot HYPE for the Core-to-EVM gas charge"
     assert view["core_hype"] == "0" and view["route"] == "forwarded"
-    view = setup(quotes=(0, 0)).gas_view({})
+    view = setup(quotes=(0, 0)).gas_view({})["to_reserve"]
     assert view["blocked_by"] == "CoreDepositWallet cannot currently forward the destination mint"
-    view = setup(mode="never").gas_view({})
+    view = setup(mode="never").gas_view({})["to_reserve"]
     assert view["route"] == "self_mint"
     assert view["blocked_by"] == "reserve requires native ETH on base"
 

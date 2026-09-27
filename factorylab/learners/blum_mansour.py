@@ -223,21 +223,8 @@ class BlumMansour:
         if not isinstance(snapshot, BlumMansourSnapshot) or snapshot._owner is not self:
             raise ValueError("snapshot must belong to this BlumMansour learner")
         if snapshot.executed is not None and isinstance(feedback, BanditFeedback):
-            if not self._bandit:
-                raise TypeError("SR_MAB requires EXP3 bases satisfying Lemma 10")
-            executed, p = dict(snapshot.executed), dict(snapshot.p)
-            _probabilities(executed, snapshot.support)
-            k = feedback.action
-            if k not in executed or not math.isclose(feedback.propensity, executed[k],
-                                                     rel_tol=1e-12, abs_tol=0):
-                raise ValueError("feedback must carry the saved round's executed propensity")
-            # Off-policy extension: E[1{k=j} p_i r_k / executed_k] = p_i r_j.
-            # The row q cancels algebraically. Supplying p_i*r (bounded by one)
-            # directly avoids mislabelling an importance gain >1 as a bounded reward.
-            # External standing mixtures do not inherit the unmodified SR_MAB theorem.
-            for action, base in zip(self.actions, self._bases, strict=True):
-                base.update(BanditFeedback(k, p.get(action, 0.) * feedback.reward,
-                                            feedback.propensity))
+            _probabilities(dict(snapshot.executed), snapshot.support)
+            self.update_carried(dict(snapshot.p), dict(snapshot.executed), feedback)
             return
         pending = self._pending
         self._pending = snapshot.support, dict(snapshot.p), tuple(map(dict, snapshot.rows))
@@ -245,6 +232,69 @@ class BlumMansour:
             self.update(feedback)
         finally:
             self._pending = pending
+
+    def update_carried(
+        self, p: dict[str, float], executed: dict[str, float], feedback: BanditFeedback
+    ) -> None:
+        """Train current base weights on a round sampled from ``executed``, owned by p.
+
+        Guarantees the off-policy estimator E[1{k=j} p_i r_k / executed_k] = p_i r_j
+        for every row i this learner holds (a row absent from ``p`` gains nothing),
+        so a round drawn by a predecessor router still trains this one without bias.
+        Raises, changing nothing, unless the drawn action is in ``executed`` and in
+        this learner's universe and the feedback carries its executed propensity.
+        """
+        if not self._bandit:
+            raise TypeError("SR_MAB requires EXP3 bases satisfying Lemma 10")
+        if not isinstance(feedback, BanditFeedback):
+            raise TypeError("a carried round requires bandit feedback")
+        k = feedback.action
+        if k not in executed or not math.isclose(feedback.propensity, executed[k],
+                                                 rel_tol=1e-12, abs_tol=0):
+            raise ValueError("feedback must carry the saved round's executed propensity")
+        if k not in self.actions:
+            raise ValueError("the drawn action is outside this learner's universe")
+        # The row q cancels algebraically. Supplying p_i*r (bounded by one)
+        # directly avoids mislabelling an importance gain >1 as a bounded reward.
+        # External standing mixtures do not inherit the unmodified SR_MAB theorem.
+        for action, base in zip(self.actions, self._bases, strict=True):
+            base.update(BanditFeedback(k, p.get(action, 0.) * feedback.reward,
+                                       feedback.propensity))
+
+    def reshaped(self, actions: Sequence[str], *, id: str) -> "BlumMansour":
+        """Return an independent learner over ``actions`` that keeps what this one learned.
+
+        Every surviving row keeps its surviving log-weights; an action a row never
+        held starts at that row's surviving mean, and a new row starts at the mean
+        of the surviving rows, exactly as ``EXP3.expand`` admits a new action. No
+        pending round is carried and no regret guarantee spans the change.
+        """
+        if not self._bandit:
+            raise TypeError("only EXP3 bases can be reshaped")
+        new = _actions(actions)
+        saved = {a: base.state() for a, base in zip(self.actions, self._bases, strict=True)}
+
+        def row(weights: dict[str, float]) -> dict[str, float]:
+            kept = {a: w for a, w in weights.items() if a in new}
+            mean = sum(kept.values()) / len(kept) if kept else 0.0
+            return {a: kept.get(a, mean) for a in new}
+
+        survivors = [row(saved[a]["log_weights"]) for a in new if a in saved]
+        fallback = ({a: sum(r[a] for r in survivors) / len(survivors) for a in new}
+                    if survivors else dict.fromkeys(new, 0.0))
+        first = next(iter(saved.values()))
+        bases = []
+        for action in new:
+            base = saved.get(action)
+            weights = row(base["log_weights"]) if base is not None else dict(fallback)
+            offset = max(weights.values())
+            bases.append(EXP3.restore({
+                "algorithm": "EXP3", "id": (base or first)["id"],
+                "actions": list(new), "gamma": (base or first)["gamma"],
+                "log_weights": {a: w - offset for a, w in weights.items()},
+            }))
+        source = iter(bases)
+        return BlumMansour(lambda _: next(source), new, id=id)
 
     def state(self) -> dict:
         """Return parameters, every base state, and the pending decision snapshot."""

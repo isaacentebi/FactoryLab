@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from factorylab.charter.committee import Seat
-from scripts.adopt_charter import adoption_vote, approved
+from scripts.charter_session import adoption_vote, approved
 
 
 @pytest.mark.parametrize('text,stop', [

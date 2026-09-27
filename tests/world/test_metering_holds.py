@@ -32,7 +32,7 @@ def test_unknown_bill_is_accounted_without_leaking_a_hold(phase):
 
 @pytest.mark.parametrize('usage', [-1, '5', None, {}, [], True, 1.5, float('nan'), float('inf')])
 def test_invalid_usage_at_invocation_never_leaks_reservation(usage):
-    wallet = Wallet(10000, Ledger())
+    wallet = Wallet(20000, Ledger())
     prices = PriceTable({'vendor': TokenPrice(1, 1)})
 
     class Provider:
@@ -41,12 +41,12 @@ def test_invalid_usage_at_invocation_never_leaks_reservation(usage):
 
     assembly = Assembly(AssemblySpec('assembly', 1, 'vendor', max_tokens=16),
                         MeteredModel(Provider(), prices, Meter(wallet)))
-    req = Request('caller', 'test', {}, {}, {}, 100, 10000, None, 'JSON', 'test', 'caller')
+    req = Request('caller', 'test', {}, {}, {}, 100, 20000, None, 'JSON', 'test', 'caller')
     ret = assembly.invoke(req)
     assert ret.status == 'failed'
     assert wallet.state()['reservations'] == []
-    assert wallet.available == wallet.balance < 10000
-    assert ret.cost == 10000 - wallet.balance
+    assert wallet.available == wallet.balance < 20000
+    assert ret.cost == 20000 - wallet.balance
 
 
 def test_an_uncertain_bill_settles_through_the_meter_hook_to_its_true_cost():

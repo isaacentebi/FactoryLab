@@ -13,12 +13,18 @@ def test_testnet_manifest_is_not_mainnet() -> None:
 
 
 def _base() -> dict:
+    from tests.seed_charter import seed_charter_table
+
     return {
         "name": "x",
         "initial_balance_usd": "10",
         "models": [{"id": "m", "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
         "assemblies": [{"id": "a", "model_id": "m"}],
-        "novelty": {"share": 0.1, "window": "1h"},
+        "novelty": {"share": 0.1},
+        "charter": seed_charter_table(),
+        "immune": {"price_step": 0.05},
+        # A world that lists a venue states its repricing period (wave 16, D2).
+        "timing": {"world_repricing": "1h"},
     }
 
 
@@ -53,70 +59,236 @@ def test_mainnet_requires_a_client_namespace_before_the_charter_hashes() -> None
 
 def test_duration_strings() -> None:
     d = _base()
-    d["novelty"]["window"] = "36h"
-    assert manifest_from_dict(d).novelty.window_ns == 36 * NS_PER_HOUR
+    d["treasury"] = {"cap_window": "36h"}
+    d["timing"] = {"world_repricing": "36h"}
+    m = manifest_from_dict(d)
+    assert m.treasury.cap_window_ns == 36 * NS_PER_HOUR
+    assert m.timing.world_repricing_ns == 36 * NS_PER_HOUR
+
+
+@pytest.mark.parametrize("section,key", [("novelty", "window"),
+                                         ("novelty", "max_lifetime_windows"),
+                                         ("treasury", "forward_wait_windows")])
+def test_a_cast_window_is_refused_because_windows_are_derived(section, key):
+    """Time audit T1, T5, T11, T13: no loop period is cast in a manifest (ruling R8)."""
+    d = _base()
+    d.setdefault(section, {})[key] = "1m" if key == "window" else 2
+    with pytest.raises(ValueError, match=rf"{section}\.{key} was"):
+        manifest_from_dict(d)
+
+
+def test_the_load_half_of_the_ratio_rule_refuses_a_horizon_inside_min_ratio_ticks():
+    """Time audit T2: a horizon a decision waits on is an outer loop over the tick."""
+    for key in ("verdict_timeout_events", "consequence_backstop_events"):
+        d = _base()
+        d["evaluation"] = {key: 2}
+        with pytest.raises(ValueError, match="at least timing.min_ratio ticks"):
+            manifest_from_dict(d)
+    d = _base()
+    d["treasury"] = {"forward_wait_ticks": 2}
+    with pytest.raises(ValueError, match="forward_wait_ticks"):
+        manifest_from_dict(d)
+    d = _base()
+    d["tick_interval"] = "10s"
+    d["clock"] = {"min_tick": "10s"}
+    d["treasury"] = {"cap_window": "20s"}
+    with pytest.raises(ValueError, match="cap_window"):
+        manifest_from_dict(d)
 
 
 def test_prices_section_defaults_and_validation() -> None:
     m = manifest_from_dict(_base())
-    assert (m.prices.eta, m.prices.decay, m.prices.lambda_max, m.prices.min_window_events) == (
-        0.5,
+    # Unstated, eta is derived from the SF-0 relation: (cap - kp) / (min_ratio * k).
+    assert (m.prices.eta, m.prices.decay, m.prices.penalty_cap, m.prices.min_window_events) == (
+        0.5 / 9,
         0.1,
-        1.0,
+        0.5,
         1,
     )
     d = _base()
-    d["prices"] = {"eta": 0.25, "decay": 0.05, "lambda_max": 2, "min_window_events": 3}
+    d["prices"] = {"decay": 0.05, "penalty_cap": 0.25, "min_window_events": 3}
     m2 = manifest_from_dict(d)
-    assert m2.prices.lambda_max == 2.0 and m2.prices.min_window_events == 3
+    assert m2.prices.penalty_cap == 0.25 and m2.prices.min_window_events == 3
+    assert m2.prices.eta == 0.25 / 9  # derived from its own cap
     assert (
         m2.manifest_hash() != m.manifest_hash()
     )  # the controller's parameters are part of the seed
-    for bad in ({"eta": 0}, {"decay": -1}, {"lambda_max": 0}, {"min_window_events": 0}):
+    for bad in ({"eta": 0}, {"decay": -1}, {"penalty_cap": 0}, {"penalty_cap": 1},
+                {"min_window_events": 0},
+                # SF-0 (wave 16): saturating before the organ can see an attractor.
+                {"eta": 0.5}, {"kp": 0.5}, {"eta": 0.5 / 8}):
         d = _base()
         d["prices"] = bad
         with pytest.raises(ValueError):
             manifest_from_dict(d)
 
 
-def test_grounded_horizon_default_keeps_legacy_identity_and_nondefault_changes_it():
+@pytest.mark.parametrize("eta", [float("nan"), float("inf"), "0.05", -1],
+                         ids=["nan", "inf", "string", "negative"])
+def test_an_eta_outside_its_domain_is_refused_as_it_was(eta) -> None:
+    """Codex on 646e3c7: the price field rules live in ``validate_price_fields``, which
+    ``validate`` calls, and eta takes kp's finite-number rule. Which manifests the kernel
+    accepts is unchanged: a NaN, an infinite, a string or a negative eta was refused
+    before (by the SF-0 relation, a TypeError or the eta > 0 rule) and still is, now by
+    the field rule itself."""
+    import dataclasses
+
+    m = manifest_from_dict(_base())
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, eta=eta))
+    with pytest.raises(ValueError, match="prices.eta must be finite and > 0"):
+        bad.validate_price_fields()
+    with pytest.raises(ValueError, match="prices.eta must be finite and > 0"):
+        bad.validate()
+    if not isinstance(eta, str):  # the loader reads a stated eta as float(...)
+        d = _base()
+        d["prices"] = {"eta": eta}
+        with pytest.raises(ValueError, match="prices.eta"):
+            manifest_from_dict(d)
+
+
+@pytest.mark.parametrize("decay", [float("nan"), float("inf"), -1.0],
+                         ids=["nan", "inf", "negative"])
+def test_a_decay_outside_its_domain_is_refused_by_validate(decay) -> None:
+    """Codex on 3309478: decay takes the finite-number rule the price controller holds
+    every rate to (``charter.controller._number``)."""
+    import dataclasses
+
+    m = manifest_from_dict(_base())
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, decay=decay))
+    for check in (bad.validate_price_fields, bad.validate):
+        with pytest.raises(ValueError, match="prices.decay must be finite and > 0"):
+            check()
+
+
+@pytest.mark.parametrize("decay", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_a_non_finite_decay_never_launched_before_the_rule(decay, tmp_path) -> None:
+    """The control for the rule above: the set of worlds that can launch is unchanged.
+    A manifest with a non-finite decay, never validated, still cannot be launched. The
+    ledger binds its manifest in the kernel's canonical JSON, which has no NaN or
+    infinity (``kernel.ledger.canonical``), so genesis refuses it before the ledger
+    writes a row. The price controller refuses the rate too."""
+    import dataclasses
+    import json
+
+    from factorylab.charter.controller import PriceController
+    from factorylab.kernel.ledger import canonical
+    from factorylab.runtime.loop import Runtime
+
+    m = load_manifest("scripted")
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, decay=decay))
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        canonical(json.loads(bad.canonical_json()))
+    path = tmp_path / "ledger.jsonl"
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        Runtime(bad, events=1, seed=1, initial_balance_micro=None, ledger_path=str(path),
+                router_gamma=0.1)
+    assert not path.exists()  # no row was written
+    with pytest.raises(ValueError, match="decay must be a finite number"):
+        PriceController(None, eta=m.prices.eta, decay=decay, penalty_cap=0.5,
+                        min_window_events=1)
+
+
+def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
+    """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
+    of the scripted world moved when the shims went, again when the standing committee
+    added committee.quorum, norm_house and charter_parent_sha256, again when a card's
+    region became typed data beside its holdouts and interval (charter audit P2, M3),
+    and again when W4's judges came to accept Exposure (primitive audit F12), and again
+    when Wave 5a added the evaluation keys and [chaos] and gave the roster a third
+    model family (evaluations C1, M1, P6), and again when a fourth gave a meta a family
+    no chain holds (the #132 review), and again when the clock stopped casting windows
+    (time audit T1, T5, T13: the novelty window and lifetime left, the treasury caps
+    gained their own duration and the forward wait its ticks), and again when thrash
+    came to be priced and immune.decay_step left (versioning audit C2), and again when
+    novelty.seat_share capped one seat's share of the niche (ruling R5), and again when
+    each model came to state how its route carries the contract (models.contract,
+    §II.b), and again when the prices that paid no one left (Wave 11: [storage]
+    micro_per_byte_day, connectors.call_price_usd, web.call_price_micro,
+    polymarket.read_price_usd, tools.population_tool_micro_per_call and
+    prices.program_micro_per_call; the wallet moves only when money moves, §II.b,
+    §IV.a), and again when the public venue reads gained their per-minute weight
+    budget ([venue] public_read_weight_per_minute), and again when that budget came to
+    be divided over venue read slots ([venue] max_readers; the population itself has no
+    size cap), and again when Polymarket reads gained their published-rate-limit budget
+    and kernel reserve ([polymarket] read_requests_per_minute,
+    kernel_reserve_per_minute), and again when retained private state gained its
+    hard cap on the finite disk ([storage] retained_private_bytes; a retired id keeps
+    its state until capacity is needed), and again when the Polymarket budget's
+    defaults rose to half the tightest published limit on a dedicated IP
+    (read_requests_per_minute 900, kernel_reserve_per_minute 300), and again when that
+    budget came to be counted over Polymarket's own sliding 10 s
+    (read_requests_per_10s 200, kernel_reserve_per_10s 100) and watcher work gained its
+    hard limit ([subscriptions] max_watcher_evaluations_per_sweep), and again when the
+    road not taken came to be priced net of the venue's own fee
+    (evaluation.opportunity_scale_bps left; wave 16, D1), and again when the consequence
+    horizon became world_repricing / min_ratio on the venue's clock (the mark's
+    evaluation.consequence_horizon_ticks left, and the scripted world states its
+    timing.world_repricing; wave 16, D2), and again when a fake venue could replay a
+    recorded tape ([exchange.tape], absent by default), and again when each model came
+    to state its training cutoff (models.training_cutoff, unknown by default; the
+    look-ahead guard of a tape world); each time it is a new v0."""
     scripted = load_manifest("scripted")
-    assert scripted.evaluation.grounded_horizon_ticks == 10
-    assert "grounded_horizon_ticks" not in scripted.canonical_json()
+    assert '"forecast_horizon_events":10' in scripted.canonical_json()
+    assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
+    assert '"contract":"json_object"' in scripted.canonical_json()
+    assert '"tape":null' in scripted.canonical_json()
+    assert '"training_cutoff":null' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "f3bf34acc6aa2e9a530bd176453c1968e526b4083f7f3dedbea59636bdad2dd8"
+        "c5e9be550f27b1a4aecd8399e288d7a1c39c5d5f051200a5fdcea9f4ca0d1480"
     )
 
     implicit = manifest_from_dict(_base())
     explicit_raw = _base()
-    explicit_raw["evaluation"] = {"grounded_horizon_ticks": 10}
+    explicit_raw["evaluation"] = {"forecast_horizon_events": 10}
     explicit = manifest_from_dict(explicit_raw)
     assert explicit.manifest_hash() == implicit.manifest_hash()
 
     changed_raw = _base()
-    changed_raw["evaluation"] = {"grounded_horizon_ticks": 11}
+    changed_raw["evaluation"] = {"forecast_horizon_events": 11}
     assert manifest_from_dict(changed_raw).manifest_hash() != implicit.manifest_hash()
 
 
-@pytest.mark.parametrize("value", [0, -1, True, 1.5, "10", None])
-def test_grounded_horizon_requires_a_positive_exact_integer(value):
+@pytest.mark.parametrize("key,value", [("producer_feedback", "realized"),
+                                       ("producer_feedback", "verdict"),
+                                       ("grounded_horizon_ticks", 10),
+                                       ("sibling_share", 0.5)])
+def test_the_deleted_reward_chain_keys_are_refused_not_ignored(key, value):
+    """Ruling R1 deleted the realized feedback mode and the grounded final judge, and
+    evaluations U2 the sibling share; R8 refuses a manifest that names physics this
+    kernel does not run."""
     raw = _base()
-    raw["evaluation"] = {"grounded_horizon_ticks": value}
-    with pytest.raises(ValueError, match="grounded_horizon_ticks"):
+    raw["evaluation"] = {key: value}
+    with pytest.raises(ValueError, match=f"evaluation.{key} was removed"):
         manifest_from_dict(raw)
 
 
 def test_clock_bounds_seed_validation_and_hash():
+    """max_tick is derived from the consequence horizon (wave 16, D2; time audit T7).
+
+    The horizon is world_repricing / min_ratio on the venue's clock, and the decision
+    loop settles min_ratio times faster than it, so a tick is admissible while it is at
+    most world_repricing / min_ratio^2. A world that lists no venue states no repricing
+    period and has no upper bound; one that lists a venue must state it.
+    """
     d = _base()
     d["clock"] = {"min_tick": "10s"}
     d["tick_interval"] = "10s"
+    d.pop("timing")
+    with pytest.raises(ValueError, match="world_repricing is required"):
+        manifest_from_dict(d)
+    d["exchange"] = {"kind": "fake", "coins": []}
+    assert manifest_from_dict(d).max_tick_ns is None
+    assert manifest_from_dict(d).consequence_horizon_ns is None
+    del d["exchange"]
+    d["timing"] = {"world_repricing": "9m"}  # H = 540 s / 3 = 180 s; max tick 180 s / 3
     m = manifest_from_dict(d)
+    assert m.consequence_horizon_ns == 180_000_000_000
     assert m.clock.min_tick_ns == 10_000_000_000
-    assert m.max_tick_ns == 1200_000_000_000
+    assert m.max_tick_ns == 60_000_000_000
     assert "max_tick" not in m.canonical_json()
-    d["tick_interval"] = "20m"
+    d["tick_interval"] = "1m"
     assert manifest_from_dict(d).tick_interval_ns == m.max_tick_ns
-    for invalid in ["9s", "1201s"]:
+    for invalid in ["9s", "61s"]:
         d["tick_interval"] = invalid
         with pytest.raises(ValueError, match="tick_interval"):
             manifest_from_dict(d)
@@ -126,14 +298,6 @@ def test_clock_bounds_seed_validation_and_hash():
     d["clock"]["max_tick"] = "20m"
     with pytest.raises(ValueError, match="derived"):
         manifest_from_dict(d)
-
-
-@pytest.mark.parametrize("value", [-1, True, "0.5", float("nan"), float("inf")])
-def test_invalid_kappa_is_rejected(value):
-    raw = _base()
-    raw["prices"] = {"kappa": value}
-    with pytest.raises(ValueError, match="kappa"):
-        manifest_from_dict(raw)
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "200", None])
@@ -147,7 +311,7 @@ def test_invalid_cadence_sample_is_rejected(value):
 def _with_charter():
     from dataclasses import asdict
 
-    from factorylab.charter.charter import seed_charter
+    from tests.seed_charter import seed_charter
 
     raw = _base()
     raw["charter"] = asdict(seed_charter())
@@ -159,7 +323,7 @@ def _with_charter():
 @pytest.mark.parametrize(("field", "value"), [
     ("observation", "missing"), ("acceptable_region", "roughly adequate"),
     ("norm", "unknown"), ("description", None), ("observation", 12),
-    ("lambda", -0.1), ("lambda", 1.1), ("lambda", True), ("lambda", "0.5"),
+    ("lambda", -0.1), ("lambda", True), ("lambda", "0.5"),
     ("lambda", float("nan")), ("lambda", float("inf")),
 ])
 def test_manifest_charter_rejects_card_field_with_identity(field, value):
@@ -174,9 +338,8 @@ def test_manifest_charter_duplicate_ids_and_lambda_bounds():
     raw["charter"]["cards"].append(raw["charter"]["cards"][0])
     with pytest.raises(ValueError, match="cost_per_return.*id"):
         manifest_from_dict(raw)
-    for value in (0, 2):
+    for value in (0, 2):  # a price has no bound of its own (wave 16, R-E)
         raw = _with_charter()
-        raw["prices"] = {"lambda_max": 2}
         raw["charter"]["cards"][0]["lambda"] = value
         assert manifest_from_dict(raw).charter_prices == (("cost_per_return", value),)
 
@@ -212,7 +375,8 @@ def test_manifest_card_rejects_unknown_role(value):
     ("evaluation", "adversarial_share", 1.5), ("evaluation", "sibling_share", -0.1),
     ("evaluation", "sampling_step", 2), ("evaluation", "sampling_cap", 0.2),
     ("committee", "min_settled", False), ("immune", "k", 1), ("immune", "k", 3.0),
-    ("immune", "bins", 1), ("immune", "tv_threshold", -1),
+    ("immune", "price_step", 0), ("immune", "price_step", float("inf")),
+    ("immune", "tv_threshold", -1),
     ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
     ("immune", "gain_step", True), ("immune", "decay_step", 0),
 ])
@@ -257,3 +421,66 @@ def test_provider_native_completion_mode_preserves_explicit_historical_allowance
     assert manifest_from_dict(d).assemblies[0].max_tokens is None
     d["assemblies"][0]["max_tokens"] = 4096
     assert manifest_from_dict(d).assemblies[0].max_tokens == 4096
+
+
+def test_a_world_without_a_charter_is_refused():
+    """Charter audit S3: the kernel supplies no default charter."""
+    raw = _base()
+    del raw["charter"]
+    with pytest.raises(ValueError, match=r"\[charter\]"):
+        manifest_from_dict(raw)
+
+
+def test_the_ratchet_step_is_stated_and_the_bin_count_is_not_a_key():
+    """Versioning S3 and U5: price_step is required, and immune.bins is refused."""
+    raw = _base()
+    del raw["immune"]["price_step"]
+    with pytest.raises(ValueError, match="immune.price_step is required"):
+        manifest_from_dict(raw)
+    raw = _base()
+    raw["immune"]["bins"] = 3
+    with pytest.raises(ValueError, match="immune.bins was removed"):
+        manifest_from_dict(raw)
+
+
+@pytest.mark.parametrize("section,table", [
+    ("drip", {"amount_usd": "1", "period": "1d", "end": "7d"}),
+    ("termination", {"max_events": 100}),
+    ("venue", {"collateral_headroom_usd": "0"}),
+])
+def test_keys_no_world_set_are_refused_not_ignored(section, table):
+    """Smuggling D-6: a manifest naming a removed key would describe unrun physics."""
+    raw = _base()
+    raw[section] = table
+    with pytest.raises(ValueError, match="was removed"):
+        manifest_from_dict(raw)
+
+
+def test_a_models_contract_defaults_to_json_object_and_names_its_schema_routes():
+    """Chapter II §II.b: how a route carries the contract is a load-time fact."""
+    raw = _base()
+    assert manifest_from_dict(raw).models[0].contract == "json_object"
+    assert manifest_from_dict(raw).schema_contract_models() == frozenset()
+    raw["models"][0].update(provider="openrouter", contract="json_schema")
+    manifest = manifest_from_dict(raw)
+    assert manifest.schema_contract_models() == frozenset({"m"})
+    assert manifest.manifest_hash() != manifest_from_dict(_base()).manifest_hash()
+
+
+@pytest.mark.parametrize("provider,contract", [
+    ("openrouter", "json"), ("openrouter", "strict"), ("openrouter", True),
+    ("openrouter", None), ("x402", "json_schema"), ("fake", "json_schema"),
+])
+def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
+    raw = _base()
+    raw["models"][0].update(provider=provider, contract=contract)
+    with pytest.raises(ValueError, match="models.contract"):
+        manifest_from_dict(raw)
+
+
+def test_the_edition6_worlds_carry_the_schema_on_the_probed_routes_alone():
+    # DeepSeek left json_schema after the first live capital-loop rehearsal (9 of 11 real
+    # contracts malformed under it); Qwen and MiniMax keep it.
+    expected = frozenset({"qwen/qwen3.8-flash", "minimax/minimax-m3"})
+    for world in ("edition6-testnet-rehearsal", "edition6-capital-loop"):
+        assert load_manifest(world).schema_contract_models() == expected

@@ -56,13 +56,15 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     spec = runtime.assemblies["eval-a"].spec
     # A judge that also accepts producer returns as a child target, and a parent producer.
     runtime._instantiate(replace(spec, id="eval-child", role="evaluator",
-                                 accepts=frozenset({"ProducerReturn", "Tick"}),
+                                 accepts=frozenset({"ProducerReturn", "Tick", "Audit"}),
                                  emits=("ProducerReturn",)))
     parent = _consequence_decision(runtime, "seed-decider", CH_VERDICT)
     runtime.handle_to_assembly[parent] = "seed-decider"
     runtime.consequences.start(parent, 0)
     request = runtime._request(parent, "parent", {}, {"type": "object"}, 10**18, CH_VERDICT)
-    child_item = ChildRequest("eval-child", "child task", {}, {"type": "object"})
+    # A request names a kind (primitive audit F5): no contract emits Audit, and
+    # eval-child alone accepts it, so the Audit request router can draw only it.
+    child_item = ChildRequest("Audit", "child task", {}, {"type": "object"})
     child_handle = None
 
     def invoke(target, req, role, *, child=False):
@@ -89,8 +91,13 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     runtime.n += 1
     runtime._route_with(state, child_return)
     excluded = [i for i in runtime.ledger._recovery_items() if i["kind"] == "route.excluded"]
-    assert {i["assembly_id"] for i in excluded} == {"eval-child"}
-    assert all(i["reason"] == "self-judgement" for i in excluded)
+    assert {i["assembly_id"] for i in excluded
+            if i["reason"] == "self-judgement"} == {"eval-child"}
+    # The other exclusions are the author's family (evaluations P6), never a judge
+    # on another family.
+    family = runtime._family("eval-child")
+    assert all(i["reason"] == "same-family" and runtime._family(i["assembly_id"]) == family
+               for i in excluded if i["reason"] != "self-judgement")
     # A judge's own verdict and a meta's own meta verdict are excluded on every kind.
     judge = _judge_handle(runtime)
     runtime.handle_to_assembly[judge] = "eval-a"

@@ -2,9 +2,8 @@
 
 These live in the kernel, not in a script, because the load path enforces them: a
 funded manifest must carry the ratified charter's content digest and the roster
-hash it was surveyed against. ``scripts/draft_edition1.py`` and
-``scripts/ratify_charter.py`` export the same functions, so artifacts written
-before this binding existed verify unchanged.
+hash it was surveyed against. ``scripts/charter_session.py`` exports with the same
+functions, so artifacts written before this binding existed verify unchanged.
 """
 
 from __future__ import annotations

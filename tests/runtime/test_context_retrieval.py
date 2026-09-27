@@ -9,11 +9,31 @@ from test_discovery_continuation import packed, request, rows, runtime, scripted
 from factorylab.cortex.request import Return
 from factorylab.runtime.compute import _bounded_result_history, _compacted_result
 from factorylab.runtime.continuity import HARD_STATE_BYTES
+from tests.runtime.test_loop import lists_nothing
+
+
+def test_invalid_read_is_answered_in_its_slot_without_dispatch(monkeypatch):
+    """A read-only batch keeps its turn: the bad read is refused, not dispatched,
+    and its error answers in its own tool_results slot (PR121 seq 11547)."""
+    rt = lists_nothing(runtime())
+    req = request(rt)
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"tool_calls": [{"tool": "venue.order_book", "args": {"coin": "BTC"}}]},
+        {"action": "hold", "rationale": "the book read was malformed; holding"},
+    ], prompts)
+    ret = rt._invoke("seed-decider", req, "producer")
+    assert ret.status == "ok" and len(prompts) == 2
+    assert not rows(rt, "tool.call")  # never dispatched
+    assert "depth" in prompts[1] and '"tool":"venue.order_book"' in prompts[1]
+    fault = rows(rt, "return.sections_dropped") or rows(rt, "return.validation_failed")
+    assert fault and "depth" in json.dumps(fault[-1])
 
 
 @pytest.mark.parametrize("calls,reason", [
-    ([{"tool": "venue.order_book", "args": {"coin": "BTC"}}], "depth"),
-    ([{"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}] * 5,
+    # Over the limit in a batch that writes: whole or not at all. (A read-only
+    # batch over the limit is answered in its slots instead.)
+    ([{"tool": "venue.cancel", "args": {"coin": "BTC", "order_id": "1"}}] * 5,
      "more than 4 tool_calls"),
 ])
 def test_invalid_tool_only_reply_reaches_own_inbox_without_dispatch(monkeypatch, calls, reason):
@@ -37,7 +57,7 @@ def test_invalid_tool_only_reply_reaches_own_inbox_without_dispatch(monkeypatch,
 
 
 def test_discover_page_read_and_act_in_one_budget(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     seat = "seed-decider"
     for i in range(12):
@@ -47,14 +67,13 @@ def test_discover_page_read_and_act_in_one_budget(monkeypatch):
         {"tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
         {"tool_calls": [{"tool": "outcome.list", "args": {"after": 8}}]},
         {"tool_calls": [{"tool": "outcome.get", "args": {"outcome_id": "outcome:12"}}]},
-        {"tool_calls": [{"tool": "note.put", "args": {"key": "evidence", "text": "exact-11"}}]},
-        {"action": "hold", "rationale": "Saved the retrieved fact."},
+        {"action": "hold", "rationale": "Read the retrieved fact."},
     ], prompts)
     before = rt.wallet.balance
     ret = rt._invoke(seat, req, "producer")
-    assert ret.status == "ok" and len(prompts) == 5
+    assert ret.status == "ok" and len(prompts) == 4
     assert [r["tool"] for r in rows(rt, "tool.call")] == [
-        "world.read", "outcome.list", "outcome.get", "note.put"]
+        "world.read", "outcome.list", "outcome.get"]
     assert all(r["ok"] for r in rows(rt, "tool.call"))
     assert "exact-11" in prompts[3]
     assert ret.cost == before - rt.wallet.balance
@@ -110,12 +129,9 @@ def test_late_public_history_is_exactly_addressable_while_current_facts_stay_inl
     assert after["public_observations"]["last_closed_window_values"] == (
         before["public_observations"]["last_closed_window_values"]
     )
-    assert after["public_observations"]["pathologies"] == (
-        before["public_observations"]["pathologies"]
-    )
-    assert after["public_observations"]["shared_directory"] == (
-        before["public_observations"]["shared_directory"]
-    )
+    # U4: pathology labels are for observers and the wake, never a seat's prompt.
+    assert "pathologies" not in before["public_observations"]
+    assert "pathologies" not in after["public_observations"]
     assert after["public_observations"]["recent_mids"] == {
         "BTC": [before["public_observations"]["recent_mids"]["BTC"][-1]]
     }
@@ -213,7 +229,8 @@ def test_routing_growth_uses_the_same_compact_world_before_and_after_invocation(
     assert compact_world_chars < raw_world_chars
     prompts = []
     scripted(rt, monkeypatch, [
-        {"action": "hold", "rationale": "No action from unchanged history."},
+        {"action": "hold", "rationale": "No action from unchanged history.",
+         "counterfactual": {"coin": "BTC", "side": "buy"}},
     ], prompts)
 
     ret = rt._invoke("seed-decider", req, "producer")
@@ -264,7 +281,8 @@ def test_first_call_can_read_transient_world_history_through_its_own_handle(monk
     prompts = []
     scripted(rt, monkeypatch, [
         {"tool_calls": calls},
-        {"action": "hold", "rationale": "The exact history was read."},
+        {"action": "hold", "rationale": "The exact history was read.",
+         "counterfactual": {"coin": "BTC", "side": "sell"}},
     ], prompts)
 
     ret = rt._invoke("seed-decider", req, "producer")
@@ -291,7 +309,7 @@ def test_first_call_can_read_transient_world_history_through_its_own_handle(monk
 
 
 def test_recent_results_carry_four_plus_two_facts_without_working_state(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     facts = [f"unknown-fact-{letter}" for letter in "abcdef"]
     for index, fact in enumerate(facts):
@@ -345,7 +363,7 @@ def test_large_prior_result_history_is_bounded_and_exactly_retrievable():
 
 
 def test_oversize_intermediate_state_is_refused_without_changing_the_head(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     seat = "seed-decider"
     rt.working_state.put(seat, {"keep": "baseline"}, handle="before")
     before_head = dict(rt.working_state.head(seat))
@@ -363,7 +381,7 @@ def test_oversize_intermediate_state_is_refused_without_changing_the_head(monkey
 
     assert ret.status == "ok" and len(prompts) == 2
     assert rt.working_state.head(seat) == before_head
-    assert '"keep": "baseline"' in prompts[1]
+    assert '"keep":"baseline"' in prompts[1]
     assert "Z" * 1000 not in prompts[1]
     refused = rows(rt, "state.refused")
     assert len(refused) == 1 and str(HARD_STATE_BYTES) in refused[0]["reason"]
@@ -394,12 +412,12 @@ def test_intermediate_state_commit_survives_a_later_final_failure(monkeypatch):
 ])
 def test_loop_ending_tool_return_handles_working_state_only_once(
         monkeypatch, state, accepted):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     prompts = []
     scripted(rt, monkeypatch, [
-        {"tool_calls": [{"tool": "note.put",
-                         "args": {"key": "done", "text": "the action is complete"}}]},
+        {"tool_calls": [{"tool": "venue.set_leverage",
+                         "args": {"coin": "ETH", "leverage": 1}}]},
         {"working_state": state,
          "tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
     ], prompts)
@@ -432,7 +450,7 @@ def test_connector_body_cannot_become_intermediate_working_state():
 
 
 def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     monkeypatch.setattr(rt, "_call_reserve", lambda *_: None)
     prompts = []
@@ -447,7 +465,7 @@ def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch
 
 
 def test_large_unaffordable_result_preserves_answer_without_claiming_delivery(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     seat = "seed-decider"
     rt.outcomes.append(seat, handle="large", outcome={"evidence": "x" * 250_000})
     base = request(rt)
@@ -466,7 +484,7 @@ def test_large_unaffordable_result_preserves_answer_without_claiming_delivery(mo
 
 
 def test_unaffordable_recent_working_set_falls_back_to_exact_references(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     seat = "seed-decider"
     for index in range(2):
         rt.outcomes.append(seat, handle=f"fact-{index}",
@@ -504,20 +522,24 @@ def test_unaffordable_recent_working_set_falls_back_to_exact_references(monkeypa
     assert prompts[2].count('"read_with"') >= 2
 
 
-def test_program_cannot_run_tools_with_its_last_answer_budget(monkeypatch):
+def test_a_program_s_tool_rounds_are_bounded_by_rounds_not_by_money(monkeypatch):
+    """Wave 11: a program call costs nothing (its jail pays no one), so its next answer
+    needs no reserve and a zero cost ceiling does not refuse its tool round; the
+    kernel's round limit is what bounds it."""
     from tests.cortex.test_programs import program
 
     rt = runtime()
     req = request(rt)
     asm, _, _ = program()
     rt.assemblies["seed-decider"] = asm
+    assert rt._call_reserve(asm, req) == 0
     monkeypatch.setattr(rt, "_invoke_compute", lambda *_, **__: Return(
-        req.handle, {}, asm.price, "ok", tool_calls=(
+        req.handle, {}, 0, "ok", tool_calls=(
             {"tool": "outcome.list", "args": {}},)))
-    ret = rt._invoke("seed-decider", replace(req, cost_ceiling=2 * asm.price - 1), "producer")
-    assert ret.status == "failed" and ret.cost == asm.price
-    assert not rows(rt, "tool.call")
-    assert rows(rt, "tool.rounds_exhausted")[0]["reserve"] == asm.price
+    ret = rt._invoke("seed-decider", replace(req, cost_ceiling=0), "producer")
+    assert ret.cost == 0
+    assert rows(rt, "tool.call")
+    assert all(row.get("reserve", 0) == 0 for row in rows(rt, "tool.rounds_exhausted"))
 
 
 def test_routing_bridge_does_not_fund_the_seats_retrieval_chain(monkeypatch):

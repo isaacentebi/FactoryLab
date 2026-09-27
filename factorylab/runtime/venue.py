@@ -9,8 +9,8 @@ from decimal import Decimal
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.shared import _to_plain
-from factorylab.settlement.lots import LotTable
-from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.settlement.lots import VENUE_FEE_MARKETS, WIND_DOWN, LotTable
+from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.exchange import (
     AccountState,
     Order,
@@ -65,10 +65,312 @@ def dead_report() -> dict:
             "exposure_status": UNKNOWN}
 
 
+def close_recorded_market(rt, *, through_tape_end: bool = False) -> None:
+    """End a recorded venue's market with its world, and settle what that leaves.
+
+    A venue that charges funding only at hour boundaries would leave the last
+    partial hour uncharged when the world ends between two of them, and an order
+    sent after the recording's last row could never arrive and would rest forever as
+    pending exposure: a replay whose costs are understated, or whose venue state is
+    never settled, is kinder than the market it replays (Chapter II §III.b: the
+    consequence that grades the chain must be the world's). The venue's closing
+    effects (``close_recording``: the accrued funding, and every order that can no
+    longer arrive cancelled) settle once, before the production mark, like any other
+    venue effect; never raises into a kill. Only a venue that closes (a recorded tape)
+    is asked; every other runtime is untouched.
+
+    The instant it closes at never passes the recording's end (``closes_ns``). When
+    the tape itself ended the run (``through_tape_end``: its clock ran out before its
+    tick budget, or the paced clock reached the end, ``TAPE_ENDED``), the venue is
+    first advanced and settled exactly through the end: orders in flight meet every
+    recorded row up to it and funding runs through it. When an earlier budget or a
+    termination ended the run, it closes at the world's instant.
+    """
+    from factorylab.world.tape import TAPE_ENDED
+
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or getattr(rt, "live", True) \
+            or not callable(getattr(exchange, "close_recording", None)):
+        return
+    try:
+        closes = int(exchange.closes_ns)
+        if through_tape_end or getattr(rt, "_safety_stop", None) == TAPE_ENDED:
+            rt._settle_exchange_effects(rt._advance_venue(closes), observe_positions=False)
+            rt.clock.now_ns = max(rt.clock.now_ns, closes)
+        rt._settle_exchange_effects(
+            exchange.close_recording(min(rt.clock.now_ns, closes)), observe_positions=False)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the recorded market was not closed ({type(exc).__name__})",
+              file=sys.stderr)
+
+
+def settle_terminal(rt) -> None:
+    """Settle, before the wind-down and the seal, everything the final facts made ready.
+
+    Codex on #152: the world ends here, so a fake or recorded venue has delivered
+    every fact it ever will through its last advance (``close_recorded_market``):
+    the runtime's facts are complete through it. A live venue's streams keep their
+    own watermarks. Every outcome that became ready is fixed, and every evaluator it
+    grades is scored and delivered its grade, before ``Terminated``; the wind-down's
+    own fills come after, as late money. Never raises into a kill.
+
+    The terminal order: (1) the final venue advance (``close_recorded_market``,
+    before this); (2) the facts' watermark; (3) arrived verdicts; (4) consequence
+    resolution and due forecasts; (5) the open price window is closed by the same
+    path a due close takes (``_close_price_window``), so every share freezes exactly
+    as at a normal close and every settlement deferred to it (wave 16, D5) settles;
+    no next window opens; (6) returns are delivered; then, in ``kill``, the
+    production mark, the wind-down (its closing orders bound to the kernel's
+    wind-down account, ``bind_wind_down_orders``), the seal of a recorded venue (the
+    wind-down's fills booked), that late money booked to its owners
+    (``settle_wind_down``), every item still open censored by termination
+    (``censor_terminal``) and ``Terminated``.
+    """
+    try:
+        through = getattr(rt, "advance_through_ns", None)
+        if through is not None:
+            rt.tick_through_ns = rt.consequences.tick_through_ns = through
+        rt._settle_arrived_verdicts()
+        rt._settle_due_forecasts()
+        if (getattr(rt, "reserve_window_start", None) is not None
+                and rt.window.closed_values is None):
+            # A window the world ends inside is closed as a due one is: a score that
+            # waited for its close is earned, never stranded (Codex on #152).
+            rt._close_price_window()
+        rt._deliver_returns()
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the final consequences were not settled "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
+def bind_wind_down_orders(rt, report: dict) -> None:
+    """Guarantees every closing order the wind-down placed is bound to the kernel's
+    wind-down account (``settlement.lots.WIND_DOWN``) before its fills are booked.
+
+    Its fills then close the lots the venue flattened through the one fill path, FIFO
+    per instrument across owners, never as a closer and never opening a lot; each
+    owner's realised P&L is late money (``settle_wind_down``). Custody is unchanged.
+    Never raises into a kill.
+    """
+    try:
+        for order in report.get("closing_orders") or ():
+            sizes = [abs(Decimal(str(s))) for s in (order.get("size"), order.get("filled_size"))
+                     if s is not None]
+            size = max(sizes, default=Decimal(0))
+            if size > 0:
+                rt.consequences.bind_wind_down(order["order_id"], str(size),
+                                               str(order.get("coin")), rt.n)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the wind-down's orders were not bound "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
+def _fills_booking_failed(rt, fills, exc: BaseException) -> None:
+    """Guarantees fills a successful read consumed but could not book are on the record:
+    ``wind_down.fills_booking_failed`` with each fill's own facts and the failure, so
+    the gap is auditable and no fact is lost. Never raises into a kill."""
+    try:
+        rt.ledger.append({
+            "kind": "wind_down.fills_booking_failed",
+            "fills": [{"fact_ns": ts, **{k: payload.get(k) for k in (
+                "event_kind", "order_id", "coin", "is_buy", "size", "px", "fee_usd",
+                "market", "liquidation", "fill_ns", "paid_usd", "mid") if k in payload}}
+                      for ts, payload in fills],
+            "error": type(exc).__name__, "message": str(exc)[:500], "ts": rt.clock.now_ns})
+    except Exception as again:  # noqa: BLE001 - the diary may refuse; the kill proceeds
+        print(f"factorylab kill: the wind-down's fills were not booked "
+              f"({type(exc).__name__}) nor recorded ({type(again).__name__})",
+              file=sys.stderr)
+
+
+def read_wind_down_fills(rt, report: dict | None = None) -> None:
+    """Guarantees a live venue's wind-down fills are read after the wind-down until
+    every closing order it placed is observed, or that what was not is on the record.
+
+    A recorded venue's fills are drained at its seal (``seal_recorded_market``); any
+    other venue is read here: up to ``winddown.ROUNDS_PER_KILL`` reads of the fills
+    the ticks use (``consequence_fills.poll``), each success advancing the fills
+    watermark and booking its fills through accounting only (the closing orders
+    already bound to the kernel's account; no window is touched). Reading stops once
+    every closing order in ``report["closing_orders"]`` has a fill observed (Codex on
+    #152: a close just submitted may not have propagated to the first read). If the
+    bound is spent first, ``wind_down.fills_unread`` names each unobserved closing
+    order: the money stays in custody and its attribution is unknown. A read whose
+    fills could not be booked is ledgered with them (``_fills_booking_failed``). The
+    kill never waits. Never raises into a kill.
+    """
+    from factorylab.runtime.winddown import ROUNDS_PER_KILL
+
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or (not getattr(rt, "live", True)
+                            and callable(getattr(exchange, "seal_recording", None))):
+        return
+    wanted = {str(o["order_id"]) for o in (report or {}).get("closing_orders") or ()}
+    observed: set[str] = set()
+    errors, reads = [], 0
+    for _attempt in range(ROUNDS_PER_KILL):
+        try:
+            fills = rt.consequence_fills.poll(exchange, strict=True, now_ns=rt.clock.now_ns)
+        except Exception as exc:  # noqa: BLE001 - an unanswered read is retried, then noted
+            errors.append(type(exc).__name__)
+            continue
+        reads += 1
+        observed |= {str(payload.get("order_id")) for _ts, payload in fills}
+        try:
+            events = [WorldEvent(WorldEventKind.FILL, max(rt.clock.now_ns, ts),
+                                 exchange.name, payload) for ts, payload in fills]
+            rt._settle_exchange_effects(events, observe_positions=False,
+                                        accounting_only=True)
+        except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+            # The read succeeded and its fills are consumed (the cursor has passed
+            # them): their facts go on the record with the failure (Sol on #152).
+            _fills_booking_failed(rt, fills, exc)
+        if wanted <= observed:
+            return
+    try:
+        rt.ledger.append({"kind": "wind_down.fills_unread", "attempts": ROUNDS_PER_KILL,
+                          "reads": reads, "errors": errors,
+                          "unobserved": sorted(wanted - observed), "ts": rt.clock.now_ns})
+    except Exception as exc:  # noqa: BLE001
+        print(f"factorylab kill: the unread wind-down fills were not recorded "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
+def settle_wind_down(rt) -> None:
+    """Guarantees the money the wind-down's closes realised on a return whose outcome
+    was already fixed is booked to that return's owner, once, before the seal.
+
+    Sol on #152: the wind-down's fills, drained at the seal (``seal_recorded_market``)
+    or read after it (``read_wind_down_fills``), arrive after ``settle_terminal``; each
+    owner's part is late money (``_settle_late``), a claim moved to its seat, never a
+    score. A return whose outcome was never fixed has its realised P&L booked the same
+    way (``consequence.realized_at_termination``), once, and stays censored. Custody
+    is unchanged: the venue already holds it. Never raises into a kill.
+    """
+    try:
+        rt._settle_late()
+        # A return never graded: its realised P&L is still its owner's money.
+        rt._settle_realized_at_termination()
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the wind-down's late money was not booked "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
+#: Why a decision, ballot or margin still open at the seal closed without its signal.
+TERMINATION = "termination"
+
+#: Every live book (``settled.LIVE_BOOKS``) that holds work awaiting a later boundary:
+#: emptied at the seal, once the queue has censored every decision it names.
+CLEARED_AT_TERMINATION = (
+    "internal", "cascade", "pending", "arrived_verdicts", "pending_exposure",
+    "exposure_scores", "declined_exposures", "pending_counters", "forecast_returns",
+    "noop_credits", "assembly_rounds", "tool_uses", "tool_holds", "uptake",
+    "pending_votes", "lambda_posts", "retirement_proposals", "challenges",
+    "margin_windows", "measured_consequences", "reference_mids",
+    "deferred_settlements", "raw_scores", "round_penalties",
+)
+#: The live books that await nothing: provenance, the world's own marks, and the price
+#: loop's measurement record. They are kept as they are at the seal.
+KEPT_AT_TERMINATION = (
+    "population_tools", "tool_specs",           # a tool's provenance
+    "registered_observations", "registered_predicates",  # registrations' provenance
+    "price_windows", "price_origins", "window",  # the price loop's measurement record
+    "venue_marks", "funding_prints",            # the venue's own facts
+)
+
+
+def _censored_kind(rt, handle: str) -> str:
+    """The ledger kind a decision censored by termination is recorded under, by what
+    it was: a ballot, a forecast, an antagonist's exposure, a counter-verdict, or any
+    other decision."""
+    if any(vote["handle"] == handle for vote in rt.pending_votes):
+        return "ballot.censored"
+    if handle in {f.handle for f in rt.book.pending()}:
+        return "forecast.censored"
+    if handle in rt.pending_exposure:
+        return "exposure.censored"
+    if handle in rt.pending_counters:
+        return "counter.censored"
+    return "decision.censored"
+
+
+def censor_terminal(rt) -> None:
+    """Guarantees nothing is open at the seal: no decision in the kernel queue is left
+    pending or timed out, and no live book holds work awaiting a later boundary.
+
+    The last step before ``Terminated``. After termination nothing learns, so the
+    record is what matters. The kernel queue is the one source of truth: every
+    decision it holds without a final outcome is settled censored (reason
+    termination, no reward), once, with a row of its kind (``_censored_kind``); a
+    forecast is also marked settled in its book. Every lambda margin not yet due is
+    ledgered ``margin.censored``. Then every book in ``CLEARED_AT_TERMINATION`` is
+    emptied. Anything available settled normally in ``settle_terminal``, before the
+    wind-down. Never raises into a kill.
+    """
+    from factorylab.kernel.queue import SettleStatus
+
+    open_status = (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
+    try:
+        forecasts = {f.handle for f in rt.book.pending()}
+        for handle in rt.queue.retained():
+            decision = rt.queue.get(handle)
+            if decision.status not in open_status:
+                continue
+            kind = _censored_kind(rt, handle)
+            rt.queue.settle(handle, channel=decision.channel, score=0.0,
+                            status=SettleStatus.CENSORED,
+                            definition_version="terminated-v1", sampling_ref=None)
+            if handle in forecasts:
+                rt.book.mark_settled(handle)
+            rec = rt.pending.get(handle)
+            rt.ledger.append({"kind": kind, "handle": handle, "reason": TERMINATION,
+                              **({"evaluation": rec.evaluation} if rec is not None else {})})
+        for index in sorted(rt.margin_windows):
+            rt.ledger.append({"kind": "margin.censored", "window": index,
+                              "due": rt.margin_windows[index]["due"],
+                              "reason": TERMINATION})
+        for name in CLEARED_AT_TERMINATION:
+            book = getattr(rt, name, None)
+            if book is not None:
+                book.clear()
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: open items were not censored ({type(exc).__name__})",
+              file=sys.stderr)
+
+
+def seal_recorded_market(rt) -> None:
+    """Book what the wind-down's closes did on a recorded venue, then seal the venue.
+
+    The second half of the terminal sequence: after ``close_recorded_market`` (the
+    accrued funding, the orders that can never arrive), the kill's wind-down closes
+    positions and balances against the last recorded book; their fills and refusals
+    are settled here like any venue effect, so their realized P&L is booked, and only
+    then is the venue sealed against every further order, before ``Terminated``.
+    Idempotent; never raises into a kill; a no-op off a recorded venue.
+    """
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or getattr(rt, "live", True) \
+            or not callable(getattr(exchange, "seal_recording", None)):
+        return
+    drained = []
+    try:
+        drained = exchange.drain_events()
+        rt._settle_exchange_effects(drained, observe_positions=False, accounting_only=True)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        # Drained, so consumed: their facts go on the record with the failure.
+        _fills_booking_failed(rt, [(e.ts_ns, {"event_kind": str(e.kind), **e.payload})
+                                   for e in drained], exc)
+    try:
+        exchange.seal_recording()
+    except Exception as exc:  # noqa: BLE001
+        print(f"factorylab kill: the recorded market was not sealed ({type(exc).__name__})",
+              file=sys.stderr)
+
+
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
 
-    def kill(self, reason: str) -> dict:
+    def kill(self, reason: str, *, through_tape_end: bool = False) -> dict:
         """End this world: production dies first, and only then is the venue wound down.
 
         The single kill path inside a living runtime: the duration kill through
@@ -97,6 +399,10 @@ class VenueMixin:
 
         if self.termination.final:
             return getattr(self, "wind_down_report", dead_report())
+        close_recorded_market(self, through_tape_end=through_tape_end)
+        # Everything the final facts made ready is fixed and graded before the
+        # wind-down; the wind-down's own fills are late money (Codex on #152).
+        settle_terminal(self)
         owed = bool(self.m.kill.wind_down)
         report = dead_report()
         try:
@@ -119,15 +425,27 @@ class VenueMixin:
                                    launch_nonce=getattr(self, "launch_nonce", None))
             elif owed:
                 report["error"] = "world has no exchange"
+            if owed and getattr(getattr(self, "polymarket", None), "writes", False):
+                self._wind_down_polymarket(report)
+            # Its closing orders are the kernel's wind-down account's, so their fills
+            # close the lots the venue flattened (Sol on #152).
+            bind_wind_down_orders(self, report)
+            # A recorded venue: book the wind-down's closes, then refuse every order.
+            seal_recorded_market(self)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
             report["error"] = type(exc).__name__
         finally:
+            seal_recorded_market(self)  # sealed whatever the wind-down did (idempotent)
             # An acknowledgement is not a reconciled flat account.
             report.setdefault("exposure_state", winddown.UNKNOWN)
             report["exposure_status"] = report["exposure_state"]
             report["production_state"] = winddown.KILLED
             self.wind_down_report = report
             self.exposure_state = report["exposure_state"]
+            if owed:
+                read_wind_down_fills(self, report)  # a live venue's closes, read again
+            settle_wind_down(self)  # the wind-down's P&L, to its owners, before the seal
+            censor_terminal(self)  # the last step before the seal
             try:
                 witness.note_wind_down(
                     wind_down=owed, orders=report.get("orders", 0),
@@ -149,7 +467,8 @@ class VenueMixin:
         if self.venue is not None:
             self._reconcile_orders(final=True)
             try:
-                fills = self.consequence_fills.poll(self.exchange, strict=True)
+                fills = self.consequence_fills.poll(self.exchange, strict=True,
+                                                    now_ns=self.clock.now_ns)
             except Exception as exc:
                 # A failed read cannot turn into evidence of an empty fill set.
                 report["fill_read_error"] = type(exc).__name__
@@ -159,7 +478,219 @@ class VenueMixin:
             self._settle_exchange_effects(observed, observe_positions=False)
         self.ledger.append({"kind": "venue.terminal_reconciliation", **report})
         self.terminal_reconciliation = report
-        self.kill("explicit_kill:budget")
+        # A recorded tape's clock stops before its tick budget only at the tape's end:
+        # the world then closes through that end, not at its last tick (world/tape.py).
+        clock = self.tick_clock
+        ran_out = (getattr(self.exchange, "closes_ns", None) is not None
+                   and getattr(clock, "index", 0) < getattr(clock, "count", 0))
+        self.kill("explicit_kill:budget", through_tape_end=ran_out)
+
+    def _read_fee_schedule(self) -> None:
+        """Read the venue's taker rate per instrument and ledger it as a world fact.
+
+        Wave 16, D1 and ruling R-I: the road not taken is priced net of the venue's
+        own round trip, taker because a named counterfactual has no limit price.
+        Guarantees each instrument's rate (a perp coin, a spot pair) is the one the
+        venue's listing states on that instrument's own row (``instruments``:
+        ``taker_fee_rate``, a fraction of notional), never pooled across instruments:
+        a tape that records a different rate per coin prices each coin at its own
+        (Codex on #152). An instrument whose row states no rate has none: an unread
+        rate is never a number. Read at the first broadcast and again once per
+        ``timing.world_repricing``; a venue that re-reads its account's rates is asked
+        to first. A change is ledgered as ``venue.fee_schedule``.
+
+        Ruling R10-i: a read that states no rate for an instrument keeps its last
+        successfully read rate, and every successful read is kept with its time
+        (``history``, per instrument) so a horizon's exit fee is the venue's most recent
+        successful rate at or before it (``_rate_at``). Retention is need-based, as
+        wave 17b pins its books: per instrument, the latest read at or before the
+        earliest instant an open consequence can still ask for (``_fee_needs``) and
+        every read after it; with none open, only the latest read.
+
+        The same read states the venue's instrument listing (Codex on #152): every perp
+        and spot row it names, rate or none, kept as ``listed`` and read by
+        ``_listed_instruments``. A read that names no instrument (unanswered, or a
+        recording with no row yet) keeps the last listing a read stated.
+        """
+        refresh = getattr(self.exchange, "refresh_fee_rates", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:  # noqa: BLE001 - an unanswered read keeps the last rates
+                pass
+        try:
+            listing = self.exchange.instruments()
+        except Exception:  # noqa: BLE001 - an unanswered listing states no rate
+            listing = {}
+        read: dict[str, str] = {}
+        named: list[str] = []
+        for market in ("perp", "spot"):
+            for row in listing.get(market) or []:
+                if isinstance(row, dict) and row.get("coin") is not None:
+                    named.append(str(row["coin"]))
+                    if row.get("taker_fee_rate") is not None:
+                        read[str(row["coin"])] = str(row["taker_fee_rate"])
+        previous = self.fee_schedule or {}
+        before_listed = list(previous.get("listed") or [])
+        listed = list(dict.fromkeys(named)) if named else before_listed
+        before = dict(previous.get("rates") or {})
+        now = self.clock.now_ns
+        history = {name: [list(row) for row in rows]
+                   for name, rows in (previous.get("history") or {}).items()}
+        for instrument, rate in read.items():
+            history.setdefault(instrument, []).append([now, rate])
+        needs = self._fee_needs()
+        for instrument, rows in history.items():
+            # Keep what an open consequence can still ask for (Codex on #152: a fixed
+            # window dropped the rate at H while a long verdict window still waited
+            # for the mid at H): the read in force at the earliest needed instant and
+            # everything after it. Nothing open: the latest read, which any later
+            # decision's legs read at or after.
+            floor = needs.get(instrument, now)
+            in_force = [i for i, row in enumerate(rows) if row[0] <= floor]
+            history[instrument] = rows[in_force[-1] if in_force else 0:]
+        rates = {**before, **read}  # an instrument this read left unstated keeps its last
+        self.fee_schedule = {"rates": rates, "read_ns": now, "history": history,
+                             "listed": listed}
+        if not previous or rates != before or listed != before_listed:
+            self.ledger.append({"kind": "venue.fee_schedule", "rates": dict(rates),
+                                "listed": list(listed),
+                                "basis": "the venue's taker_fee_rate per instrument, a "
+                                         "fraction of notional",
+                                "ts": self.clock.now_ns})
+
+    def _fee_schedule_due(self) -> bool:
+        """Whether the venue's fee schedule is unread, or a repricing period old."""
+        if self.fee_schedule is None:
+            return True
+        period = self.m.timing.world_repricing_ns
+        return period is not None and self.clock.now_ns - self.fee_schedule["read_ns"] >= period
+
+    def _listed_instruments(self) -> tuple[str, ...]:
+        """The instruments the venue lists: what its last listing read named, else the
+        manifest's markets.
+
+        Codex on #152: a named trade is held to what the venue lists, never to what it
+        has quoted, so a listed instrument with no mid yet is still nameable and opens
+        at its first mid (ruling R10-h). Guarantees the perp coins and spot pairs of the
+        venue's last listing read that named any (``_read_fee_schedule``), and before
+        one the manifest's coins and spot pairs plus every registered market
+        (``_trading_markets``). A Polymarket token is never listed here: no venue mid
+        of one is broadcast, so a trade named on it could never open.
+        """
+        listed = (self.fee_schedule or {}).get("listed")
+        return tuple(listed) if listed else tuple(self._trading_markets())
+
+    def _taker_rate(self, coin: str) -> str | None:
+        """The taker rate in force for ``coin`` (a perp coin or spot pair) as last read:
+        its own rate, never another instrument's or a market's pooled one."""
+        return ((self.fee_schedule or {}).get("rates") or {}).get(coin)
+
+    def _advance_venue(self, ts_ns: int) -> list[WorldEvent]:
+        """Advance a fake or recorded venue to ``ts_ns``: every fact it holds through
+        that instant is delivered by the call, so every stream is delivered through it
+        (``advance_through_ns``; ruling R10-o)."""
+        events = self.exchange.advance(ts_ns)
+        self.advance_through_ns = max(getattr(self, "advance_through_ns", None) or ts_ns,
+                                      ts_ns)
+        return events
+
+    def _stream_watermark(self, stream: str) -> int | float | None:
+        """The instant one fact stream (``lots.FACT_STREAMS``) is delivered through, or
+        None when this runtime keeps no watermark for it (Codex on #152, R10-o).
+
+        Guarantees, for Hyperliquid, what ``_stream_through`` states (a live read's
+        request instant, or the time a fake or recorded venue was advanced to); for
+        Polymarket, the instant its events feed and each token's book were last read
+        successfully (``PolymarketSurface.through``: a simulated venue's advance time,
+        or a live read's instant before it), and minus infinity for one never read. A
+        failed read advances nothing, so it holds what depends on it.
+        """
+        if stream.startswith("hl:"):
+            return self._stream_through((stream.removeprefix("hl:"),))
+        surface = getattr(self, "polymarket", None)
+        if surface is None:
+            return None
+        if stream == "pm:events" and not surface.writes:
+            # A read-only surface places no order and holds no position: it has no
+            # events feed for anything to wait on (Codex on #152).
+            return None
+        key = "events" if stream == "pm:events" else stream.removeprefix("pm:book:")
+        read = (getattr(surface, "through", None) or {}).get(key)
+        if read is None:
+            return float("-inf")
+        return read if surface.venue.deterministic else read - 1
+
+    def _stream_through(self, streams: tuple[str, ...]) -> int | float | None:
+        """The earliest instant through which the venue has delivered every fact of
+        ``streams``, or None when this runtime keeps no venue watermark (ruling R10-o).
+
+        Guarantees, for a live venue, the instant before the request time of the latest
+        successful read of each polled stream (``LiveVenue.through``; fills from the fill
+        cursor), and
+        minus infinity for a stream never read successfully (nothing waits on an
+        unread stream as if it were empty); for a fake or recorded venue, the time it
+        was last advanced to (``advance_through_ns``), every stream alike.
+        """
+        venue = getattr(self, "venue", None)
+        if venue is None:
+            return getattr(self, "advance_through_ns", None)
+        through = dict(getattr(venue, "through", {}) or {})
+        cursor = getattr(self, "consequence_fills", None)
+        through["fills"] = getattr(cursor, "through_ns", None)
+        values = [through.get(stream) for stream in streams]
+        if any(value is None for value in values):
+            return float("-inf")
+        # A read made at an instant may miss a fact of that very instant: delivered
+        # through the instant before it.
+        return min(values) - 1
+
+    def _fee_needs(self) -> dict[str, int]:
+        """The earliest instant, per instrument, an open consequence can still read the
+        venue's fee rate at.
+
+        Guarantees every instant ``_rate_at`` can yet be asked for is at or after its
+        instrument's value: a named trade still frozen (``reference_mids``) needs its
+        decision, its opening and its horizon; an acting return whose outcome is not
+        fixed needs its opening and its horizon for every perp or spot instrument it
+        holds now or held at any recorded fact (``_instruments_of``: the history its
+        grade at H is derived from, ``_states_at_horizon``), so a lot open at H and
+        closed after it keeps its rate at H until the payoff is fixed (Codex on #152);
+        ``lots._exit_rates_for`` asks for exactly those. An instrument nothing open
+        holds or held is absent.
+        """
+        needs: dict[str, int] = {}
+
+        def need(instrument: str, *instants: int | None) -> None:
+            for at in instants:
+                if isinstance(at, int):
+                    needs[instrument] = min(at, needs.get(instrument, at))
+
+        for frozen in (getattr(self, "reference_mids", None) or {}).values():
+            if frozen.get("coin") is not None:
+                need(frozen["coin"], frozen.get("ns"), frozen.get("open_ns"),
+                     frozen.get("due_ns"))
+        consequences = getattr(self, "consequences", None)
+        table = getattr(consequences, "table", None)
+        if table is not None:
+            # The horizon the book itself asks its exit rates at (``_exit_rates_for``);
+            # without one it asks at the present, which the latest read answers.
+            horizon = getattr(consequences, "horizon_ns", None) or 0
+            for account in table.returns:
+                at = account.opened_at_ns
+                if account.payoff is not None or account.voided or at is None:
+                    continue
+                for coin, market in sorted(consequences._instruments_of(account.handle)):
+                    if market in VENUE_FEE_MARKETS:
+                        need(coin, at, at + horizon)
+        return needs
+
+    def _rate_at(self, instrument: str, at_ns: int) -> str | None:
+        """The venue's most recent successfully read taker rate for ``instrument`` at or
+        before ``at_ns``, or None when none was read by then (ruling R10-i)."""
+        rows = ((self.fee_schedule or {}).get("history") or {}).get(instrument) or []
+        before = [rate for ns, rate in rows if ns <= at_ns]
+        return before[-1] if before else None
 
     def _trading_markets(self) -> tuple[str, ...]:
         """Return the markets this world trades: the manifest seed plus every registration.
@@ -240,17 +771,14 @@ class VenueMixin:
 
     def _refuse_order(self, handle: str, reason: str, *, kind: str = "order.refused",
                       **extra) -> dict:
-        """Publish one refusal that happened before any intent, and tell its author why.
+        """Ledger one refusal that happened before any intent, and tell its author why.
 
-        A refusal the population cannot read is a refusal it will repeat: the
-        reason goes to the diary as ``kind`` and to ``registration_feedback``,
-        the same surface a refused proposal uses, so the next return sees it in
-        its own world block. Returns the rejection the caller hands back.
+        The reason goes to the diary as ``kind`` and to the author's own inbox
+        under the order's handle, and to no other seat. Returns the rejection the
+        caller hands back.
         """
         self.ledger.append({"kind": kind, "handle": handle, "reason": reason,
                             **extra, "ts": self.clock.now_ns})
-        self.registration_feedback.append({"kind": kind,
-                                           "reason": f"order: {reason}"})
         owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
         if owner is not None:
             self.outcomes.append(owner, handle=handle,
@@ -350,9 +878,10 @@ class VenueMixin:
         line and an operator can all read what the venue did without reading it
         as money leaving the compute wallet.
 
-        The compute wallet moves for model, tool and program charges, rent,
-        releases, transfers between seats and confirmed conversions into provider
-        credit. Nothing here is any of those.
+        The compute wallet moves only when money moves: provider bills for model
+        calls, a seller's price for a paid read or a paid call, treasury fees,
+        releases and confirmed conversions into provider credit. Nothing here is
+        any of those.
         """
         for delta, reference, reason, custody, order_id in settlements:
             handle = self._order_owner(order_id)
@@ -371,11 +900,29 @@ class VenueMixin:
         """The decision that placed an order, from the consequence book's own record."""
         if order_id is None:
             return None
-        orders = getattr(getattr(self.consequences, "table", None), "orders", None) or ()
-        return next((o.handle for o in orders if o.order_id == str(order_id)), None)
+        table = getattr(self.consequences, "table", None)
+        if table is None:
+            return None
+        # A released account's order still names its owner (wave 17b), so a very late
+        # fill is booked to the decision that placed it, as it was before the release.
+        return table.order_owner(str(order_id))
 
     def _settle_exchange_effects(self, evs: list[WorldEvent], *,
-                                 observe_positions: bool = True) -> None:
+                                 observe_positions: bool = True,
+                                 broadcast_mids: bool = True,
+                                 accounting_only: bool = False) -> None:
+        """Settle a batch of venue facts into money, consequence accounting and the world.
+
+        Guarantees every fact of the batch reaches consequence accounting now: the
+        consequence book (``consequences.observe``) and the named trades
+        (``_observe_mid``, ``_observe_funding``), so a venue's delivered-through
+        watermark never runs ahead of what accounting has seen (Codex on #152).
+        ``broadcast_mids`` False keeps the batch's mids from the seats (a pass that
+        delivers no mid of its own); they are accounted all the same.
+        ``accounting_only`` is a terminal batch (a kill's wind-down and seal, after the
+        last price window closed): the consequence book, custody and the running money
+        totals move, and no window counter does (the closed window stays as published).
+        """
         if any(we.kind is not WorldEventKind.MARKET_MID for we in evs):
             # A fill, a funding payment or a liquidation is the venue's books moving.
             self._venue_moved()
@@ -413,26 +960,54 @@ class VenueMixin:
             elif we.kind is WorldEventKind.FUNDING:
                 paid = usd_to_micro(we.payload["paid_usd"], rounding="nearest")
                 if paid:
-                    settlements.append((-paid, f"funding:{we.payload['coin']}:{we.ts_ns}",
+                    at = funding_instant(we.payload, we.ts_ns)
+                    settlements.append((-paid, f"funding:{we.payload['coin']}:{at}",
                                         "funding", "venue_perps", None))
         if settlements:
             self._settle_venue(settlements)
         for we in evs:
             if id(we) not in refused:
-                self.consequences.observe(str(we.kind), dict(we.payload), self.n)
+                payload = dict(we.payload)
+                if we.kind is WorldEventKind.MARKET_MID:
+                    # The mid's own venue time: a horizon is marked by the first mid at
+                    # or after it (wave 16, D2), never by the event that follows it.
+                    payload["ts_ns"] = we.ts_ns
+                elif we.kind is WorldEventKind.FILL:
+                    # The fill's own venue time (a polled venue stamps the event when
+                    # read; ``fill_ns`` is the execution's): a fill after a return's
+                    # horizon is late money for it (``_states_at_horizon``).
+                    payload["ts_ns"] = int(we.payload.get("fill_ns", we.ts_ns))
+                elif we.kind is WorldEventKind.FUNDING:
+                    # The funding time the payment is for (R10-m: an outcome accrues
+                    # funding only for funding times at or before its horizon).
+                    payload["ts_ns"] = funding_instant(we.payload, we.ts_ns)
+                self.consequences.observe(str(we.kind), payload, self.n)
+                # The named trades read the same facts at the same moment; reading
+                # them again when the kernel event is routed changes nothing.
+                if we.kind is WorldEventKind.MARKET_MID:
+                    self._observe_mid(str(we.payload["coin"]), int(we.ts_ns),
+                                      str(we.payload["mid"]))
+                elif (we.kind is WorldEventKind.FUNDING
+                        and we.payload.get("rate") is not None):
+                    self._observe_funding(str(we.payload["coin"]),
+                                          funding_instant(we.payload, we.ts_ns),
+                                          str(we.payload["rate"]), we.payload.get("mark"))
         for we in evs:
             if id(we) in refused:
                 self.internal.append(self._kernel_event(we))
                 continue
+            if not broadcast_mids and we.kind is WorldEventKind.MARKET_MID:
+                continue
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
-                self.window.fills += 1
                 notional = usd_to_micro(
                     Decimal(str(we.payload["size"])) * Decimal(str(we.payload["px"]))
                 , rounding="nearest")
-                self.window.notional_micro += notional
                 realized = usd_to_micro(we.payload["realized_usd"], rounding="nearest")
-                self.window.realized_pnl_micro += realized
+                if not accounting_only:
+                    self.window.fills += 1
+                    self.window.notional_micro += notional
+                    self.window.realized_pnl_micro += realized
                 fee = usd_to_micro(we.payload["fee_usd"], rounding="nearest")
                 self.realized_to_date += realized
                 self.fees_to_date += fee
@@ -447,7 +1022,8 @@ class VenueMixin:
                     "px": str(we.payload["px"]), "notional_micro": notional,
                     "realized_micro": realized, "fee_micro": fee,
                     "liquidation": we.payload.get("liquidation", False),
-                    "window": self.window.index, "event": self.n, "ts": we.ts_ns,
+                    "window": None if accounting_only else self.window.index,
+                    "event": self.n, "ts": we.ts_ns,
                 })
 
             elif we.kind is WorldEventKind.FUNDING:
@@ -462,27 +1038,143 @@ class VenueMixin:
         if observe_positions:
             self._observe_positions()
 
-    def _execute_outputs(self, ret: Return) -> None:
+    def _wind_down_polymarket(self, report: dict) -> None:
+        """Wind the polymarket pot down beside the venue, and let its exposure count.
+
+        A kill owes every custody its wind-down; a Polymarket position the book
+        would not take is exposure the dead world still holds, so the report's
+        ``exposure_state`` is the worse of the two venues'.
+        """
+        from factorylab.runtime import winddown
+        from factorylab.runtime.polymarket import wind_down as polymarket_wind_down
+
+        pm = polymarket_wind_down(self)
+        report["polymarket"] = pm
+        rank = (winddown.FLAT, winddown.DUST, winddown.PENDING, winddown.UNKNOWN)
+        states = [report.get("exposure_state", winddown.UNKNOWN), pm["exposure_state"]]
+        report["exposure_state"] = max(
+            states, key=lambda state: rank.index(state) if state in rank else len(rank))
+
+    def tool_writes(self, handle: str) -> list[dict]:
+        """The venue writes this decision made through tools, in submission order.
+
+        Guarantees only intents durably written under this handle's tool slots
+        are returned; the answer's own market order (client id == handle) is not.
+        A vault write is a venue write like an order and is returned beside them,
+        and a Polymarket write is one of them too: a decision acts once, on any venue.
+        """
+        polymarket = getattr(self, "polymarket", None)
+        return [intent for client_id, intent in (
+                    *self.order_intents.items(), *getattr(self, "vault_intents", {}).items())
+                if intent["handle"] == handle and client_id != handle] + (
+            polymarket.writes_of(handle) if polymarket is not None else [])
+
+    def executed_operations(self, handle: str) -> list[dict]:
+        """What this decision executed at the venue, as its evaluators may see it.
+
+        Guarantees each row is a durable intent and the venue's latest answer to
+        it — never the producer's own narrative — so a judge can weigh a claim
+        against the operations the decision actually took.
+        """
+        intents = list(self.tool_writes(handle))
+        if handle in self.order_intents:
+            intents.append(self.order_intents[handle])
+        rows = []
+        for intent in intents:
+            result = intent.get("result") or {}
+            rows.append({
+                "operation": intent["operation"], "client_id": intent["client_id"],
+                "args": dict(intent["args"]), "status": result.get("status"),
+                **{key: result[key]
+                   for key in ("order_id", "filled_size", "avg_px", "error", "vault")
+                   if result.get(key) is not None},
+            })
+        return rows
+
+    def _execute_outputs(self, ret: Return, kind: str | None = None) -> None:
+        """Place the market order an answer names, at most once, and only a producer kind's.
+
+        Invariant (the one gate an answer's order passes): a venue write happens
+        only from an answer that is a valid, non-declining order of its contract,
+        or from a venue write tool call the seat made and the kernel admitted
+        (``_run_tool``, never here). So nothing is placed for a return that is not
+        ``ok`` (a malformed or failed reply, or a decline the invocation rewrote to
+        ``refused``), nor for one whose outputs decline (``declines``: ``status``
+        reads ``cannot``, whatever order fields sit beside it), nor for one that
+        is not a dict. Only the
+        contract's fields are read; the kernel never reads a reply's prose to
+        decide what the seat meant (§I.a: it never chooses a seat's action).
+
+        Guarantees nothing is placed for a return whose kind does not own the answer
+        order (``ANSWER_ORDER_KINDS``; primitive audit F7): a population kind's
+        ``action`` is its own word. The kind is ``kind`` when the caller knows it,
+        else the one the return bound (``return_kinds``), else its author's only
+        kind; an unknown kind places nothing. For a producer kind every earlier
+        rule holds: a decision acts once, and an answer never trades in place of a
+        refused or dropped write.
+        """
+        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS, declines
+
         out = ret.outputs
-        if self.wallet.dead or ret.status != "ok":
+        attempted = self.venue_attempts.pop(ret.handle, None)
+        if (self.wallet.dead or ret.status != "ok" or not isinstance(out, dict)
+                or declines(out)):
+            return
+        kind = kind or self.return_kinds.get(ret.handle)
+        if kind is None:
+            owner = self.assemblies.get(self.handle_to_assembly.get(ret.handle, ""))
+            emits = owner.spec.emits if owner is not None else ()
+            kind = emits[0] if len(emits) == 1 else None
+        if kind not in ANSWER_ORDER_KINDS:
             return
         if out.get("action") != "order":
             if str(out.get("action", "")).lower().startswith(("buy:", "sell:")):
                 self._refuse_order(ret.handle, 'action labels are not orders; use action="order" '
                                    'with explicit coin, side and size')
             return
-        if str(out.get("side", "buy")).lower() not in ("buy", "sell"):
-            self._refuse_order(ret.handle, "order side must be buy or sell")
+        # A decision acts once. When it already wrote to the venue through a tool,
+        # "order" in its answer names that trade; executing it would trade twice.
+        written = self.tool_writes(ret.handle)
+        if written:
+            self.ledger.append({"kind": "order.reported", "handle": ret.handle,
+                                "client_ids": [w["client_id"] for w in written],
+                                "reason": "the decision already wrote to the venue "
+                                          "through tools; the answer reports it"})
+            return
+        # A decision whose venue write was refused, or whose writing batch was
+        # dropped whole, has not acted -- and its answer must not act in the write's
+        # place: the answer names the trade the refused write meant (or reports it),
+        # and a market order is not the resting limit, the hedge or the close it was.
+        batch_dropped = any(d.get("section") == "tool_calls" and "index" not in d
+                            for d in ret.dropped)
+        if attempted or batch_dropped:
+            # The refusal states the fact and no remedy (smuggling audit D6).
+            self._refuse_order(
+                ret.handle, "nothing was submitted: this decision's venue write was refused "
+                f"({attempted or 'its tool batch was dropped'}), and its answer's order does "
+                "not execute in the write's place")
+            return
+        side = out.get("side")
+        if not isinstance(side, str) or side.lower() not in ("buy", "sell"):
+            self._refuse_order(
+                ret.handle, 'nothing was submitted: action "order" named no coin, side and '
+                "size, and this decision placed nothing through a venue tool. A market "
+                'order is the answer {"action": "order", "coin", "side", "size"}; a limit '
+                "order is the tool venue.place_limit {coin, side, size, price}")
             return
         try:
             order = Order(
                 str(out["coin"]),
-                str(out.get("side", "buy")).lower() == "buy",
+                side.lower() == "buy",
                 Decimal(str(out["size"])),
                 client_id=ret.handle,
                 market=out.get("market", "perp"),
             )
-        except (KeyError, ValueError, ArithmeticError) as exc:
+        except KeyError:
+            self._refuse_order(ret.handle, 'nothing was submitted: an answer order names its '
+                               'coin, side and size')
+            return
+        except (ValueError, ArithmeticError) as exc:
             self._refuse_order(ret.handle,
                                f"order output is not a readable order: {type(exc).__name__}")
             return
@@ -498,14 +1190,128 @@ class VenueMixin:
         if hasattr(self.exchange, "drain_events"):  # fake venue fills synchronously
             self._settle_exchange_effects(self.exchange.drain_events())
 
+    def _class_transfer_pending(self) -> bool:
+        pending = getattr(self.treasury, "state", None)
+        return bool(pending and pending["status"] == "submitted"
+                    and pending["direction"] in ("spot_to_perps", "perps_to_spot"))
+
+    def _spot_shortfall(self, operation: str, args: dict) -> str | None:
+        """Why a spot sell or close exceeds the inventory this world accounts, or None."""
+        if args.get("market") != "spot" or not (
+            operation == "venue.close" or (
+                operation in ("venue.place_market", "venue.place_limit")
+                and args.get("side") == "sell"
+            )
+        ):
+            return None
+        held = self.spot_inventory.get(args["coin"], (Decimal(0), Decimal(0)))[0]
+        quantity = held if args.get("size") is None else Decimal(str(args["size"]))
+        lots = sum((lot.size for lot in self.consequences.table.lots
+                    if lot.coin == args["coin"] and lot.market == "spot"), 0)
+        if quantity <= 0 or quantity > min(held, lots):
+            return "spot sell exceeds accounted inventory"
+        return None
+
+    def venue_batch_refusal(self, seat: str, handle: str,
+                            writes: list[tuple[str, str, dict]]) -> tuple[int, str] | None:
+        """The first write of a batch that would be refused, and why, or None.
+
+        Guarantees a batch of venue writes is weighed whole before any of it is
+        submitted: each write meets the same collateral, class-transfer and
+        spot-inventory tests it would meet alone, and two identical placements in
+        one batch are one order written twice (a decision acts once). An order
+        identical to one an earlier decision left resting is not refused: the venue
+        allows it and fees price it (Chapter II rulings, R6). ``writes`` is (slot, tool, args)
+        in batch order. A hedge whose second leg would be refused therefore never
+        leaves its first leg standing alone. Collateral is weighed per write against
+        the account as it is now, less what the batch's earlier writes take from the
+        same pool: the margin an earlier perp order needs and the USDC a vault write
+        moves out of perps are not free for a later perp order or vault write, and
+        an earlier spot buy's cost is not free for a later spot buy. Without that, a
+        deposit and an order that each fit alone passed together and left one leg
+        standing when the venue refused the other.
+        """
+        from factorylab.world.venue_tools import VAULT_WRITES
+
+        placed: set[tuple] = set()
+        committed = Decimal(0)  # taken from free perps collateral by earlier writes
+        spot_committed = Decimal(0)  # taken from spot USDC by earlier spot buys
+        for index, (slot, tool, args) in enumerate(writes):
+            client_id = f"{handle}:{slot}"
+            if client_id in self.order_intents or client_id in getattr(
+                    self, "vault_intents", {}):
+                continue  # a retry reconciles; it is not a new write
+            if self._class_transfer_pending() and tool != "venue.cancel":
+                return index, "class transfer awaiting receipt"
+            if tool in VAULT_WRITES:
+                reason, moved = self._vault_refusal(tool, args, committed=committed)
+                if reason:
+                    return index, reason
+                committed += moved
+                continue
+            shortfall = self._spot_shortfall(tool, args)
+            if shortfall:
+                return index, shortfall
+            if tool not in ("venue.place_market", "venue.place_limit"):
+                continue
+            key = (tool, args.get("coin"), args.get("side"), str(args.get("size")),
+                   str(args.get("price")), args.get("market", "perp"))
+            if key in placed:
+                return index, "the same order is placed twice in one batch"
+            placed.add(key)
+            try:
+                size = Decimal(str(args.get("size")))
+                price = Decimal(str(args["price"])) if "price" in args else None
+            except ArithmeticError:
+                return index, "size or price is not a number"
+            coin, is_buy = str(args.get("coin")), args.get("side") == "buy"
+            reduce_only = args.get("reduce_only") is True
+            reason = self._order_collateral(
+                handle, coin, size, is_buy, price, reduce_only=reduce_only,
+                committed=spot_committed if "/" in coin else committed)
+            if reason:
+                return index, reason
+            if not reduce_only:
+                taken = self._order_requirement(coin, size, is_buy, price)
+                if "/" in coin:
+                    spot_committed += taken
+                else:
+                    committed += taken
+        return None
+
+    def _order_requirement(self, coin: str, size: Decimal, is_buy: bool,
+                           price: Decimal | None = None) -> Decimal:
+        """What an accepted order takes from its pool's free balance, as the collateral
+        check weighs it: a perp order's initial margin at the venue's leverage, a spot
+        buy's cost. Zero where the venue has not said enough to know."""
+        try:
+            mids = self._tick_mids()
+            mark = max(mids[coin], price or mids[coin])
+            if "/" in coin:
+                return size * mark if is_buy else Decimal(0)
+            view = self._collateral_view(coin, "perp")
+            current = Decimal(str(view.get("position_size", 0)))
+            target = current + (size if is_buy else -size)
+            increase = max(Decimal(0), abs(target) - abs(current)) * mark
+            leverage = self._order_leverage(coin, view)
+        except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError,
+                TypeError):
+            return Decimal(0)
+        return increase / leverage if leverage else Decimal(0)
+
     def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
         """Every venue write has a durable intent and a stable identity before submission."""
-        pending = getattr(self.treasury, "state", None)
-        if (pending and pending["status"] == "submitted"
-                and pending["direction"] in ("spot_to_perps", "perps_to_spot")
-                and operation != "venue.cancel"):
+        if self._class_transfer_pending() and operation != "venue.cancel":
             return self._refuse_order(handle, "class transfer awaiting receipt")
+        if self._tape_ended():
+            from factorylab.world.tape import MARKET_ENDED
+
+            return self._refuse_order(handle, MARKET_ENDED)
         client_id = handle if slot == "output" else f"{handle}:{slot}"
+        if client_id not in self.order_intents:
+            blocked = self._spot_shortfall(operation, args)
+            if blocked:
+                return self._refuse_order(handle, blocked)
         previous = self.order_intents.get(client_id)
         if previous is not None:
             if previous["operation"] != operation or previous["args"] != args:
@@ -519,18 +1325,6 @@ class VenueMixin:
                     return dict(previous["result"])
                 return self._recover_order(client_id)
             return dict(previous["result"])
-        if args.get("market") == "spot" and (
-            operation == "venue.close" or (
-                operation in ("venue.place_market", "venue.place_limit")
-                and args.get("side") == "sell"
-            )
-        ):
-            held = self.spot_inventory.get(args["coin"], (Decimal(0), Decimal(0)))[0]
-            quantity = held if args.get("size") is None else Decimal(str(args["size"]))
-            lots = sum((lot.size for lot in self.consequences.table.lots
-                        if lot.coin == args["coin"] and lot.market == "spot"), 0)
-            if quantity <= 0 or quantity > min(held, lots):
-                return self._refuse_order(handle, "spot sell exceeds accounted inventory")
         # An uncertain intent blocks only its own identity: repeating it reconciles
         # (above) and never resubmits. It never shuts the coin: another write on the
         # same coin -- another seat's, or a close or cancel -- carries its own identity,
@@ -591,6 +1385,12 @@ class VenueMixin:
         px = Decimal(str(payload["px"]))
         held, entry = self.spot_inventory.get(coin, (Decimal(0), Decimal(0)))
         buy = payload["is_buy"]
+        if not buy and quantity > held and self.consequences.table.order_owner(
+                str(payload["order_id"])) == WIND_DOWN:
+            # A kill wind-down sells what the venue holds, accounted or not: only the
+            # accounted part is accounted here; the rest was never any return's and
+            # the consequence book ledgers it unattributed (Sol on #152).
+            quantity = held
         if not buy and quantity > held:
             raise ValueError("spot fill exceeds accounted inventory")
         realized = Decimal(0) if buy else (px - entry) * quantity
@@ -712,7 +1512,7 @@ class VenueMixin:
         before = self.consequences.table
         self._replay_deferred(self.consequences.release_unresolved(client_id, self.n), before)
 
-    def _reconcile_orders(self, *, final: bool = False) -> None:
+    def _reconcile_orders(self, *, final: bool = False, confirm: bool = True) -> None:
         """Pending identities are reconciled before consuming newly observed venue fills.
 
         An uncertain intent is polled on a bounded schedule: at most
@@ -720,6 +1520,9 @@ class VenueMixin:
         ``order.unresolved`` and no further polling. The terminal reconciliation
         of a kill wind-down (``final``) still reads the venue for it: the last
         read of a dying runtime is owed to the order whatever the schedule spent.
+        ``confirm`` also reads back the orders that may be terminal
+        (``_confirm_terminal_orders``); a resume passes False, so that read-back is
+        made at the same tick a world never interrupted makes it.
         """
         for client_id, intent in list(self.order_intents.items()):
             if intent["result"]["status"] != "uncertain":
@@ -728,10 +1531,51 @@ class VenueMixin:
                 self._give_up_on_order(client_id)
                 continue
             self._recover_order(client_id)
+        if confirm:
+            # ``confirm=False`` at a resume (Codex on #152): the terminal read-back runs
+            # on the tick schedule only, so a resumed world makes it exactly where the
+            # uninterrupted one does, never earlier.
+            self._confirm_terminal_orders()
+        if getattr(self, "vault_intents", None):
+            self._reconcile_vault_intents(final=final)
+
+    def _confirm_terminal_orders(self) -> None:
+        """Read back, from the venue's own order status, every order that may be over.
+
+        Wave 17b: an order's account is released only once the venue itself says the
+        order is terminal (``LotTable.closed``). Guarantees each Hyperliquid order the
+        consequence book holds with no unfilled liability (fully filled as observed,
+        or its cancel acknowledged) and not yet confirmed is looked up once per tick
+        until the venue answers ``filled``, ``cancelled`` or ``rejected`` and states the
+        quantity it filled; that answer and that quantity are recorded
+        (``confirm_terminal``). Any other answer, one that omits the filled quantity,
+        or none, leaves the order unconfirmed and its account pinned, and it is read
+        again the next tick. The read is a lookup: it places, cancels and moves nothing.
+        """
+        waiting = [o.order_id for o in self.consequences.table.orders
+                   if o.remaining == 0 and o.confirmed is None]
+        if not waiting:
+            return
+        clients = {str(i["result"]["order_id"]): client_id
+                   for client_id, i in self.order_intents.items()
+                   if i["operation"] != "venue.cancel" and i["result"].get("order_id") is not None}
+        for order_id in waiting:
+            client_id = clients.get(order_id)
+            if client_id is None:
+                continue  # not this venue's order (a Polymarket one is read by its own)
+            try:
+                answer = _to_plain(vars(self.exchange.lookup(client_id, order_id=order_id)))
+            except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
+                continue
+            if (answer.get("status") in ("filled", "cancelled", "rejected")
+                    and answer.get("filled_size") is not None):
+                self.consequences.confirm_terminal(
+                    order_id, answer["status"], str(answer["filled_size"]), self.n)
 
     def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,
         price: Decimal | None = None, *, reduce_only: bool = False,
+        committed: Decimal = Decimal(0),
     ) -> str | None:
         """New exposure is collateralised by the pot the venue actually charges.
 
@@ -750,10 +1594,8 @@ class VenueMixin:
         for this instrument, and when it was observed.
 
         The check is then exactly the reviewer's: incremental margin, plus holds
-        not already reflected in margin used, plus the manifest's precommitted
-        headroom (``[venue] collateral_headroom_usd``; the kill section's
-        ``dust_micro`` is a different thing and is not it), against eligible
-        equity minus margin used.
+        not already reflected in margin used, plus what earlier writes of the same
+        batch already take, against eligible equity minus margin used.
 
         Spot and perps are checked separately and against their own balances: a
         spot buy needs the USDC to pay for it, a spot sell needs the base coin to
@@ -773,7 +1615,9 @@ class VenueMixin:
             view = self._collateral_view(coin, "spot" if spot else "perp")
             mids = self._tick_mids()
             mark = max(mids[coin], price or mids[coin])
-            headroom = Decimal(str(getattr(self.m.exchange, "collateral_headroom_usd", "0")))
+            # What earlier writes of the same batch already take from this pool is
+            # not free for this one: it rides as headroom (``venue_batch_refusal``).
+            headroom = committed
             stale = self._collateral_stale(view)
             if stale is not None:
                 reason = stale

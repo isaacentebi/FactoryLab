@@ -64,7 +64,7 @@ def test_a_censored_arm_is_not_penalised_for_being_censored():
     """Defect 2. For gain-based EXP3 a skipped update is a zero reward: the arm whose
     outcomes go unobserved falls behind the arm whose outcomes are read, at the same
     true worth. Censoring is neutral now: the unobserved round is credited the
-    evidence the router has, never a zero it did not observe."""
+    router's observed mean raw score (wave 16, D4), never a zero it did not observe."""
     rt = make_runtime()
     state, _lid = _router(rt)
     a, b = [arm for arm in state.universe if arm != NOOP][:2]
@@ -72,7 +72,9 @@ def test_a_censored_arm_is_not_penalised_for_being_censored():
     _settle(rt, _drawn(rt, state, b), SettleStatus.CENSORED)
     rt._deliver_returns()
     weights = _weights(state)
-    assert weights[b] == pytest.approx(weights[a])  # both credited 0.6 at the same odds
+    floor = min(weights.values())
+    # a credited its 0.6, b the router's observed mean, 0.6, at the same odds.
+    assert weights[b] == pytest.approx(weights[a]) and weights[b] > floor
 
 
 def test_an_abstention_does_not_sink_to_the_exploration_floor():
@@ -89,7 +91,11 @@ def test_an_abstention_does_not_sink_to_the_exploration_floor():
     assert weights[NOOP] == pytest.approx(weights[arm])
 
 
-def test_imputation_uses_the_arms_own_record_first():
+def test_an_unscored_round_is_credited_zero_consequence_never_the_arms_own_mean():
+    """Time audit T4: a population compensated only for long-run averages ceases to
+    produce variation (essay II.IV.b), so a round with no observed score is credited the
+    router's observed mean raw score (the population's, wave 16 D4), never the arm's own
+    mean."""
     rt = make_runtime()
     state, _lid = _router(rt)
     a, b = [arm for arm in state.universe if arm != NOOP][:2]
@@ -98,10 +104,16 @@ def test_imputation_uses_the_arms_own_record_first():
     _settle(rt, _drawn(rt, state, b), SettleStatus.CENSORED)
     rt._deliver_returns()
     after_b = _weights(state)
-    # b's censored round is credited b's own mean (0.1), not the router's (0.5): b
-    # gained two equal increments, a one increment nine times as large.
+    # b's censored round is credited the router's observed mean ((0.9 + 0.1) / 2 = 0.5),
+    # not b's own mean (0.1): b gained 0.1 + 0.5, a one increment of 0.9, at equal odds,
+    # each learned once on the router's one map, B = 2 * cap (ruling R10-l).
+    bound = 2 * rt.m.prices.penalty_cap
+
+    def learned(r):
+        return (r + bound) / (1 + bound)
+
     assert after_b[b] - min(after_b.values()) == pytest.approx(
-        2 * (after_b[a] - min(after_b.values())) / 9)
+        (learned(0.1) + learned(0.5)) * (after_b[a] - min(after_b.values())) / learned(0.9))
 
 
 def test_a_parent_selected_child_never_trains_the_router():
@@ -135,7 +147,10 @@ def test_a_late_score_after_the_cutoff_trains_nothing_twice():
     rt.queue.expire(10**16)  # the cutoff passes with b's decision unscored
     rt._deliver_returns()
     at_cutoff = _weights(state)
-    assert at_cutoff[b] == pytest.approx(at_cutoff[a])  # one neutral update, not a zero
+    floor = min(at_cutoff.values())
+    # One update for b at the router's observed mean (a's 0.4, the one round it learned),
+    # never a zero (wave 16, D4).
+    assert at_cutoff[b] == pytest.approx(at_cutoff[a]) and at_cutoff[b] > floor
     _settle(rt, late, SettleStatus.SETTLED, 1.0)
     assert [str(r.status) for r in rt.queue.history(late)] == ["timed_out", "settled"]
     rt._deliver_returns()
@@ -144,7 +159,8 @@ def test_a_late_score_after_the_cutoff_trains_nothing_twice():
 
 def test_a_keyed_router_learns_a_timed_out_round_once(monkeypatch):
     """Defect 4 for Blum-Mansour: the late score found its frozen round already consumed
-    and was dropped; now the round is consumed once, neutrally, at the cutoff."""
+    and was dropped; now the round is consumed once, at the cutoff, on the router's
+    observed mean raw score (wave 16, D4; time audit T4)."""
     rt = make_runtime()
     state = rt._build_router("ProducerReturn", "blum_mansour", 0.1)
     arm = next(a for a in state.universe if a != NOOP)
@@ -160,4 +176,8 @@ def test_a_keyed_router_learns_a_timed_out_round_once(monkeypatch):
     rt._deliver_returns()
     _settle(rt, late, SettleStatus.SETTLED, 0.1)
     rt._deliver_returns()
-    assert [(key, fb.reward) for key, fb in updates] == [("k-first", 0.7), ("k-late", 0.7)]
+    bound = 2 * rt.m.prices.penalty_cap
+    # One map, once, uncharged (ruling R10-l): B = 2 * cap for a router.
+    learned = (0.7 + bound) / (1 + bound)
+    assert [(key, fb.reward) for key, fb in updates] == [
+        ("k-first", pytest.approx(learned)), ("k-late", pytest.approx(learned))]

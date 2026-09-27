@@ -149,6 +149,10 @@ class WindDownExecutor:
             "attempted": True, "orders": 0, "cancelled": 0, "closed": 0, "sold": 0,
             "failed": 0, "reconciled": 0, "refused": 0, "ledger_failures": 0,
             "operations": 0, "operation_log": [], "errors": [],
+            # Every closing order the venue identified (a perp close, a spot sell),
+            # which the runtime binds to the kernel's wind-down account so its fills
+            # close the lots they flatten (``settlement.lots.WIND_DOWN``).
+            "closing_orders": [],
             "production_state": KILLED, "exposure_state": UNKNOWN,
             # The earlier name for the same fact, kept so readers written against
             # the first kill contract (and GPT-6's converted regressions) still read.
@@ -169,6 +173,15 @@ class WindDownExecutor:
         kill: the count reaches the witness line outside the diary and stderr
         reaches the operator, and the executor keeps going.
         """
+        result = row.get("result") if row.get("kind") == OP_RESULT else None
+        if (isinstance(result, dict) and row.get("op") in ("close", "sell")
+                and result.get("order_id") is not None
+                and all(o["order_id"] != str(result["order_id"])
+                        for o in self.report["closing_orders"])):
+            self.report["closing_orders"].append({
+                "order_id": str(result["order_id"]), "coin": row.get("coin"),
+                "market": row.get("market"), "size": row.get("size"),
+                "filled_size": result.get("filled_size")})
         try:
             self.ledger.append(row)
         except Exception as exc:  # noqa: BLE001 - a store may never block a kill
@@ -412,7 +425,8 @@ class WindDownExecutor:
         self._reconcile()
         self._append({"kind": STEP, "step": "summary",
                       **{k: v for k, v in self.report.items()
-                         if k not in ("errors", "operation_log", "residual")}})
+                         if k not in ("errors", "operation_log", "residual",
+                                      "closing_orders")}})
         return self.report
 
     def _pass(self, only: set | None) -> None:
@@ -532,6 +546,19 @@ class WindDownExecutor:
         except Exception as exc:  # noqa: BLE001
             mids, unreadable = {}, [*unreadable, ("mids", type(exc).__name__)]
 
+        # Money in a vault is exposure the executor does not wind down: a lockup or a
+        # leader's 5% floor can refuse the withdrawal, so no pass here attempts one. It
+        # is read and reported, and an account holding it is not flat.
+        read_vaults = getattr(self.exchange, "vault_equities", None)
+        if read_vaults is not None:
+            try:
+                residual["vaults"] = [
+                    {"vault": str(p["vault"]), "equity_usd": str(p["equity_usd"]),
+                     "locked_until_ns": p.get("locked_until_ns")}
+                    for p in read_vaults()["positions"]
+                    if _decimal(p.get("equity_usd"))]
+            except Exception as exc:  # noqa: BLE001
+                unreadable = [*unreadable, ("vault_equities", type(exc).__name__)]
         residual["resting"] = [{"order_id": str(o.get("order_id")), "coin": str(o.get("coin"))}
                                for o in resting]
         if account is not None:
@@ -566,7 +593,8 @@ class WindDownExecutor:
 
         if unreadable or (account is None):
             state = UNKNOWN
-        elif residual["resting"] or residual["positions"] or residual["balances"]:
+        elif (residual["resting"] or residual["positions"] or residual["balances"]
+              or residual.get("vaults")):
             state = PENDING
         elif residual["dust"]:
             state = DUST

@@ -99,7 +99,11 @@ def test_a17_no_sealed_field_appears_anywhere_in_the_output(scripted, tmp_path):
     assert data["returns"]["rows"][-1]["outputs"] == {
         "outputs_unavailable": "unparseable_or_truncated"}
     assert written not in document and written not in page
-    assert not _keys(data["returns"]) & {"propensities", "chosen", "weights", "gamma",
+    # A seat's own outputs are the published exception (a router proposal it wrote
+    # names a learner and a gamma); nothing around them may carry a sealed key.
+    unwrapped = {**data["returns"], "rows": [{k: v for k, v in row.items() if k != "outputs"}
+                                             for row in data["returns"]["rows"]]}
+    assert not _keys(unwrapped) & {"propensities", "chosen", "weights", "gamma",
                                          "learner", "learner_id", "memory", "memories",
                                          "prompt", "system_prompt", "prompt_text"}
 

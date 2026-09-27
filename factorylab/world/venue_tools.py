@@ -8,7 +8,18 @@ from dataclasses import asdict, dataclass, is_dataclass
 from decimal import Decimal
 from typing import Any
 
-from factorylab.world.exchange import Exchange, Order, OrderKind
+from factorylab.world.exchange import Exchange, Order, OrderKind, VenueUnavailable
+from factorylab.world.vaults import (
+    ADDRESS_PATTERN,
+    CREATE_FEE_USD,
+    DESCRIPTION_LENGTH,
+    MIN_CREATE_USD,
+    NAME_LENGTH,
+)
+
+#: The vault surface's writes and reads (``[venue] vault_tools``).
+VAULT_WRITES = frozenset({"venue.vault_create", "venue.vault_deposit", "venue.vault_withdraw"})
+VAULT_READS = frozenset({"venue.vault_details", "venue.vault_positions"})
 
 
 def seed_markets(exchange, spec) -> None:
@@ -31,10 +42,13 @@ def seed_markets(exchange, spec) -> None:
             (*target.spot_pairs, *target.listed_spot_pairs)))
         coins = tuple(c for c in coins if c in target.listed_coins)
         pairs = tuple(p for p in pairs if p in target.listed_spot_pairs)
-        for coin in target.listed_coins:
+        # A recorded market's prices are the recording's alone: a market with no
+        # recorded row yet has no mid, never the fake's seeded 100 (factorylab/world/tape.py).
+        recorded = bool(getattr(target, "tape_sha256", None))
+        for coin in () if recorded else target.listed_coins:
             target._mids.setdefault(coin, Decimal(100))
             target._mid_history.setdefault(coin, [])
-        for pair in target.listed_spot_pairs:
+        for pair in () if recorded else target.listed_spot_pairs:
             base = pair.split("/")[0]
             target._mids.setdefault(base, Decimal(100))
             target._mids.setdefault(pair, target._mids[base])
@@ -99,9 +113,13 @@ def _validate(value: Any, schema: dict, path: str = "args") -> None:
             raise ValueError(f"{path}: must exceed {schema['exclusiveMinimum']}")
     if kind == "string":
         if len(value) < schema.get("minLength", 0):
-            raise ValueError(f"{path}: must not be empty")
+            raise ValueError(f"{path}: must not be empty" if schema.get("minLength", 0) <= 1
+                             else f"{path}: at least {schema['minLength']} characters")
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            raise ValueError(f"{path}: at most {schema['maxLength']} characters")
         if "pattern" in schema and re.fullmatch(schema["pattern"], value) is None:
-            raise ValueError(f"{path}: invalid decimal string")
+            raise ValueError(f"{path}: invalid address" if schema["pattern"] == ADDRESS_PATTERN
+                             else f"{path}: invalid decimal string")
 
 
 def _json_value(value: Any) -> Any:
@@ -114,6 +132,93 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (tuple, list)):
         return [_json_value(item) for item in value]
     return value
+
+
+#: Hyperliquid's documented REST limits ("Rate limits and user limits",
+#: hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits):
+#: "REST requests share an aggregated weight limit of 1200 per minute" per IP;
+#: l2Book, allMids, clearinghouseState and spotClearinghouseState weigh 2; every
+#: other documented info request weighs 20; candleSnapshot adds weight per 60 items
+#: returned, and fundingHistory, userFunding and userFills per 20. The added weight per
+#: interval is not stated, so it is counted as 1.
+VENUE_WEIGHT_PER_MINUTE = 1200
+#: What the population's venue reads may use by default, all seats together: 40%,
+#: leaving 720 a minute for the kernel's own calls (account and spot state, mids,
+#: asset contexts, open orders, funding and fill pages each tick, and orders).
+DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE = 480
+#: The venue requests behind each ``HyperliquidExchange._guarded`` name, by weight.
+REQUEST_WEIGHT = {"all_mids": 2, "spot_mids": 2, "l2_snapshot": 2, "user_state": 2,
+                  "spot_user_state": 2}
+#: Requests whose weight grows with the items returned: one more per this many.
+REQUEST_ITEMS_PER_WEIGHT = {"candles": 60, "funding_history": 20, "user_funding": 20,
+                            "user_fills_by_time": 20, "non_funding_ledger": 20}
+
+
+#: What a venue write costs besides its fill, as a fact (Chapter II §I.b): no gas.
+NO_GAS = ("It pays no gas; a fill pays the venue's fee at the rates world.venue lists "
+          "(taker_fee_rate, maker_fee_rate).")
+
+
+def request_weight(what: str, result: Any = None) -> int:
+    """The documented weight of one venue request named ``what``; items counted when known."""
+    weight = REQUEST_WEIGHT.get(what, 20)
+    per = REQUEST_ITEMS_PER_WEIGHT.get(what)
+    if per is not None and isinstance(result, (list, tuple)):
+        weight += len(result) // per
+    return weight
+
+
+#: Every venue read a seat can call, and the weight of one attempt of it: the
+#: requests the live adapter sends for it, at their documented weights.
+#: ``venue.instruments`` sends none: the adapter answers from the listing it loaded.
+_BASE_WEIGHT = {"venue.instruments": 0, "venue.mids": 2, "venue.order_book": 2,
+                "venue.funding": 20, "venue.candles": 20, "venue.funding_history": 20,
+                "venue.open_orders": 20,
+                # user state, spot user state and all mids (the last two with spot pairs)
+                "venue.positions": 6,
+                "venue.vault_details": 20,
+                # userVaultEquities and leadingVaults
+                "venue.vault_positions": 40}
+_ITEMS_PER_WEIGHT = {"venue.candles": ("n", 60, 200), "venue.funding_history": ("n", 20, 100)}
+#: The span a seat's venue read share is counted over: any sliding minute.
+READ_WINDOW_NS = 60_000_000_000
+#: Each seat read and the adapter method (and arguments, from the read's own) that
+#: answers it: the key an identical read within one tick is answered under.
+TICK_ANSWERED = {
+    "venue.instruments": ("instruments", ()), "venue.mids": ("mids", ()),
+    "venue.funding": ("funding", ()),
+    "venue.candles": ("candles", ("coin", "interval", "n")),
+    "venue.order_book": ("order_book", ("coin", "depth")),
+    "venue.funding_history": ("funding_history", ("coin", "n")),
+    "venue.open_orders": ("open_orders", ()), "venue.positions": ("account", ()),
+    "venue.vault_details": ("vault_details", ("vault",)),
+    "venue.vault_positions": ("vault_equities", ()),
+}
+TICK_ANSWER_FACT = (
+    "Within one world tick, until a venue write, a read identical to a venue request "
+    "already answered in that tick (the kernel's own included) is answered from that "
+    "answer, and sends no request.")
+
+
+def public_read_weight(tool_id: str, args: Any) -> int | None:
+    """The documented weight of one attempt of a seat's venue read, or None for any other tool.
+
+    Guarantees the weight never undercounts a well-formed call's first attempt: an
+    item count that is missing or out of its schema's range is counted at the
+    schema's maximum. Retries are not in it; they are charged as the adapter sends
+    them.
+    """
+    base = _BASE_WEIGHT.get(tool_id)
+    if base is None:
+        return None
+    extra = _ITEMS_PER_WEIGHT.get(tool_id)
+    if extra is None:
+        return base
+    key, per, most = extra
+    n = args.get(key) if isinstance(args, dict) else None
+    if type(n) is not int or not 1 <= n <= most:
+        n = most
+    return base + -(-n // per)
 
 
 class VenueTools:
@@ -188,25 +293,26 @@ class VenueTools:
             ("positions", "Open signed positions and entry prices for the account.", {}, []),
             (
                 "place_market",
-                "Place a market buy or sell; optionally reduce only.",
+                "Place a market buy or sell; optionally reduce only. " + NO_GAS,
                 trade,
                 ["coin", "side", "size"],
             ),
             (
                 "place_limit",
-                "Place a good-until-cancelled limit order; optionally reduce only.",
+                "Place a good-until-cancelled limit order; optionally reduce only. " + NO_GAS,
                 {**trade, "price": positive},
                 ["coin", "side", "size", "price"],
             ),
             (
                 "cancel",
-                "Cancel a resting order on its coin.",
+                "Cancel a resting order on its coin. " + NO_GAS,
                 {"coin": coin, "order_id": {"type": "string", "minLength": 1}},
                 ["coin", "order_id"],
             ),
             (
                 "close",
-                "Reduce a position by size, or close it fully when size is omitted or null.",
+                "Reduce a position by size, or close it fully when size is omitted or null. "
+                + NO_GAS,
                 {
                     "coin": coin,
                     "market": market,
@@ -216,7 +322,7 @@ class VenueTools:
             ),
             (
                 "set_leverage",
-                "Set cross-margin leverage for a coin.",
+                "Set cross-margin leverage for a coin. " + NO_GAS,
                 {
                     "coin": coin,
                     "market": market,
@@ -245,9 +351,10 @@ class VenueTools:
         # carries only the trading markets' records, so this description is what
         # tells an assembly the rest of the listing is one call away.
         listings = {
-            "instruments": "Every market the venue lists, with its lot size, tick size and "
-                           "minimum order value. world.venue carries these records for the "
-                           "world's trading_markets only; this read returns the full listing.",
+            "instruments": "Every market the venue lists, with its lot size, tick size, "
+                           "minimum order value and this account's taker and maker fee "
+                           "rates. world.venue carries these records for the world's "
+                           "trading_markets only; this read returns the full listing.",
             "mids": "Public venue mids for all listed markets.",
             "funding": "Public venue funding for all listed markets.",
         }
@@ -335,6 +442,11 @@ class VenueTools:
             return {"open_orders": ex.open_orders()}
         if tool_id == "venue.positions":
             account = ex.account()
+            if getattr(account, "stale", False):
+                # The adapter fell back to its last complete snapshot because the venue
+                # did not answer: the kernel reads that as stale, and a seat is told
+                # the venue did not answer, never shown old positions as this read's.
+                raise VenueUnavailable("account: the venue did not answer this read")
             return {"positions": account.positions, **({"spot_balances": account.spot_balances}
                     if getattr(ex, "spot_pairs", ()) else {})}
         if tool_id in ("venue.place_market", "venue.place_limit"):
@@ -357,3 +469,69 @@ class VenueTools:
             return ex.close(args["coin"], None if size is None else Decimal(str(size)),
                             market=args.get("market", "perp"))
         return ex.set_leverage(args["coin"], args["leverage"], market=args.get("market", "perp"))
+
+
+def vault_specs() -> tuple[dict[str, dict], dict[str, list[dict]]]:
+    """Guarantees the vault surface's contracts and one schema-valid example for each.
+
+    Descriptions state what a call does and what the venue charges or refuses, and
+    nothing about what a vault is for. Every call is free: the venue charges
+    nothing for a read, and what it charges for a write (the creation fee) lands
+    on the venue account, where it happens.
+    """
+    address = {"type": "string", "pattern": ADDRESS_PATTERN}
+    usd = {
+        "anyOf": [
+            {"type": "number", "exclusiveMinimum": 0},
+            {"type": "string",
+             "pattern": r"^(?=[0-9.]*[1-9])(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"},
+        ]
+    }
+    definitions = [
+        ("venue.vault_details",
+         "A vault's venue record: name, leader, total equity, depositor count, leader "
+         "fraction and commission, whether it takes deposits or is closed, and this "
+         "account's own equity, lockup end and withdrawable amount in it.",
+         {"vault": address}, ["vault"], 0),
+        ("venue.vault_positions",
+         "This account's equity in each vault it holds, with each lockup end, and the "
+         "vaults it leads.", {}, [], 0),
+        ("venue.vault_create",
+         "Create a vault led by this account, moving usd from perps collateral into it. "
+         f"The venue also charges a {CREATE_FEE_USD} USDC creation fee from perps "
+         f"collateral. usd is at least {MIN_CREATE_USD}; name ({NAME_LENGTH[0]}-"
+         f"{NAME_LENGTH[1]} characters) and description ({DESCRIPTION_LENGTH[0]}-"
+         f"{DESCRIPTION_LENGTH[1]}) cannot be changed later. Returns the vault address.",
+         {"name": {"type": "string", "minLength": NAME_LENGTH[0],
+                   "maxLength": NAME_LENGTH[1]},
+          "description": {"type": "string", "minLength": DESCRIPTION_LENGTH[0],
+                          "maxLength": DESCRIPTION_LENGTH[1]},
+          "usd": usd}, ["name", "description", "usd"], 0),
+        ("venue.vault_deposit",
+         "Move usd from perps collateral into a vault. The deposit is locked until the "
+         "lockup end venue.vault_details reports.",
+         {"vault": address, "usd": usd}, ["vault", "usd"], 0),
+        ("venue.vault_withdraw",
+         "Move usd of this account's equity in a vault back to perps collateral. Refused "
+         "before the lockup end, and in a vault this account leads when its share would "
+         "fall below 5%. The venue pays a withdrawal net of the leader's commission on "
+         "the profit of the part withdrawn.",
+         {"vault": address, "usd": usd}, ["vault", "usd"], 0),
+    ]
+    specs = {
+        tool_id: {"id": tool_id, "description": description,
+                  "args_schema": {"type": "object", "properties": deepcopy(properties),
+                                  "required": required, "additionalProperties": False},
+                  "price_micro_per_call": price, "kind": "venue"}
+        for tool_id, description, properties, required, price in definitions
+    }
+    vault = "0x" + "0" * 40
+    examples = {
+        "venue.vault_details": [{"vault": vault}],
+        "venue.vault_positions": [{}],
+        "venue.vault_create": [{"name": "example", "description": "Example description.",
+                                "usd": "100"}],
+        "venue.vault_deposit": [{"vault": vault, "usd": "10"}],
+        "venue.vault_withdraw": [{"vault": vault, "usd": "10"}],
+    }
+    return specs, examples

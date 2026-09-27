@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -200,7 +201,9 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             refuse("probe", Reason.ARGUMENTS_INCOMPLETE)
             return ARGUMENT_EXIT
         model_id = f"x402:{seller_root(args.seller)}#{args.model}"
-        provider = X402Provider(rpc=args.rpc or BASE_RPC)
+        from factorylab.runtime.capital_loop import ReserveGuard
+
+        provider = X402Provider(rpc=args.rpc or BASE_RPC, guard=ReserveGuard("x402_probe"))
         req = ModelRequest(
             model_id,
             "Reply briefly.",
@@ -346,7 +349,12 @@ def _cmd_reserve(args: argparse.Namespace) -> int:
         except (InvalidOperation, ValueError):
             refuse("reserve topup", Reason.TOPUP_AMOUNT_REFUSED)
             return ARGUMENT_EXIT
-    client = X402Client(base_url=args.base_url or VENICE_URL, rpc=args.rpc or BASE_RPC)
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    # A top-up's authorization is written ahead to the reserve's record under its lock,
+    # or never signed; a capital-loop run holding the reserve refuses it.
+    client = X402Client(base_url=args.base_url or VENICE_URL, rpc=args.rpc or BASE_RPC,
+                        guard=ReserveGuard("reserve_topup"))
     if args.reserve_cmd == "status":
         usdc, eth, venice = client.usdc_balance(), client.eth_balance(), client.venice_balance()
         print(
@@ -414,7 +422,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         seed=args.seed,
         initial_balance_micro=args.initial_balance,
         ledger_path=args.ledger,
-        drip=not args.no_drip,
         kill_at_end=args.kill_at_end,
         clock_source=clock_source,
     )
@@ -586,6 +593,67 @@ def _cmd_kill(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_norm_edition(args: argparse.Namespace) -> int:
+    """Write the norm house's signed norm edition where the living world reads it.
+
+    Essay II.IV.a: the norm layer is written by a house outside the factory and is
+    read-only from inside it. This writes one signed file beside the ledger
+    (``<ledger>.norms/<sequence>.json``); the world reads it at its next governance
+    boundary, hears its committee's testimony and applies it as the next charter
+    edition. The file carries norms and nothing else: no money, no price, no card,
+    no kernel parameter is reachable through it. The key must be the manifest's
+    ``[norm_house] signer``; a manifest that names none refuses every edition.
+    Writes nothing if the sequence's file already exists. Never prints the key.
+    """
+    import tomllib
+    from pathlib import Path
+
+    from factorylab.charter.norm_edition import build, inbox_path
+
+    manifest = load_manifest(args.world)
+    if manifest.norm_house.signer is None:
+        print("factorylab norm-edition: the manifest casts no norm_house.signer",
+              file=sys.stderr)
+        return ARGUMENT_EXIT
+    with open(args.norms, "rb") as f:
+        raw = tomllib.load(f) if str(args.norms).endswith(".toml") else json.load(f)
+    if not isinstance(raw, dict) or set(raw) != {"norms"}:
+        print("factorylab norm-edition: the norms file holds exactly one key, norms",
+              file=sys.stderr)
+        return ARGUMENT_EXIT
+    key = _read_key_file(Path(args.key_file), Path(args.key_file).name)
+    body = build(world=manifest.name, manifest_sha256=manifest.manifest_hash(),
+                 sequence=args.sequence, norms=raw["norms"], private_key=key)
+    del key
+    if body["signer"] != manifest.norm_house.signer:
+        print("factorylab norm-edition: the key is not the manifest's norm_house.signer",
+              file=sys.stderr)
+        return ARGUMENT_EXIT
+    path = inbox_path(args.ledger, args.sequence)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Published atomically: the whole body is written and synced under a temporary
+    # name, then hard-linked into place. A link never replaces an existing file, so
+    # a sequence is written at most once, and a crash leaves either nothing or the
+    # complete file -- never a truncated one that would block the next edition.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "x") as f:
+            json.dump(body, f, sort_keys=True, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            print(f"factorylab norm-edition: sequence {args.sequence} is already written",
+                  file=sys.stderr)
+            return ARGUMENT_EXIT
+    finally:
+        tmp.unlink(missing_ok=True)
+    print(json.dumps({"world": manifest.name, "sequence": args.sequence, "path": str(path),
+                      "signer": body["signer"], "norms": len(body["norms"])}))
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     with open(args.summary) as f:
         s = json.load(f)
@@ -707,10 +775,12 @@ def _cmd_wake(args: argparse.Namespace) -> int:
 
 
 def _cmd_versions(args: argparse.Namespace) -> int:
-    """Behaviour-based versions, pathologies and early warnings over a dead world's diary.
+    """The forensic reader: a dead world's versions, pathologies and early warnings.
 
-    Thresholds come from the genesis manifest carried by Launch. Read-only;
-    needs the released key like postmortem.
+    It replays the same live versioning and predicate the immune organ ran while
+    the world was alive (``versioning.live``, ``versions.diagnose``), with the
+    thresholds from the genesis manifest carried by Launch. Read-only; needs the
+    released key like postmortem.
     """
     from factorylab.versioning.reader import read_diary
     from factorylab.versioning.report import render, summary
@@ -847,7 +917,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="starting wallet balance in micro-USD, overriding the manifest")
     r.add_argument("--ledger", default=None,
                    help="ledger file path; its .key is written beside it. In-memory if omitted")
-    r.add_argument("--no-drip", action="store_true", help="launch without the manifest's drip")
     r.add_argument("--duration", default=None,
                    help="wall-clock length like 30m; overrides --events. A live world stops "
                         "at the first tick after the deadline, never later than the ticks "
@@ -900,6 +969,23 @@ def build_parser() -> argparse.ArgumentParser:
     kill.add_argument("--world", required=True, help="the world's original manifest name")
     kill.add_argument("--ledger", required=True, help="the living world's ledger")
     kill.set_defaults(func=_cmd_kill)
+
+    norms = sub.add_parser(
+        "norm-edition", help="sign the norm house's next norm edition for a living world",
+        description="Write a signed norm edition beside the world's ledger. The world "
+                    "reads it at its next governance boundary, records its committee's "
+                    "testimony and applies it as the next charter edition. It carries "
+                    "norms only; the key must be the manifest's [norm_house] signer.")
+    norms.add_argument("--world", required=True, help="the world's original manifest name")
+    norms.add_argument("--ledger", required=True, help="the living world's ledger")
+    norms.add_argument("--norms", required=True,
+                       help="a .toml or .json file holding exactly norms = [...]: names, "
+                            "or tables of id and definition")
+    norms.add_argument("--sequence", required=True, type=int,
+                       help="this edition's place in the world's norm editions: 1, 2, ...")
+    norms.add_argument("--key-file", required=True,
+                       help="the signer's private key file (mode 0400 or 0600); never printed")
+    norms.set_defaults(func=_cmd_norm_edition)
 
     resume = sub.add_parser("resume", help="continue a process-interrupted world",
                             description="Reopen an existing world after its process died, "
@@ -972,10 +1058,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run":
         from factorylab.cortex.sandbox import NoJail
         from factorylab.kernel.ledger import LedgerBusyError
+        from factorylab.runtime.bootstrap import MainnetRailRequiresALedger
+        from factorylab.runtime.polymarket import LiveReaderRefused
 
         try:
             _load_dotenv()
             return int(args.func(args))
+        except MainnetRailRequiresALedger:
+            refuse("run", Reason.MAINNET_RAIL_REQUIRES_A_LEDGER)
+            return ARGUMENT_EXIT
+        except LiveReaderRefused as exc:
+            refuse("run", Reason(exc.code))
+            return 1 if exc.code == Reason.POLYMARKET_IP_IN_USE else ARGUMENT_EXIT
         except LedgerBusyError:
             refuse("run", Reason.LEDGER_BUSY)
             return LEDGER_BUSY_EXIT
@@ -995,6 +1089,16 @@ def main(argv: list[str] | None = None) -> int:
             # name which subsystem refused.
             refuse("run", Reason.ADAPTER_UNAVAILABLE, exc)
             return 1
+    if args.cmd == "norm-edition":
+        # Reads only the signer's key file it is given; loads no other credential.
+        try:
+            return int(args.func(args))
+        except KeyFileModeError:
+            refuse("norm-edition", Reason.CREDENTIAL_UNSAFE)
+            return ARGUMENT_EXIT
+        except Exception:
+            refuse("norm-edition", Reason.ARGUMENTS_INCOMPLETE)
+            return ARGUMENT_EXIT
     if args.cmd == "treasury":
         try:
             _load_dotenv()

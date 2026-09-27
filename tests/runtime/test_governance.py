@@ -28,8 +28,10 @@ def test_votes_have_one_queue_decision_per_seat_per_amendment(monkeypatch):
     calls = [i for i in items if i['kind'] == 'invocation']
     assert len(decisions) == len(calls) == 2
     assert {i['handle'] for i in decisions} == {i['handle'] for i in calls}
-    for call in calls:
-        assert rt.queue.history(call['handle'])
+    # Charter audit P1: a failed motion's ballots are not censored; each waits to be
+    # graded on the reject branch, against the unchanged charter.
+    waiting = {v['handle']: v['branch'] for v in rt.pending_votes}
+    assert waiting == {call['handle']: 'reject' for call in calls}
     assert rt.window.invocations == 2
 
 
@@ -47,7 +49,8 @@ def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
     rt._apply_registrations('author', Return('author', {'register': [
         {'kind': 'router', 'learner': 'exp3', 'event_kind': 'Tick', 'add': True}]}, 0, 'ok'))
     assert rt.stats.registrations_rejected == 1 and rt.stats.registrations_accepted == 0
-    assert 'router cap reached' in rt.registration_feedback[-1]['reason']
+    rejected = [i for i in rt.ledger._recovery_items() if i['kind'] == 'registration.rejected']
+    assert 'router cap reached' in rejected[-1]['reason']
     assert len(rt.routers['Tick']) == cap
     assert rt.registry.state() == registry and rt.reserve.remaining() == remaining
     assert not [i for i in rt.ledger._recovery_items() if i['kind'] == 'novelty.release']
@@ -107,6 +110,10 @@ def _ballot(rt, monkeypatch, direction, *, baseline, value, vote=True):
     ballot = rt.pending_votes[-1]
     assert ballot["baseline"] == baseline and ballot["region"] is not None
     reading["value"] = value
+    # Grading waits min_ratio consequence periods after activation (time audit T2).
+    rt._close_policy_window(rt.window.index)
+    assert not [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"]
+    rt.ticks_consumed += rt._policy_floor()
     rt._close_policy_window(rt.window.index)
     outcome = [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"][-1]
     return handle, outcome
@@ -142,6 +149,7 @@ def test_a_ballot_without_a_baseline_is_censored(monkeypatch):
     assert rt.pending_votes[-1]["baseline"] is None
     monkeypatch.setattr(governance, "measure_card",
                         lambda card, samples, observations=None: {"all": 0.95})
+    rt.ticks_consumed += rt._policy_floor()
     rt._close_policy_window(rt.window.index)
     outcome = [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"][-1]
     assert outcome["y"] is None and outcome["status"] == str(SettleStatus.CENSORED)

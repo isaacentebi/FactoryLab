@@ -89,6 +89,31 @@ class SnapshotLearner:
         """Close a censored round without fabricating reward or permitting handle reuse."""
         del self._snapshots[handle]
 
+    def take_for(self, handle: str) -> tuple[dict[str, float], dict[str, float]]:
+        """Close a round to hand it to a successor: (owning policy p, executed policy).
+
+        The handle stays spent here, so the round trains this learner never again;
+        the returned pair is everything ``update_carried`` needs to train another.
+        """
+        saved = self._snapshots.pop(handle)
+        if isinstance(saved, BlumMansourSnapshot):
+            p = dict(saved.p)
+            return p, dict(saved.executed) if saved.executed is not None else p
+        return dict(saved), dict(saved)
+
+    def update_carried(self, p: dict[str, float], executed: dict[str, float],
+                       feedback: Feedback) -> None:
+        """Train this learner on a round a predecessor drew, sampled from ``executed``.
+
+        A swap learner credits each row its share of ``p`` (``BlumMansour.update_carried``);
+        any other inner learner takes the bandit feedback, whose logged propensity is
+        the executed one. No handle is opened or spent.
+        """
+        if isinstance(self.inner, BlumMansour):
+            self.inner.update_carried(p, executed, feedback)
+        else:
+            self.inner.update(feedback)
+
     def update(self, feedback: Feedback) -> None:
         """Reject unaddressed feedback, which cannot identify a delayed decision."""
         raise TypeError("SnapshotLearner requires update_for(handle, feedback)")

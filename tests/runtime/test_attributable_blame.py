@@ -1,0 +1,286 @@
+"""A scoped card's violation is priced onto the seat that caused it, not split over everyone.
+
+Edition 3's ``censorship-bound`` card measures ``avoidably_unresolved_share`` per
+assembly: its violation belongs to the seat whose accepted commitments went
+unresolved. The generic floor-split charged every decision in the window about the
+same, guilty or not; these tests pin that the charge now lands on the violating
+seat, in proportion to what it contributed, and that the decision which left the
+commitment unresolved is priced instead of credited a free neutral.
+"""
+
+from dataclasses import replace
+
+import pytest
+
+from factorylab.charter.charter import MetricCard
+from factorylab.charter.windows import MetricWindow
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.runtime import pricing
+from factorylab.runtime.loop import Runtime
+from factorylab.runtime.pricing import UNRESOLVED_PRICED
+from factorylab.runtime.worlds import load_manifest
+
+GUILTY, PARTLY, INNOCENT = "eval-a", "eval-b", "eval-c"
+
+
+def _card(per="assembly"):
+    return MetricCard(
+        id="censorship-bound", norm="truthful commitments",
+        description="Avoidably unresolved accepted commitments.", units="fraction",
+        window=MetricWindow("forecasts", 4, per), acceptable_region="at most 0.30",
+        observation="avoidably_unresolved_share", answers_for="all")
+
+
+def _runtime(card):
+    seed = load_manifest("scripted")
+    manifest = replace(seed, charter=replace(seed.charter, cards=(card,)))
+    rt = Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1)
+    rt._derive_regions()
+    rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    return rt
+
+
+def _decision(rt, assembly, channel="consequence"):
+    handle = rt.queue.open(
+        actor="test-router", event_id="test", channel=channel, deadline_ns=10**18,
+        parent_handle=None, cost_ceiling=0,
+        propensity=PropensityRecord((assembly,), (1.0,), assembly, 0, "test-router", "state"),
+    )
+    rt.handle_to_assembly[handle] = assembly
+    sample = rt._contribution(handle, "evaluator")
+    sample["invocations"] = sample["ok"] = 1
+    return handle
+
+
+def _commitments(rt, assembly, censored: int, n: int = 4):
+    for i in range(n):
+        rt.card_samples.forecasts.append({
+            "handle": f"f-{assembly}-{i}", "assembly": assembly, "role": "evaluator",
+            "subject_handle": "s", "subject_assembly": "seed-decider",
+            "subject_role": "producer", "window": rt.window.index, "skill": None,
+            "predicate": "wallet_up", "y": None if i < censored else 1,
+            "status": "censored" if i < censored else "settled", "verdict": None,
+            "excluded": None,
+        })
+
+
+def _closed(card, monkeypatch):
+    """A closed window where one seat left every commitment unresolved and one half."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(card)
+    handles = {seat: [_decision(rt, seat) for _ in range(2)]
+               for seat in (GUILTY, PARTLY, INNOCENT)}
+    _commitments(rt, GUILTY, censored=4)
+    _commitments(rt, PARTLY, censored=2)
+    _commitments(rt, INNOCENT, censored=0)
+    rt._close_price_window()
+    return rt, handles
+
+
+def test_blame_lands_on_the_violating_seats_in_proportion_and_not_on_the_compliant(
+        monkeypatch):
+    rt, handles = _closed(_card(), monkeypatch)
+    assert rt.window.closed_scopes["censorship-bound"] == {
+        GUILTY: 1.0, PARTLY: 0.5, INNOCENT: 0.0}
+    shares = {seat: [rt._penalty_terms("all", h)[0]["share"] for h in hs]
+              for seat, hs in handles.items()}
+    penalties = {seat: [rt._penalty_for("all", h) for h in hs] for seat, hs in handles.items()}
+    # Distances outside "at most 0.30": 7/3 and 2/3 of the bound, so 7/9 and 2/9 of it.
+    assert shares[GUILTY] == pytest.approx([7 / 9 / 2] * 2)
+    assert shares[PARTLY] == pytest.approx([2 / 9 / 2] * 2)
+    assert shares[INNOCENT] == [0.0, 0.0]
+    assert all(p > 0 for p in penalties[GUILTY] + penalties[PARTLY])
+    assert penalties[INNOCENT] == [0.0, 0.0]
+    assert penalties[GUILTY][0] == pytest.approx(3.5 * penalties[PARTLY][0])
+    term = rt._penalty_terms("all", handles[GUILTY][0])[0]
+    assert term["owner"] == GUILTY and term["lambda"] > 0
+
+
+def test_settled_score_of_the_innocent_seat_is_untouched(monkeypatch):
+    rt, handles = _closed(_card(), monkeypatch)
+    rt._settle_priced(handles[INNOCENT][0], channel="consequence", score=0.9,
+                      definition_version="t", sampling_ref=None, cards="evaluator")
+    rt._settle_priced(handles[GUILTY][0], channel="consequence", score=0.9,
+                      definition_version="t", sampling_ref=None, cards="evaluator")
+    assert rt.queue.history(handles[INNOCENT][0])[-1].score == 0.9
+    assert rt.queue.history(handles[GUILTY][0])[-1].score < 0.9
+
+
+def test_a_violation_with_no_attributable_owner_keeps_the_generic_floor_split(monkeypatch):
+    rt, handles = _closed(_card(per=None), monkeypatch)
+    everyone = [h for hs in handles.values() for h in hs]
+    shares = {rt._penalty_terms("all", h)[0]["share"] for h in everyone}
+    assert shares == {max(rt.m.prices.min_blame_share, 1 / len(everyone))}
+    assert all("owner" not in rt._penalty_terms("all", h)[0] for h in everyone)
+
+
+def test_an_avoidably_unresolved_commitment_is_priced_for_its_owner(monkeypatch):
+    """The decision that left it unresolved settles censored, carrying its price."""
+    rt, handles = _closed(_card(), monkeypatch)
+    owner, bystander = handles[GUILTY][0], handles[INNOCENT][0]
+    for handle in (owner, bystander):
+        rt._settle_priced(handle, channel="consequence", score=0.0, definition_version="t",
+                          sampling_ref=None, cards="evaluator", unresolved=("f-1",))
+    charged = rt.queue.history(owner)[-1]
+    assert charged.status is SettleStatus.CENSORED
+    assert charged.definition_version == UNRESOLVED_PRICED
+    assert charged.score == pytest.approx(rt._penalty_for("evaluator", owner)) and charged.score > 0
+    assert rt.queue.history(bystander)[-1].score == 0.0
+    entry = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.penalty"][0]
+    assert entry["raw"] is None and entry["unresolved"] == ["f-1"]
+    # Its learners are credited as for an abstention: the router's observed mean less the
+    # same price, never a zero score (wave 16, D4), on the one affine map every learner
+    # learns (R10-l). The bystander bears nothing.
+    assert rt._priced_abstention(owner) == pytest.approx(charged.score)
+    assert rt._priced_abstention(bystander) == 0.0
+
+
+def test_an_unresolved_priced_settlement_is_censored_in_censored_share(monkeypatch):
+    """Codex on #152: an UNRESOLVED_PRICED settlement has no measured world outcome, so it
+    is censored in ``censored_share`` (censored / outcomes), numerator and denominator
+    both; a settlement with a score counts in the denominator alone."""
+    from factorylab.runtime.observations import SEEDS
+
+    rt, handles = _closed(_card(), monkeypatch)
+    before = (rt.window.censored, rt.window.outcomes)
+    rt._settle_priced(handles[GUILTY][0], channel="consequence", score=0.0,
+                      definition_version="t", sampling_ref=None, cards="evaluator",
+                      unresolved=("f-1",))
+    rt._settle_priced(handles[INNOCENT][0], channel="consequence", score=0.9,
+                      definition_version="t", sampling_ref=None, cards="evaluator")
+    assert rt.queue.history(handles[GUILTY][0])[-1].definition_version == UNRESOLVED_PRICED
+    assert (rt.window.censored - before[0], rt.window.outcomes - before[1]) == (1, 2)
+    assert SEEDS["censored_share"].measure(rt.window) == pytest.approx(
+        (before[0] + 1) / (before[1] + 2))
+
+
+def test_the_published_forecast_skill_is_the_mean_of_the_window_settled_forecast_rows(
+        monkeypatch):
+    """Codex on #152: ``price.window`` publishes ``forecast_skill`` as a card over the
+    closed window computes it, the mean skill of the forecasts the window settled (a
+    censored one has no skill), never a mean of per-evaluator cumulative skills."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(_card())
+    for i, skill in enumerate((0.3, None, -0.1)):
+        rt.card_samples.forecasts.append({
+            "handle": f"f-{i}", "assembly": GUILTY, "role": "evaluator",
+            "subject_handle": "s", "subject_assembly": "seed-decider",
+            "subject_role": "producer", "window": rt.window.index, "skill": skill,
+            "predicate": "return_paid_off", "y": 1,
+            "status": "settled" if skill is not None else "censored", "verdict": None,
+            "excluded": None})
+    rt._close_price_window()
+    (row,) = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.window"]
+    assert row["observations"]["forecast_skill"] == pytest.approx(0.1)
+
+
+def test_forecast_return_with_an_unresolved_commitment_is_settled_priced(monkeypatch):
+    """``_settle_forecast_returns`` routes an avoidably unresolved commitment to pricing."""
+    rt, handles = _closed(_card(), monkeypatch)
+    parent = handles[GUILTY][1]
+    child = rt.queue.open(
+        actor=GUILTY, event_id="forecast", channel="consequence", deadline_ns=10**18,
+        parent_handle=parent, cost_ceiling=0,
+        propensity=PropensityRecord((GUILTY,), (1.0,), GUILTY, 0, GUILTY, "test"))
+    rt.queue.settle(child, channel="consequence", score=0.0, status=SettleStatus.CENSORED,
+                    definition_version="brier-v1", sampling_ref=None)
+    rt.return_kinds[parent] = "Verdict"
+    rt.forecast_returns[parent] = {"handles": [child], "results": {}, "unresolved": [child]}
+    rt._settle_forecast_returns()
+    settled = rt.queue.history(parent)[-1]
+    assert settled.definition_version == UNRESOLVED_PRICED and settled.score > 0
+    assert parent not in rt.forecast_returns
+
+
+def test_a_violating_seat_with_no_decision_in_the_window_is_ledgered_unattributed(
+        monkeypatch):
+    """Its part of the price has nobody to carry it: ledgered, never silently free."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(_card())
+    carried = [_decision(rt, PARTLY) for _ in range(2)]
+    _commitments(rt, GUILTY, censored=4)  # violates, but made no decision here
+    _commitments(rt, PARTLY, censored=2)
+    _commitments(rt, INNOCENT, censored=0)  # compliant: nothing to attribute
+    rt._close_price_window()
+    rows = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.unattributed"]
+    assert [(r["card_id"], r["scope"], r["window"]) for r in rows] == [
+        ("censorship-bound", GUILTY, rt.window.index)]
+    row = rows[0]
+    assert row["lambda"] == rt.window.closed_prices["censorship-bound"] > 0
+    assert row["violation"] == pytest.approx(7 / 3) and row["part"] == pytest.approx(7 / 9)
+    # Evidence only: the seat that did respond still carries exactly its own part.
+    assert rt._penalty_terms("all", carried[0])[0]["share"] == pytest.approx(2 / 9 / 2)
+
+
+def test_a_violating_seat_with_only_niche_decisions_is_ledgered_unattributed(monkeypatch):
+    """Codex on #152: a niche decision bears nothing (R-E as amended), so a violating
+    scope whose only decisions are niche carries none of its part: it is ledgered
+    ``price.unattributed``, never counted as charged."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(_card())
+    niche = _decision(rt, GUILTY)
+    rt.window.decisions[niche]["niche"] = True  # as ``_invoke`` marks a protected trial
+    _decision(rt, PARTLY)
+    _commitments(rt, GUILTY, censored=4)
+    _commitments(rt, PARTLY, censored=2)
+    _commitments(rt, INNOCENT, censored=0)
+    rt._close_price_window()
+    assert rt._penalty_for("all", niche) == 0.0
+    rows = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.unattributed"]
+    assert [(r["card_id"], r["scope"], r["window"]) for r in rows] == [
+        ("censorship-bound", GUILTY, rt.window.index)]
+
+
+def test_a_timed_out_forecast_return_still_carries_its_unresolved_price(monkeypatch):
+    """A wall-clock cutoff before the horizon (an outage) does not make the price free.
+
+    The invocation's deadline is wall time; its forecasts' horizons count events. A
+    loop that stalls past the deadline expires the decision before its forecasts
+    come due, and it still settles late, priced, on its own record.
+    """
+    rt, handles = _closed(_card(), monkeypatch)
+    parent = handles[GUILTY][1]
+    child = rt.queue.open(
+        actor=GUILTY, event_id="forecast", channel="consequence", deadline_ns=10**19,
+        parent_handle=parent, cost_ceiling=0,
+        propensity=PropensityRecord((GUILTY,), (1.0,), GUILTY, 0, GUILTY, "test"))
+    assert parent in rt.queue.expire(10**18)  # the cutoff passes; the horizon has not
+    assert rt.queue.get(parent).status is SettleStatus.TIMED_OUT
+    rt.queue.settle(child, channel="consequence", score=0.0, status=SettleStatus.CENSORED,
+                    definition_version="brier-v1", sampling_ref=None)
+    rt.return_kinds[parent] = "Verdict"
+    rt.forecast_returns[parent] = {"handles": [child], "results": {}, "unresolved": [child]}
+    rt._settle_forecast_returns()
+    history = rt.queue.history(parent)
+    assert history[0].status is SettleStatus.TIMED_OUT
+    assert history[-1].definition_version == UNRESOLVED_PRICED and history[-1].score > 0
+    assert parent not in rt.forecast_returns
+
+
+def test_a_saturated_region_violation_plus_a_holdout_closes_the_window(monkeypatch):
+    """Codex on #152: a subnormal scale holds the region violation at FLOAT_MAX, and a
+    failed holdout adds its own; their sum was infinity, which aborted the close. It is
+    saturated (``held_sum``): the window closes, the card is priced, and every ledger
+    row is JSON without infinities."""
+    import json
+
+    from factorylab.charter.controller import FLOAT_MAX, CardRegion
+
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    card = MetricCard("wf", "care with scarce resources", "A reading.", "fraction",
+                      MetricWindow("windows", 1, None), {"rule": "at least", "lo": 0.9},
+                      "well_formed_rate", "all")
+    rt = _runtime(card)
+    region = CardRegion("wf", "min", 0.9, None, 5e-324)  # a subnormal scale
+    rt.regions["wf"] = region
+    rt.controller.update_region(region)
+    monkeypatch.setattr(rt, "_holdout_results", lambda _values: {
+        "wf": {"results": {"h@1": False}, "violation": FLOAT_MAX}})
+    rt.window.invocations, rt.window.ok = 10, 1
+    rt._close_price_window()
+    (update,) = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.update"]
+    assert update["violation"] == FLOAT_MAX
+    for row in rt.ledger._recovery_items():
+        json.dumps(row, allow_nan=False)
+    assert rt._penalty_for("all", _decision(rt, INNOCENT)) <= rt.m.prices.penalty_cap

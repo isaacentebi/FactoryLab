@@ -243,7 +243,7 @@ A diary binds its manifest and its venue account; edition 2 also binds the
 release that executes them (cold audit F1). At every start the runtime computes
 
 ```
-release_digest = sha256(git_head + sha256(uv.lock) + tree_hash(factorylab/))
+release_digest = sha256(sha256(uv.lock) + tree_hash(factorylab/))
 ```
 
 in `factorylab/runtime/release.py`, ledgers it in the `Launch` event and in every
@@ -254,7 +254,9 @@ digests). The tree hash covers the package as it is on disk, so an uncommitted
 edit is a different release exactly as a new commit is. There is no override:
 a changed release is a new world.
 
-The head comes from git when the checkout has it. The provisioner also runs
+The git head is not part of the digest (versioning S2): a commit that changes no
+executable byte is the same release. It is recorded beside the digest as forensic
+metadata. The head comes from git when the checkout has it. The provisioner also runs
 `deploy/install.sh`, which records the identity in `repo/RELEASE`; a host without
 git reads the head from there, and `release_info()["git_head_source"]` says which
 was used (`git`, `release_file`, or `none`). Print it on the host:
@@ -706,16 +708,32 @@ CSP prohibits scripts, embedding and network resources.
 
 At 03:00 UTC nightly (up to ten minutes jitter; missed runs catch up), `backup.sh`
 captures the ledger's byte length and copies only complete newline-terminated
-records from that prefix. The factory continues appending. It also copies the
-artifact archive, `runs/funded.artifacts/` (edition 2, C9: every program seat's
-private state and every note the population kept, one hash-named file each,
-verified against its name; an in-progress temporary is skipped), and records
-the count and size in `runs/funded.release.json`. The archive is part of the
-world's memory: the diary's checkpoint names each artifact by hash, and a
-restore of the diary without the bytes is refused by `resume` with the reason
-code `artifact_missing` (a `failed_resume` item naming the sha and its owner),
-never continued with a program that has lost its state. A restore therefore
-extracts `runs/` whole, ledger, key and `funded.artifacts/` together. Keys are
+records from that prefix, hashing them as they are copied (the ledger is never
+read into memory whole). The factory continues appending. It also copies the
+three sidecars the diary names by hash: the rolling checkpoint,
+`runs/funded.checkpoint/` (wave 17: the world state the diary's latest `snapshot`
+item names), the artifact archive, `runs/funded.artifacts/` (edition 2, C9: every
+program seat's private state and every note the population kept, one hash-named
+file each, verified against its name), and the recorded answers,
+`runs/funded.io/`; an in-progress temporary is skipped. The world replaces its
+checkpoint and collects released artifacts at every window boundary while the
+backup runs, so the checkpoint and artifact files are pinned with hard links
+(`runs/.backup-pin/`, removed on exit) once just before the ledger's length is
+fixed and once after it is copied, and archived from the pin: the files the
+copied diary names cannot be removed from under the copy. Counts and sizes of
+each are recorded in `runs/funded.release.json`. The staged copy is then proven
+restorable by the release's own interpreter (`repo/.venv/bin/python -m
+factorylab.runtime.sidecar`: its latest checkpoint is present and hash-true,
+every artifact it names is there, and every recorded answer its replay tail
+names is there and hash-true). A copy that fails is not uploaded, and neither is
+one that cannot be checked: without `repo/.venv/bin/python` the backup fails
+with `backup not uploaded: no release interpreter`, so an unproven copy never
+stands in for a proven one. The sidecars are part of the world's memory: a restore
+without them is refused by `resume` with `checkpoint_missing`,
+`checkpoint_mismatch`, `io_result_missing` or `artifact_missing` (the last as a
+`failed_resume` item naming the sha and its owner), never continued with a
+program that has lost its state. A restore therefore extracts `runs/` whole:
+ledger, key, `funded.checkpoint/`, `funded.artifacts/` and `funded.io/` together. Keys are
 immutable; the process copies the three root keys plus `runs/funded.jsonl.key`
 into a private root-only temporary directory. It pipes tar directly into age;
 no plaintext tar is written. It uploads a dated `.tar.age` through

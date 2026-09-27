@@ -20,12 +20,18 @@ from tests.cortex.test_jail import require_jail
 
 pytestmark = pytest.mark.slow
 
+# A hold that executes nothing names the trade it declined, on a coin the world it was
+# shown lists (the return contract of a producing kind), as a model seat's must.
 COUNTER = (
     "import json, sys\n"
     "d = json.load(sys.stdin)\n"
     "s = d['state'] or {'n': 0}\n"
-    "print(json.dumps({'action': 'hold', 'payoff': 0.1, 'seen': s['n'],"
-    " 'state': {'n': s['n'] + 1}}))\n"
+    "mids = (d['inputs'].get('world') or {}).get('recent_mids') or {}\n"
+    "out = {'action': 'hold', 'payoff': 0.1, 'seen': s['n'], 'state': {'n': s['n'] + 1}}\n"
+    "if mids:\n"
+    "    out['counterfactual'] = {'coin': 'BTC' if 'BTC' in mids else min(mids),"
+    " 'side': 'buy'}\n"
+    "print(json.dumps(out))\n"
 )
 PROGRAM = {"kind": "assembly", "id": "prog-a", "model_id": "program", "accepts": ["Tick"],
            "code": COUNTER, "state_policy": "private"}
@@ -48,8 +54,8 @@ class Proposer(ScriptedProvider):
 
 def world(path, events, **kwargs):
     return Runtime(load_manifest("scripted"), events=events, seed=1, initial_balance_micro=None,
-                   ledger_path=None if path is None else str(path), drip=False,
-                   router_gamma=.1, provider=Proposer(), **kwargs)
+                   ledger_path=None if path is None else str(path), router_gamma=.1,
+                   provider=Proposer(), **kwargs)
 
 
 def items(path):

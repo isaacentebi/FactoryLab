@@ -5,7 +5,7 @@ from factorylab.runtime.worlds import load_manifest
 
 def runtime():
     return Runtime(load_manifest('scripted'), events=40, seed=1,
-                   initial_balance_micro=None, ledger_path=None, drip=False, router_gamma=.1)
+                   initial_balance_micro=None, ledger_path=None, router_gamma=.1)
 
 
 def test_spot_runtime_journal_settlement_and_snapshot():
@@ -29,9 +29,11 @@ def test_spot_runtime_journal_settlement_and_snapshot():
     assert rt._world_block()['venue']['spot'][0]['coin'] == 'BTC/USDC'
 
 
-def test_scripted_provider_exercises_spot_and_transfer():
-    rt = runtime()
-    rt.run()
+def test_scripted_provider_exercises_spot_and_transfer(scripted_runtime_run):
+    # The run test_r3_a_spot's replay-once test compares against: this guard is also what
+    # keeps that test's spot.inventory interrupt from being vacuous.
+    manifest = load_manifest('scripted')
+    rt = scripted_runtime_run(manifest, 40, 1).runtime(manifest)
     spot = [i for i in rt.order_intents.values() if i['args'].get('market') == 'spot']
     assert {i['args']['side'] for i in spot if i['result']['status'] == 'filled'} == {'buy', 'sell'}
     assert rt.treasury.state['direction'] == 'perps_to_spot'

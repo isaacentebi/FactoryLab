@@ -124,7 +124,8 @@ def test_deferred_spot_fill_updates_both_books_only_after_acknowledgement():
         restored._ledger_lock.close()
 
 
-def test_durable_spot_inventory_write_replays_once_after_interruption(tmp_path):
+def test_durable_spot_inventory_write_replays_once_after_interruption(tmp_path,
+                                                                    scripted_runtime_run):
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.resume import resume_runtime
     from factorylab.runtime.worlds import load_manifest
@@ -134,9 +135,10 @@ def test_durable_spot_inventory_write_replays_once_after_interruption(tmp_path):
 
     def build(path=None):
         return Runtime(load_manifest("scripted"), events=40, seed=1,
-                       initial_balance_micro=None, ledger_path=path, drip=False, router_gamma=.1)
+                       initial_balance_micro=None, ledger_path=path, router_gamma=.1)
 
-    expected = build().run()
+    # The uninterrupted reference is build().run(), shared with test_venue_spot.
+    expected = scripted_runtime_run(load_manifest("scripted"), 40, 1).summary
     path = str(tmp_path / "spot.jsonl")
     rt = build(path)
     append = rt.ledger.append

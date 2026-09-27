@@ -20,8 +20,13 @@ from factorylab.world.x402 import HTTPResponse
 
 
 def pair():
+    from factorylab.runtime.capital_loop import ReserveGuard
+
     account = Account.create()
-    return EVM(HYPEREVM_TESTNET, account), EVM(BASE_SEPOLIA, account)
+    chains = EVM(HYPEREVM_TESTNET, account), EVM(BASE_SEPOLIA, account)
+    for chain in chains:  # written ahead, in the test's lock dir
+        chain.transaction_guard = ReserveGuard("test")
+    return chains
 
 
 def message(source, dest, amount=5_000_000):

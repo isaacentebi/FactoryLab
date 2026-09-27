@@ -5,7 +5,6 @@ Nothing here touches a network. The scripted-world evidence (a producer tool reg
 and called, ``tool.call`` items in the diary) runs only where a jail exists.
 """
 
-from dataclasses import replace
 
 import pytest
 
@@ -28,16 +27,14 @@ def test_a_claimed_jail_that_cannot_start_fails_the_gate_instead_of_skipping(mon
 
 
 def test_run_refuses_a_world_offering_tools_when_the_jail_cannot_start(monkeypatch, tmp_path):
-    """The world block would publish tools no proposal could obtain; nothing is written."""
+    """The world block would publish tools no proposal could obtain; nothing is written.
+
+    Every world offers population tools. Their price once doubled as the switch (a
+    world pricing them at zero offered none); since Wave 11 a jailed call pays no one
+    and has no price, so no world launches on a host whose jail cannot start."""
     monkeypatch.setattr("factorylab.runtime.loop.jail_probe", lambda: "no jail on this host")
     m = load_manifest("scripted")
-    assert m.tools.population_tool_micro_per_call > 0
     ledger = tmp_path / "w.jsonl"
     with pytest.raises(sandbox.NoJail, match="offers population tools"):
         run_world(m, events=3, seed=1, ledger_path=str(ledger))
     assert not ledger.exists() and not (tmp_path / "w.jsonl.key").exists()
-    # A manifest that prices no population tools promises none and still launches.
-    free = replace(m, tools=replace(m.tools, population_tool_micro_per_call=0))
-    monkeypatch.setattr("factorylab.cortex.tools.jail_available", lambda: False)
-    summary = run_world(free, events=3, seed=1)
-    assert summary["stats"]["events"] >= 3

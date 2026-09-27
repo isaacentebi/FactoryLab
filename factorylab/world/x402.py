@@ -28,12 +28,23 @@ from factorylab.kernel.money import nonnegative_usd_micro
 #: a transport timeout is billed as uncertain at the ceiling, so it must be rarer than
 #: a slow reply. The ten-minute tick absorbs it.
 MODEL_HTTP_TIMEOUT_S = 180
+#: The adapter's ceiling on a completion, used when its caller states no deadline of
+#: its own. Native completion allowances (#121) let a reply think for minutes, so it
+#: is far longer than a read's -- but it is finite: with no deadline one stalled
+#: connection held an edition 5 world for over half an hour. The runtime states each
+#: call's deadline as a ratio of its delivered tick (``ModelRequest.timeout_s``; time
+#: audit T8), never above this. A reply that exceeds it is billed uncertain at the
+#: request's ceiling, never dropped.
+MODEL_COMPLETION_TIMEOUT_S = 900
 
 BASE_RPC = "https://mainnet.base.org"
 VENICE_URL = "https://api.venice.ai/api/v1"
 BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 BASE_NETWORK = "eip155:8453"
 TOP_UP_MICRO = 5_000_000
+#: The longest validity window this adapter ever signs, whatever a quote allows: an
+#: authorization's ``validBefore`` is at most this many seconds after it was built.
+MAX_AUTHORIZATION_S = 600
 
 
 class X402Error(Exception):
@@ -42,6 +53,55 @@ class X402Error(Exception):
 
 class InsufficientReserve(X402Error):
     """A validated payment cannot be covered; no authorization was signed."""
+
+
+class AuthorizationNotRecorded(X402Error):
+    """The write-ahead guard refused or failed: no authorization was signed."""
+
+
+#: The ``authorization_typed_data`` message fields written as decimal strings.
+UINT_FIELDS = ("value", "validAfter", "validBefore")
+
+
+def sign_transfer_authorization(account: Any, typed: dict, *, guard: Any,
+                                head: Any = None) -> Any:
+    """The one place this code base signs an EIP-3009 authorization with a reserve key.
+
+    Guarantees nothing is signed unless ``guard`` first returned for this exact message:
+    the guard (``factorylab.runtime.capital_loop``'s ``AuthorizationLog`` under a held
+    ``ReserveLock``, or ``ReserveGuard``, which takes that lock for the one write) has
+    written the authorization, durably, to the reserve's write-ahead record beside the
+    lock. No guard, a guard that raises, or a message for another payer raises
+    ``AuthorizationNotRecorded`` and signs nothing. Every signer of an EIP-3009
+    ``TransferWithAuthorization`` (x402 purchases, Venice top-ups from the CLI, the
+    compute proof and both treasury rails) reaches the signature only through here.
+    ``head`` reads the Base chain head just before the record is written; the guard
+    records it as the authorization's ``start_block`` (the signature does not exist
+    before it, so it cannot be used before it). An unreadable head signs nothing.
+    """
+    if typed.get("primaryType") != "TransferWithAuthorization":
+        raise AuthorizationNotRecorded("only a TransferWithAuthorization is signed here")
+    message = typed["message"]
+    if str(message.get("from", "")).lower() != account.address.lower():
+        raise AuthorizationNotRecorded("authorization payer is not the signing reserve")
+    if guard is None:
+        raise AuthorizationNotRecorded(
+            "no write-ahead guard: an authorization is signed only after it is recorded "
+            "under the reserve lock; nothing was signed")
+    if head is None:
+        raise AuthorizationNotRecorded("no chain head reader; nothing was signed")
+    try:
+        start_block = int(head())
+    except Exception:  # noqa: BLE001 - no head, no start block, no signature
+        raise AuthorizationNotRecorded("chain head unreadable; nothing was signed") from None
+    try:
+        guard({k: str(v) if k in UINT_FIELDS else v for k, v in message.items()},
+              start_block)
+    except Exception as exc:  # noqa: BLE001 - an unrecorded authorization is never signed
+        raise AuthorizationNotRecorded(
+            f"write-ahead refused ({getattr(exc, 'reason', type(exc).__name__)}); "
+            "nothing was signed") from None
+    return account.sign_message(encode_typed_data(full_message=typed))
 
 
 @dataclass(frozen=True)
@@ -62,8 +122,12 @@ class _NoRedirect(request.HTTPRedirectHandler):
         return None
 
 
-def http_request(method: str, url: str, payload: dict | None, headers: dict) -> HTTPResponse:
-    """One HTTP attempt preserves 402 headers and parses decimal numbers without floats."""
+def http_request(method: str, url: str, payload: dict | None, headers: dict, *,
+                 timeout: float | None = None) -> HTTPResponse:
+    """One HTTP attempt preserves 402 headers and parses decimal numbers without floats.
+
+    ``timeout`` is a completion's own deadline in seconds, never above the ceiling.
+    """
     req = request.Request(
         url,
         data=json.dumps(payload).encode() if payload is not None else None,
@@ -73,8 +137,9 @@ def http_request(method: str, url: str, payload: dict | None, headers: dict) -> 
     try:
         completion = method == "POST" and parse.urlsplit(url).path.rstrip("/").endswith(
             "/chat/completions")
+        ceiling = MODEL_COMPLETION_TIMEOUT_S if completion else MODEL_HTTP_TIMEOUT_S
         response = request.build_opener(_NoRedirect()).open(
-            req, timeout=None if completion else MODEL_HTTP_TIMEOUT_S)
+            req, timeout=(min(float(timeout), ceiling) if completion and timeout else ceiling))
     except error.HTTPError as exc:
         response = exc
     with response:
@@ -271,7 +336,7 @@ def authorization_typed_data(
     _address(address)
     now = time.time_ns() // 1_000_000_000 if now is None else now
     nonce = os.urandom(32) if nonce is None else nonce
-    timeout = min(accepted["maxTimeoutSeconds"], 600)
+    timeout = min(accepted["maxTimeoutSeconds"], MAX_AUTHORIZATION_S)
     if type(now) is not int or now < 0 or now + timeout >= 2**256:
         raise X402Error("Invalid authorization time")
     if not isinstance(nonce, bytes) or len(nonce) != 32:
@@ -311,7 +376,8 @@ def authorization_typed_data(
     }
 
 
-def payment_header(account: Any, quote: PaymentQuote) -> str:
+def payment_header(account: Any, quote: PaymentQuote, *, guard: Any = None,
+                   head: Any = None) -> str:
     """Standard base64 of UTF-8 v2 JSON retains accepted requirements and signed payload.
 
     Specification files read from https://github.com/coinbase/x402 (2026-09-11):
@@ -320,9 +386,10 @@ def payment_header(account: Any, quote: PaymentQuote) -> str:
     ``specs/transports-v2/http.md`` (base64 JSON transport).
     Venice uses ``X-402-Payment`` for the v2 envelope that the standard sends in
     ``PAYMENT-SIGNATURE``. The uint256 authorization values are decimal strings.
+    The signature is made only through ``sign_transfer_authorization`` with ``guard``.
     """
     typed = authorization_typed_data(quote.accepted, account.address)
-    signed = account.sign_message(encode_typed_data(full_message=typed))
+    signed = sign_transfer_authorization(account, typed, guard=guard, head=head)
     authorization = {
         k: str(v) if k in {"value", "validAfter", "validBefore"} else v
         for k, v in typed["message"].items()
@@ -386,13 +453,23 @@ class X402Client:
         base_url: str = VENICE_URL,
         rpc: str = BASE_RPC,
         transport: Transport | None = None,
+        guard: Any = None,
     ) -> None:
         self._account = _account(private_key)
+        # The write-ahead guard every authorization this client signs passes through
+        # (``sign_transfer_authorization``); without one it signs nothing.
+        self.guard = guard
         self.address = self._account.address
         self.base_url = base_url.rstrip("/")
         self.rpc = rpc
         self._transport = transport or http_request
         self._secrets = (private_key or os.environ.get("RESERVE_PRIVATE_KEY", ""),)
+
+    def chain_head(self) -> int:
+        """The latest Base block number, read keylessly through this client's transport."""
+        from factorylab.world.evm import BASE, EVM
+
+        return EVM(BASE, None, transport=self._transport, rpc=self.rpc).block()
 
     def auth_headers(self, path: str) -> dict[str, str]:
         """The request gets a fresh signed SIWE header for its own URI."""
@@ -426,7 +503,7 @@ class X402Client:
             raise X402Error("Quote exceeds registered per-request ceiling")
         if self.usdc_balance() < quote.amount_micro:
             raise InsufficientReserve("Reserve cannot cover the quoted Base USDC payment")
-        return payment_header(self._account, quote)
+        return payment_header(self._account, quote, guard=self.guard, head=self.chain_head)
 
     def venice_balance(self, address: str | None = None) -> int:
         """A SIWE-authenticated wallet balance is rounded down to integer micro-USD."""
@@ -455,7 +532,8 @@ class X402Client:
             raise X402Error("Insufficient Base USDC for a $5 top-up")
         path = "/x402/top-up"
         quote = parse_quote(self._request("POST", path, {}), amount_micro=amount_micro)
-        encoded = payment_header(self._account, quote)
+        encoded = payment_header(self._account, quote, guard=self.guard,
+                                 head=self.chain_head)
         response = self._request("POST", path, {}, **{"X-402-Payment": encoded})
         if not 200 <= response.status < 300:
             raise X402Error(

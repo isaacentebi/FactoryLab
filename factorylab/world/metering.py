@@ -12,7 +12,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, TypeVar
 
-from factorylab.world.models import ModelProvider, ModelRequest, ModelResponse, PriceTable
+from factorylab.world.models import (
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    PriceTable,
+    prompt_chars,
+)
 from factorylab.world.openrouter import OpenRouterError as ProviderOpenRouterError
 from factorylab.world.venice import VeniceError as ProviderVeniceError
 
@@ -72,6 +78,9 @@ class BillingUncertain(RuntimeError):
 
     def __init__(self, cost: int, cause: Exception):
         self.cost = cost
+        # The provider failure behind it, for a caller that tells an expired call from
+        # a failed one (time audit T8). Never rendered: it may name the provider.
+        self.cause = cause
         super().__init__(f"billing uncertain ({type(cause).__name__})")
 
 
@@ -258,8 +267,7 @@ class MeteredModel:
 
     def ceiling(self, req: ModelRequest) -> int:
         price = self.prices.price(req.model_id)
-        prompt_chars = len(req.system) + sum(len(str(m.get("content", ""))) for m in req.messages)
-        est_input = int(prompt_chars * self.input_slack) + 64
+        est_input = int(prompt_chars(req) * self.input_slack) + 64
         return price.cost(est_input, req.max_tokens)
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:

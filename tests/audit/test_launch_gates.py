@@ -26,6 +26,7 @@ from factorylab.world.scripted import (
     ScriptedProvider,
     _description_from_prompt,
     _inputs_from_prompt,
+    request_form,
 )
 from tests.helpers import place
 from tests.runtime.test_connectors import ledger_items
@@ -47,7 +48,7 @@ TESTNET_BALANCE = "966"
 def custody_runtime(*, venue_usd: str = TESTNET_BALANCE) -> Runtime:
     """A scripted world on a venue holding `venue_usd`."""
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=50_000_000,
-                 ledger_path=None, drip=False, router_gamma=.1, provider=ScriptedProvider(),
+                 ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
                  exchange=FakeExchange(start_cash_usd=Decimal(venue_usd)))
     rt._manage_reserve_window()
     return rt
@@ -163,7 +164,7 @@ def leaky_world(tmp_path_factory):
     sink: list[tuple[str, str, str]] = []
     path = tmp_path_factory.mktemp("launch-gates") / "leaky.jsonl"
     run_world(load_manifest("scripted"), events=30, seed=1, ledger_path=str(path),
-              drip=False, provider=_seats_that_leak(sink)())
+              provider=_seats_that_leak(sink)())
     return sink, path
 
 
@@ -185,13 +186,6 @@ class TestGateTwoContinuityAndInformationBoundaries:
     """"no judge or wake gets private state"."""
 
 
-    def test_the_run_actually_planted_a_private_state_in_every_seat(self, leaky_world):
-        """A scan that found nothing because nothing was there proves nothing."""
-        sink, path = leaky_world
-        assert len(sink) > 100
-        own = [text for _, _, text in sink if PRIVATE_MARKER in text]
-        assert own, "no seat was ever shown its own working state"
-
     def test_no_evaluator_request_carries_any_seats_working_state_or_ack_through(
             self, leaky_world):
         """"no judge ... gets private state", scanned over every request of a whole run.
@@ -205,13 +199,23 @@ class TestGateTwoContinuityAndInformationBoundaries:
         commissioned on -- which is where a forwarded producer return arrives.
         """
         sink, _ = leaky_world
+        # A scan that found nothing because nothing was there proves nothing: the run
+        # planted private state, and some seat was shown its own.
+        assert len(sink) > 100
+        assert any(PRIVATE_MARKER in text for _, _, text in sink), (
+            "no seat was ever shown its own working state")
         commissions = [(desc, system, text) for desc, system, text in sink
-                       if desc.startswith(("Evaluate", "Assess"))]
+                       if request_form(None, text, _inputs_from_prompt(text))
+                       in ("judge", "meta")]
         assert len(commissions) > 20, "the run commissioned no evaluation to scan"
         scanned = 0
         for desc, system, text in commissions:
             assert PRIVATE_MARKER not in system
-            you, rest = text.split("\n\nWORLD UPDATE\n", 1)
+            # Judges see the work, not the producer's world, so a commission may
+            # carry no WORLD UPDATE; its YOU block then ends where REQUEST begins.
+            marker = ("\n\nWORLD UPDATE\n" if "\n\nWORLD UPDATE\n" in text
+                      else "\n\nREQUEST\n")
+            you, rest = text.split(marker, 1)
             # Nothing a seat kept privately reaches the evaluator's world or inputs.
             assert PRIVATE_MARKER not in rest, desc
             assert text.count(PRIVATE_MARKER) <= 1, desc  # its own head, at most

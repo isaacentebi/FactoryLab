@@ -3,9 +3,11 @@
 import ast
 import fcntl
 import hashlib
+import inspect
 import json
 import os
 import pickle
+import resource
 import shutil
 from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
@@ -14,6 +16,7 @@ import pytest
 
 from factorylab.cortex.sandbox import jail_available
 from factorylab.kernel.ledger import canonical
+from factorylab.runtime.capital_loop import default_lock_dir as operator_default_lock_dir
 from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
@@ -56,10 +59,6 @@ class ScriptedRun:
     def entries(self):
         return self._field("entries")
 
-    @property
-    def requests(self):
-        return self._field("requests")
-
     def copy_to(self, directory):
         """Return a private ledger with every sidecar and original permission preserved."""
         if self.ledger_path is None:
@@ -75,9 +74,9 @@ class ScriptedRun:
         return rt
 
 
-def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
+def _cached_scripted_run(directory, manifest, events, seed, *, mode):
     """Publish only completed runs, once per key across all workers in this session."""
-    identity = (manifest.canonical_json(), events, seed, jail_available(), mode, drip)
+    identity = (manifest.canonical_json(), events, seed, jail_available(), mode)
     key = hashlib.sha256(canonical(identity)).hexdigest()
     directory.mkdir(parents=True, exist_ok=True)
     run_directory = directory / key
@@ -96,22 +95,11 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
                 result = {"summary": run_world(manifest, events=events, seed=seed,
                                                ledger_path=str(path))}
             else:
-                from factorylab.world.scripted import _inputs_from_prompt
-
-                entries, requests = [], []
-
-                class RecordingProvider(ScriptedProvider):
-                    def complete(self, request):
-                        text = "\n".join(str(m.get("content", ""))
-                                         for m in request.messages)
-                        requests.append(_inputs_from_prompt(text))
-                        return super().complete(request)
-
+                entries = []
                 # These consumers originally used in-memory ledgers. Preserve that call:
                 # persisting every encrypted append here would add thousands of fsyncs.
                 rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                             ledger_path=None, drip=drip, router_gamma=.1,
-                             provider=RecordingProvider() if mode == "recorded_runtime" else None)
+                             ledger_path=None, router_gamma=.1)
                 append = rt.ledger.append
 
                 def capture(item):
@@ -126,8 +114,7 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
                 finally:
                     rt.ledger.append = append
                     rt._ledger_lock.close()
-                result = dict(summary=summary, entries=entries, requests=requests,
-                              state=runtime_state(rt))
+                result = dict(summary=summary, entries=entries, state=runtime_state(rt))
             fields = {name: pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
                       for name, value in result.items()}
             temporary = result_path.with_suffix(".tmp")
@@ -174,10 +161,9 @@ def scripted_run(_scripted_run_cache):
 @pytest.fixture(scope="session")
 def scripted_runtime_run(_scripted_run_cache):
     """Share direct Runtime evidence without changing run_world's separate launch checks."""
-    def run(manifest, events, seed, *, drip=True, record_requests=False):
-        mode = "recorded_runtime" if record_requests else "runtime"
+    def run(manifest, events, seed):
         return _cached_scripted_run(_scripted_run_cache, manifest, events, seed,
-                                    mode=mode, drip=drip)
+                                    mode="runtime")
 
     return run
 
@@ -187,11 +173,60 @@ def scripted_runtime_run(_scripted_run_cache):
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
-_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run"})
+_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
-# A check-tier test whose call phase takes longer than this fails: it belongs in gate.
+#: Functions outside ``tests/`` that run a world's loop when called: the loop's own entry
+#: and the operator rehearsal's (``scripts/edition4_rehearsal.run_rehearsal``).
+_WORLD_ENTRY_POINTS = frozenset({"run_world", "run_rehearsal"})
+_GATE_MARKS = ("gate", "world")
+_TESTS_ROOT = Path(__file__).resolve().parent
+# A check-tier test whose setup and call use more CPU than this fails: it belongs in gate.
+# CPU, not wall time, so a loaded machine cannot fail a test; the wall ceiling still
+# fails a check test that sleeps or waits.
 CHECK_LIMIT_ENV = "FACTORYLAB_CHECK_LIMIT_S"
 CHECK_LIMIT_DEFAULT_S = 2.0
+CHECK_WALL_CEILING_S = 10.0
+# A gate file whose tests together use more CPU than this (setup, call and teardown,
+# summed across workers: its serial cost) fails the run, unless it is listed below with
+# the reason it cannot be smaller.
+GATE_FILE_BUDGET_ENV = "FACTORYLAB_GATE_FILE_BUDGET_S"
+GATE_FILE_BUDGET_DEFAULT_S = 60.0
+GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
+    # Serial CPU on the integrated tree (lanes E, M, P and #149, #154, #155 merged).
+    "tests/gauntlet/test_thrash.py": (
+        "98 s: the pathology instrument's thrash criteria. th1 (TH-1e reads the release "
+        "after its 50 steady windows) and th3 (two charter boundaries) fail at two thirds "
+        "of 300 events, and each has negative controls that run the same world with the "
+        "mechanism disabled (design G2); th2-reversion and its negative control are strict "
+        "xfails wave 16b turns green, kept at full size; th2 is halved, th4 shared"),
+    "tests/runtime/test_settled_release.py": (
+        "89 s: wave 17b. Release changes nothing a reader sees, over a released and a kept "
+        "150-event world (at 120 and 100 events the release share, the venue-confirmed "
+        "released orders and the invariant's candidate pool are absent), the tally checked "
+        "against the full scan after every event, and one crash probe resumed to the end"),
+    "tests/runtime/test_retained_state_crash.py": (
+        "83 s: crash anywhere resumes to the uninterrupted run (a storage contract). Each "
+        "of the thirteen crash-point rows runs a world to its crash and resumes it to the "
+        "end over 30 ticks, the shortest that reaches every crash point; the rows share one "
+        "reference run, the two eviction rows another"),
+    "tests/runtime/test_evaluation_layer.py": (
+        "78 s: tier recursion on two seeds and a fourth tier (CUTOVER, lane E), the "
+        "multi-judge, adversarial, two-router and heavy-chaos worlds at their lane E "
+        "sizes; family-disjoint judging reads the shared 100-event scripted run"),
+    "tests/scripts/test_class2_audit.py": (
+        "74 s: the Class 2 release audit's CLI, run on real git histories (about 2,500 git "
+        "calls, the tool's own provenance and calibration reads) and the seat-text scan; "
+        "gate as a whole (GATE_MODULE), on one worker"),
+    "tests/runtime/test_bounded_memory.py": (
+        "68 s: the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at "
+        "2.2 against the 2.3 bound) and pruning changes nothing a reader sees (a 120-tick "
+        "world with and without pruning: at 60 ticks only 45% of returns are slim, under "
+        "the test's own non-vacuity bound); every other test reads these shared worlds"),
+    "tests/gauntlet/test_stable_failure.py": (
+        "65 s: SF-1 (sf1c reads the integral frozen at the cap, which a two-thirds run "
+        "does not reach) with its two negative controls, and the transient world and its "
+        "control, strict xfails wave 16b turns green, all at 300 events; sf2 is halved"),
+}
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -203,20 +238,31 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
-def _runs_world_here(call: ast.Call) -> bool:
-    """Whether one call, read on its own, starts a world's event loop."""
+#: Calls that return a runtime ready to run: its constructor and a resume.
+_RUNTIME_BUILDERS = frozenset({"Runtime", "resume_runtime"})
+
+
+def _runs_world_here(call: ast.Call, builders=_RUNTIME_BUILDERS,
+                     runtimes=frozenset()) -> bool:
+    """Whether one call, read on its own, starts a world's event loop.
+
+    Building a ``Runtime`` is not a world, whatever its events budget: only running
+    its loop is (``rt.run()`` where ``rt`` is one of ``runtimes``, the variables this
+    function assigned from a builder; ``Runtime(...).run()`` or ``f(...).run()`` where
+    ``f`` is one of ``builders``; ``run_world``; or the CLI). Any other object's
+    ``.run()`` is not read as a world: the runtime world guard catches a world this
+    static read misses.
+    """
     name = _call_name(call)
-    if name == "run_world":
+    if name in _WORLD_ENTRY_POINTS:
         return True
-    if name == "Runtime":
-        # ``Runtime(..., events=0)`` builds a runtime without running one; any other
-        # events budget, or one passed positionally, is a world.
-        events = next((k.value for k in call.keywords if k.arg == "events"), None)
-        return not (isinstance(events, ast.Constant) and events.value == 0)
     if (name == "run" and isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name) and call.func.value.id != "subprocess"
             and not call.args and not call.keywords):
-        return True  # ``rt.run()``: the loop itself
+        receiver = call.func.value
+        if isinstance(receiver, ast.Name):
+            return receiver.id in runtimes  # ``rt.run()``: the loop itself
+        if isinstance(receiver, ast.Call):
+            return _call_name(receiver) in builders
     # The CLI, in process or as a child: ``main(["run", ...])`` or ``[..., "resume", ...]``.
     for argument in call.args:
         if isinstance(argument, (ast.List, ast.Tuple)):
@@ -228,13 +274,72 @@ def _runs_world_here(call: ast.Call) -> bool:
     return False
 
 
-def _world_functions(tree: ast.Module) -> set[str]:
-    """Names of this module's functions that run a world, directly or through a helper."""
+def _test_module_path(module: str | None) -> Path | None:
+    """The file of a module under ``tests/``, or None for any other module."""
+    if not module or not (module == "tests" or module.startswith("tests.")):
+        return None
+    base = _TESTS_ROOT.parent.joinpath(*module.split("."))
+    for path in (base.with_suffix(".py"), base / "__init__.py"):
+        if path.is_file():
+            return path
+    return None
+
+
+def _imported_world_calls(tree: ast.Module, world_functions_of) -> frozenset[str]:
+    """The call spellings (``fn`` or ``alias.fn``) that reach a world function of another
+    module under ``tests/``, as this module imports it."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            source = _test_module_path(node.module)
+            for alias in node.names:
+                submodule = _test_module_path(f"{node.module}.{alias.name}")
+                if submodule is not None:  # ``from tests.gauntlet import populations as P``
+                    found |= {f"{alias.asname or alias.name}.{name}"
+                              for name in world_functions_of(submodule)}
+                elif source is not None and alias.name in world_functions_of(source):
+                    found.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                source = _test_module_path(alias.name)
+                if source is not None and alias.asname:
+                    found |= {f"{alias.asname}.{name}" for name in world_functions_of(source)}
+    return frozenset(found)
+
+
+def _spelling(call: ast.Call) -> str | None:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return f"{func.value.id}.{func.attr}"
+    return None
+
+
+def _world_functions(tree: ast.Module, world_functions_of=None) -> set[str]:
+    """Names of this module's functions that run a world, directly, through a helper of
+    this module, or through a helper imported from another module under ``tests/``."""
     functions = {node.name: node for node in ast.walk(tree)
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     calls = {name: [n for n in ast.walk(node) if isinstance(n, ast.Call)]
              for name, node in functions.items()}
-    world = {name for name, found in calls.items() if any(map(_runs_world_here, found))}
+    imported = (_imported_world_calls(tree, world_functions_of)
+                if world_functions_of is not None else frozenset())
+    # A helper that builds a Runtime: ``_runtime(path).run()`` runs its loop.
+    builders = _RUNTIME_BUILDERS | {name for name, found in calls.items()
+                                    if any(_call_name(c) in _RUNTIME_BUILDERS
+                                           for c in found)}
+
+    def runtimes(node) -> frozenset[str]:
+        """The names this function binds to a builder's result (``rt = Runtime(...)``)."""
+        return frozenset(
+            target.id for assign in ast.walk(node) if isinstance(assign, ast.Assign)
+            and isinstance(assign.value, ast.Call) and _call_name(assign.value) in builders
+            for target in assign.targets if isinstance(target, ast.Name))
+
+    world = {name for name, found in calls.items()
+             if any(_runs_world_here(c, builders, runtimes(functions[name]))
+                    or _spelling(c) in imported for c in found)}
     changed = True
     while changed:
         changed = False
@@ -246,87 +351,347 @@ def _world_functions(tree: ast.Module) -> set[str]:
     return world
 
 
-def _module_facts(path: Path) -> tuple[bool, set[str]]:
-    tree = ast.parse(path.read_text())
-    imports_run_world = any(
-        isinstance(node, ast.ImportFrom)
-        and node.module == "factorylab.runtime.loop"
-        and any(alias.name == "run_world" for alias in node.names)
-        for node in ast.walk(tree)
-    )
-    return imports_run_world, _world_functions(tree)
+def _fixture_runs_world(fixturedef, world_functions_of) -> bool:
+    """Whether a fixture defined under ``tests/`` runs a world when it is set up."""
+    func = inspect.unwrap(getattr(fixturedef, "func", None) or (lambda: None))
+    code = getattr(func, "__code__", None)
+    if code is None:
+        return False
+    path = Path(code.co_filename).resolve()
+    if not path.is_relative_to(_TESTS_ROOT):
+        return False
+    return func.__name__ in world_functions_of(path)
+
+
+def _shares_a_module_fixture(item) -> bool:
+    """Whether this test uses a class-, module- or package-scoped fixture defined under
+    ``tests/``: something built once and read by several tests of its module."""
+    info = getattr(item, "_fixtureinfo", None)
+    for definitions in (info.name2fixturedefs.values() if info is not None else ()):
+        for definition in definitions:
+            code = getattr(inspect.unwrap(getattr(definition, "func", None)
+                                          or (lambda: None)), "__code__", None)
+            if (definition.scope in ("class", "module", "package") and code is not None
+                    and Path(code.co_filename).resolve().is_relative_to(_TESTS_ROOT)):
+                return True
+    return False
+
+
+def _world_fixtures(item, world_functions_of) -> list:
+    """The fixtures this test uses whose setup runs a world."""
+    info = getattr(item, "_fixtureinfo", None)
+    definitions = info.name2fixturedefs if info is not None else {}
+    return [definition for name in getattr(item, "fixturenames", ())
+            for definition in definitions.get(name, ())
+            if _fixture_runs_world(definition, world_functions_of)]
+
+
+def _runs_world(item, world_functions_of, world_fixtures) -> bool:
+    """The static per-test read: its body, a helper of its module, or a fixture it uses."""
+    if _SHARED_WORLD_FIXTURES & set(getattr(item, "fixturenames", ())):
+        return True
+    name = getattr(item, "originalname", None) or item.name.split("[")[0]
+    return name in world_functions_of(Path(item.path)) or bool(world_fixtures)
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items):
-    """Partition collected tests into tiers without changing selection or existing markers.
+    """Partition collected tests into tiers, one test at a time.
 
-    A test is ``gate`` when it is marked so (or ``world``), when its module imports
-    ``run_world``, when it uses a shared scripted run, or when its body, a helper in
-    its module, or a fixture in its module runs a world (``Runtime`` with a nonzero
-    events budget, ``rt.run()``, ``run_world``, or the CLI's ``run``/``resume``).
-    Everything else that is not ``network`` or ``slow`` is ``check``. The static read
-    can miss a world; the check-tier time limit below catches what it misses.
+    A test is ``gate`` when the test itself (or its class) is marked ``gate`` (or
+    ``world``), when it uses a shared scripted run, or when its body, a helper in its
+    module, or a fixture it uses runs a world (``rt.run()``, ``run_world``, or the CLI's
+    ``run``/``resume``). A test marked ``check`` is ``check``. Everything else that is
+    not ``network`` or ``slow`` is ``check``.
+
+    A gate test that shares a class- or module-scoped fixture of ``tests/`` (a world, a
+    rendered corpus) is grouped with its module (``xdist_group``; ``--dist loadgroup`` in
+    pyproject): the module runs on one worker, so what it shares is built once, never
+    once per worker.
+
+    A module's ``pytestmark = gate`` does not make every test in it gate: it is removed
+    and each test is read on its own, so the unit tests beside a world test stay in the
+    inner loop. A module whose every test shares a setup over the check limit (an
+    autouse module fixture) says so with ``GATE_MODULE = "<why>"``: all its tests are
+    gate. The static read can miss a world; the check-tier CPU limit below catches
+    what it misses.
     """
-    modules = {}
+    facts: dict[Path, set[str]] = {}
+
+    def world_functions_of(path: Path) -> set[str]:
+        path = path.resolve()
+        if path not in facts:
+            facts[path] = set()  # an import cycle reads this module as world-free
+            facts[path] = _world_functions(ast.parse(path.read_text()), world_functions_of)
+        return facts[path]
+
+    stripped = set()
     for item in items:
-        path = Path(item.path)
-        if path not in modules:
-            modules[path] = _module_facts(path)
-        imports_run_world, world_functions = modules[path]
+        module = item.getparent(pytest.Module)
+        if module is not None and id(module) not in stripped:
+            stripped.add(id(module))
+            module.own_markers[:] = [m for m in module.own_markers
+                                     if m.name not in _GATE_MARKS]
+    for item in items:
         if any(item.get_closest_marker(m) for m in ("network", "slow")):
             continue
-        fixtures = set(getattr(item, "fixturenames", ()))
-        name = getattr(item, "originalname", None) or item.name.split("[")[0]
-        gate = (bool(item.get_closest_marker("gate") or item.get_closest_marker("world"))
-                or imports_run_world
-                or bool(_SHARED_WORLD_FIXTURES & fixtures)
-                or name in world_functions
-                or bool(world_functions & fixtures))
+        world_fixtures = _world_fixtures(item, world_functions_of)
+        if (any(item.get_closest_marker(m) for m in _GATE_MARKS)
+                or getattr(getattr(item, "module", None), "GATE_MODULE", None)):
+            gate = True
+        elif item.get_closest_marker("check"):
+            gate = False
+        else:
+            gate = _runs_world(item, world_functions_of, world_fixtures)
         if gate:
             item.add_marker(pytest.mark.gate)
             item.add_marker(pytest.mark.world)
+            if _shares_a_module_fixture(item):
+                item.add_marker(pytest.mark.xdist_group(item.nodeid.split("::", 1)[0]))
         else:
             item.add_marker(pytest.mark.check)
             item.add_marker(pytest.mark.fast)
 
 
-def _check_limit_s() -> float | None:
-    raw = os.environ.get(CHECK_LIMIT_ENV, "").strip()
+def _seconds_from_env(name: str, default: float) -> float | None:
+    raw = os.environ.get(name, "").strip()
     if not raw:
-        return CHECK_LIMIT_DEFAULT_S
+        return default
     if raw.lower() in ("0", "off", "none"):
         return None
     return float(raw)
 
 
-@pytest.hookimpl(hookwrapper=True)
+def _check_limit_problem(cpu: dict[str, float], wall: dict[str, float],
+                         limit_s: float | None) -> str | None:
+    """Why a passing check-tier test breaks the tier's limits, or None if it does not.
+
+    ``cpu`` and ``wall`` map a phase to its seconds; setup and call are charged
+    together, so a world a fixture runs is the test's world.
+    """
+    if limit_s is None:
+        return None
+    cpu_s = cpu.get("setup", 0.0) + cpu.get("call", 0.0)
+    wall_s = wall.get("setup", 0.0) + wall.get("call", 0.0)
+    if cpu_s > limit_s:
+        return f"used {cpu_s:.2f}s of CPU (limit {limit_s:.1f}s)"
+    if wall_s > CHECK_WALL_CEILING_S:
+        return f"took {wall_s:.2f}s of wall time (ceiling {CHECK_WALL_CEILING_S:.0f}s)"
+    return None
+
+
+def _files_over_budget(cpu_by_file: dict[str, float], budget_s: float | None,
+                       exceptions: dict[str, str]) -> dict[str, float]:
+    """The gate files whose serial CPU is over the budget and not excepted by name."""
+    if budget_s is None:
+        return {}
+    return {path: s for path, s in cpu_by_file.items()
+            if s > budget_s and path not in exceptions}
+
+
+_PHASE_CPU = pytest.StashKey[dict]()
+_PHASE_WALL = pytest.StashKey[dict]()
+
+
+def _cpu_s() -> float:
+    """This process's CPU, plus that of every child it has waited for."""
+    own = resource.getrusage(resource.RUSAGE_SELF)
+    children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
+
+
+#: Whether a world event was stepped during this test's setup or call.
+_STEPPED_A_WORLD = pytest.StashKey[bool]()
+
+
+class _WorldGuard:
+    """Records, per test, whether a world stepped an event during its setup or call.
+
+    Every world, whatever starts it (``run_world``, ``Runtime.run``, a resume's replay,
+    the CLI or an operator script in process), steps each event through
+    ``Runtime._process_event``: for this session that method is wrapped to mark the
+    test whose setup or call is running. The static classifier reads source and can
+    miss a world behind a wrapper; this reads what ran. It lives in test code only:
+    the class is patched for the session and put back at its end.
+    """
+
+    def __init__(self):
+        self.current = None  # the item whose setup or call is running, or None
+        self.original = None
+
+    def pytest_sessionstart(self, session):
+        from factorylab.runtime import loop
+
+        self.original = original = loop.Runtime._process_event
+        guard = self
+
+        def stepping(rt, event):
+            if guard.current is not None:
+                guard.current.stash[_STEPPED_A_WORLD] = True
+            return original(rt, event)
+
+        loop.Runtime._process_event = stepping
+
+    def pytest_sessionfinish(self, session):
+        from factorylab.runtime import loop
+
+        if self.original is not None:
+            loop.Runtime._process_event = self.original
+
+
+def _stepped_a_world_problem(item) -> str | None:
+    """Why a check-tier test broke the tier's rule that it runs no world, or None."""
+    if item.stash.get(_STEPPED_A_WORLD, False):
+        return "stepped a world event"
+    return None
+
+
+def _measured(item, when):
+    guard = item.config.pluginmanager.get_plugin("factorylab-world-guard")
+    start = _cpu_s()
+    if guard is not None and when in ("setup", "call"):
+        guard.current = item
+    try:
+        return (yield)
+    finally:
+        if guard is not None:
+            guard.current = None
+        item.stash.setdefault(_PHASE_CPU, {})[when] = _cpu_s() - start
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item):
+    return (yield from _measured(item, "setup"))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    return (yield from _measured(item, "call"))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item):
+    return (yield from _measured(item, "teardown"))
+
+
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
-    """A ``check`` test that runs longer than the limit fails, naming the fix."""
-    outcome = yield
-    report = outcome.get_result()
-    limit = _check_limit_s()
-    if (limit is None or report.when != "call" or not report.passed
-            or item.get_closest_marker("check") is None or report.duration <= limit):
-        return
-    report.outcome = "failed"
-    report.longrepr = (
-        f"{item.nodeid} is in the check tier but its call took {report.duration:.2f}s "
-        f"(limit {limit:.1f}s). The check tier is the inner loop and runs no world: mark "
-        "this test @pytest.mark.gate (or make it faster). On a slow machine raise the "
-        f"limit with {CHECK_LIMIT_ENV}=<seconds>, or disable it with {CHECK_LIMIT_ENV}=off.")
+    """Every report carries its phase's CPU and its tier; a ``check`` test whose setup
+    and call together are over the limits fails, naming the fix.
+
+    Setup counts: a world a fixture runs is the test's world. A module- or class-scoped
+    fixture charges the first test that sets it up, which is the one to mark gate.
+    """
+    report = yield
+    report.factorylab_cpu_s = item.stash.get(_PHASE_CPU, {}).get(call.when, 0.0)
+    item.stash.setdefault(_PHASE_WALL, {})[call.when] = report.duration
+    report.factorylab_tier = ("gate" if item.get_closest_marker("gate")
+                              else "check" if item.get_closest_marker("check") else None)
+    if report.when != "call" or not report.passed or report.factorylab_tier != "check":
+        return report
+    problem = _stepped_a_world_problem(item) or _check_limit_problem(
+        item.stash[_PHASE_CPU], item.stash[_PHASE_WALL],
+        _seconds_from_env(CHECK_LIMIT_ENV, CHECK_LIMIT_DEFAULT_S))
+    if problem is not None:
+        report.outcome = "failed"
+        report.longrepr = (
+            f"{item.nodeid} is in the check tier but its setup and call {problem}. The check tier "
+            "is the inner loop and runs no world: mark this test @pytest.mark.gate (or "
+            f"make it faster). Raise the CPU limit with {CHECK_LIMIT_ENV}=<seconds>, or "
+            f"disable both limits with {CHECK_LIMIT_ENV}=off.")
+    return report
+
+
+class _GateBudget:
+    """Sums each gate file's serial CPU from the reports and fails a run whose file is
+    over the budget: a slow world is shrunk, shared or excepted by name, never let creep.
+    """
+
+    def __init__(self):
+        self.cpu: dict[str, float] = {}
+        self.wall: dict[str, float] = {}
+        self.over: dict[str, float] = {}
+
+    def pytest_runtest_logreport(self, report):
+        if getattr(report, "factorylab_tier", None) != "gate":
+            return
+        path = report.nodeid.split("::", 1)[0]
+        self.cpu[path] = self.cpu.get(path, 0.0) + (report.factorylab_cpu_s or 0.0)
+        self.wall[path] = self.wall.get(path, 0.0) + report.duration
+
+    def pytest_sessionfinish(self, session):
+        self.over = _files_over_budget(
+            self.cpu, _seconds_from_env(GATE_FILE_BUDGET_ENV, GATE_FILE_BUDGET_DEFAULT_S),
+            GATE_FILE_BUDGET_EXCEPTIONS)
+        if self.over and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    def pytest_terminal_summary(self, terminalreporter):
+        if not self.cpu:
+            return
+        write = terminalreporter.write_line
+        terminalreporter.section("gate files by serial CPU")
+        for path, cpu in sorted(self.cpu.items(), key=lambda kv: -kv[1])[:15]:
+            note = " (excepted)" if path in GATE_FILE_BUDGET_EXCEPTIONS else ""
+            write(f"{cpu:8.1f}s cpu {self.wall[path]:8.1f}s wall  {path}{note}")
+        write(f"{sum(self.cpu.values()):8.1f}s cpu {sum(self.wall.values()):8.1f}s wall  "
+              f"all {len(self.cpu)} gate files")
+        for path, cpu in sorted(self.over.items()):
+            write(f"FAILED gate budget: {path} used {cpu:.1f}s of CPU, over the "
+                  f"{GATE_FILE_BUDGET_ENV} budget; shrink or share its world, or list it "
+                  "in GATE_FILE_BUDGET_EXCEPTIONS with the reason", red=True)
+
+
+def pytest_configure(config):
+    # Every process that runs tests watches its worlds.
+    config.pluginmanager.register(_WorldGuard(), "factorylab-world-guard")
+    # Only the process that sees every report judges the budget: the controller under
+    # xdist, or the one process without it.
+    if not hasattr(config, "workerinput"):
+        config.pluginmanager.register(_GateBudget(), "factorylab-gate-budget")
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
     """Return a scripted-world runtime with no ledger file, no network and no credentials."""
     manifest = load_manifest("scripted")
     if live:
-        manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"),
-                           drip=None)
+        manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=balance,
-                   ledger_path=None, drip=False, router_gamma=.1,
+                   ledger_path=None, router_gamma=.1,
                    exchange=FakeExchange(), provider=ScriptedProvider(),
                    clock_source=clock_source)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _jail_probed_once():
+    """The jail probe runs once per test process: whether confined code can run is a
+    fact about this host, and each probe starts a jailed interpreter (about 40 ms, three
+    per ``Runtime`` built, most of a unit test's cost).
+
+    The kept answer is the real probe's, on the host's own seams. A test that replaces
+    ``shutil.which`` or ``subprocess.Popen`` (a jail missing or unable to start) gets a
+    fresh probe through its replacement, and one that patches ``jail_probe`` itself
+    replaces this for its own duration (``jail_available`` reads it at call time).
+    """
+    import shutil
+
+    from factorylab.cortex import sandbox
+    from factorylab.runtime import loop
+
+    real, answers = sandbox.jail_probe, []
+    seams = (shutil.which, sandbox.subprocess.Popen)
+
+    def probed():
+        if (shutil.which, sandbox.subprocess.Popen) != seams:
+            return real()
+        if not answers:
+            answers.append(real())
+        return answers[0]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sandbox, "jail_probe", probed)
+        patch.setattr(loop, "jail_probe", probed)
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -344,3 +709,235 @@ def _forget_in_process_kills():
     witness._killed_here.clear()
     yield
     witness._killed_here.clear()
+
+
+@pytest.fixture(autouse=True)
+def _capital_loop_locks_stay_in_tmp(monkeypatch, tmp_path_factory):
+    """No test can touch the operator's real capital-loop lock or last-run record.
+
+    ``ReserveLock`` without a ``lock_dir`` resolves ``default_lock_dir()``, the operator
+    account's ``~/.factorylab/capital-loop``, which holds the live reserve's record. Every
+    test gets its own temporary directory there instead, made only if a test asks.
+    """
+    from factorylab.runtime import capital_loop
+
+    made = []
+
+    def temporary():
+        if not made:
+            made.append(tmp_path_factory.mktemp("capital-loop-locks"))
+        return made[0]
+
+    monkeypatch.setattr(capital_loop, "default_lock_dir", temporary)
+
+
+@pytest.fixture
+def write_ahead(monkeypatch):
+    """A real write-ahead guard made the default of every X402Client and X402Provider.
+
+    Production signs an EIP-3009 authorization only through
+    ``x402.sign_transfer_authorization`` with a guard, and every signer is handed one
+    (``ReserveGuard``). A test that signs asks for this fixture: its clients get a real
+    ``ReserveGuard``, whose lock and record live in the test's temporary lock directory
+    (``_capital_loop_locks_stay_in_tmp``), so the test exercises the same chokepoint.
+    """
+    from factorylab.runtime.capital_loop import ReserveGuard
+    from factorylab.world import market, x402
+
+    default = ReserveGuard("test")
+    for cls in (x402.X402Client, market.X402Provider):
+        def init(self, *args, _original=cls.__init__, guard=None, **kwargs):
+            _original(self, *args, guard=guard if guard is not None else default, **kwargs)
+
+        monkeypatch.setattr(cls, "__init__", init)
+    # These tests' fake wires answer only the calls they were written for; the chain
+    # head the chokepoint records as start_block is a fixed block here. The head read
+    # itself is tested where it matters (tests/world/test_signing_chokepoint.py).
+    monkeypatch.setattr(x402.X402Client, "chain_head", lambda self: 1)
+    return default
+
+
+@pytest.fixture
+def operator_lock_dir():
+    """The real ``default_lock_dir`` the autouse fixture above replaces: call it only to
+    compute a path, never to lock anything there."""
+    return operator_default_lock_dir
+
+
+# ---- No test touches the network
+
+
+class NetworkForbidden(RuntimeError):
+    """A test tried to reach a non-local host; it must use a fake (or be marked
+    ``network``, which keeps it out of the check and gate tiers)."""
+
+
+#: Hosts a test may reach: this machine only (a jail or a local server may use them).
+_LOCAL_HOSTS = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+
+
+def _local_host(host) -> bool:
+    import ipaddress
+
+    if host in (None, "", b""):
+        return True
+    if isinstance(host, bytes):
+        host = host.decode(errors="replace")
+    host = str(host).strip("[]").lower()
+    if host in _LOCAL_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False  # a name that is not this machine's is resolved over the network
+
+
+def _ip_literal(host) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(str(host).strip("[]").split("%", 1)[0])
+        return True
+    except ValueError:
+        return False
+
+
+def _url_host(url) -> str | None:
+    from urllib.parse import urlsplit
+
+    return urlsplit(getattr(url, "full_url", url)).hostname
+
+
+@pytest.fixture(autouse=True)
+def _no_network(request, monkeypatch):
+    """Every outbound network path raises ``NetworkForbidden``, naming what it reached.
+
+    Covers ``socket.getaddrinfo`` (a DNS lookup is already traffic),
+    ``socket.socket.connect``/``connect_ex``, a datagram's ``sendto``/``sendmsg`` to an
+    address, and ``socket.create_connection`` (loopback and unix sockets allowed),
+    ``urllib.request.urlopen`` and every ``OpenerDirector.open``, which the project's
+    own seams ``x402.http_request`` and ``polymarket.http_get_json`` both open through
+    (a test that fakes the opener beneath a seam reaches nothing, and is not stopped).
+    Each attempt is also remembered and fails the test at teardown, so code that
+    catches the error (a rail that turns any transport failure into a retry) cannot
+    hide it.
+
+    Isolation covers this test process and the known subprocess seams of
+    ``factorylab/`` and ``scripts/``, whose children the in-process patches cannot
+    reach:
+
+    * ``connector.resolve_addresses`` resolves a name in a ``python -I`` child: a name
+      that is neither local nor an IP literal is refused (unless the test replaced
+      ``subprocess.run`` with a fake, when nothing leaves);
+    * ``scripts/rehearsal.py`` ``run_command`` and ``scripts/fastloop.py`` ``run_seeds``
+      start child worlds, which may call providers or venues: refused.
+
+    The other subprocesses cannot reach the network: ``cortex.sandbox`` runs population
+    code jailed with no network grant (bubblewrap ``--unshare-all`` on Linux, a
+    sandbox-exec profile without one on macOS), and ``runtime.release`` asks a local
+    ``git rev-parse HEAD``. A subprocess a test starts itself, and OS-level isolation,
+    are out of scope. A test marked ``network`` is left alone; such tests
+    are never in the check or gate tiers.
+    """
+    if request.node.get_closest_marker("network"):
+        yield
+        return
+    import socket
+    import urllib.request
+
+    attempts: list[str] = []
+
+    def forbid(what: str):
+        attempts.append(what)
+        raise NetworkForbidden(f"tests may not touch the network: {what} "
+                               "(use a fake, or mark the test @pytest.mark.network)")
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not _local_host(host):
+            forbid(f"DNS lookup of {host!r}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def guarded(real):
+        def connect(self, address):
+            if self.family in (socket.AF_INET, socket.AF_INET6) and not _local_host(
+                    address[0] if isinstance(address, tuple) else address):
+                forbid(f"socket connect to {address!r}")
+            return real(self, address)
+        return connect
+
+    def remote(sock, address) -> bool:
+        return sock.family in (socket.AF_INET, socket.AF_INET6) and not _local_host(
+            address[0] if isinstance(address, tuple) else address)
+
+    real_sendto, real_sendmsg = socket.socket.sendto, socket.socket.sendmsg
+
+    def sendto(self, data, *args):
+        # sendto(data, address) or sendto(data, flags, address): a datagram needs no
+        # DNS lookup or connect to leave for a numeric address.
+        if args and remote(self, args[-1]):
+            forbid(f"socket sendto {args[-1]!r}")
+        return real_sendto(self, data, *args)
+
+    def sendmsg(self, buffers, *args, **kwargs):
+        address = kwargs.get("address", args[2] if len(args) > 2 else None)
+        if address is not None and remote(self, address):
+            forbid(f"socket sendmsg to {address!r}")
+        return real_sendmsg(self, buffers, *args, **kwargs)
+
+    real_create_connection = socket.create_connection
+
+    def create_connection(address, *args, **kwargs):
+        if not _local_host(address[0]):
+            forbid(f"socket connection to {address!r}")
+        return real_create_connection(address, *args, **kwargs)
+
+    real_open = urllib.request.OpenerDirector.open
+
+    def opener_open(self, fullurl, *args, **kwargs):
+        if not _local_host(_url_host(fullurl)):
+            forbid(f"urllib open of {getattr(fullurl, 'full_url', fullurl)}")
+        return real_open(self, fullurl, *args, **kwargs)
+
+    real_urlopen = urllib.request.urlopen
+
+    def urlopen(url, *args, **kwargs):
+        if not _local_host(_url_host(url)):
+            forbid(f"urlopen of {getattr(url, 'full_url', url)}")
+        return real_urlopen(url, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", guarded(socket.socket.connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded(socket.socket.connect_ex))
+    monkeypatch.setattr(socket.socket, "sendto", sendto)
+    monkeypatch.setattr(socket.socket, "sendmsg", sendmsg)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", opener_open)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    import subprocess
+
+    from factorylab.world import connector
+    from scripts import fastloop, rehearsal
+
+    real_run, real_resolve = subprocess.run, connector.resolve_addresses
+
+    def resolve_addresses(host, *args, **kwargs):
+        # The child does the DNS lookup; only a real subprocess.run starts one.
+        if (subprocess.run is real_run and not _local_host(host)
+                and not _ip_literal(host)):
+            forbid(f"resolve_addresses({host!r}) in a python -I child")
+        return real_resolve(host, *args, **kwargs)
+
+    def child_world(name):
+        def refuse(*args, **kwargs):
+            forbid(f"{name}: a child world outside this guard")
+        return refuse
+
+    monkeypatch.setattr(connector, "resolve_addresses", resolve_addresses)
+    monkeypatch.setattr(rehearsal, "run_command", child_world("scripts/rehearsal.py run_command"))
+    monkeypatch.setattr(fastloop, "run_seeds", child_world("scripts/fastloop.py run_seeds"))
+    yield attempts  # the guard's own tests read (and clear) what it stopped
+    if attempts:
+        pytest.fail("the test touched the network: " + "; ".join(attempts), pytrace=False)

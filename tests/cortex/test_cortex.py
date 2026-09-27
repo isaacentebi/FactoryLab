@@ -78,8 +78,8 @@ def test_request_rejects_author_fields_and_bad_ceiling() -> None:
     # scoring channel is still none of its business, and neither is its parent.
     assert "REQUEST" in text and "YOU" in text
     # R3-E renames the slot to §8's shape: the same four facts under ``request``.
-    assert '"handle": "h1"' in text and "fast" not in text
-    assert '"liable_budget": "self"' in text
+    assert '"handle":"h1"' in text and "fast" not in text
+    assert '"liable_budget":"self"' in text
 
 
 def test_invoke_charges_wallet_exactly_and_parses_output() -> None:

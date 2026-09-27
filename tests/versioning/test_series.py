@@ -175,10 +175,8 @@ def test_empty_summary_is_explicit(immune_params):
     "params",
     [
         {"window_items": 0},
-        {"bins": 0},
         {"k": 0},
         {"k": True},
-        {"bins": 1.5},
         {"tv_threshold": float("nan")},
         {"gap_threshold": 1.1},
         {"tv_threshold": -1},

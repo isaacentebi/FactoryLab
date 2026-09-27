@@ -13,6 +13,7 @@ from urllib import parse
 
 from factorylab.world.metering import BillingUncertain, Infeasible, Metered, MeteredModel
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.openai_wire import response_format
 from factorylab.world.venice import VeniceAndOpenRouter
 from factorylab.world.x402 import (
     BASE_NETWORK,
@@ -109,10 +110,18 @@ def split_model_id(model_id: str) -> tuple[str, str]:
     return seller_root(seller), model
 
 
-def _request(transport: Transport, method: str, url: str, payload=None, headers=None):
+def _request(transport: Transport, method: str, url: str, payload=None, headers=None, *,
+             timeout: float | None = None):
+    """One market HTTP call; ``timeout`` is a completion's own deadline (time audit T8)."""
+    from factorylab.world.openai_wire import CALL_EXPIRED, expired
+
     try:
+        if timeout is not None and transport is http_request:
+            return transport(method, url, payload, headers or {}, timeout=timeout)
         return transport(method, url, payload, headers or {})
-    except Exception:
+    except Exception as exc:
+        if expired(exc):
+            raise X402Error(f"Market HTTP call: {CALL_EXPIRED}") from None
         raise X402Error("Market HTTP transport or response decoding failed") from None
 
 
@@ -268,11 +277,16 @@ class X402Provider:
         extra_body: Mapping[str, Any] | None = None,
         max_request_micro: int = 500_000,
         resolver: Callable[[str], list[str]] | None = None,
+        guard: Any = None,
     ) -> None:
         if type(max_request_micro) is not int or max_request_micro < 0:
             raise X402Error("Request cap must be nonnegative integer micro-USD")
         self.max_request_micro = max_request_micro
         self._private_key = private_key
+        # The write-ahead guard every purchase authorization passes before it is signed
+        # (``x402.sign_transfer_authorization``); the runtime binds a ``ReserveGuard``.
+        # Unbound, this provider quotes and reads but signs nothing.
+        self.guard = guard
         self._transport = transport or http_request
         # How a seller's host name is resolved for the registration-time address check.
         # The live default is the connector's bounded DNS helper; an injected transport
@@ -291,7 +305,8 @@ class X402Provider:
 
     def _client(self, *, record=None) -> X402Client:
         return _ObservedReserveClient(private_key=self._private_key, rpc=self.rpc,
-                                      transport=self._transport, record=record)
+                                      transport=self._transport, record=record,
+                                      guard=self.guard)
 
     def _clean(self, value: Any) -> Any:
         clean = redact(value, (self._private_key or os.environ.get("RESERVE_PRIVATE_KEY", ""),))
@@ -380,11 +395,13 @@ class X402Provider:
 
     def _payload(self, req: ModelRequest) -> tuple[str, dict]:
         root, model = split_model_id(req.model_id)
-        # A seller on the OpenAI wire receives the same JSON-object contract as
-        # every other provider; the quote and the paid call carry identical bodies.
-        # The contract is applied after the seller's extra body, so an accepted
-        # extra body can never pay for a call that did not ask for structured JSON.
-        contract = {"response_format": {"type": "json_object"}} if req.json_object else {}
+        # A seller on the OpenAI wire receives the JSON-object contract of every route
+        # whose manifest contract is the default (a request's schema, if it carries
+        # one, is not sent); the quote and the paid call carry identical bodies. The
+        # contract is applied after the seller's extra body, so an accepted extra
+        # body can never pay for a call that did not ask for structured JSON.
+        wire = response_format(req)
+        contract = {"response_format": wire} if wire is not None else {}
         return root + "/v1/chat/completions", {
             "model": model, "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
@@ -475,7 +492,8 @@ class X402Provider:
                                   if quoted.resource is not None else {}),
                                **({"extensions": quoted.extensions}
                                   if quoted.extensions is not None else {})})
-            if quoted is not None else _request(self._transport, "POST", url, payload)
+            if quoted is not None else _request(self._transport, "POST", url, payload,
+                                                timeout=req.timeout_s)
         )
         if response.status == 402:
             quote = parse_quote(response)
@@ -498,8 +516,15 @@ class X402Provider:
                 return self._paid(req, url, payload, encoded, quote, client, record)
             except PaymentOutcomeUnknown:
                 raise
-            except Exception:
-                raise PaymentOutcomeUnknown("Submitted payment outcome is unknown") from None
+            except Exception as exc:
+                # A paid call that outlived its caller's deadline is still unknown: the
+                # seller may settle the authorization. Only the reason says it expired.
+                from factorylab.world.openai_wire import CALL_EXPIRED
+
+                expired = str(exc).endswith(CALL_EXPIRED)
+                raise PaymentOutcomeUnknown(
+                    "Submitted payment outcome is unknown"
+                    + (f": {CALL_EXPIRED}" if expired else "")) from None
         if not 200 <= response.status < 300:
             raise X402Error(f"Seller request failed (HTTP {response.status})")
         return self._response(req, response, None, None, record)
@@ -509,7 +534,7 @@ class X402Provider:
         """The paid half of ``complete``: one submission and its receipt. Every failure
         raised here happens after the authorization was sent."""
         response = _request(self._transport, "POST", url, payload,
-                            {"PAYMENT-SIGNATURE": encoded})
+                            {"PAYMENT-SIGNATURE": encoded}, timeout=req.timeout_s)
         settlement = None
         header = _header(response.headers, "payment-response", "x-payment-response")
         if header is not None:

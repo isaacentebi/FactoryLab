@@ -1,6 +1,6 @@
 """Supported observations; absent evidence never becomes a score.
 
-The twenty-four seed observations below are the factory's starting measurement
+The seed observations below are the factory's starting measurement
 vocabulary. They are not the whole of it: the population may also register
 its own observation — a pure ``observe(facts) -> float`` over the public
 per-window facts, run in the tool jail — and a card may then name it. Seed and
@@ -23,8 +23,18 @@ if TYPE_CHECKING:
 
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
+# The early-warning summaries are the evaluators' (``runtime.ews``), not a public fact.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices", "series_discarded")
+                         "closed_cards", "closed_prices", "closed_holdouts",
+                         "series_discarded", "ews_variance", "ews_autocorrelation",
+                         # The provider and family names are text; the observations
+                         # below publish their concentration, not the names.
+                         "calls_by_provider", "calls_by_family",
+                         # Wave 16, D5: per-decision relief evidence, filed by handle.
+                         "closed_relief", "paid_off_settled", "paid_off_handles",
+                         # The world's consequence scores in the window: the sampling
+                         # actuator's evidence count, not a window observation.
+                         "consequence_readings")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -52,6 +62,12 @@ class Observation:
     code: str | None = None
     version: int = 1
     provenance: str = "seed"
+    # True for a quantity of one window: an amount it accumulates (a count, a spend, a
+    # PnL) or a ratio to that window's own base (turnover over its starting equity).
+    # Over several windows it is the mean of each window's own value, never a value of
+    # their summed statistics. Rates over summable denominators are measured from the
+    # summed statistics.
+    per_window: bool = False
 
     @property
     def scale(self) -> float:
@@ -77,36 +93,62 @@ def _mean(values: list[float] | list[int]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def _cost_per_return(w: MeasureWindow) -> float | None:
-    """Mean cost of the window's well-formed producer returns, rent included.
+def _concentration(counts: Mapping[str, int] | None) -> float | None:
+    """The largest share of the window's model calls one name took, or None without calls."""
+    total = sum((counts or {}).values())
+    return max(counts.values()) / total if total else None
 
-    Retained-storage rent is cost the window spent without a return to carry
-    it, so it is added to what those returns cost and never counted as one of
-    them: a window paying rent measures a higher cost per return, not a lower
-    one. Rent alone is therefore unmeasurable — a window with no well-formed
-    producer return has no per-return cost, however much storage it paid for.
+
+def _prompt_mean(w: MeasureWindow, key: str) -> float | None:
+    """A prompt byte count per measured prompt; a window with none measured has no mean.
+
+    The denominator is ``prompts``, the invocations whose opening prompt was rendered
+    and measured, not ``invocations``: a request that could not be rendered is an
+    invocation (it failed) but no prompt, and averaging it in as zero bytes would be
+    a byte count nobody sent. A record closed before prompts were measured carries
+    neither ``prompts`` nor prompt bytes: it measured zero prompts, so it adds
+    nothing to either side of the mean, and a selection of such records alone is
+    unmeasured, never a mean of zero.
+    """
+    return _ratio(getattr(w, key, 0) or 0, getattr(w, "prompts", 0) or 0)
+
+
+def _read_mean(w: MeasureWindow) -> float | None:
+    """Reading bytes per invocation whose readings are measured; none measured, no mean.
+
+    The denominator is ``read_measured``. A record closed before readings were
+    measured carries neither it nor reading bytes: its invocations' readings were
+    never metered, so it adds nothing to either side of the mean, and a selection
+    of such records alone is unmeasured, never a mean of zero. A current invocation
+    no one read is a measured zero and counts.
+    """
+    return _ratio(getattr(w, "downstream_read_bytes", 0) or 0,
+                  getattr(w, "read_measured", 0) or 0)
+
+
+def _cost_per_return(w: MeasureWindow) -> float | None:
+    """Mean metered cost of the window's well-formed producer returns, or None without one.
+
+    Every cost here is a debit with a real counterparty (a provider's bill, a
+    seller's price): nothing the wallet did not pay enters it.
     """
     costs = w.costs
     if not costs:
         return None
-    return (sum(costs) + getattr(w, "storage_cost_micro", 0)) / len(costs)
+    return sum(costs) / len(costs)
 
 
 def _cost_per_attempt(w: MeasureWindow) -> float | None:
-    """Mean cost of every invocation the window made, failed ones and rent included.
+    """Mean cost of every invocation the window made, failed ones included.
 
     A tolerated failure is compute the window spent: nine cheap successes and
-    one expensive failure cost what all ten cost, not what the nine did. The
-    live window's per-decision costs already carry retained-storage rent, so
-    it is in the numerator and never a divisor. A closed record keeps no
-    attribution, so it is measured from the window's return samples instead
-    (``charter.measurement``), and a window with no invocation has no cost
-    per attempt.
+    one expensive failure cost what all ten cost, not what the nine did. Guarantees
+    the window's metered compute over its invocations, the two counters every
+    invocation moves together (``compute_spend_micro``, ``invocations``), so a closed
+    record, a scope's facts and a card's response rows give one number (Codex on
+    #152); a window with no invocation has no cost per attempt.
     """
-    decisions = getattr(w, "decisions", None)
-    if not decisions or not w.invocations:
-        return None
-    return sum(d["cost"] for d in decisions.values()) / w.invocations
+    return _ratio(getattr(w, "compute_spend_micro", 0) or 0, w.invocations)
 
 
 def _disagreement(w: MeasureWindow) -> float | None:
@@ -126,33 +168,43 @@ def _verdict_std(w: MeasureWindow) -> float | None:
     return pstdev(values) if values else None
 
 
+def _resolved_verdicts(w: MeasureWindow) -> list[float]:
+    """The verdicts attached to the forecasts the window resolved; a record closed before
+    they were kept has none."""
+    return list(getattr(w, "resolved_verdicts", None) or [])
+
+
 CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "cost_per_return",
-        "Mean cost of well-formed producer returns, including retained-storage rent.",
+        "Mean metered cost of well-formed producer returns.",
         "micro-USD per return",
         _cost_per_return,
         (0.0, 1_000_000.0),
     ),
     Observation(
         "cost_per_attempt",
-        "Mean cost of every selected return, failed ones included, plus retained-storage rent.",
+        "Mean metered cost of every selected return, failed ones included.",
         "micro-USD per attempt",
         _cost_per_attempt,
         (0.0, 1_000_000.0),
     ),
     Observation(
         "well_formed_rate",
-        "Well-formed returns over runtime invocations (excluding votes).",
+        "Well-formed returns over runtime invocations, ballots included.",
         "fraction",
         lambda w: _ratio(w.ok, w.invocations),
         (0.0, 1.0),
     ),
     Observation(
         "forecast_skill",
-        "Mean cumulative consequence skill of evaluators with settlements.",
+        "Mean skill of the forecasts settled: each forecast's score 1 - (q - y)^2 minus "
+        "the same score at its pre-outcome base rate; positive when they beat the base "
+        "rate. A verdict's consequence score is never included.",
         "score difference",
-        lambda w: _mean(w.forecast_skills),
+        # ``fmean``, as a card over closed windows averages the same rows (Codex on #152:
+        # one name, one formula, one number).
+        lambda w: fmean(w.forecast_skills) if w.forecast_skills else None,
         (-1.0, 1.0),
     ),
     Observation(
@@ -161,6 +213,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "ratio",
         lambda w: 0.0 if not w.notional_micro else _ratio(w.notional_micro, w.equity_start_micro),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "noop_share",
@@ -184,6 +237,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.registrations),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "registration_rejections",
@@ -191,6 +245,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.registration_rejections),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "amendments_proposed",
@@ -198,6 +253,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.amendments_proposed),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "amendments_activated",
@@ -205,6 +261,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.amendments_activated),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "verdict_mean",
@@ -220,6 +277,22 @@ CATALOGUE: tuple[Observation, ...] = (
         _verdict_std,
         (0.0, 0.5),
     ),
+    # Codex on #152: the verdict attached to each resolved forecast is its own quantity,
+    # never ``verdict_mean`` under a second formula (rule 3: one name, one formula).
+    Observation(
+        "resolved_verdict_mean",
+        "Mean of the verdict attached to each forecast resolved.",
+        "score",
+        lambda w: fmean(values) if (values := _resolved_verdicts(w)) else None,
+        (0.0, 1.0),
+    ),
+    Observation(
+        "resolved_verdict_std",
+        "Population standard deviation of the verdict attached to each forecast resolved.",
+        "score standard deviation",
+        lambda w: pstdev(values) if (values := _resolved_verdicts(w)) else None,
+        (0.0, 0.5),
+    ),
     Observation(
         "evaluator_disagreement",
         "Mean population std across judges of the same return; "
@@ -230,19 +303,40 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "consequence_paid_off_rate",
-        "Positive outcomes over settled return consequences.",
+        "Positive outcomes over settled return consequences of acting returns (those "
+        "that executed a venue operation or earned); a return that acted on nothing is "
+        "not in it.",
         "fraction",
         lambda w: _ratio(w.consequences_paid_off, w.consequences_settled),
         (0.0, 1.0),
     ),
+    Observation(
+        "non_acting_informative_share",
+        "Returns that executed nothing and named a trade whose world outcome was fixed "
+        "in the window, measured with an informative base-rate key, over all such "
+        "returns whose outcome was fixed (measured, or known absent).",
+        "fraction",
+        lambda w: _ratio(w.non_acting_informative, w.non_acting_outcomes),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "non_acting_paid_off_rate",
+        "Of the informative non-acting outcomes fixed in the window, the share with "
+        "y = 1: a declined trade that would not have beaten its round trip, or a "
+        "refused order that would have.",
+        "fraction",
+        lambda w: _ratio(w.non_acting_paid_off, w.non_acting_informative),
+        (0.0, 1.0),
+    ),
     Observation("fills", "Venue fills processed in the window.", "count",
-                lambda w: float(w.fills), (0.0, 1.0)),
+                lambda w: float(w.fills), (0.0, 1.0), per_window=True),
     Observation(
         "realized_pnl_usd",
         "Realized fill P&L before fees and funding.",
         "USD",
         lambda w: w.realized_pnl_micro / 1_000_000,
         (-1.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "position_concentration",
@@ -303,8 +397,225 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.market_purchases),
         (0.0, 1.0),
+        per_window=True,
+    ),
+    # Essay II.IV: "speed is categorically indistinguishable from a specific approach
+    # to cash burn" (charter audit M6). A clock motion predicts its effect on this, or
+    # on an observation the population registered.
+    # Essay II.III.a, ruling R3, evaluations M2: the early-warning statistics, live. The
+    # full table (every series at k, 2k and 4k windows) is shown to the evaluators;
+    # these two summarise it so a card may price critical slowing down.
+    Observation(
+        "ews_variance",
+        "The largest population variance among the score series (mean verdict, mean "
+        "meta grade, consequence skill, evaluator disagreement), each over its shortest "
+        "complete span of k, 2k or 4k closed windows.",
+        "score variance",
+        lambda w: getattr(w, "ews_variance", None),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "ews_autocorrelation",
+        "The largest centred lag-one autocorrelation among the same score series over "
+        "the same spans.",
+        "correlation",
+        lambda w: getattr(w, "ews_autocorrelation", None),
+        (-1.0, 1.0),
+    ),
+    # Essay II.III: "more evaluators consuming more compute ... than agents engaged in
+    # production". Not enforced: the seat majority is manifest physics, and what share
+    # of compute the evaluators spend is the charter's to price (the #132 review).
+    Observation(
+        "evaluator_compute_share",
+        "Compute the evaluator roles (judges, adversarial judges, every tier of meta) "
+        "spent in the window over all compute spent in it.",
+        "fraction",
+        lambda w: _ratio(getattr(w, "evaluator_spend_micro", 0),
+                         getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1.0),
+    ),
+    # Essay II.IV.c: loops that "share a common medium (e.g., a common foundation model
+    # whose checkpoint releases act as a global forcing function) or a common
+    # infrastructure ... risk entrainment"; governance must "force or incentivize the
+    # randomization of a factory's dependency class" (time audit T15). These say how
+    # concentrated the window's dependencies were, so a card can price it.
+    Observation(
+        "provider_concentration",
+        "The largest share of the window's model calls that one provider served "
+        "(openrouter, venice, x402 sellers, the program jail).",
+        "fraction",
+        lambda w: _concentration(getattr(w, "calls_by_provider", None)),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "family_concentration",
+        "The largest share of the window's model calls made on one foundation model "
+        "family, whichever route served them.",
+        "fraction",
+        lambda w: _concentration(getattr(w, "calls_by_family", None)),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "burn_per_window",
+        "Compute spent in the window: every invocation's metered cost, each a "
+        "debit paid to a real counterparty.",
+        "micro-USD per window",
+        lambda w: float(getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1_000_000.0),
+        per_window=True,
+    ),
+    # Essay II.IV.a: the metrics layer is ceded, and the factory proposes metrics only
+    # on quantities the world publishes. Context size is one: these publish the byte
+    # counts every invocation's ledger row already carries (``sections``), with no
+    # target, threshold or advice attached. Bytes, not provider tokens: the kernel
+    # renders the bytes for every seat alike, while tokenizers differ by family and the
+    # reported usage covers only an invocation's last provider call.
+    Observation(
+        "prompt_bytes",
+        "Mean UTF-8 bytes of the opening prompt rendered for each invocation, every "
+        "section included (the total its ledger row records), over the invocations whose "
+        "prompt was rendered; tool-round continuations are not counted.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "prompt_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "you_bytes",
+        "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "you_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "inputs_bytes",
+        "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "inputs_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "downstream_read_bytes",
+        "INPUTS bytes rendered to the invocations commissioned on a published return "
+        "(judges, adversarial judges, metas, any contract routed on it), summed over the "
+        "window and divided by the window's invocations whose readings are measured; per "
+        "role or assembly, filed under the return's author.",
+        "bytes per return",
+        lambda w: _read_mean(w),
+        (0.0, 1_000_000.0),
     ),
 )
+
+
+#: What each seed's ``measure`` reads from a window, and nothing else. Chapter II
+#: §II.b (physics is enforced, not announced) and §I.b ("the structures of requests
+#: and rewards" are public): the catalogue's input clause is rendered from this
+#: declaration (``charter.measurement.measurement_catalogue``), and a test holds every
+#: calculator to it, so no published description can name an input its calculator
+#: does not read (Codex on #152: ``forecast_skill`` was published as averaging scored
+#: verdicts it never read).
+WINDOW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "cost_per_return": ("costs",),
+    "cost_per_attempt": ("compute_spend_micro", "invocations"),
+    "well_formed_rate": ("ok", "invocations"),
+    "forecast_skill": ("forecast_skills",),
+    "turnover": ("notional_micro", "equity_start_micro"),
+    "noop_share": ("noop_returns", "producer_returns"),
+    "revision_rate": ("revision_returns", "producer_returns"),
+    "registrations": ("registrations",),
+    "registration_rejections": ("registration_rejections",),
+    "amendments_proposed": ("amendments_proposed",),
+    "amendments_activated": ("amendments_activated",),
+    "verdict_mean": ("verdicts",),
+    "verdict_std": ("verdicts",),
+    "resolved_verdict_mean": ("resolved_verdicts",),
+    "resolved_verdict_std": ("resolved_verdicts",),
+    "evaluator_disagreement": ("verdicts",),
+    "consequence_paid_off_rate": ("consequences_paid_off", "consequences_settled"),
+    "non_acting_informative_share": ("non_acting_informative", "non_acting_outcomes"),
+    "non_acting_paid_off_rate": ("non_acting_paid_off", "non_acting_informative"),
+    "fills": ("fills",),
+    "realized_pnl_usd": ("realized_pnl_micro",),
+    "position_concentration": ("max_position_notional_micro", "equity_start_micro"),
+    "exposure_win_rate": ("exposures_won", "exposures_settled"),
+    "meta_verdict_mean": ("meta_verdicts",),
+    "avoidably_unresolved_share": (),
+    "censored_share": ("censored", "outcomes"),
+    "tool_calls": ("tool_calls", "invocations"),
+    "market_purchases": ("market_purchases",),
+    "ews_variance": ("ews_variance",),
+    "ews_autocorrelation": ("ews_autocorrelation",),
+    "evaluator_compute_share": ("evaluator_spend_micro", "compute_spend_micro"),
+    "provider_concentration": ("calls_by_provider",),
+    "family_concentration": ("calls_by_family",),
+    "burn_per_window": ("compute_spend_micro",),
+    "prompt_bytes": ("prompt_bytes", "prompts"),
+    "you_bytes": ("you_bytes", "prompts"),
+    "inputs_bytes": ("inputs_bytes", "prompts"),
+    "downstream_read_bytes": ("downstream_read_bytes", "read_measured"),
+})
+#: What each window field a seed reads is, as the catalogue's input clause states it:
+#: where the runtime counts it, never what it is for.
+WINDOW_FIELD_MEANINGS: Mapping[str, str] = MappingProxyType({
+    "costs": "the metered cost of each well-formed producer return",
+    "invocations": "the invocations the window made",
+    "ok": "the well-formed returns among them",
+    "forecast_skills": "the skill of each forecast the window settled, in settlement "
+                       "order: its score 1 - (q - y)^2 minus the same score at its "
+                       "pre-outcome prevalence base rate. Settled forecasts only; no "
+                       "verdict's consequence score",
+    "notional_micro": "the filled notional, size times price, summed",
+    "equity_start_micro": "the venue equity at the window's start, or none when the venue "
+                          "did not state it",
+    "noop_returns": "the producer returns declaring action noop or hold",
+    "producer_returns": "the producer returns published",
+    "revision_returns": "the producer returns whose registration was accepted, plus the "
+                        "amendments activated",
+    "registrations": "the accepted population registrations, amendment proposals included",
+    "registration_rejections": "the rejected population registration proposals",
+    "amendments_proposed": "the amendments admitted to the proposal book",
+    "amendments_activated": "the amendments activated",
+    "verdicts": "the raw evaluator verdicts delivered, by judged return and judge",
+    "resolved_verdicts": "the verdict attached to each forecast the window resolved, in "
+                         "resolution order",
+    "consequences_paid_off": "the settled return_paid_off consequences with y = 1",
+    "consequences_settled": "the settled return_paid_off consequences of acting returns",
+    "non_acting_informative": "the non-acting outcomes fixed with an informative "
+                              "base-rate key",
+    "non_acting_outcomes": "the outcomes fixed for returns that executed nothing and "
+                           "named a trade (measured, or known absent)",
+    "non_acting_paid_off": "the informative non-acting outcomes with y = 1",
+    "fills": "the venue fills processed",
+    "realized_pnl_micro": "the realized fill P&L before fees and funding",
+    "max_position_notional_micro": "the peak absolute marked notional on one coin",
+    "exposures_won": "the antagonist exposure settlements won",
+    "exposures_settled": "the antagonist exposures settled",
+    "meta_verdicts": "the raw meta verdicts delivered, every tier",
+    "censored": "the settlements the window resolved censored, with no measured "
+                "outcome: an UNRESOLVED_PRICED settlement included",
+    "outcomes": "every settlement the window resolved, settled or censored: each "
+                "card-priced settlement, each forecast, and each judgement, exposure, "
+                "counter, evaluation or composed settlement censored for want of an "
+                "outcome",
+    "tool_calls": "the tool calls attempted, failures included",
+    "market_purchases": "the paid x402 requests with a recorded result",
+    "ews_variance": "the early-warning variance statistic at the window's close",
+    "ews_autocorrelation": "the early-warning lag-one autocorrelation at the window's close",
+    "evaluator_spend_micro": "the compute the evaluator roles spent",
+    "compute_spend_micro": "every invocation's metered cost, summed",
+    "calls_by_provider": "the model calls, counted by the provider that served them",
+    "calls_by_family": "the model calls, counted by foundation model family",
+    "prompt_bytes": "the UTF-8 bytes of the opening prompts rendered, summed",
+    "you_bytes": "the UTF-8 bytes of their YOU sections, summed",
+    "inputs_bytes": "the UTF-8 bytes of their INPUTS sections, summed",
+    "prompts": "the invocations whose opening prompt was rendered",
+    "downstream_read_bytes": "the INPUTS bytes rendered to the invocations commissioned "
+                             "on a published return, summed",
+    "read_measured": "the invocations whose readings are metered",
+})
 
 
 SEED_IDS = frozenset(o.id for o in CATALOGUE)
@@ -668,9 +979,18 @@ class ObservationBook:
         """
         if not observation.registered:
             return observation.measure(window)
-        if self._run is None:
+        return self.value_of_facts(observation, window_facts(window))
+
+    def value_of_facts(self, observation: Observation, facts: dict) -> float | None:
+        """Run a registered observation on facts already made public, with the same range rule.
+
+        The facts are the caller's: a closed window's (``window_facts``) or one
+        scope's share of them (``charter.measurement.scope_facts``). Either way the
+        code is handed numbers and never the identity they were filed under.
+        """
+        if not observation.registered or self._run is None:
             return None
-        value, _error = self._run(observation.code, window_facts(window))
+        value, _error = self._run(observation.code, facts)
         if value is None:
             return None
         lo, hi = observation.unit_range

@@ -40,7 +40,6 @@ class RunStats:
     forecasts_sealed: int = 0
     forecasts_settled: int = 0
     timeouts: int = 0
-    upward_releases: int = 0
     reserve_windows: int = 0
     exclusions: int = 0
     registrations_accepted: int = 0
@@ -61,6 +60,16 @@ class RunStats:
     transfer_intents: int = 0
     exposures_settled: int = 0
     exposures_won: int = 0
+    # Draws whose every eligible reader was barred by family (``route.barred``).
+    route_barred: int = 0
+    # Adversarial judges' counter-verdicts the world scored (evaluations M1).
+    counters_settled: int = 0
+    # Chaos faults injected, by kind (``runtime.chaos``; essay II.III.b).
+    chaos_faults: dict[str, int] = field(default_factory=dict)
+    # The early-warning record (essay II.III.a; ruling R3): each closed window's
+    # score profile, the last 4k of them, and the statistics of the last close.
+    ews_history: list[dict] = field(default_factory=list)
+    early_warning: dict[str, Any] = field(default_factory=dict)
     price_updates: int = 0
     price_skipped: int = 0
     penalized_settlements: int = 0
@@ -81,7 +90,13 @@ class RunStats:
     # settled consequences delivered per assembly (the novelty reserve's trials)
     consequences_by_assembly: dict[str, int] = field(default_factory=dict)
     registered_window: dict[str, int] = field(default_factory=dict)  # assembly -> window index
+    # assembly -> the world tick it registered at: where its patience counts from (T5)
+    registered_tick: dict[str, int] = field(default_factory=dict)
+    # The immune organ's retained window records (``timing.min_ratio × immune.k``),
+    # the live versioning (``versioning.live``) and the thrash price the last close set.
     immune_windows: list[dict] = field(default_factory=list)
+    versions: dict[str, Any] = field(default_factory=dict)
+    thrash: dict[str, Any] = field(default_factory=dict)
     pathologies: dict[str, bool] = field(default_factory=lambda: {
         "stable_failure": False, "thrash": False, "learning_death": False,
     })
@@ -98,6 +113,23 @@ def _equity_or_none(exchange: Any) -> str | None:
     try:
         return str(exchange.account().equity_usd)
     except RuntimeError:
+        return None
+
+
+def _vault_equity_or_none(exchange: Any) -> str | None:
+    """This account's equity across its vaults: held at the venue, not in its account.
+
+    ``exchange_equity_usd`` is the trading account alone, so money moved into a vault
+    would read there as a loss; this is the figure beside it. ``None`` when the venue
+    has no vaults to read or would not say.
+    """
+    read = getattr(exchange, "vault_equities", None)
+    if read is None:
+        return None
+    try:
+        return str(sum((Decimal(str(p["equity_usd"])) for p in read()["positions"]),
+                       Decimal(0)))
+    except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
         return None
 
 
@@ -166,7 +198,6 @@ class SummaryMixin:
             "world": self.m.name,
             "manifest_hash": self.m.manifest_hash(),
             "seed": self.seed,
-            "drip": self.use_drip,
             "terminated": self.termination.final,
             "termination_reason": self.termination.reason,
             "seal_key_released": self.ledger.seal_key_released(),
@@ -180,9 +211,11 @@ class SummaryMixin:
             "ledger_verify": self.ledger.verify(),
             "outstanding_decisions": len(self.queue.outstanding()),
             "execution": {
-                "intents": len(self.order_intents),
+                # A released decision's intents are counts (wave 17b).
+                "intents": len(self.order_intents) + self.released_intents.get("intents", 0),
                 "statuses": {status: sum(i["result"]["status"] == status
                                          for i in self.order_intents.values())
+                             + self.released_intents.get(f"status:{status}", 0)
                              for status in ("filled", "resting", "cancelled",
                                             "rejected", "uncertain")},
                 "polled_fills": self.stats.fills,
@@ -190,6 +223,7 @@ class SummaryMixin:
                 "positions_closed_at_exit": False,
             },
             "exchange_equity_usd": _equity_or_none(self.exchange.target),
+            "vault_equity_usd": _vault_equity_or_none(self.exchange.target),
             "live": self.live,
             "evaluation_boundary": "registered accepts → selected emits → return channel",
             "charter_edition": self.charter.edition,

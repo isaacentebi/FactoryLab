@@ -61,7 +61,9 @@ def test_assembly_max_tokens_uses_provider_native_allowance_when_unspecified() -
 
         assert rejected == []
         assert accepted[0].max_tokens is None
-    validate_proposal({"kind": "assembly", "max_tokens": None})
+    validate_proposal({"kind": "assembly", "id": "native-budget", "model_id": "ds-flash",
+                       "system_prompt": "Use the available context.", "accepts": ["Tick"],
+                       "max_tokens": None})
 
 
 def test_assembly_max_tokens_has_no_arbitrary_upper_bound() -> None:
@@ -80,7 +82,9 @@ def test_assembly_max_tokens_has_no_arbitrary_upper_bound() -> None:
 
     assert rejected == []
     assert [proposal.max_tokens for proposal in accepted] == [8192, 32768]
-    validate_proposal({"kind": "assembly", "max_tokens": 32768})
+    validate_proposal({"kind": "assembly", "id": "very-large-context", "model_id": "ds-flash",
+                       "system_prompt": "Use the available context.", "accepts": ["Tick"],
+                       "max_tokens": 32768})
 
 
 @pytest.mark.parametrize("max_tokens", [15, -1, True, 16.0, "8192"])

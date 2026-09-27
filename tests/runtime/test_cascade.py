@@ -1,31 +1,25 @@
-"""Cascade windows, restated for R3-D: separation is time and completed evidence.
+"""Cascade windows: separation is time and completed evidence, counted in world ticks.
 
-Every test here used to count arrivals, because the gate did. GPT-6 Pro's third
-reading calls that a launch blocker (§3: "three messages arriving together
-satisfy the separation") and §6.C replaces it with a duration. The properties
-being pinned are the same three: a window releases exactly one representative
-carrying its window's evidence, the jitter is deterministic, bounded and never
-redrawn mid-window, and tiers never mix. What changed is the unit.
+Every test here once counted arrivals, because the gate did; then durations in wall
+nanoseconds at the declared tick. Chapter II §IV.c asks for "a minimum cascade
+control ratio (e.g., 3:1+) before returning verdicts into the next evaluatory
+tier", jittered, and time audit T10 asks that the ratio be taken against the
+measured period of the loop the window gates, in the one clock domain (T3). The
+properties pinned are the same three: a window releases exactly one
+representative carrying its window's evidence, the jitter is deterministic,
+bounded, continuous and never redrawn mid-window, and tiers never mix.
 """
 
-import random
-from math import ceil, floor
+from math import ceil
 
 import pytest
 
 from factorylab.kernel.events import Event, EventKind
-from factorylab.runtime.cascade import (
-    CascadeGate,
-    event_tier,
-    release_threshold,
-    release_window_ns,
-)
-
-# One observation window, in nanoseconds: the unit a tier's duration is counted in.
-WINDOW = 10
+from factorylab.runtime.cascade import CascadeGate, event_tier, release_window
+from factorylab.runtime.clockwork import jitter_draw
 
 
-def arrival(index, *, tier=1, score=0.5, ts_ns=None):
+def arrival(index, *, tier=1, score=0.5):
     payload = (
         {"evaluator_handle": f"handle-{index}", "verdict": score, "rationale": "reason"}
         if tier == 1
@@ -34,7 +28,7 @@ def arrival(index, *, tier=1, score=0.5, ts_ns=None):
     return Event(
         f"event-{index}",
         EventKind.VERDICT if tier == 1 else EventKind.META_VERDICT,
-        index if ts_ns is None else ts_ns,
+        index,
         payload,
         "runtime",
     )
@@ -42,30 +36,29 @@ def arrival(index, *, tier=1, score=0.5, ts_ns=None):
 
 @pytest.mark.parametrize("tier", [1, 2, 3, 20])
 def test_latest_representative_contains_exact_window_without_mutating_inputs(tier):
-    window_ns = release_window_ns(3, 0, 0.0, WINDOW)
-    gate = CascadeGate(window_ns, opened_ns=0)
-    # Three arrivals spread across the window's duration; the third closes it.
-    events = [arrival(i, tier=tier, score=s, ts_ns=i * (window_ns // 2))
-              for i, s in enumerate([0.1, 0.9, 0.2])]
-    for event in events[:2]:
+    window = release_window(3, 0, 0.0, 2)  # three times a two-tick inner loop
+    assert window == 6
+    gate = CascadeGate(window, opened=0)
+    # Three arrivals spread across the window's ticks; the third closes it.
+    events = [arrival(i, tier=tier, score=s) for i, s in enumerate([0.1, 0.9, 0.2])]
+    for tick, event in zip((0, 3), events[:2], strict=True):
         before = gate
-        gate, released = gate.add(event)
+        gate, released = gate.add(event, now=tick)
         assert released is None
         assert len(gate.arrivals) == len(before.arrivals) + 1
-    next_gate, released = gate.add(events[-1])
+    next_gate, released = gate.add(events[-1], now=6)
     assert next_gate is None
     assert len(gate.arrivals) == 2
     assert event_tier(released) == tier
     assert released.id == events[-1].id
-    assert released.ts_ns == events[-1].ts_ns
     assert released.source == events[-1].source
     assert dict(released.payload) == {
         **events[-1].payload,
         "window": {
             "count": 3,
             "arrivals": 3,
-            "window_ns": window_ns,
-            "elapsed_ns": window_ns,
+            "window_ticks": 6,
+            "elapsed_ticks": 6,
             "mean": pytest.approx(0.4),
             "min": 0.1,
             "max": 0.9,
@@ -75,81 +68,91 @@ def test_latest_representative_contains_exact_window_without_mutating_inputs(tie
     assert all("window" not in e.payload for e in events)
 
 
-@pytest.mark.parametrize("ratio,fraction", [(3, 0), (3, 0.2), (5, 0.5), (10, 1)])
-def test_jitter_is_deterministic_bounded_and_never_redrawn_midwindow(ratio, fraction):
-    """The same property as before, over durations: a window's length is drawn once."""
+@pytest.mark.parametrize("ratio,fraction,inner", [(3, 0, 1), (3, 0.2, 1), (5, 0.5, 2),
+                                                  (10, 1, 3)])
+def test_jitter_is_deterministic_bounded_continuous_and_never_redrawn_midwindow(
+        ratio, fraction, inner):
+    """A window's length is drawn once, from the tier's own stream, and only lengthens."""
     def run(seed):
-        rng = random.Random(seed)
         gate = None
-        sizes = []
+        windows = []
         opened_at = 0
         handles = []
-        for i in range(1000):
+        for tick in range(2000):
             if gate is None:
-                gate = CascadeGate(release_window_ns(ratio, fraction, rng.random(), WINDOW),
-                                   opened_ns=i * WINDOW)
-                opened_at = i
-            window_ns = gate.window_ns
-            gate, released = gate.add(arrival(i, ts_ns=i * WINDOW))
+                drawn = release_window(ratio, fraction,
+                                       jitter_draw(seed, "cascade:1", len(windows) + 1), inner)
+                gate = CascadeGate(drawn, opened=tick)
+                opened_at = tick
+            window = gate.window
+            gate, released = gate.add(arrival(tick), now=tick)
             if released is None:
-                assert (i - opened_at) * WINDOW < window_ns
-                assert gate.window_ns == window_ns
+                assert tick - opened_at < window
+                assert gate.window == window
             else:
-                assert (i - opened_at) * WINDOW == window_ns
-                sizes.append(window_ns // WINDOW)
+                assert tick - opened_at == ceil(window)
+                windows.append(window)
                 handles.extend(released.payload["window"]["handles"])
         assert handles == [f"handle-{i}" for i in range(len(handles))]
-        return sizes
+        return windows
 
-    sizes = run(7)
-    assert sizes == run(7)
-    assert all(
-        ratio - floor(ratio * fraction) <= n <= ratio + ceil(ratio * fraction) for n in sizes
-    )
-    assert min(sizes) >= ratio
+    windows = run(7)
+    assert windows == run(7)
+    assert all(ratio * inner <= w <= ratio * inner * (1 + fraction) for w in windows)
     if fraction:
-        assert len(set(sizes)) > 1
-        assert sizes != run(8)
+        assert len(set(windows)) > 5  # continuous, not a two-valued step
+        assert windows != run(8)
     else:
-        assert set(sizes) == {ratio}
+        assert set(windows) == {ratio * inner}
 
 
 def test_distinct_tiers_cannot_share_a_gate():
-    gate, _ = CascadeGate(WINDOW, opened_ns=0).add(arrival(0))
+    gate, _ = CascadeGate(3, opened=0).add(arrival(0), now=0)
     with pytest.raises(ValueError, match="mix tiers"):
-        gate.add(arrival(1, tier=2))
+        gate.add(arrival(1, tier=2), now=1)
     with pytest.raises(ValueError, match="mix tiers"):
-        CascadeGate(WINDOW, 0, (arrival(0), arrival(1, tier=2)))
+        CascadeGate(3, 0, (arrival(0), arrival(1, tier=2)))
     with pytest.raises(ValueError, match="Verdict"):
-        CascadeGate(WINDOW, opened_ns=0).add(Event("tick", EventKind.TICK, 0, {}, "world"))
+        CascadeGate(3, opened=0).add(Event("tick", EventKind.TICK, 0, {}, "world"), now=0)
 
 
 @pytest.mark.parametrize(
-    "ratio,fraction,draw",
+    "ratio,fraction,draw,inner",
     [
-        (1, 0.2, 0.5),
-        (2, 0.2, 0.5),
-        (3.0, 0.2, 0.5),
-        (3, -0.1, 0.5),
-        (3, float("nan"), 0.5),
-        (3, float("inf"), 0.5),
-        (3, 0.2, -0.1),
-        (3, 0.2, 1.0),
-        (3, 0.2, float("nan")),
+        (1, 0.2, 0.5, 1),
+        (2, 0.2, 0.5, 1),
+        (3.0, 0.2, 0.5, 1),
+        (3, -0.1, 0.5, 1),
+        (3, float("nan"), 0.5, 1),
+        (3, float("inf"), 0.5, 1),
+        (3, 0.2, -0.1, 1),
+        (3, 0.2, 1.0, 1),
+        (3, 0.2, float("nan"), 1),
+        (3, 0.2, 0.5, 0),
+        (3, 0.2, 0.5, 1.5),
     ],
 )
-def test_invalid_cadence_is_rejected(ratio, fraction, draw):
+def test_invalid_cadence_is_rejected(ratio, fraction, draw, inner):
     with pytest.raises(ValueError):
-        release_threshold(ratio, fraction, draw)
-    with pytest.raises(ValueError):
-        release_window_ns(ratio, fraction, draw, WINDOW)
+        release_window(ratio, fraction, draw, inner)
 
 
-@pytest.mark.parametrize("window_ns", [0, -1, 3.0])
-def test_invalid_gate_state_is_rejected(window_ns):
+@pytest.mark.parametrize("window", [0, -1, float("nan"), "3"])
+def test_invalid_gate_state_is_rejected(window):
     with pytest.raises(ValueError):
-        CascadeGate(window_ns)
+        CascadeGate(window)
     with pytest.raises(ValueError):
-        release_window_ns(3, 0.2, 0.5, 0)
-    with pytest.raises(ValueError):
-        CascadeGate(WINDOW, -1)
+        CascadeGate(3, -1)
+
+
+def test_a_carried_arrival_is_read_first_among_equals_and_its_count_is_bounded():
+    """II.IV.c: a judgement carried in was withheld only until its subject settled."""
+    carried = CascadeGate(3, 0, (arrival(0),), carried=1)
+    gate, _ = carried.add(arrival(1), now=1)
+    _, released = gate.add(arrival(2), now=3)
+    assert released.id == "event-0"
+    _, released = CascadeGate(3, 0, (arrival(0),)).add(arrival(1), now=3)
+    assert released.id == "event-1"  # without carrying, the latest
+    for count in (-1, 2, True):
+        with pytest.raises(ValueError, match="carried"):
+            CascadeGate(3, 0, (arrival(0),), carried=count)

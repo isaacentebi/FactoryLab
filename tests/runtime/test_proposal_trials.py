@@ -32,6 +32,9 @@ def _runtime(monkeypatch):
     rt._manage_reserve_window()
     votes = []
     monkeypatch.setattr(rt, "_hold_vote", lambda am, committee, **_k: votes.append(am.id))
+    # Enough eligible seats, besides proposer and target, for committee.quorum.
+    monkeypatch.setattr(rt, "_committee_eligible", lambda: {
+        "eval-b": "evaluator", "meta-a": "meta", "antagonist-a": "antagonist"})
     return rt, votes
 
 
@@ -53,7 +56,8 @@ def test_an_amendment_proposal_charges_its_proposer_the_trial(monkeypatch):
         "kind": "amendment", "id": "drop-one", "remove": [card.id],
         "predicted_effect": {"card_id": rt.charter.cards[-1].id, "direction": "increase",
                              "window": 1}})
-    assert votes == ["drop-one"]
+    # The motion waits for the next governance boundary's committee (charter audit C1).
+    assert votes == [] and [am.id for am in rt.charter_book.agenda()] == ["drop-one"]
     assert rt.budget.entitlement(SEAT) == before - rt.ev.trial_amount_micro
 
 

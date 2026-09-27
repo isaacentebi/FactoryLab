@@ -58,7 +58,7 @@ def test_invariant_5_population_registration_requires_authentic_novelty_receipt(
     for receipt in (None, Reservation("fake", 10, "h", "novelty"), wallet.reserve(10, "h", "new")):
         with pytest.raises(PermissionError):
             registry.register(contract, by_handle="h", reservation=receipt)
-    reserve = NoveltyReserve(0.2, 100, has_history=lambda _: False, ledger=ledger, clock_ns=clock)
+    reserve = NoveltyReserve(0.2, has_history=lambda _: False, ledger=ledger, clock_ns=clock)
     reserve.open_window(clock.now, 100)
     receipt = reserve.reserve_for(contract, 10)
     with pytest.raises(PermissionError):
