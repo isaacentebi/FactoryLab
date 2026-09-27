@@ -2742,3 +2742,17 @@ def test_th1c_and_th1d_charge_nothing_on_a_round_drawn_in_the_niche():
                           "charge": 0.4 * 0.7, "reward": 0.4}]
     assert g.th1c_movement(charged, M).status == g.FAIL
     assert g.th1d_frontier(charged, M).status == g.FAIL
+
+
+def test_s5b_a_penalty_ledgered_before_its_decision_opened_fails():
+    """R16b-8: S5b builds its actors and draws in ledger order. A settled score (or a
+    learned round) ledgered before its ``decision.open`` is never credited to a router:
+    it fails, whatever the mean it would have made."""
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.3, "penalty": 0.0, "reward": 0.3}
+    in_order = [_open("s0", "seat"), _penalty("s0", 0.0) | {"raw": 0.3}, credit]
+    assert g.s5b_observed_neutral(in_order, M).ok
+    reversed_ = [_penalty("s0", 0.0) | {"raw": 0.3}, _open("s0", "seat"), credit]
+    result = g.s5b_observed_neutral(reversed_, M)
+    assert result.status == g.FAIL
+    assert result.evidence["before_open"] == [{"kind": "price.penalty", "handle": "s0"}]

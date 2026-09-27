@@ -3193,13 +3193,15 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     """
     learned_rows = any(row.get("kind") == "router.learned" for row in events)
     seats = decision_seats(events)
-    actors = unique_map(rows_of(events, "decision.open"), lambda row: need(row, "handle"),
-                        lambda row: need(row, "actor"))
+    # Built in ledger order (R16b-8): a score or a learned round can only name a decision
+    # already opened; one ledgered before its ``decision.open`` fails, never credited.
+    actors: dict[str, Any] = {}
     # Only a round its router drew enters that router's mean (``router_draw``): a self
     # child's score is its parent's choice, never a round the router played.
-    drawn = {need(row, "handle") for row in rows_of(events, "decision.open") if router_draw(row)}
+    drawn: set[str] = set()
+    ever_opened = {need(row, "handle") for row in rows_of(events, "decision.open")}
     raws: dict[str, list[float]] = defaultdict(list)
-    bad, checked, untraced = [], 0, 0
+    bad, checked, untraced, early = [], 0, 0, []
     # A decision that timed out was learned once, neutrally, at its cutoff: a late
     # settlement after it (the queue's late-settlement right) is never learned again
     # (feedback.py ``_learn_router_return``: "learned once already, neutrally, at its
@@ -3232,6 +3234,15 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
 
     for row in events:
         kind = row.get("kind")
+        if kind == "decision.open":
+            unique_put(actors, need(row, "handle"), need(row, "actor"), row)
+            if router_draw(row):
+                drawn.add(need(row, "handle"))
+            continue
+        if (kind in ("price.penalty", "router.learned") and need(row, "handle") not in actors
+                and need(row, "handle") in ever_opened):
+            early.append({"kind": kind, "handle": need(row, "handle")})
+            continue
         if kind == "decision.timeout":
             timed_out.add(need(row, "return.handle"))
             continue
@@ -3280,6 +3291,10 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
                 if abs(float(need(row, "neutral")) - mean) > 1e-9:
                     bad.append({"handle": need(row, "handle"), "neutral": need(row, "neutral"),
                                 "observed_mean": mean, "rounds": len(observed)})
+    if early:
+        return _result("S5b", False, before_open=early[:5], checked=checked,
+                       mismatched=len(bad), example=bad[:3],
+                       why="a score or learned round is ledgered before its decision opened")
     if untraced:
         return _result("S5b", False, untraced=untraced, checked=checked,
                        mismatched=len(bad), example=bad[:3],
