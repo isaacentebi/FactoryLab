@@ -56,3 +56,12 @@ def test_a_mixed_contract_on_a_wake_is_a_producers_and_a_judging_step_is_read_by
         model_req, text = _model_request("Judge it.", {"verdict": {"verdict": 0.5}},
                                          VERDICT_SCHEMA, settlement={key: "published"})
         assert request_form(model_req, text, _inputs_from_prompt(text)) == form
+
+
+def test_a_root_requirement_holds_beside_every_alternative():
+    """Codex on b1c8590: the root ``required`` binds every ``anyOf`` alternative."""
+    schema = {"type": "object", "required": ["verdict"],
+              "anyOf": [{"properties": {"verdict": {"maximum": 0.5}}},
+                        {"properties": {"verdict": {"minimum": 0.5}}}]}
+    model_req, text = _model_request("Rate it.", {"kind": "Tick", "payload": {}}, schema)
+    assert request_form(model_req, text, _inputs_from_prompt(text)) == "judge"

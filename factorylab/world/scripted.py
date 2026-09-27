@@ -434,10 +434,15 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
 
 
 def _shape_required(schema: dict) -> list[frozenset[str]]:
-    """Each admitted answer shape's required fields (``anyOf`` / ``oneOf`` shapes)."""
-    shapes = schema.get("anyOf") or schema.get("oneOf") or (schema,)
-    return [frozenset(f for f in shape.get("required", ()) if isinstance(f, str))
-            for shape in shapes if isinstance(shape, dict)] or [frozenset()]
+    """Each admitted answer shape's required fields (``anyOf`` / ``oneOf`` shapes), the
+    schema's root ``required`` merged into every one: an alternative is admitted only
+    beside the root's own constraints (Codex on b1c8590)."""
+    root = frozenset(f for f in schema.get("required", ()) if isinstance(f, str))
+    alternatives = schema.get("anyOf") or schema.get("oneOf")
+    if not alternatives:
+        return [root]
+    return [root | frozenset(f for f in shape.get("required", ()) if isinstance(f, str))
+            for shape in alternatives if isinstance(shape, dict)] or [root]
 
 
 def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
