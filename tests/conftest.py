@@ -175,9 +175,12 @@ def scripted_runtime_run(_scripted_run_cache):
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
 _SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
+#: Functions outside ``tests/`` that run a world's loop when called: the loop's own entry
+#: and the operator rehearsal's (``scripts/edition4_rehearsal.run_rehearsal``).
+_WORLD_ENTRY_POINTS = frozenset({"run_world", "run_rehearsal"})
 _GATE_MARKS = ("gate", "world")
 _TESTS_ROOT = Path(__file__).resolve().parent
-# A check-tier test whose call phase uses more CPU than this fails: it belongs in gate.
+# A check-tier test whose setup and call use more CPU than this fails: it belongs in gate.
 # CPU, not wall time, so a loaded machine cannot fail a test; the wall ceiling still
 # fails a check test that sleeps or waits.
 CHECK_LIMIT_ENV = "FACTORYLAB_CHECK_LIMIT_S"
@@ -224,7 +227,7 @@ def _runs_world_here(call: ast.Call, builders=frozenset({"Runtime"})) -> bool:
     is one of ``builders``, ``run_world``, or the CLI).
     """
     name = _call_name(call)
-    if name == "run_world":
+    if name in _WORLD_ENTRY_POINTS:
         return True
     if (name == "run" and isinstance(call.func, ast.Attribute)
             and not call.args and not call.keywords):
@@ -426,6 +429,7 @@ def _files_over_budget(cpu_by_file: dict[str, float], budget_s: float | None,
 
 
 _PHASE_CPU = pytest.StashKey[dict]()
+_PHASE_WALL = pytest.StashKey[dict]()
 
 
 def _cpu_s() -> float:
@@ -460,20 +464,27 @@ def pytest_runtest_teardown(item):
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Every report carries its phase's CPU and its tier; a ``check`` call over the
-    limits fails, naming the fix."""
+    """Every report carries its phase's CPU and its tier; a ``check`` test whose setup
+    and call together are over the limits fails, naming the fix.
+
+    Setup counts: a world a fixture runs is the test's world. A module- or class-scoped
+    fixture charges the first test that sets it up, which is the one to mark gate.
+    """
     report = yield
     report.factorylab_cpu_s = item.stash.get(_PHASE_CPU, {}).get(call.when, 0.0)
+    item.stash.setdefault(_PHASE_WALL, {})[call.when] = report.duration
     report.factorylab_tier = ("gate" if item.get_closest_marker("gate")
                               else "check" if item.get_closest_marker("check") else None)
     if report.when != "call" or not report.passed or report.factorylab_tier != "check":
         return report
-    problem = _check_limit_problem(report.factorylab_cpu_s, report.duration,
+    cpu, wall = item.stash[_PHASE_CPU], item.stash[_PHASE_WALL]
+    problem = _check_limit_problem(cpu.get("setup", 0.0) + cpu.get("call", 0.0),
+                                   wall.get("setup", 0.0) + wall.get("call", 0.0),
                                    _seconds_from_env(CHECK_LIMIT_ENV, CHECK_LIMIT_DEFAULT_S))
     if problem is not None:
         report.outcome = "failed"
         report.longrepr = (
-            f"{item.nodeid} is in the check tier but its call {problem}. The check tier "
+            f"{item.nodeid} is in the check tier but its setup and call {problem}. The check tier "
             "is the inner loop and runs no world: mark this test @pytest.mark.gate (or "
             f"make it faster). Raise the CPU limit with {CHECK_LIMIT_ENV}=<seconds>, or "
             f"disable both limits with {CHECK_LIMIT_ENV}=off.")
