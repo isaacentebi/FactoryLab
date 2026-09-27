@@ -1073,10 +1073,18 @@ class FillCursor:
         """
         if type(tick_ns) is not int or tick_ns < 0:
             raise ValueError("tick_ns must be nonnegative integer nanoseconds")
+        if self.measured and self.expected_positions is None:
+            try:
+                account = exchange.account()
+                self.initialize(account, now_ns=account.observed_at_ns or now_ns or self.launch_ns)
+            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
+                pass
         read_start = self.since_ns
         if self.measured:
             floor = min((o["submitted_ns"] for o in self.orders.values()),
                         default=self.since_ns)
+            if self.baseline_ns is not None and self.baseline_ns > self.launch_ns:
+                floor = self.launch_ns  # Pre-anchor executions still require delivery.
             if self.incomplete_since_ns is not None:
                 floor = min(floor, self.incomplete_since_ns)
             read_start = max(self.launch_ns, floor - (self.propagation_bound_ns or 0)

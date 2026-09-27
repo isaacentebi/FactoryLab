@@ -253,6 +253,36 @@ def test_unchanged_residual_is_annotated_once_then_late_fill_restores_accounting
     assert c.last_residual is None
 
 
+def test_failed_baseline_retries_after_checkpoint_without_rebooking():
+    from factorylab.runtime.resume import decode, encode
+
+    venue = Venue()
+    fresh = venue.account
+    venue.account = lambda: (_ for _ in ()).throw(RuntimeError('offline'))
+    c = FillCursor(Ledger(), start_ns=0, measured=True)
+    venue.shown = venue.executed = [fill(100)]
+    assert len(c.poll(venue, now_ns=110)) == 1
+    assert c.expected_positions is None
+    saved = decode(encode({k: v for k, v in vars(c).items() if k != 'ledger'}))
+    restored = object.__new__(FillCursor)
+    vars(restored).update(saved, ledger=c.ledger)
+    venue.account = fresh
+    assert restored.poll(venue, now_ns=200) == []
+    assert restored.expected_positions == {'perp:BTC': '1'}
+    assert restored.through_ns == 200
+
+
+def test_retry_baseline_keeps_pre_anchor_execution_delivery():
+    venue = Venue(fees=False)
+    c = FillCursor(Ledger(), start_ns=0, measured=True)
+    venue.executed = [fill(100)]
+    assert c.poll(venue, now_ns=200) == []
+    venue.shown = venue.executed
+    assert [ts for ts, _ in c.poll(venue, now_ns=210)] == [100]
+    assert c.expected_positions == {'perp:BTC': '1'}
+    assert c.poll(venue, now_ns=220) == []
+
+
 @pytest.mark.parametrize('count', [400, 5000])
 def test_reconciled_identity_memory_is_bounded(count):
     import json
