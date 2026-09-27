@@ -165,17 +165,62 @@ def bind_wind_down_orders(rt, report: dict) -> None:
               f"({type(exc).__name__})", file=sys.stderr)
 
 
+def read_wind_down_fills(rt) -> None:
+    """Guarantees a live venue's wind-down fills are read once more after the wind-down,
+    or that the failure to read them is on the record.
+
+    A recorded venue's fills are drained at its seal (``seal_recorded_market``); any
+    other venue is read here: up to ``winddown.ROUNDS_PER_KILL`` attempts of the fills
+    read the ticks use (``consequence_fills.poll``), whose fills go through the one
+    fill path (the wind-down's closing orders already bound to the kernel's account)
+    and whose success advances the fills watermark. If every attempt fails,
+    ``wind_down.fills_unread`` is ledgered: the money stays in custody and its
+    attribution is unknown; the kill never waits on it. Never raises into a kill.
+    """
+    from factorylab.runtime.winddown import ROUNDS_PER_KILL
+
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or (not getattr(rt, "live", True)
+                            and callable(getattr(exchange, "seal_recording", None))):
+        return
+    errors = []
+    for _attempt in range(ROUNDS_PER_KILL):
+        try:
+            fills = rt.consequence_fills.poll(exchange, strict=True, now_ns=rt.clock.now_ns)
+        except Exception as exc:  # noqa: BLE001 - an unanswered read is retried, then noted
+            errors.append(type(exc).__name__)
+            continue
+        try:
+            observed = [WorldEvent(WorldEventKind.FILL, max(rt.clock.now_ns, ts),
+                                   exchange.name, payload) for ts, payload in fills]
+            rt._settle_exchange_effects(observed, observe_positions=False)
+        except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+            print(f"factorylab kill: the wind-down's fills were not booked "
+                  f"({type(exc).__name__})", file=sys.stderr)
+        return
+    try:
+        rt.ledger.append({"kind": "wind_down.fills_unread", "attempts": len(errors),
+                          "errors": errors, "ts": rt.clock.now_ns})
+    except Exception as exc:  # noqa: BLE001
+        print(f"factorylab kill: the unread wind-down fills were not recorded "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
 def settle_wind_down(rt) -> None:
     """Guarantees the money the wind-down's closes realised on a return whose outcome
     was already fixed is booked to that return's owner, once, before the seal.
 
-    Sol on #152: the wind-down's fills, drained at the seal (``seal_recorded_market``),
-    arrive after ``settle_terminal``; each owner's part is late money
-    (``_settle_late``), a claim moved to its seat, never a score. Custody is
-    unchanged: the venue already holds it. Never raises into a kill.
+    Sol on #152: the wind-down's fills, drained at the seal (``seal_recorded_market``)
+    or read after it (``read_wind_down_fills``), arrive after ``settle_terminal``; each
+    owner's part is late money (``_settle_late``), a claim moved to its seat, never a
+    score. A return whose outcome was never fixed has its realised P&L booked the same
+    way (``consequence.realized_at_termination``), once, and stays censored. Custody
+    is unchanged: the venue already holds it. Never raises into a kill.
     """
     try:
         rt._settle_late()
+        # A return never graded: its realised P&L is still its owner's money.
+        rt._settle_realized_at_termination()
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         print(f"factorylab kill: the wind-down's late money was not booked "
               f"({type(exc).__name__})", file=sys.stderr)
@@ -364,6 +409,8 @@ class VenueMixin:
             report["production_state"] = winddown.KILLED
             self.wind_down_report = report
             self.exposure_state = report["exposure_state"]
+            if owed:
+                read_wind_down_fills(self)  # a live venue's closes, read once more
             settle_wind_down(self)  # the wind-down's P&L, to its owners, before the seal
             censor_terminal(self)  # the last step before the seal
             try:

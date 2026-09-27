@@ -228,6 +228,19 @@ class ReturnConsequences:
         self.table = table
         return late
 
+    def realized_at_termination(self, event: int) -> dict[str, int]:
+        """Ledger and hand back, once, the realised P&L of each return whose outcome was
+        never fixed, at the world's end (``LotTable.realized_at_termination``): a money
+        fact, never a grade. Each is ``consequence.realized_at_termination``."""
+        table, realized = self.table.realized_at_termination()
+        if not realized:
+            return {}
+        for handle, micro in realized.items():
+            self.ledger.append({"kind": "consequence.realized_at_termination",
+                                "handle": handle, "micro": micro, "event": event})
+        self.table = table
+        return realized
+
     def account_open(self, handle: str) -> bool:
         """Only a return admitted here and not yet resolved may create venue exposure."""
         try:

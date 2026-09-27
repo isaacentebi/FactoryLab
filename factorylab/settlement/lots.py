@@ -100,7 +100,9 @@ class ReturnAccount:
     closes: int = 0  # lots this return closed, in whole or in part, as the closer
     earned_micro: int = 0  # paid calls of the service this return registered, while open
     earnings: int = 0  # how many such receipts
-    late_micro: int = 0  # realised P&L already booked to the owner after the outcome was fixed
+    # Realised P&L already booked to the owner after the outcome was fixed, or at the
+    # world's end for an outcome never fixed (``realized_at_termination``).
+    late_micro: int = 0
     # A return no seat authored: a router abstention. It is kept so its handle can
     # never be admitted twice, but it owes no outcome — nothing resolves against it
     # and no payoff forecast may be sealed on it.
@@ -354,6 +356,26 @@ class LotTable:
             if any(lot.handle == handle for lot in self.lots):
                 rows.append((handle, total, realized))
         return replace(table, released_late=tuple(rows)), late
+
+    def realized_at_termination(self) -> tuple["LotTable", dict[str, int]]:
+        """Hand back the realised P&L of every return whose outcome was never fixed.
+
+        The world is ending: an account with no payoff will never be graded, yet what
+        its lots realised (a close, the kill wind-down's included) is money. Each such
+        account's realised total, less what was handed back before, is its owner's,
+        once; the successor table records it (``late_micro``) so it is never handed
+        back twice. A voided account is no return and holds nothing.
+        """
+        updates, realized = {}, {}
+        for account in self.returns:
+            if account.payoff is not None or account.voided:
+                continue
+            total = account.realized_micro.numerator // account.realized_micro.denominator
+            delta = total - account.late_micro
+            if delta:
+                realized[account.handle] = delta
+                updates[account.handle] = replace(account, late_micro=total)
+        return self._accounts(updates), realized
 
     def account(self, handle: str) -> ReturnAccount:
         """Return the original account or fail for an unknown return."""

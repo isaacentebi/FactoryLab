@@ -1090,6 +1090,24 @@ class FeedbackMixin:
             self.outcomes.append(owner, handle=handle, delta_micro=micro, evidence=handle,
                                  outcome={"late_realization_micro": micro})
 
+    def _settle_realized_at_termination(self) -> None:
+        """At the world's end, what a never-graded return's lots realised is its owner's.
+
+        Guarantees the realised P&L of each return whose outcome was never fixed (its
+        lots closed, the kill wind-down's closes included) moves its owner's venue
+        claim once, through the same claim path as late money, and is told to it. It
+        is a money fact, never a score: the decision stays censored for grading.
+        """
+        for handle, micro in self.consequences.realized_at_termination(self.n).items():
+            owner = (self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+                     or self._released_owner(handle))
+            if owner is None or owner not in self.assemblies:
+                self._late_undeliverable(handle, micro)
+                continue
+            self._book_consequence(owner, micro, "realized_at_termination", handle)
+            self.outcomes.append(owner, handle=handle, delta_micro=micro, evidence=handle,
+                                 outcome={"realized_at_termination_micro": micro})
+
     def _book_income(self, item: dict) -> None:
         """Verified x402 income is new money: it arrives in ``base_reserve`` and is the
         owning seat's (C11, C10).

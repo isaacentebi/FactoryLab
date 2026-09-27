@@ -442,3 +442,15 @@ def test_a_wind_down_close_of_unowned_inventory_credits_nobody():
     table = LotTable().seed_spot("PURR/USDC", "5", "4").start("a", 1).finish("a", 0)
     table = _wind_down(table, "wd-2", size="5", px="5", coin="PURR/USDC")
     assert not table.lots and table.account("a").realized_micro == 0
+
+
+def test_a_never_fixed_returns_realised_pnl_is_handed_back_once_at_termination():
+    """At the world's end an account with no payoff is never graded, yet what its lots
+    realised is money: handed back once; a fixed or voided account is not."""
+    table = LotTable().start("open", 1).finish("open", 0).start("fixed", 2).finish("fixed", 0)
+    table = fill(table, "open", "o1", size="1", px="100")
+    table = _wind_down(table, "wd-3", size="1", px="110")
+    table, realized = table.realized_at_termination()
+    assert realized == {"open": 10_000_000}
+    table, again = table.realized_at_termination()
+    assert again == {}
