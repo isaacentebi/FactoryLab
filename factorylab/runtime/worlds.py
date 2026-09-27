@@ -726,10 +726,14 @@ class WorldManifest:
         if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
                 or not 0 <= p.min_blame_share <= 1):
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
-        # eta takes kp's finite-number rule: a NaN or an infinite eta is otherwise refused
-        # only by the SF-0 relation (``gain_headroom``), never by a rule of its own.
-        if type(p.eta) not in (int, float) or not isfinite(p.eta) or p.eta <= 0:
-            raise ValueError("prices.eta must be finite and > 0")
+        # eta and decay take kp's finite-number rule, the one the price controller holds
+        # every rate to (``charter.controller._number``). A NaN or an infinite one was
+        # already refused before anything was written (canonical_json cannot hash it,
+        # and the controller refuses it); this states the refusal as the field's own.
+        for name in ("eta", "decay"):
+            value = getattr(p, name)
+            if type(value) not in (int, float) or not isfinite(value) or value <= 0:
+                raise ValueError(f"prices.{name} must be finite and > 0")
         if min(p.eta, p.decay) <= 0 or p.min_window_events < 1:
             raise ValueError("prices: eta, decay > 0 and min_window_events >= 1")
         for name in ("kp", "kd"):

@@ -146,6 +146,45 @@ def test_an_eta_outside_its_domain_is_refused_as_it_was(eta) -> None:
             manifest_from_dict(d)
 
 
+@pytest.mark.parametrize("decay", [float("nan"), float("inf"), -1.0],
+                         ids=["nan", "inf", "negative"])
+def test_a_decay_outside_its_domain_is_refused_by_validate(decay) -> None:
+    """Codex on 3309478: decay takes the finite-number rule the price controller holds
+    every rate to (``charter.controller._number``)."""
+    import dataclasses
+
+    m = manifest_from_dict(_base())
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, decay=decay))
+    for check in (bad.validate_price_fields, bad.validate):
+        with pytest.raises(ValueError, match="prices.decay must be finite and > 0"):
+            check()
+
+
+@pytest.mark.parametrize("decay", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_a_non_finite_decay_never_launched_before_the_rule(decay, tmp_path) -> None:
+    """The control for the rule above: the set of worlds that can launch is unchanged.
+    A manifest with a non-finite decay, never validated, still cannot be launched. Its
+    canonical form cannot be hashed (JSON has no NaN or infinity), so genesis refuses
+    it before the ledger writes a row. The price controller refuses the rate too."""
+    import dataclasses
+
+    from factorylab.charter.controller import PriceController
+    from factorylab.runtime.loop import Runtime
+
+    m = load_manifest("scripted")
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, decay=decay))
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        bad.canonical_json()
+    path = tmp_path / "ledger.jsonl"
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        Runtime(bad, events=1, seed=1, initial_balance_micro=None, ledger_path=str(path),
+                router_gamma=0.1)
+    assert not path.exists()  # no row was written
+    with pytest.raises(ValueError, match="decay must be a finite number"):
+        PriceController(None, eta=m.prices.eta, decay=decay, penalty_cap=0.5,
+                        min_window_events=1)
+
+
 def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
     of the scripted world moved when the shims went, again when the standing committee

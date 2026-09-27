@@ -855,7 +855,8 @@ def _launched(manifest):
 
 @pytest.mark.parametrize("block,field,value", [
     ("novelty", "share", -0.1), ("novelty", "share", 1.5), ("prices", "decay", 0.0),
-    ("prices", "penalty_cap", 1.0), ("immune", "gain_step", 0.0), ("timing", "min_ratio", 2)])
+    ("prices", "penalty_cap", 1.0), ("immune", "gain_step", 0.0), ("timing", "min_ratio", 2),
+    ("prices", "decay", float("inf"))])
 def test_a_launched_manifest_the_kernel_refuses_is_diary_invalid(block, field, value):
     """Codex on b56e793: a diary's launched physics is validated by the kernel's own load
     validation (``WorldManifest.validate`` on the rebuilt manifest), never restated: a
@@ -926,7 +927,8 @@ def _longrun1_manifest():
     # Codex on 646e3c7: only the SF-0 relation is set aside; the launched kp and eta
     # still take the kernel's own field rules (``validate_price_fields``).
     ("prices", "kp", -1, "prices.kp"), ("prices", "eta", -1, "prices.eta"),
-    ("prices", "eta", float("nan"), "prices.eta")])
+    ("prices", "eta", float("nan"), "prices.eta"),
+    ("prices", "decay", float("inf"), "prices.decay")])
 def test_a_pre_wave_16_launch_takes_the_full_kernel_validation(block, field, value, why):
     """Codex on d3dc486: a pre-wave-16 diary loses only the fields wave 16 retired
     (``RETIRED_FIELDS``: prices.lambda_max); the full kernel validation then runs, and a
