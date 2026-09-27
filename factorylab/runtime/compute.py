@@ -1135,9 +1135,17 @@ class ComputeMixin:
         return [{k: v for k, v in row.items() if k != "owner"} for row in rows]
 
     def _artifacts_owned_by(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        """How many rows ``seat`` owns, and the newest ``limit`` of them."""
-        rows = self._artifact_index(seat)
-        return len(rows), rows[:limit]
+        """How many rows ``seat`` owns, and the newest ``limit`` of them.
+
+        Guarantees the count and the rows ``_artifact_index(seat)`` would give, and
+        only ``seat``'s own (information audit C4). Only the rows returned are
+        copied: the directory preview is read every world block, and copying every
+        row a seat ever kept made it grow with the world's age.
+        """
+        listing = self._artifact_listing()
+        keys = listing.by_owner.get(seat, ())
+        return len(keys), [{k: v for k, v in listing.row[key].items() if k != "owner"}
+                           for key in keys[:limit]]
 
     def _artifact_page(self, owner: str, args: dict) -> dict[str, Any]:
         """One ``artifact.list`` page of the caller's own rows, the total, and the cursor.
