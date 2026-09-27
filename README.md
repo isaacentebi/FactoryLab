@@ -218,8 +218,13 @@ with every return it received, while any score is owed to it; released, it keeps
 a tombstone.
 
 **The niche.** The novelty share lies in (0, 1]; it cannot be abolished. It accrues
-as a flow and is spendable only by contracts with no settled history, for compute
-and for registration alike. A decision taken in the niche bears no card penalty.
+as a flow and is spendable only by unhistoried actions. For compute, that means a
+tool call of a (tool, kind) that no decision of the seat carrying a propensity record
+or a delivered return has taken, and the one model call that reads its result, for
+any seat the router drew, historied or not. For registration, it means contracts with
+no settled history. A committee ballot never qualifies, and no seat may spend more
+than its share of a period's niche. A decision taken in the niche bears no card
+penalty. The kernel names what is eligible; it never chooses the action.
 
 **The two channels.** A request carries everything an executor needs and nothing
 about who asked; the only thing that travels forward is the propensity of the
@@ -229,9 +234,11 @@ return. It arrives on the reward channel, addressed to the handle.
 **The prices.** One price law, a PID controller per metric card, turns a card's
 violation into λ. λ is clipped to `[0, penalty_cap / v]` while the card violates;
 at the bound the integrator holds and the saturation is ledgered. Verdict and
-conformity scores settle net of Σ λ·violation, clipped to [0, 1]. The consequence
-and exposure channels, the novelty reserve and router exploration lie outside the
-price law's reach.
+conformity scores settle net of Σ λ·violation, clipped to [0, 1], and so do the
+decision rewards on the consequence, exposure and counter channels. What lies
+outside the judged loop is the measurement those channels carry: a fact the world
+settles, not another model's reading. The price still applies to the reward it
+becomes. Only a decision taken in the niche bears no card penalty.
 
 **The population's shape.** A world that seeds judging is refused at load unless
 evaluator seats strictly outnumber producer seats, at least three foundation
