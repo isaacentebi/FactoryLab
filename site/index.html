@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FactoryLab</title>
+<meta name="description" content="FactoryLab builds a superdark factory: a Class 3 factory that sets its own objectives by negotiating them with its world. An independent implementation of the ideas in The Superdark Factory.">
+<meta name="theme-color" content="#060606">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060606'/%3E%3Crect x='7' y='7' width='18' height='18' fill='none' stroke='%23ecebe4' stroke-width='2'/%3E%3Crect x='19' y='19' width='6' height='6' fill='%23ff5a1f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..500&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="FactoryLab home">
+      <span class="word">Factory<i>Lab</i></span>
+      <span class="k">A Class 3 factory, under construction</span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="ideas.html">Ideas</a>
+      <a href="factory.html">Factory</a>
+      <a href="progress.html">Progress</a>
+      <a class="ext" href="https://superdark.ai/" rel="noopener">Essay</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-grid">
+      <div class="hero-copy load">
+        <p class="k">FactoryLab <span class="sig">/</span> a superdark factory</p>
+        <h1 class="display" id="hero-title">One move<br>at launch.<br><em>Then the lights go out.</em></h1>
+        <div>
+          <p class="lede">We are building a factory that decides what it is for. It is given a wallet, a market, a clock and a charter, and nobody tells it what to want. It finds out by dealing with the world.</p>
+          <div class="row">
+            <a class="btn solid" href="ideas.html">Read the ideas <span class="arrow">→</span></a>
+            <a class="btn" href="factory.html">Explore the factory <span class="arrow">→</span></a>
+          </div>
+        </div>
+      </div>
+      <div class="hero-field" data-field aria-hidden="true">
+        <canvas></canvas>
+        <div class="readout">
+          <div><div class="k">Decisions</div><div class="num" data-count>0</div></div>
+          <div><div class="k">Read by a judge</div><div class="num" data-judged>0</div></div>
+        </div>
+        <p class="caption">A sketch, not live data. Each cell is a decision; a ring is a judge reading it; the flash is its score coming home. No person reads any of it.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="credit-strip">
+    <div class="wrap">
+      <p>An independent implementation of <a href="https://superdark.ai/" rel="noopener"><em>The Superdark Factory</em></a> by Marek Poliks, Roberto Alonso-Trillo, Tyler Dunn, Hugh Scott-Douglas and Jay Springett (Antikythera, MIT Press, 2026). The ideas are theirs; the mistakes are ours. <span class="quiet">Not affiliated with or endorsed by the authors.</span></p>
+    </div>
+  </div>
+
+  <section class="section" id="what">
+    <div class="wrap">
+      <div class="section-head rv">
+        <p class="k">01 <span class="sig">/</span> What this is</p>
+        <div>
+          <h2>A factory whose output<br><em>nobody reviews.</em></h2>
+          <p class="lede quiet">As software writes more of itself, people read less of it: first every change, then the long ones, then summaries, then nothing. The essay calls this going dark. It argues that the answer is not to read harder, but to build a factory that can be trusted without being read, because it is graded by what actually happens in the world.</p>
+        </div>
+      </div>
+      <div class="panes cols-3 rv">
+        <div>
+          <p class="k">The world</p>
+          <h3>A wallet and a market</h3>
+          <p class="quiet small">Real money in integer micro-dollars, an exchange, event markets and paid model providers. Every thought the factory has is bought at the vendor's price.</p>
+        </div>
+        <div>
+          <p class="k">The population</p>
+          <h3>Seats that judge each other</h3>
+          <p class="quiet small">Short-lived language-model agents: producers that act or decline, judges that grade them, and judges of judges, tier on tier. Most of the population is evaluators.</p>
+        </div>
+        <div>
+          <p class="k">The kernel</p>
+          <h3>Physics, not advice</h3>
+          <p class="quiet small">A short list of rules enforced in code and never stated to the seats. Money is conserved. Nothing judges its own output. Death at the floor is final.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="classes">
+    <div class="wrap">
+      <div class="section-head rv">
+        <p class="k">02 <span class="sig">/</span> Three classes</p>
+        <div>
+          <h2>What does the factory <em>take as input?</em></h2>
+          <p class="lede quiet">The essay sorts factories by what they automate. Anything we hand our factory that it should have worked out itself pulls it down a class, however clever the rest is.</p>
+        </div>
+      </div>
+      <div class="rv">
+        <div class="ladder" role="tablist" aria-label="Factory classes" data-ladder>
+          <button role="tab" data-class="1" aria-selected="false" aria-controls="ladder-stage" id="tab-1"><span class="n">1</span><span class="k">Automates execution</span></button>
+          <button role="tab" data-class="2" aria-selected="false" aria-controls="ladder-stage" id="tab-2"><span class="n">2</span><span class="k">Automates planning</span></button>
+          <button role="tab" data-class="3" aria-selected="true" aria-controls="ladder-stage" id="tab-3"><span class="n">3</span><span class="k">Automates objectives</span></button>
+        </div>
+        <div class="ladder-stage" id="ladder-stage" role="tabpanel" aria-live="polite">
+          <div>
+            <p class="k" data-ladder-takes>Its input is a world.</p>
+            <h3 data-ladder-name>Class 3 automates objectives</h3>
+            <p class="quiet" data-ladder-body>Nobody hands it a goal.</p>
+          </div>
+          <div>
+            <div class="flow" data-ladder-flow></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="doors">
+    <div class="wrap">
+      <div class="section-head rv">
+        <p class="k">03 <span class="sig">/</span> Go further</p>
+        <h2>Three ways in.</h2>
+      </div>
+      <div class="panes cols-3 doors rv">
+        <a href="ideas.html">
+          <span class="k">Ideas</span>
+          <span class="quiet small">Surfaces not strategies, the two channels, judges graded by consequences, the four pathologies and their prices, the charter.</span>
+          <span class="h3">The philosophy, in plain words</span>
+          <span class="go">Read →</span>
+        </a>
+        <a href="factory.html">
+          <span class="k">Factory</span>
+          <span class="quiet small">Every part of the machine on one map: seats, channels, the kernel, the price controller, the charter, the world. Trace one turn of the loop.</span>
+          <span class="h3">An interactive map of the parts</span>
+          <span class="go">Explore →</span>
+        </a>
+        <a href="progress.html">
+          <span class="k">Progress</span>
+          <span class="quiet small">Which waves have merged, what each changed and why, what is open, and what we plan next. Including what has not happened yet.</span>
+          <span class="h3">The build log, honestly kept</span>
+          <span class="go">Track →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="homage" id="source" aria-labelledby="homage-title">
+    <div class="wrap">
+      <div class="inner">
+        <div class="rv">
+          <p class="k">Source of the ideas</p>
+          <p class="title" id="homage-title"><em>The Superdark Factory:</em> Toward the Full Automation of Software</p>
+          <p class="cite">Marek Poliks, Roberto Alonso-Trillo, Tyler Dunn, Hugh Scott-Douglas and Jay Springett. Antikythera (MIT Press), September 2026.</p>
+          <div class="row">
+            <a class="btn" href="https://superdark.antikythera.org/" rel="noopener">Read the paper ↗</a>
+            <a class="btn" href="https://superdark.ai/" rel="noopener">superdark.ai ↗</a>
+          </div>
+        </div>
+        <div class="rv">
+          <p class="k">Why this site exists</p>
+          <p>FactoryLab is one team's attempt to build the factory the essay describes, small enough to read and with enough money at stake that the results mean something. Chapter II of the essay, "The Dark Stack", is our design authority: where our code disagrees with it, the code is wrong.</p>
+          <p>Everything on this site is our reading, in our words. For the argument itself, and its full force, go to the source.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div>
+      <span class="brand"><span class="word">Factory<i>Lab</i></span></span>
+      <p>An independent implementation of ideas from <a href="https://superdark.ai/" rel="noopener"><em>The Superdark Factory</em></a>. Not affiliated with or endorsed by its authors.</p>
+    </div>
+    <div>
+      <p class="k">Site</p>
+      <ul><li><a href="ideas.html">Ideas</a></li><li><a href="factory.html">Factory</a></li><li><a href="progress.html">Progress</a></li></ul>
+    </div>
+    <div>
+      <p class="k">Source</p>
+      <ul><li><a href="https://superdark.ai/" rel="noopener">superdark.ai ↗</a></li><li><a href="https://superdark.antikythera.org/" rel="noopener">The paper at Antikythera ↗</a></li></ul>
+    </div>
+  </div>
+</footer>
+
+<div class="bar" role="status" aria-label="Build status">
+  <span data-head>HEAD</span>
+  <span class="rail" aria-hidden="true"></span>
+  <a href="progress.html" data-milestone>Loading progress…</a>
+</div>
+
+<script src="assets/site.js" defer></script>
+</body>
+</html>

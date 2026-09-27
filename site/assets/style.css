@@ -89,7 +89,7 @@ img, svg { display: block; max-width: 100%; }
 .display {
   font-family: var(--serif);
   font-weight: 400;
-  font-size: clamp(52px, 9.2vw, 148px);
+  font-size: clamp(52px, 7.2vw, 124px);
   line-height: 0.9;
   letter-spacing: -0.02em;
   margin: 0;
@@ -195,6 +195,7 @@ blockquote.pull cite {
 .bar .rail i.p { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-4); }
 .bar .rail i.now { background: var(--sodium); }
 .bar a { text-decoration: none; color: var(--ink-2); }
+.bar [data-milestone] { display: block; line-height: var(--bar); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 body.has-bar { padding-bottom: var(--bar); }
 @media (max-width: 760px) {
   .bar .rail, .bar .hide-s { display: none; }
