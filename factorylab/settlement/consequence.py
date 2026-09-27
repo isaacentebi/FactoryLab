@@ -9,6 +9,7 @@ from factorylab.settlement.lots import (
     FEE_UNKNOWN,
     NO_MARK,
     RELEASED_ORDER,
+    WIND_DOWN,
     LotTable,
     Payoff,
     fill_stream,
@@ -275,6 +276,17 @@ class ReturnConsequences:
         """
         return {item["handle"] for item in self.unresolved_orders.values()}
 
+    def bind_wind_down(self, order_id: str, size: str, coin: str, event: int) -> None:
+        """Bind, with its evidence first, a kill wind-down's closing order to the
+        kernel's ``WIND_DOWN`` account (no decision, no grade, no reward). An order
+        already attributed writes nothing."""
+        try:
+            table = self.table.bind_wind_down(order_id, size, coin=coin)
+        except ValueError:
+            return
+        self._apply("wind_down_order", {"order_id": order_id, "size": str(size),
+                                        "coin": coin, "event": event}, table)
+
     def cancel(self, order_id: str, event: int) -> None:
         """Release only the unfilled liability of an acknowledged cancellation or rejection."""
         self._apply("cancel", {"order_id": order_id, "event": event}, self.table.cancel(order_id))
@@ -349,6 +361,9 @@ class ReturnConsequences:
                 self.ledger.append({"kind": "consequence.released_fill", "event": event,
                                     "order_id": str(payload["order_id"]), "handle": released,
                                     "reason": RELEASED_ORDER})
+            if any(o.order_id == str(payload["order_id"]) and o.handle == WIND_DOWN
+                   for o in self.table.orders):
+                self._unattributed_wind_down(payload, event, self.table, table)
             # What the fill did to every open return, at its own fact time.
             self._record_effects(at, str(payload["coin"]), self.table, table)
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
@@ -374,6 +389,43 @@ class ReturnConsequences:
             self._apply("funding", {"event": event, "payload": dict(payload)}, table)
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
             self.cancel(str(payload["order_id"]), event)
+
+    def _unattributed_wind_down(self, payload: dict, event: int, before: LotTable,
+                                after: LotTable) -> None:
+        """Ledger what a wind-down fill closed that no owner holds, never inventing one.
+
+        Guarantees one ``consequence.unattributed`` row for a fill of the kernel's
+        ``WIND_DOWN`` account whose quantity matched no lot (``residual``) or closed
+        inventory no return account holds (``unowned``); nothing when all of it closed
+        owned lots.
+        """
+        coin = str(payload["coin"])
+        owners = ({r.handle for r in before.returns}
+                  | {row[1] for row in before.released_orders}
+                  | {row[0] for row in before.released_late})
+        # What each owner still holds after the fill, lot by lot (a partial close
+        # keeps the lot with a smaller size), so the difference is what it closed.
+        remaining: dict[tuple, Fraction] = {}
+        for lot in after.lots:
+            if lot.coin == coin:
+                key = (lot.handle, lot.coin, lot.is_buy, lot.market, lot.px)
+                remaining[key] = remaining.get(key, 0) + lot.size
+        closed: dict[str | None, Fraction] = {}
+        for lot in before.lots:
+            if lot.coin != coin:
+                continue
+            key = (lot.handle, lot.coin, lot.is_buy, lot.market, lot.px)
+            kept = min(lot.size, remaining.get(key, 0))
+            remaining[key] = remaining.get(key, 0) - kept
+            closed[lot.handle] = closed.get(lot.handle, 0) + lot.size - kept
+        quantity = abs(Fraction(str(payload.get("inventory_size", payload["size"]))))
+        residual = quantity - sum(closed.values())
+        unowned = sum(size for handle, size in closed.items() if handle not in owners)
+        if residual > 0 or unowned > 0:
+            self.ledger.append({"kind": "consequence.unattributed", "event": event,
+                                "order_id": str(payload["order_id"]), "coin": coin,
+                                "account": WIND_DOWN, "residual": str(residual),
+                                "unowned": str(unowned)})
 
     def redeem(self, coin: str, payout: str, event: int, facts: dict, *,
                at_ns: int | None = None) -> dict[str, int]:
