@@ -442,7 +442,7 @@ class Runtime(
                         WorldEventKind.FILL, max(self.clock.now_ns, ts), self.exchange.name, payload
                     )
                     for ts, payload in self.consequence_fills.poll(
-                        self.exchange, now_ns=self.clock.now_ns)
+                        self.exchange, now_ns=self.clock.now_ns, tick_ns=self.wall.tick_ns())
                 )
                 self._settle_exchange_effects(observed)
                 if self.reconciler.due():
@@ -586,7 +586,8 @@ class Runtime(
         if self.live:
             fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
                      for ts, payload in self.consequence_fills.poll(self.exchange,
-                                                                     now_ns=now)]
+                                                                 now_ns=now,
+                                                                 tick_ns=self.wall.tick_ns())]
         else:
             # The recorded market moved while a model thought: whatever it filled,
             # refused or charged by now settles here, and its mids are accounted; the
@@ -927,7 +928,8 @@ class Runtime(
         if self.live:
             observed = [
                 WorldEvent(WorldEventKind.FILL, max(now_ns, ts), self.exchange.name, payload)
-                for ts, payload in self.consequence_fills.poll(self.exchange, now_ns=now_ns)
+                for ts, payload in self.consequence_fills.poll(
+                    self.exchange, now_ns=now_ns, tick_ns=self.wall.tick_ns())
             ]
             observed.extend(self.venue.funding_payments(now_ns))
             self._settle_exchange_effects(observed)

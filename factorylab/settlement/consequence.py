@@ -856,8 +856,9 @@ class FillCursor:
 
     Timestamp plus all Fill fields and their multiplicity distinguish observations,
     never the order id alone. Exact venues retain the latest timestamp's counts.
-    Live reads retain every count since launch: an empirical propagation maximum is
-    not a proof that a future fill cannot arrive later. Every booked fill passes here.
+    Live reads retain counts only inside the measured overlap window. An empirical
+    propagation maximum is not proof that a future fill cannot arrive later; a
+    required overlap behind discarded history makes completeness unknown.
     """
 
     def __init__(self, ledger: Ledger, *, start_ns: int, measured: bool = False) -> None:
@@ -866,6 +867,7 @@ class FillCursor:
             raise ValueError("start_ns must be nonnegative integer nanoseconds")
         ledger.append({"kind": "consequence.fill_cursor", "since_ns": start_ns, "seen": []})
         self.ledger = ledger
+        self.launch_ns = start_ns
         self.since_ns = start_ns
         self.seen: dict[tuple, int] = {}
         self.measured = measured
@@ -874,9 +876,10 @@ class FillCursor:
         # Chapter II §III.b: live completeness is an observation, not a request-time
         # assertion. Until a timed execution is observed there is no measured bound.
         self.through_ns: int | None = None
+        self.read_ns: int | None = None
 
     def poll(self, exchange, *, strict: bool = False,
-             now_ns: int | None = None) -> list[tuple[int, dict]]:
+             now_ns: int | None = None, tick_ns: int = 0) -> list[tuple[int, dict]]:
         """Return unseen executions in timestamp order, persisting the cursor before advance.
 
         Guarantees each execution states its venue time (``fill_ns``). Exact reads
@@ -884,9 +887,23 @@ class FillCursor:
         first-seen delay, remaining unknown before the first timed fill. A failed
         read changes nothing. The empirical bound can grow and the watermark can
         retreat; neither proves the maximum delay of executions not yet observed.
+        The polling candidate is the last successful read time minus the measured
+        bound, even while completeness is unknown; one further bound and tick of
+        overlap delimit retained identities, clamped at launch and discarded history.
         """
+        if type(tick_ns) is not int or tick_ns < 0:
+            raise ValueError("tick_ns must be nonnegative integer nanoseconds")
+        read_start = self.since_ns
+        lost_overlap = False
+        if (self.measured and self.read_ns is not None
+                and self.propagation_bound_ns is not None):
+            wanted = max(self.launch_ns, self.read_ns
+                         - 2 * self.propagation_bound_ns - tick_ns)
+            lost_overlap = wanted < self.since_ns
+            # Chapter II §III.b: forgotten identities cannot safely be booked again.
+            read_start = max(self.since_ns, wanted)
         try:
-            fills = exchange.fills(self.since_ns)
+            fills = exchange.fills(read_start)
         except RuntimeError:  # read-only venue without an account
             if strict:
                 raise
@@ -895,7 +912,7 @@ class FillCursor:
         result = []
         observations = []
         for fill in sorted(fills, key=lambda f: f.ts_ns):
-            if fill.ts_ns < self.since_ns:
+            if fill.ts_ns < read_start:
                 continue
             payload = {
                 "order_id": fill.order_id,
@@ -921,7 +938,11 @@ class FillCursor:
         bound = self.propagation_bound_ns
         if observations:
             bound = max(bound or 0, *(max(0, seen - ts) for ts, seen in observations))
-        complete = self.observation_complete and len(observations) == len(result)
+        history_complete = all(getattr(fill, "history_complete", True) for fill in fills)
+        if self.measured and now_ns is not None and bound is not None:
+            lost_overlap |= max(self.launch_ns, now_ns - 2 * bound - tick_ns) < read_start
+        complete = (self.observation_complete and not lost_overlap and history_complete
+                    and len(observations) == len(result))
         if self.measured and now_ns is not None:
             through = None if bound is None or not complete else now_ns - bound
             # Chapter II §III.b: the measured outside fact is public and replayable.
@@ -930,17 +951,20 @@ class FillCursor:
             self.ledger.append({"kind": "consequence.fill_propagation",
                                 "read_ns": now_ns, "through_ns": through,
                                 "bound_ns": bound, "observation_complete": complete,
+                                "read_start_ns": read_start, "history_complete": history_complete,
+                                "lost_overlap": lost_overlap,
                                 "observations": [[ts, seen] for ts, seen in observations]})
             self.through_ns = through
         elif now_ns is not None:
             self.through_ns = max(self.through_ns or now_ns, now_ns)
         self.propagation_bound_ns = bound
+        self.read_ns = now_ns
         if self.measured:
             self.observation_complete = complete
-        if result:
-            latest = self.since_ns if self.measured else max(ts for ts, _ in result)
+        if result or (self.measured and read_start != self.since_ns):
+            latest = read_start if self.measured else max(ts for ts, _ in result)
             seen = ({key: max(self.seen.get(key, 0), counts.get(key, 0))
-                     for key in self.seen | counts} if self.measured else
+                     for key in self.seen | counts if key[0] >= read_start} if self.measured else
                     {key: count for key, count in counts.items() if key[0] == latest})
             self.ledger.append(
                 {

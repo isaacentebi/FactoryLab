@@ -124,6 +124,7 @@ class Fill:
     inventory_size: Decimal | None = None
     observed_at_ns: int | None = None
     crossed: bool | None = None
+    history_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -215,6 +216,8 @@ class Exchange(Protocol):
 
 #: The most fills Hyperliquid's ``userFillsByTime`` answers in one read.
 FILLS_PAGE = 2000
+#: The endpoint exposes only the most recent 10,000 fills, across time pages.
+FILLS_HISTORY = 10_000
 
 
 def _venue_fill_id(row: dict) -> str:
@@ -1593,11 +1596,12 @@ class HyperliquidExchange:
 
         Runtime polling may defer a failed read, while terminal reconciliation
         reports that failure explicitly. Neither advances the inclusive cursor.
-        Guarantees every fill at or after ``since_ns`` the venue holds: the venue
-        answers at most ``FILLS_PAGE`` rows per read, so a full page is followed by the
-        next from its latest millisecond (reread, and deduplicated by trade id), until
-        a short page proves the rest delivered (Codex on #152: a caller's watermark
-        may pass only what was read). A full page that does not advance fails closed.
+        Time pages contain at most 2,000 rows, within the endpoint's most recent
+        10,000 fills (Hyperliquid info endpoint, userFillsByTime). Inclusive pages
+        deduplicate trade ids. Exhausting retained history whose first fill follows
+        the read start marks every returned fill's history incomplete; a short final
+        page proves pagination ended, not that older venue history still exists.
+        A full page that does not advance fails closed.
         """
         if not self._address:
             raise RuntimeError("fills() needs an address or a private key")
@@ -1666,7 +1670,11 @@ class HyperliquidExchange:
         import time
 
         observed_at_ns = time.time_ns()
-        return [replace(fill, observed_at_ns=observed_at_ns) for fill in out]
+        # Chapter II §III.b: the history cap cannot become a completeness assertion.
+        history_complete = not (len(rows) >= FILLS_HISTORY
+                                and min((f.ts_ns for f in out), default=since_ns + 1) > since_ns)
+        return [replace(fill, observed_at_ns=observed_at_ns,
+                        history_complete=history_complete) for fill in out]
 
     def candles(self, coin: str, interval: str, n: int) -> list[dict]:
         """Return up to n recent OHLCV buckets in increasing nanosecond timestamp order."""

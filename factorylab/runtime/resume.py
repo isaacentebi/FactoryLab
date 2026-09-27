@@ -963,7 +963,7 @@ _COMPONENT_FIELDS = (
                           # Codex on #152: the facts seen through, and returns' economics
                           # frozen at their horizon.
                           "facts_ns", "tick_through_ns", "history")),
-    ("consequence_fills", "", ("since_ns", "seen", "through_ns", "measured",
+    ("consequence_fills", "", ("launch_ns", "read_ns", "since_ns", "seen", "through_ns", "measured",
                                "propagation_bound_ns", "observation_complete")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
@@ -1266,6 +1266,14 @@ def restore_runtime(rt, state: dict) -> None:
                                    ordinals=ordinals.get(path))
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
+            if name == "consequence_fills" and field not in components[name]:
+                if field == "launch_ns":
+                    rt.consequence_fills.launch_ns = components[name]["since_ns"]
+                    continue
+                if field == "read_ns":
+                    # Older cursors retained launch history; first resumed poll rereads it.
+                    rt.consequence_fills.read_ns = None
+                    continue
             if (name == "controller" and field in ("kp", "kd")
                     and field not in components[name]):
                 # Older checkpoints inherited these immutable parameters from the same manifest.

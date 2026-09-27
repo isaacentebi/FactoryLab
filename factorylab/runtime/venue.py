@@ -210,7 +210,8 @@ def read_wind_down_fills(rt, report: dict | None = None) -> None:
     errors, reads = [], 0
     for _attempt in range(ROUNDS_PER_KILL):
         try:
-            fills = rt.consequence_fills.poll(exchange, strict=True, now_ns=rt.clock.now_ns)
+            fills = rt.consequence_fills.poll(exchange, strict=True, now_ns=rt.clock.now_ns,
+                                              tick_ns=rt.wall.tick_ns())
         except Exception as exc:  # noqa: BLE001 - an unanswered read is retried, then noted
             errors.append(type(exc).__name__)
             continue
@@ -468,7 +469,8 @@ class VenueMixin:
             self._reconcile_orders(final=True)
             try:
                 fills = self.consequence_fills.poll(self.exchange, strict=True,
-                                                    now_ns=self.clock.now_ns)
+                                                    now_ns=self.clock.now_ns,
+                                                    tick_ns=self.wall.tick_ns())
             except Exception as exc:
                 # A failed read cannot turn into evidence of an empty fill set.
                 report["fill_read_error"] = type(exc).__name__

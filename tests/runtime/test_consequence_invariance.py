@@ -418,8 +418,11 @@ def _run(rng: random.Random) -> dict:
                 if kind == "poll" and late_fill:
                     exchange = SimpleNamespace(fills=lambda since: [
                         f for f in visible_fills if f.ts_ns >= since])
+                    # The synthetic reader polls at 5–70 s cadence above, rather than
+                    # on each 10 s market tick. Its one-poll slack is that 70 s bound.
                     delivered = [(ts, "Fill", {**payload, "ts_ns": ts})
-                                 for ts, payload in fill_cursor.poll(exchange, now_ns=at)]
+                                 for ts, payload in fill_cursor.poll(exchange, now_ns=at,
+                                                                     tick_ns=70 * S)]
                     delivered += [(f[0], "Funding", f) for f in funding]
                     for _ts, event_kind, payload in sorted(delivered, key=lambda row: row[0]):
                         if event_kind == "Fill":
