@@ -75,11 +75,11 @@
       }
       var head = bar.querySelector("[data-head]");
       if (head) head.innerHTML = (d.status.live ? "<b class='sig'>●</b>&nbsp;Live" : "○&nbsp;Not live");
-      var ms = bar.querySelector("[data-milestone]");
+      var ms = bar.querySelector("[data-state]");
       if (ms) ms.innerHTML = "<b>" + d.status.headline + "</b>";
     }).catch(function () {
-      var ms = bar.querySelector("[data-milestone]");
-      if (ms) ms.textContent = "Progress data unavailable";
+      var ms = bar.querySelector("[data-state]");
+      if (ms) ms.textContent = "Factory status unavailable";
     });
   }
 

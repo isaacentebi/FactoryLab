@@ -193,7 +193,7 @@ blockquote.pull cite {
 .bar .rail i.p { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-4); }
 .bar .rail i.now { background: var(--sodium); }
 .bar a { text-decoration: none; color: var(--ink-2); }
-.bar [data-milestone] { display: block; line-height: var(--bar); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bar [data-state] { display: block; line-height: var(--bar); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 body.has-bar { padding-bottom: var(--bar); }
 @media (max-width: 760px) {
   .bar .rail, .bar .hide-s { display: none; }
