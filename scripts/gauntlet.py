@@ -3079,10 +3079,18 @@ def _sf0_parts(manifest: Mapping, events: list[Mapping]) -> tuple[str, dict]:
 
 
 def _manifest_from(path: str | None) -> dict:
+    """The manifest at ``path`` (JSON or world TOML) as a mapping; one that cannot be
+    read or parsed, or is not a mapping, raises ``DiaryInvalid`` naming the file."""
     if path is None:
         return {}
-    text = Path(path).read_text()
-    return json.loads(text) if path.endswith(".json") else tomllib.loads(text)
+    try:
+        text = Path(path).read_text()
+        manifest = json.loads(text) if path.endswith(".json") else tomllib.loads(text)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise DiaryInvalid(f"the manifest {path} cannot be read: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise DiaryInvalid(f"the manifest {path} is not a mapping")
+    return manifest
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3100,8 +3108,8 @@ def main(argv: list[str] | None = None) -> int:
     sw.add_argument("--seeds", default="1,2,3")
     args = parser.parse_args(argv)
     if args.command == "replay":
-        manifest = _manifest_from(args.manifest) if args.manifest else None
         try:
+            manifest = _manifest_from(args.manifest) if args.manifest else None
             events = load_events(args.diary)
             results = replay(events, manifest, world=args.world, seed=args.seed)
         except DiaryInvalid as exc:

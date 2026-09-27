@@ -1387,6 +1387,25 @@ def test_the_replay_command_refuses_an_unbound_diary(tmp_path, capsys):
     assert g.main(["replay", str(tmp_path / "rows.json"), "--world", "w", "--seed", "1"]) == 0
 
 
+@pytest.mark.parametrize("name,text", [
+    ("missing.json", None), ("m.json", '{"prices": '), ("m.json", "[1, 2]"),
+    ("m.toml", "prices = ["), ("m.toml", "\udc80"), ("m.json", b"\xff\xfe\x00")],
+    ids=["missing", "truncated-json", "not-a-mapping", "bad-toml", "undecodable", "binary"])
+def test_a_manifest_that_cannot_be_read_is_refused_not_raised(tmp_path, capsys, name, text):
+    """Codex on 6f22238: ``--manifest`` read or parse failures are ``DiaryInvalid``
+    (exit 2, "refused"), inside the same guard as the diary's."""
+    (tmp_path / "rows.json").write_text(json.dumps(_seq([_launch(name="w"), _w(1)])))
+    path = tmp_path / name
+    if isinstance(text, bytes):
+        path.write_bytes(text)
+    elif text is not None:
+        path.write_text(text, errors="surrogateescape")
+    with pytest.raises(g.DiaryInvalid, match="manifest"):
+        g._manifest_from(str(path))
+    assert g.main(["replay", str(tmp_path / "rows.json"), "--manifest", str(path)]) == 2
+    assert "refused" in capsys.readouterr().err
+
+
 
 # --- the consolidated round on 9fea1f2: Codex pass 11 and Sol's cross-family pass -----------
 
