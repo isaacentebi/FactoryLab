@@ -256,3 +256,31 @@ def test_a_timed_out_forecast_return_still_carries_its_unresolved_price(monkeypa
     assert history[0].status is SettleStatus.TIMED_OUT
     assert history[-1].definition_version == UNRESOLVED_PRICED and history[-1].score > 0
     assert parent not in rt.forecast_returns
+
+
+def test_a_saturated_region_violation_plus_a_holdout_closes_the_window(monkeypatch):
+    """Codex on #152: a subnormal scale holds the region violation at FLOAT_MAX, and a
+    failed holdout adds its own; their sum was infinity, which aborted the close. It is
+    saturated (``held_sum``): the window closes, the card is priced, and every ledger
+    row is JSON without infinities."""
+    import json
+
+    from factorylab.charter.controller import FLOAT_MAX, CardRegion
+
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    card = MetricCard("wf", "care with scarce resources", "A reading.", "fraction",
+                      MetricWindow("windows", 1, None), {"rule": "at least", "lo": 0.9},
+                      "well_formed_rate", "all")
+    rt = _runtime(card)
+    region = CardRegion("wf", "min", 0.9, None, 5e-324)  # a subnormal scale
+    rt.regions["wf"] = region
+    rt.controller.update_region(region)
+    monkeypatch.setattr(rt, "_holdout_results", lambda _values: {
+        "wf": {"results": {"h@1": False}, "violation": FLOAT_MAX}})
+    rt.window.invocations, rt.window.ok = 10, 1
+    rt._close_price_window()
+    (update,) = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.update"]
+    assert update["violation"] == FLOAT_MAX
+    for row in rt.ledger._recovery_items():
+        json.dumps(row, allow_nan=False)
+    assert rt._penalty_for("all", _decision(rt, INNOCENT)) <= rt.m.prices.penalty_cap

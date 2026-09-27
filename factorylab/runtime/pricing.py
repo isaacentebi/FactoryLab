@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from fractions import Fraction
-from math import ceil
+from math import ceil, fsum
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import (
     CardRegion,
     held,
+    held_sum,
     part,
     ratio,
     relative_region,
@@ -804,13 +805,13 @@ class PricingMixin:
             # Saturated at the cap: an unbounded adopted price never overflows (R-E).
             weight[cid] = card_pressure(
                 self.controller.price(cid),
-                violation(region, card_values[cid]) + holdouts.get(cid, 0.0),
+                held_sum(violation(region, card_values[cid]), holdouts.get(cid, 0.0)),
                 self.m.prices.penalty_cap)
         roles = sorted({c.answers_for for c in cards.values() if c.answers_for != "all"})
 
         def role_sum(role: str | None) -> float:
-            return sum(w for cid, w in weight.items()
-                       if cards[cid].answers_for in ("all", role))
+            return held_sum(*(w for cid, w in weight.items()
+                              if cards[cid].answers_for in ("all", role)))
 
         pressure = {}
         for cid, card in cards.items():
@@ -1035,7 +1036,7 @@ class PricingMixin:
                     or observation is None or not scopes):
                 continue
             excess = {scope: violation(region, value) for scope, value in scopes.items()}
-            total = sum(excess.values())
+            total = held_sum(*excess.values())
             if total <= 0:
                 continue
             # The decisions that will settle against this window's frozen price for
@@ -1112,7 +1113,7 @@ class PricingMixin:
                 continue
             holdouts = (self.card_samples.holdouts if window.closed_values is None
                         else window.closed_holdouts)
-            amount = violation(region, values[card.id]) + holdouts.get(card.id, 0.0)
+            amount = held_sum(violation(region, values[card.id]), holdouts.get(card.id, 0.0))
             weight = card_pressure(price, amount, self.m.prices.penalty_cap)
             owner = None
             share = 1.0 if handle is None else self._decision_share(
@@ -1169,7 +1170,7 @@ class PricingMixin:
         if per not in ("assembly", "role") or not scopes:
             return None
         excess = {scope: violation(region, value) for scope, value in scopes.items()}
-        total = sum(excess.values())
+        total = held_sum(*excess.values())
         if total <= 0:
             return None
         own = (as_role if as_role is not None and per == "role"
@@ -1351,10 +1352,12 @@ class PricingMixin:
         if not self._in_split(handle):
             return 0.0
         terms = self._penalty_terms(cards, handle, as_role=as_role)
-        total = sum(t["weight"] for t in terms)
+        total = held_sum(*(t["weight"] for t in terms))
         if total <= 0:
             return 0.0
-        share = sum(t["weight"] * t["share"] for t in terms) / total
+        # Each weight read relative to the saturated total (``held_sum``), so the
+        # weighted share stays in [0, 1] even where the weights' sum overflowed.
+        share = min(1.0, fsum(t["weight"] / total * t["share"] for t in terms))
         return min(total, self.m.prices.penalty_cap) * share
 
     def _awaits_close(self, cards: str, handle: str | None) -> bool:

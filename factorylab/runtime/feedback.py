@@ -7,6 +7,7 @@ from math import ceil
 from statistics import fmean
 from typing import Any
 
+from factorylab.charter.controller import held_sum
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import LearningReturn, SettleStatus
 from factorylab.kernel.wallet import Infeasible
@@ -2750,8 +2751,8 @@ class FeedbackMixin:
         # Each role's price is measured with the abstention scoped in that role (the
         # Wave 2 review, item 8b): a less-weighted role's floor and attribution are
         # that role's, never the role the window filed the abstention under.
-        penalty = sum(weight * self._penalty_for(role, handle, as_role=role)
-                      for role, weight in sorted(roles.items()))
+        penalty = held_sum(*(weight * self._penalty_for(role, handle, as_role=role)
+                             for role, weight in sorted(roles.items())))
         return penalty
 
     def _abstention_awaits_close(self, handle: str) -> bool:

@@ -312,3 +312,21 @@ def test_a_card_with_no_declared_price_restarts_from_its_price_in_force():
     old.redefine("c")
     card = old.snapshot()["cards"]["c"]
     assert (card["lambda"], card["integral"]) == (live, live)
+
+
+def test_held_sum_saturates_and_is_exact_where_finite():
+    """Codex on #152: held values summed never reach infinity."""
+    from factorylab.charter.controller import FLOAT_MAX, held_sum
+
+    assert held_sum() == 0.0 and held_sum(0.1, 0.2, -0.3) == pytest.approx(0.0)
+    assert held_sum(FLOAT_MAX, FLOAT_MAX) == FLOAT_MAX
+    assert held_sum(FLOAT_MAX, FLOAT_MAX, FLOAT_MAX) == FLOAT_MAX
+    assert held_sum(-FLOAT_MAX, -FLOAT_MAX) == -FLOAT_MAX
+    assert held_sum(FLOAT_MAX, FLOAT_MAX, -FLOAT_MAX) == FLOAT_MAX  # intermediate overflow
+    assert held_sum(float("inf"), 1.0) == FLOAT_MAX  # an infinity is held first
+    ledger = Ledger()
+    prices = PriceController(ledger, eta=0.5, decay=0.1, penalty_cap=0.9,
+                             min_window_events=1, kp=0.5)
+    prices.register(CardRegion("c", "max", None, 0.0, 5e-324))  # a subnormal scale
+    prices.observe("c", 1.0, 0, holdout=FLOAT_MAX)
+    assert _updates(ledger)[-1]["violation"] == FLOAT_MAX

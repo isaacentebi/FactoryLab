@@ -2,7 +2,7 @@
 
 import sys
 from dataclasses import dataclass, replace
-from math import copysign, isfinite
+from math import copysign, fsum, isfinite
 from typing import Literal
 
 from factorylab.charter.amendment import proposed_price
@@ -36,6 +36,22 @@ def held(value: float) -> float:
     overflowing product or sum is held at ``FLOAT_MAX``, never ledgered as infinity.
     """
     return value if isfinite(value) else copysign(FLOAT_MAX, value)
+
+
+def held_sum(*values: float) -> float:
+    """The sum of ``values``, saturated: finite for any non-NaN floats.
+
+    Guarantees the exact sum (``fsum``) where it is finite, else ``FLOAT_MAX`` of the
+    sum's sign (Codex on #152): a region violation and a holdout violation, pressures,
+    penalty weights and PID terms may each be held at ``FLOAT_MAX``, and adding two of
+    them must never reach infinity, which no ledger row can carry. An intermediate
+    overflow is resolved by summing the terms relative to ``FLOAT_MAX``.
+    """
+    terms = [held(v) for v in values]
+    try:
+        return held(fsum(terms))
+    except OverflowError:
+        return held(fsum(v / FLOAT_MAX for v in terms) * FLOAT_MAX)
 
 
 def part(own: float, values) -> float:
@@ -547,7 +563,7 @@ class PriceController:
                 }
             )
             return
-        violation = self.violation(card_id, value) + holdout
+        violation = held_sum(self.violation(card_id, value), holdout)
         if pressure is not None:
             pressure = _number(pressure, "pressure")
         # At its own bound no gain on the card's price exists, and the integrator
@@ -560,7 +576,7 @@ class PriceController:
                                                episode=episode)
         if anticipated is not None and violation > 0:
             feed_forward = held(self.__kp * max(anticipated, -violation))
-            requested = held(requested + feed_forward)
+            requested = held_sum(requested, feed_forward)
             terms = {**terms, "f": feed_forward, "anticipated": anticipated}
         bound = self._bound(violation)
         price = max(0.0, requested) if bound is None else min(bound, max(0.0, requested))
@@ -586,8 +602,8 @@ class PriceController:
             violation_windows=state.violation_windows + 1 if violation > 0 else 0,
             # The pressure at the prices now in force: the reading (at the prices
             # before this update) moved by this card's own change.
-            last_pressure=max(0.0, (own_before if pressure is None else pressure)
-                              - own_before + own_after),
+            last_pressure=max(0.0, held_sum(own_before if pressure is None else pressure,
+                                            -own_before, own_after)),
         )
         entry = {
             "kind": "price.update",
@@ -656,15 +672,15 @@ class PriceController:
             # an integral prices nothing and could never decay; a spike's smaller
             # bound never cuts it.
             kept = min(episode, state.integral)
-            if frozen or (proportional + kept >= bound
+            if frozen or (held_sum(proportional, kept) >= bound
                           and violation > state.previous_violation):
                 # At the cap, or saturated high without any new integration and still
                 # climbing: hold, never wind up, and never cut: a spike's lower bound
                 # clips the price, not the pressure the card has accumulated.
                 integral = kept
             else:
-                integral = min(bound, kept + self.__eta * violation)
-        return (held(proportional + integral + derivative), integral,
+                integral = min(bound, held_sum(kept, self.__eta * violation))
+        return (held_sum(proportional, integral, derivative), integral,
                 {"p": proportional, "i": integral, "d": derivative})
 
     def saturation(self, card_id: str) -> dict[str, float | int | None]:
@@ -700,14 +716,11 @@ class PriceController:
     def penalty(self, values: dict[str, float]) -> float:
         """Return the sum over known cards of each one's pressure, saturated per card at
         the cap (``pressure``) and not clipped in total; callers own score clipping."""
-        return sum(
-            (
-                _pressure(self.price(card_id), self.violation(card_id, value), self.__cap)
-                for card_id, value in values.items()
-                if card_id in self.__cards
-            ),
-            0.0,
-        )
+        return held_sum(*(
+            _pressure(self.price(card_id), self.violation(card_id, value), self.__cap)
+            for card_id, value in values.items()
+            if card_id in self.__cards
+        ))
 
     @property
     def decay(self) -> float:
