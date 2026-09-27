@@ -125,3 +125,22 @@ def test_a_combined_contract_is_answered_whole_never_by_the_one_form_it_picked()
     ballot = {"type": "object", "required": ["vote"], "properties": {"vote": {"type": "boolean"}}}
     only, _text = _model_request("Vote on the motion.", {}, ballot)
     assert "verdict" not in json.loads(ScriptedProvider().complete(only).text)
+
+
+def test_a_combined_closed_bounded_contract_is_answered_inside_its_schema():
+    """Sol on #157: a contract requiring a vote and a verdict, closed
+    (``additionalProperties: false``) and bounding the verdict at 0.2, is answered with
+    exactly those two fields and a verdict inside the bound: the kernel's own
+    ``validate_schema`` admits it. Whole canned replies merged in carried ``reason``,
+    ``rationale`` and ``forecasts``, and a verdict of 0.3."""
+    from factorylab.cortex.assembly import validate_schema
+
+    closed = {"type": "object", "required": ["vote", "verdict"],
+              "additionalProperties": False,
+              "properties": {"vote": {"type": "boolean"},
+                             "verdict": {"type": "number", "minimum": 0, "maximum": 0.2}}}
+    model_req, text = _model_request("Vote on the motion.", {}, closed)
+    reply = json.loads(ScriptedProvider().complete(model_req).text)
+    assert set(reply) == {"vote", "verdict"} and reply["vote"] is True, reply
+    assert 0 <= reply["verdict"] <= 0.2, reply
+    validate_schema(reply, closed)

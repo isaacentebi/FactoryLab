@@ -84,23 +84,42 @@ class ScriptedProvider:
 
     def _satisfy_contract(self, reply: Any, req: ModelRequest, text: str,
                           inputs: dict[str, Any]) -> Any:
-        """``reply`` with every recognised field the contract obliges (``contract_requires``)
-        that it lacks, each as this population answers that field alone (R16b-7).
+        """``reply`` answering the whole contract when it lacks a field every admitted
+        shape obliges (``contract_requires``; R16b-7), else ``reply`` as it is.
 
         Guarantees a combined contract (a ballot that must also carry a verdict, say) is
-        satisfied whole, never answered by the one form its classifier picked; a field
-        the reply already carries is kept. Harness only: the kernel never reads this.
+        answered whole, never by the one form its classifier picked, and the answer is
+        built from the admitted schema: only the fields an admitted shape names (a
+        closed schema, ``additionalProperties: false``, gets no stray field), each
+        value this population gives that field alone, fitted to that field's own
+        bounds and enum; it is returned only if its admitted shape admits it
+        (``_admits``), else ``reply`` is returned unchanged (Sol on #157). Harness
+        only: the kernel never reads this.
         """
         if not isinstance(reply, dict):
+            return reply
+        required = contract_requires(req, text)
+        if required <= set(reply):
+            return reply
+        schema = _contract_schema(req, text)
+        if schema is None:
             return reply
         answers = {"conformity": lambda: self._meta(inputs),
                    "vote": lambda: {"vote": True, "reason": "scripted yes"},
                    "assessment": lambda: {"assessment": "scripted testimony"},
                    "verdict": lambda: self._evaluate(req, inputs)}
-        required = contract_requires(req, text)
-        for field, answer in answers.items():
-            if field in required and field not in reply:
-                reply = {**answer(), **reply}
+        for shape in _admitted_shapes(schema):
+            properties = shape.get("properties") or {}
+            closed = shape.get("additionalProperties") is False
+            answer = {k: v for k, v in reply.items() if not closed or k in properties}
+            for field in shape.get("required") or ():
+                if field not in answer and field in answers:
+                    value = answers[field]().get(field)
+                    if value is not None:
+                        answer[field] = value
+            answer = {k: _fit(v, properties.get(k)) for k, v in answer.items()}
+            if _admits(answer, shape):
+                return answer
         return reply
 
     @staticmethod
@@ -453,6 +472,113 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
     if not isinstance(schema, dict):
         return frozenset()
     return frozenset().union(*_shape_required(schema))
+
+
+def _contract_schema(req: ModelRequest | None, text: str) -> dict | None:
+    """The request's outcome schema, from the same trusted sources as
+    ``outcome_required``: the rendered ``OUTCOME SCHEMA`` line, else the wire schema."""
+    marker = "OUTCOME SCHEMA\n"
+    tail = _kernel_tail(text)
+    if marker in tail:
+        try:
+            schema = json.loads(tail.split(marker, 1)[1].split("\n", 1)[0])
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+        if isinstance(schema, dict):
+            return schema
+    schema = req.response_schema if req is not None else None
+    return schema if isinstance(schema, dict) else None
+
+
+def _admitted_shapes(schema: dict) -> list[dict]:
+    """The flat shapes a schema admits one level down: the schema itself, or each
+    ``anyOf`` / ``oneOf`` alternative (a local ``$ref`` resolved) with the enclosing
+    level's properties, requirements and closure merged in. A deeper union is not
+    flattened: its answer is checked against the level it names only."""
+    defs = schema.get("$defs") if isinstance(schema.get("$defs"), dict) else {}
+
+    def resolved(node: dict) -> dict:
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            found = defs.get(ref[len("#/$defs/"):])
+            if isinstance(found, dict):
+                return {**found, **{k: v for k, v in node.items() if k != "$ref"}}
+        return node
+
+    root = resolved(schema)
+    alts = root.get("anyOf") or root.get("oneOf")
+    if not isinstance(alts, list) or not alts:
+        return [root]
+    shapes = []
+    for alt in (resolved(a) for a in alts if isinstance(a, dict)):
+        closed = (alt.get("additionalProperties") is False
+                  or root.get("additionalProperties") is False)
+        shapes.append({
+            "properties": {**(root.get("properties") or {}), **(alt.get("properties") or {})},
+            "required": [*(root.get("required") or ()), *(alt.get("required") or ())],
+            **({"additionalProperties": False} if closed else {})})
+    return shapes
+
+
+#: The JSON types a scripted answer's fields are checked against (``_admits``).
+_JSON_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool,
+               "number": (int, float), "integer": int, "null": type(None)}
+
+
+def _admits(answer: dict, shape: dict) -> bool:
+    """Whether a flat admitted shape admits ``answer``: every required field present,
+    no field a closed shape does not name, and each named field of its type, inside
+    its enum and its numeric bounds. The world layer imports nothing of the factory's
+    validator (package boundary), so the scripted seat checks its own answer here."""
+    properties = shape.get("properties") or {}
+    if any(f not in answer for f in shape.get("required") or ()):
+        return False
+    if shape.get("additionalProperties") is False and set(answer) - set(properties):
+        return False
+    for key, value in answer.items():
+        field = properties.get(key)
+        if not isinstance(field, dict):
+            continue
+        kinds = field.get("type")
+        kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
+        if kinds and not any(
+                isinstance(value, _JSON_TYPES.get(k, ())) and not (
+                    k in ("number", "integer") and isinstance(value, bool))
+                for k in kinds):
+            return False
+        if isinstance(field.get("enum"), list) and value not in field["enum"]:
+            return False
+        if type(value) in (int, float) and (
+                ("minimum" in field and value < field["minimum"])
+                or ("maximum" in field and value > field["maximum"])
+                or ("exclusiveMinimum" in field and value <= field["exclusiveMinimum"])
+                or ("exclusiveMaximum" in field and value >= field["exclusiveMaximum"])):
+            return False
+    return True
+
+
+def _fit(value: Any, schema: Any) -> Any:
+    """``value`` moved inside ``schema``'s own enum and numeric bounds, when it has any:
+    the first enum member for a value outside it, a number clamped to its inclusive
+    bounds, or the midpoint of its bounds for an exclusive one it crosses."""
+    if not isinstance(schema, dict):
+        return value
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum and value not in enum:
+        return enum[0]
+    if type(value) not in (int, float):
+        return value
+    lo = schema.get("minimum", schema.get("exclusiveMinimum"))
+    hi = schema.get("maximum", schema.get("exclusiveMaximum"))
+    if "minimum" in schema and value < schema["minimum"]:
+        value = schema["minimum"]
+    if "maximum" in schema and value > schema["maximum"]:
+        value = schema["maximum"]
+    crosses = (("exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"])
+               or ("exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]))
+    if crosses and lo is not None and hi is not None:
+        value = (lo + hi) / 2
+    return value
 
 
 def _shape_required(schema: dict) -> list[frozenset[str]]:
