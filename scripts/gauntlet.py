@@ -253,32 +253,75 @@ def physics(manifest: Mapping | None) -> Physics:
         consequence_share=float(get(evaluation, "consequence_share", base.consequence_share)),
         no_swap_regret_kinds=tuple(get(evaluation, "no_swap_regret_kinds", ())),
     )
-    _check_physics(ph)
     return ph
 
 
-#: The physics every iterative reading depends on (``w_sat``, ``t_release``,
-#: ``t_gamma``, ``gain_steps``): each a finite rate, a positive step where a loop
-#: advances by it. ``lambda_max`` may be infinite (wave 16 states none).
-_POSITIVE = ("decay", "gain_step", "cap", "gamma_max")
-_NONNEGATIVE = ("eta", "kp", "kd", "price_step", "tv_threshold", "gap_threshold")
+def _rebuild(tp: Any, value: Any) -> Any:
+    """``value`` (a manifest's JSON) as the kernel's dataclass ``tp``, field by field from
+    the dataclass's own type hints: the inverse of ``asdict`` the launched manifest was
+    written with (``WorldManifest.canonical_json``)."""
+    import dataclasses
+    import types
+    import typing
+
+    if value is None:
+        return None
+    origin = typing.get_origin(tp)
+    if dataclasses.is_dataclass(tp):
+        hints = typing.get_type_hints(tp)
+        return tp(**{f.name: _rebuild(hints[f.name], value[f.name])
+                     for f in dataclasses.fields(tp) if f.init and f.name in value})
+    if origin in (typing.Union, types.UnionType):
+        for arg in (a for a in typing.get_args(tp) if a is not type(None)):
+            try:
+                return _rebuild(arg, value)
+            except (TypeError, ValueError, KeyError, AttributeError):
+                continue
+        return value
+    if origin is tuple:
+        args = typing.get_args(tp)
+        if len(args) == 2 and args[1] is Ellipsis:
+            return tuple(_rebuild(args[0], v) for v in value)
+        return tuple(_rebuild(a, v) for a, v in zip(args, value, strict=False)) if args \
+            else tuple(value)
+    if origin in (dict, Mapping) and typing.get_args(tp):
+        return {k: _rebuild(typing.get_args(tp)[1], v) for k, v in value.items()}
+    if origin is frozenset:
+        return frozenset(value)
+    return value
 
 
-def _check_physics(ph: Physics) -> None:
-    """Refuse (``DiaryInvalid``) physics under which a reading would never end or mean
-    nothing: a non-finite rate, a step that does not advance (``decay`` or
-    ``gain_step`` at or below 0 makes ``t_release`` / ``t_gamma`` loop forever), a
-    loop ratio or tail below 1 (Codex on b1c8590)."""
-    bad = [name for name in _POSITIVE
-           if not (math.isfinite(getattr(ph, name)) and getattr(ph, name) > 0)]
-    bad += [name for name in _NONNEGATIVE
-            if not (math.isfinite(getattr(ph, name)) and getattr(ph, name) >= 0)]
-    if not (ph.lambda_max > 0 and not math.isnan(ph.lambda_max)):
-        bad.append("lambda_max")
-    bad += [name for name in ("r", "k") if getattr(ph, name) < 1]
-    if bad:
-        raise DiaryInvalid(f"the manifest's physics is unusable: {', '.join(bad)} must be "
-                           "finite and positive where a reading advances by it")
+def kernel_problem(launched: Mapping) -> str | None:
+    """Why the kernel would not have launched this manifest, or None, by the kernel's
+    own load validation, never restated (Codex on b56e793): the launched manifest is
+    rebuilt as the kernel's ``WorldManifest`` and ``validate`` runs on it (novelty
+    share, the prices, the immune steps and bounds, the timing ratios, ...). A diary
+    launched before wave 16 (its prices state ``lambda_max``, which wave 16's kernel
+    refuses as removed) predates this kernel's rules; its prices are validated by the
+    controller that priced it (``PriceController``'s own constructor), and its other
+    physics by the gauntlet's bounded readings (``Malformed`` past their bound)."""
+    from factorylab.runtime.worlds import WorldManifest
+
+    try:
+        world = _rebuild(WorldManifest, launched)
+        world.validate()
+        return None
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        current = str(exc) or type(exc).__name__
+    prices = _section(launched, "prices")
+    if "lambda_max" not in prices:
+        return current
+    from factorylab.charter.controller import PriceController
+    from factorylab.kernel.ledger import Ledger
+
+    try:
+        PriceController(Ledger(None), eta=prices.get("eta"), decay=prices.get("decay"),
+                        penalty_cap=prices.get("penalty_cap"),
+                        min_window_events=prices.get("min_window_events", 1),
+                        kp=prices.get("kp", 0.0), kd=prices.get("kd", 0.0))
+    except (TypeError, ValueError) as exc:
+        return str(exc) or type(exc).__name__
+    return None
 
 
 def w_sat(ph: Physics, v: float) -> int | None:
@@ -309,8 +352,8 @@ _LOOP_SLACK = 64
 
 def _bound(span: float, step: float) -> int:
     """The iterations a loop advancing ``step`` needs to cover ``span``, with slack:
-    ``⌈span / step⌉ + _LOOP_SLACK`` (``step > 0`` by ``_check_physics``). A span or
-    step that is not finite bounds nothing, so the loop runs none and refuses."""
+    ``⌈span / step⌉ + _LOOP_SLACK``. A span or step that is not finite, or a step at or
+    below zero, bounds nothing, so the loop runs none and refuses (``Malformed``)."""
     if not (math.isfinite(span) and math.isfinite(step)) or step <= 0:
         return 0
     return max(0, math.ceil(max(0.0, span) / step)) + _LOOP_SLACK
@@ -594,6 +637,9 @@ def bind_diary(events: list[Mapping], *, world: str | None = None, seed: int | N
     """
     identity = diary_identity(events)
     launched = identity["manifest"]
+    why = kernel_problem(launched)
+    if why is not None:
+        raise DiaryInvalid(f"the kernel would not have launched this manifest: {why}")
     evidence = {"world": identity["name"], "manifest_hash": identity["manifest_hash"],
                 "seed": identity["seed"]}
     if world is not None and identity["name"] != world:

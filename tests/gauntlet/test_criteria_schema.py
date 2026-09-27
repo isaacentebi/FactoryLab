@@ -703,15 +703,39 @@ def test_no_open_ended_loop_in_the_gauntlet():
     assert all(reason.strip() for reason in WHILE_ALLOWED.values())
 
 
-@pytest.mark.parametrize("field,value", [("decay", 0.0), ("decay", -0.1),
-                                         ("decay", float("nan")), ("decay", float("inf")),
-                                         ("eta", float("inf")), ("penalty_cap", 0.0)])
-def test_physics_a_reading_cannot_advance_under_is_refused(field, value):
-    """Codex on b1c8590: decay 0 made t_release loop forever. Physics a reading would
-    never finish under is refused as DiaryInvalid, never run."""
-    manifest = {"prices": {"eta": 0.05, "decay": 0.1, "penalty_cap": 0.5, field: value}}
-    with pytest.raises(g.DiaryInvalid, match="physics is unusable"):
-        g.physics(manifest)
+def _launched(manifest):
+    launched = {**manifest, "name": manifest.get("name", "unit"), "seed": 1}
+    return [{"kind": "event", "seq": 1, "event": {"id": "launch", "kind": "Launch", "payload": {
+        "manifest": launched, "manifest_hash": g.manifest_hash(launched),
+        "launch_nonce": "0" * 32}}}]
+
+
+@pytest.mark.parametrize("block,field,value", [
+    ("novelty", "share", -0.1), ("novelty", "share", 1.5), ("prices", "decay", 0.0),
+    ("prices", "penalty_cap", 1.0), ("immune", "gain_step", 0.0), ("timing", "min_ratio", 2)])
+def test_a_launched_manifest_the_kernel_refuses_is_diary_invalid(block, field, value):
+    """Codex on b56e793: a diary's launched physics is validated by the kernel's own load
+    validation (``WorldManifest.validate`` on the rebuilt manifest), never restated: a
+    novelty share of -0.1, a decay of 0 or a ratio below 3 is refused as DiaryInvalid."""
+    from factorylab.runtime.worlds import load_manifest
+
+    good = json.loads(load_manifest("scripted").canonical_json())
+    assert g.bind_diary(_launched(good))[1]["world"] == "scripted"
+    bad = json.loads(json.dumps(good))
+    bad[block][field] = value
+    with pytest.raises(g.DiaryInvalid, match="the kernel would not have launched"):
+        g.bind_diary(_launched(bad))
+
+
+def test_a_pre_wave_16_launch_is_validated_by_the_controller_that_priced_it():
+    """A manifest stating prices.lambda_max predates wave 16's rules; its prices are read
+    by ``PriceController``'s own constructor: a decay of 0 is refused."""
+    old = {"prices": {"eta": 0.5, "decay": 0.1, "lambda_max": 1.0, "penalty_cap": 0.5,
+                      "min_window_events": 1}}
+    assert g.bind_diary(_launched(old))
+    old["prices"]["decay"] = 0.0
+    with pytest.raises(g.DiaryInvalid, match="decay"):
+        g.bind_diary(_launched(old))
 
 
 def test_the_iterative_readings_are_bounded_and_kernel_exact():
@@ -720,6 +744,10 @@ def test_the_iterative_readings_are_bounded_and_kernel_exact():
     assert g.t_release(ph, 0.0) == 0
     with pytest.raises(g.Malformed):
         g.t_release(ph, float("inf"))
+    # Physics a reading could not finish under is bounded, never a hang.
+    stalled = g.physics({"prices": {"decay": 0.0}})
+    with pytest.raises(g.Malformed):
+        g.t_release(stalled, 0.5)
 
 
 # --- Codex on 45c3ccd: an evidence map never silently overwrites a row ---------------------
