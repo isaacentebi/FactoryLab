@@ -865,6 +865,8 @@ _DERIVED_STATE = {
     "Runtime._peak_observed": "the window and tick whose position peak was already "
                               "observed; a venue write drops it and a restore re-reads",
     "Runtime._prefix_memo": "the rendered cacheable prompt prefix, keyed on what it renders",
+    "Assembly._wire_memo": "rendered wire contracts, keyed on every input wire_schema reads; "
+                           "a restore starts empty and renders each one again identically",
     "Runtime._world_chars_cache": "the world block's size, keyed on the event that measured it",
     "Runtime._artifact_listing_view": "the artifact listing, rebuilt from the archive index",
     "ArtifactStore._changed": "hashes changed since the listing last drained; a restore "
