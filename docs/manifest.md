@@ -456,10 +456,14 @@ done, so every judge a draw woke on a return counts and none alone
 **A verdict is also a prediction.** When the world resolves the judged return,
 the kernel scores the verdict `q` against a measured outcome `y`:
 `brier = 1 - (q - y)^2`, `base = 1 - (b - y)^2` with `b` the base rate of that
-kind of outcome, for the same named or taken coin, side and horizon, before this
+kind of outcome, for the same named or taken exposure and horizon, before this
 return's own entered it (once per return, however many judges read it; the key is
-`verdict:<definition>:<coin>:<side>:<horizon ns>`, wave 16 D3, so a judge that knows
-only which coins or sides the world usually proves right earns 0.5 and no more), and
+`verdict:<definition>:<exposure>:<horizon ns>`, wave 16 D3, so a judge that knows
+only which coins or sides the world usually proves right earns 0.5 and no more;
+`<exposure>` is `<coin>:<side>` for a named trade and for an acting return with one
+executed leg, and for one with several, each distinct `<instrument>:<side>` leg sorted
+by instrument then side and joined by `|`; a new vault the venue gave no address is
+`VAULT:new:<name>` with `%` written `%25` and `|` written `%7C`), and
 `consequence score = 0.5 + 0.5 * (brier - base)`, which stays in [0, 1] and is a
 proper scoring rule (an affine map of Brier) (`verdict.consequence`). A judge the
 world proved wrong earns less than one it proved right, and one that only repeats

@@ -526,7 +526,7 @@ def test_every_wave_16_formula_is_published_in_world_scoring():
     for fact in (
         "declined-trade-net-v1", "attempted-trade-net-v1",  # D1
         "H = timing.world_repricing / timing.min_ratio",  # D2
-        "verdict:<definition>:<coin>:<side>:<H in ns>", "uninformative",  # D3
+        "verdict:<definition>:<exposure>:<H in ns>", "uninformative",  # D3
         "the equal mean of those that exist",  # D6
         "No consequence score enters a card, a lambda or a posted lambda",  # section 9
         "priced at the router's observed average raw score less the same penalty",  # D4
@@ -929,3 +929,47 @@ def test_the_published_abstention_map_evaluates_to_what_every_learner_learns(raw
         formula, {}, {"r": raw, "B": eval(router_bound, {}, {"cap": cap}), "P": p + thrash}))
     assert rt._learning_value("s", raw, p) == pytest.approx(eval(
         formula, {}, {"r": raw, "B": eval(seat_bound, {}, {"cap": cap}), "P": p}))
+
+
+def test_the_published_prevalence_key_is_the_one_the_runtime_keys_by():
+    """Codex on #152: the key built FROM the published rule (its template, the leg
+    delimiter, the leg order and the vault-name escapes, each read from world.scoring)
+    equals ``_verdict_key`` for a single leg, several legs and an escaped new vault."""
+    import re
+
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    text = rt._scoring_block()["verdict_is_a_prediction"]
+    template = re.search(r"key (verdict:<definition>:<exposure>:<H in ns>)", text).group(1)
+    delimiter = re.search(r"joined by (\S);", text).group(1)
+    assert "sorted by instrument then side" in text
+    escapes = dict(re.findall(r"(\S) written (%[0-9A-F]{2})", text))
+    assert set(escapes) == {"%", "|"}
+
+    def published(legs):
+        """The key the published rule gives for these (instrument, side) legs."""
+        legs = sorted(dict.fromkeys(legs))
+        exposure = delimiter.join(f"{i}:{s}" for i, s in legs)
+        return (template.replace("<definition>", "return_paid_off")
+                .replace("<exposure>", exposure).replace("<H in ns>", str(rt._horizon_ns())))
+
+    def escaped(name):
+        return "".join(escapes.get(c, c) for c in name)
+
+    def order(coin, is_buy=True):
+        return {"operation": "venue.place_market", "status": "ok",
+                "args": {"coin": coin, "is_buy": is_buy, "size": "0.001"}}
+
+    vault = {"operation": "venue.vault_create", "status": "ok",
+             "args": {"name": "a|b%c", "description": "d", "usd": "100"}}
+    cases = {"single": ([order("BTC")], [("BTC", "buy")]),
+             "multi": ([order("SOL", False), order("BTC"), order("BTC/USDC")],
+                       [("SOL", "sell"), ("BTC", "buy"), ("BTC/USDC", "buy")]),
+             "vault": ([order("ETH"), vault],
+                       [("ETH", "buy"), ("VAULT:new:" + escaped("a|b%c"),
+                                         "venue.vault_create")])}
+    rt.executed_operations = lambda handle: cases[handle][0]
+    for handle, (_operations, legs) in cases.items():
+        rt.world_outcomes[handle] = {"subject": rt._acted_trade(handle)}
+        assert rt._verdict_key(handle, "return_paid_off") == published(legs), handle
