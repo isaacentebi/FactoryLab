@@ -365,6 +365,22 @@ def test_sf1d_durations_are_read_per_saturation_episode():
     assert short.status == g.FAIL and short.evidence["unmatched"] == [{"run": [5, 7]}]
 
 
+def test_sf1d_a_claimed_duration_is_backed_by_the_ratchet_stream():
+    """Sol on #157: three capped updates and one isolated saturated row claiming
+    ``duration = 10`` is one saturated window, not sustained saturation: nothing in the
+    diary counted the duration up to 10, so the run is unmatched and SF-1d fails. A
+    duration counted up by ordinary ratchets (1-7) and then saturated ones (8-10) at
+    the run's windows passes."""
+    at_cap = _windowed("c", [(0.5, 1.0, 0.5)] * 3, first=11)
+    isolated = g.sf1d_escalation(at_cap + _saturated((13, 10)), M, card="c")
+    assert isolated.status == g.FAIL, isolated.evidence
+    assert isolated.evidence["unmatched"] == [{"run": [11, 13]}]
+    assert isolated.evidence["uncredited"] == [{"window": 13, "duration": 10}]
+    counted = _ratchets(*[(w, w) for w in range(1, 8)]) + _saturated((11, 8), (12, 9),
+                                                                      (13, 10))
+    assert g.sf1d_escalation(at_cap + counted, M, card="c").ok
+
+
 def test_sf1d_episodes_are_aligned_to_their_runs_not_counted():
     """Codex P2: capped runs at windows 1-3 and 20-22 need episodes overlapping each;
     two episodes at 1-3 and 40-42 are two, but the run at 20-22 has none."""

@@ -1230,7 +1230,9 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     are aligned, not counted: every sustained run needs an episode whose rows *inside
     the run's windows* (``update_windows``) reach a duration of ``min_ratio``:
     overlapping the run, or reaching ``min_ratio`` outside it, is not escalation of that
-    run. A saturation row names its ``window`` and its ``duration``.
+    run. A saturation row names its ``window`` and its ``duration``, and its duration
+    counts only when the ratchet stream backs it (``_credible_ratchets``; Sol on #157):
+    one isolated row claiming a large duration is not sustained saturation.
     """
     ph = physics(manifest)
     at = update_windows(events)
@@ -1261,6 +1263,9 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     spans = [(min(need(r, "window") for r in e), max(need(r, "window") for r in e),
               need(e[-1], "duration"))
              for e in episodes]
+    credible = _credible_ratchets(events, card)
+    uncredited = [{"window": need(r, "window"), "duration": need(r, "duration")}
+                  for e in episodes for r in e if id(r) not in credible]
     if not sustained:
         if malformed:
             # A broken saturation count is observed whatever the runs show.
@@ -1275,13 +1280,40 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
             unmatched.append({"run": None, "why": "the run's windows are not ledgered"})
             continue
         lo, hi = min(windows_of), max(windows_of)
-        if not any(max((need(x, "duration") for x in e if lo <= need(x, "window") <= hi), default=0)
+        if not any(max((need(x, "duration") for x in e if lo <= need(x, "window") <= hi
+                        and id(x) in credible), default=0)
                    >= ph.r for e in episodes):
             unmatched.append({"run": [lo, hi]})
     return _result("SF-1d", bool(rows) and not malformed and not unmatched,
                    card=card, saturated_rows=len(rows), episodes=spans[:6],
                    sustained_runs=len(sustained), unmatched=unmatched[:5],
-                   malformed=malformed[:5], longest_run=longest)
+                   uncredited=uncredited[:5], malformed=malformed[:5], longest_run=longest)
+
+
+def _credible_ratchets(events: list[Mapping], card: str) -> set[int]:
+    """The ``id``s of ``card``'s ratchet rows whose duration the ratchet stream backs.
+
+    Sol on #157: a row's duration is a claim, and one isolated saturated row carrying
+    ``duration = 10`` is not ten windows of the attractor. Over the card's ordinary and
+    saturated ratchets together (the one duration count, R-E, R10-e), a row of
+    duration 1 is credible, and a row of duration ``d`` is credible only when a
+    credible row of duration ``d - 1`` sits at an earlier window. Guarantees a
+    duration SF-1d reads was counted up, row by row, in the diary itself."""
+    stream = [row for row in events
+              if row.get("kind") in ("immune.price_ratchet", "immune.price_ratchet_saturated")
+              and need(row, "card_id") == card]
+    earliest: dict[int, int] = {}  # a credible duration: the first window it stood at
+    credible: set[int] = set()
+    for row in sorted(stream, key=lambda r: (r.get("window") if isinstance(r.get("window"), int)
+                                             else math.inf)):
+        d, window = row.get("duration"), row.get("window")
+        if (not isinstance(d, int) or isinstance(d, bool) or not isinstance(window, int)
+                or isinstance(window, bool) or d < 1):
+            continue
+        if d == 1 or earliest.get(d - 1, math.inf) < window:
+            credible.add(id(row))
+            earliest.setdefault(d, window)
+    return credible
 
 
 def gamma_of(values: list[float]) -> float:

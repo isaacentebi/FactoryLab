@@ -667,6 +667,8 @@ IDENTITY_GET_ALLOWED: dict[tuple[str, str], str] = {
     ("Malformed", "window"): "evidence of a row already refused; any kind, any shape",
     ("sf0_relation", "window"): "a manifest card's optional block, not a ledger row",
     ("sf1d_escalation", "window"): "read as nullable and reported as malformed evidence",
+    ("_credible_ratchets", "window"): "a ratchet without an integer window is never "
+                                      "credible; SF-1d reports it as malformed evidence",
     ("router_presence", "window"): "immune.* kinds differ; one without window is placed "
                                    "by the price window it was written in",
     ("ld1a_accrual", "window"): "evidence of a row the criterion already fails",
