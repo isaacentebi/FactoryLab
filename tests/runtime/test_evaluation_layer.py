@@ -228,19 +228,22 @@ def _recursive(base):
     return replace(base, assemblies=tuple(seats))
 
 
-@pytest.mark.gate
-def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_window():
-    from factorylab.runtime.loop import Runtime
+def _recursive_world(scripted_runtime_run, seed):
+    """The recursive world at 120 events, one shared uninterrupted run per seed: its
+    restored runtime and its ledger entries.
 
+    The tier-two window is min_ratio times the judges' scored loop (time audit T10): a
+    judge settles on its world outcome, about a backstop, so metas' grades reach the
+    tier above after a few of those loops, not in the first eighty ticks."""
     manifest = _recursive(load_manifest("scripted"))
     manifest.validate()
-    # The tier-two window is min_ratio times the judges' scored loop (time audit T10):
-    # a judge settles on its world outcome, about a backstop, so metas' grades reach the
-    # tier above after a few of those loops, not in the first eighty ticks.
-    rt = Runtime(manifest, events=200, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
-    rt.run()
-    items = rt.ledger._recovery_items()
+    record = scripted_runtime_run(manifest, 120, seed)
+    return record.runtime(manifest), record.entries
+
+
+def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_window(
+        scripted_runtime_run):
+    _rt, items = _recursive_world(scripted_runtime_run, 1)
     grades = [i for i in items if i["kind"] == "evaluator.meta_grade"]
     assert any(i["tier"] >= 3 for i in grades), "no meta was graded from above"
     # A window releases its representative and companions beside it.
@@ -249,21 +252,19 @@ def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_win
     assert any(i["graded_by"] is not None for i in settled)
 
 
-@pytest.mark.gate
-@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
-def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(seed):
+# Two seeds, since tier recursion draws on the stream; seed 3 is the one whose world
+# reaches a fourth tier within these 120 events (the first tier-four grade lands at
+# event 107), so its row proves every shallower tier as well.
+@pytest.mark.parametrize("seed", [1, 3])
+def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(scripted_runtime_run, seed):
     """Essay II.III.b: evaluators are graded from above, tier upon tier; II.IV.c: a
     verdict rises a tier only after settling, through a window at least min_ratio times
     the loop beneath. A meta's judge settles no sooner than its own grade window, so a
     grade window of a fixed verdict_timeout_ticks closed before the tier above could
-    read the meta: on these seeds 11 to 17 tier-three grades were delivered and 0 to 4
-    counted. The grade window is now the read itself."""
-    from factorylab.runtime.loop import Runtime
-
-    rt = Runtime(_recursive(load_manifest("scripted")), events=200, seed=seed,
-                 initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
-    rt.run()
-    items = rt.ledger._recovery_items()
+    read the meta: on seeds 1 to 5, 11 to 17 tier-three grades were delivered and 0 to
+    4 counted, and every tier-four grade was dropped. The grade window is now the read
+    itself."""
+    rt, items = _recursive_world(scripted_runtime_run, seed)
     delivered = rt.stats.meta_verdicts
     assert delivered.get(3, 0) >= 5
     for tier, count in delivered.items():
@@ -280,6 +281,19 @@ def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(seed):
     carried = {e for i in items if i["kind"] == "cascade.carry" for e in i["carried"]}
     risen = carried & {i["event_id"] for i in items if i["kind"] == "cascade.release"}
     assert carried and 2 * len(risen) >= len(carried), (len(risen), len(carried))
+
+
+def test_a_fourth_tier_grades_the_third_and_its_grades_count(scripted_runtime_run):
+    """Essay II.III: evaluations of evaluations "stacking to some arbitrary level". The
+    grade-window fix (dd1ee21) claimed tier four; this world reaches it: a tier-three
+    grader's MetaVerdict rises through its own cascade window, the tier above grades
+    it, and the grade counts."""
+    rt, items = _recursive_world(scripted_runtime_run, 3)
+    assert rt.stats.meta_verdicts.get(4, 0) >= 1
+    assert [i for i in items if i["kind"] == "evaluator.meta_grade" and i["tier"] == 4]
+    assert any(i["tier"] == 3 for i in items if i["kind"] == "cascade.release")
+    settled = [i for i in items if i["kind"] == "evaluator.settled" and i["tier"] == 3]
+    assert any(i["graded_by"] is not None for i in settled)
 
 
 # --- the adversarial layer (M1, P5) --------------------------------------------------
