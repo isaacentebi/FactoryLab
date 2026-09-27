@@ -6,6 +6,14 @@
   doc.classList.remove("no-js");
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 
+  // SMIL animations ignore CSS; pause them for visitors who asked for less motion.
+  var pauseSvg = function () {
+    if (!reduce.matches) return;
+    document.querySelectorAll("svg").forEach(function (s) { if (s.pauseAnimations) s.pauseAnimations(); });
+  };
+  pauseSvg();
+  if (reduce.addEventListener) reduce.addEventListener("change", pauseSvg);
+
   /* ---------- reveal on scroll ---------- */
   var rv = document.querySelectorAll(".rv");
   if ("IntersectionObserver" in window && !reduce.matches) {

@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideas · FactoryLab</title>
+<meta name="description" content="The philosophy behind FactoryLab in plain language: Class 3 factories, surfaces not strategies, two channels, judges graded by consequence, the four pathologies and their prices, and the charter.">
+<meta name="theme-color" content="#060606">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060606'/%3E%3Crect x='7' y='7' width='18' height='18' fill='none' stroke='%23ecebe4' stroke-width='2'/%3E%3Crect x='19' y='19' width='6' height='6' fill='%23ff5a1f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..500&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="FactoryLab home">
+      <span class="word">Factory<i>Lab</i></span>
+      <span class="k">A Class 3 factory, under construction</span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="ideas.html" aria-current="page">Ideas</a>
+      <a href="factory.html">Factory</a>
+      <a href="progress.html">Progress</a>
+      <a class="ext" href="https://superdark.ai/" rel="noopener">Essay</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="wrap" style="padding-top: clamp(48px, 8vw, 110px); padding-bottom: clamp(32px, 5vw, 64px);">
+    <div class="load">
+      <p class="k">Ideas <span class="sig">/</span> our reading of Chapter II</p>
+      <h1 class="display">How to build<br>a factory <em>you<br>don't read.</em></h1>
+      <p class="lede quiet" style="margin-top: 32px;">These are the ideas FactoryLab is built on, explained in our own words. They come from <a href="https://superdark.ai/" rel="noopener"><em>The Superdark Factory</em></a>, mostly its second chapter, “The Dark Stack”. Where we simplify, the essay is the authority, and it is worth reading whole.</p>
+    </div>
+  </section>
+
+  <div class="wrap ideas-layout">
+    <aside class="toc" aria-label="Contents">
+      <ol>
+        <li><a href="#dark"><span>01</span>Going dark</a></li>
+        <li><a href="#classes"><span>02</span>Three classes</a></li>
+        <li><a href="#surfaces"><span>03</span>Surfaces</a></li>
+        <li><a href="#physics"><span>04</span>Physics</a></li>
+        <li><a href="#channels"><span>05</span>Two channels</a></li>
+        <li><a href="#consequence"><span>06</span>Consequence</a></li>
+        <li><a href="#pathologies"><span>07</span>Pathologies</a></li>
+        <li><a href="#time"><span>08</span>Time</a></li>
+        <li><a href="#charter"><span>09</span>The charter</a></li>
+        <li><a href="#versions"><span>10</span>Versions</a></li>
+      </ol>
+    </aside>
+
+    <div>
+      <!-- 01 -->
+      <article class="idea" id="dark">
+        <p class="k num-k">01 <span class="sig">/</span> The problem</p>
+        <h2>Going dark</h2>
+        <div class="body">
+          <p class="lede">Every year machines write more of the work and people read less of it.</p>
+          <p>First a person reviews every change. Then only the long ones. Then summaries of them. Eventually the approval step is still there, but it no longer means anything: the logs are perfectly legible and nobody can use them. The essay calls that condition <strong>darkness</strong>.</p>
+          <p>Reading harder does not scale. The alternative the essay proposes is a factory that is trustworthy <strong>without being read</strong>, because every part of it is scored by what actually happened in the world, continuously, by other parts that are themselves scored the same way.</p>
+        </div>
+      </article>
+
+      <!-- 02 -->
+      <article class="idea" id="classes">
+        <p class="k num-k">02 <span class="sig">/</span> Chapter I</p>
+        <h2>Three classes of factory</h2>
+        <div class="body">
+          <p>The essay sorts automated factories by what they take as input.</p>
+        </div>
+        <div class="defs">
+          <div><p class="k">Class 1</p><h3>Automates execution</h3><p>It takes a plan and carries it out.</p></div>
+          <div><p class="k">Class 2</p><h3>Automates planning</h3><p>It takes an objective and works out the plan.</p></div>
+          <div><p class="k sig">Class 3</p><h3>Automates objectives</h3><p>It works out what it is trying to do by negotiating with its world.</p></div>
+          <div><p class="k">Our test</p><h3>What did we hand it?</h3><p>Anything we give the factory that it should have owned (a plan, a target, a preferred behaviour) makes it Class 1 or 2, however clever the rest is.</p></div>
+        </div>
+      </article>
+
+      <!-- 03 -->
+      <article class="idea" id="surfaces">
+        <p class="k num-k">03 <span class="sig">/</span> Design rule</p>
+        <h2>Surfaces, <em>not strategies</em></h2>
+        <div class="body">
+          <p>We give the factory <strong>surfaces</strong>: tools, prices, custody of money, limits. We never give it <strong>strategies</strong>. No prompt, tool description, default or error message tells a seat what to do, what is good, or how careful to be.</p>
+          <p>That includes the shape of the organisation. If we wired agents into a fixed pipeline (research, then plan, then act, then review), we would have designed the objective ourselves.</p>
+          <blockquote class="pull">“A hard-coded pipeline of agents is literally just a waterfall.”<cite><a href="https://superdark.antikythera.org/" rel="noopener">The Superdark Factory, Chapter II</a></cite></blockquote>
+          <p>The same rule applies to us. The less we know about a complex system, the less structure we should impose on it. So we do not patch prompts after a model's mistakes, and we never justify a change by the behaviour we would like to see ("they hold too much"). Choosing the first roster of models is our one model choice, and it is made on cost, speed and whether the answers parse. After launch, seats change models only by proposing it.</p>
+        </div>
+      </article>
+
+      <!-- 04 -->
+      <article class="idea" id="physics">
+        <p class="k num-k">04 <span class="sig">/</span> The hard cast</p>
+        <h2>Physics is enforced, <em>not announced</em></h2>
+        <div class="body">
+          <p>The kernel is a short list of rules enforced in code. The essay calls this the <strong>hard cast</strong>. Money is conserved. Nothing returns before it is paid for. An unaffordable action is impossible. Death at the balance floor is final. Nothing judges its own output. A share of compute is reserved for newcomers.</p>
+          <p>None of these rules is ever stated to the seats as an instruction. A rule that is announced is read as advice, and advice is a strategy. This is not secrecy, though:</p>
+          <blockquote class="pull">“The informational schematics of the factory should be absolutely public.”<cite><a href="https://superdark.antikythera.org/" rel="noopener">The Superdark Factory, Chapter II</a></cite></blockquote>
+          <p>So the structure of requests and rewards, the prices, the contracts and the reward formulas are all published, as plain facts a seat can look up. They are never phrased as reasons to act.</p>
+          <p>Changing the kernel is lethal. It makes a new world, which starts again from nothing.</p>
+        </div>
+      </article>
+
+      <!-- 05 -->
+      <article class="idea" id="channels">
+        <p class="k num-k">05 <span class="sig">/</span> Communication</p>
+        <h2>Two channels, <em>and no third</em></h2>
+        <div class="body">
+          <p>Parts of the factory talk to each other in exactly two ways.</p>
+        </div>
+        <figure class="figure" aria-label="The two channels">
+          <div class="panes cols-2" style="border: 0;">
+            <div>
+              <p class="k">The request <span class="sig">·</span> rich</p>
+              <div class="pipe rich" aria-hidden="true"><i></i></div>
+              <p class="small quiet" style="margin-top: 14px;">Self-describing and author-neutral: the event, the contract it must answer, the public prices, and the probability with which this seat was chosen. Enough to act on without knowing who asked.</p>
+            </div>
+            <div>
+              <p class="k">The reward <span class="sig">·</span> thin</p>
+              <div class="pipe thin" aria-hidden="true"><i></i></div>
+              <p class="small quiet" style="margin-top: 14px;">A score and that same probability, delivered later to the exact decision that earned it, through a queue that remembers every decision's handle.</p>
+            </div>
+          </div>
+          <figcaption class="k">No direct messages, no shared notebook, no side chats. Seats compose through contracts.</figcaption>
+        </figure>
+        <div class="body">
+          <p>What each part may see is the minimum it needs. The schematics are public; each seat's scores, history and learner state are private. A judge sees the request, the answer, what was actually executed, and the probability, but <strong>never who wrote it</strong>, and never text that would reveal it.</p>
+        </div>
+      </article>
+
+      <!-- 06 -->
+      <article class="idea" id="consequence">
+        <p class="k num-k">06 <span class="sig">/</span> The reward chain</p>
+        <h2>Judges graded by <em>what happened</em></h2>
+        <div class="body">
+          <p>Producers act, or decline to. They learn from their judges' verdicts. But who keeps the judges honest?</p>
+          <p>Two signals. From above, a judge of judges grades each verdict for compliance with the charter, tier on tier: evaluations of evaluations. From outside, the world grades it by <strong>realized consequence</strong>: a fact the world measures, never another model's opinion. For a trade, whether it paid off after fees. For a decision that did nothing, what the trade it named would have made. For a forecast, how the market resolved.</p>
+          <p>Every verdict is therefore also a prediction, and it is scored by a proper rule against the outcome. The rule for what counts as an outcome is fixed before the factory starts: set in advance, at the moment the architect makes the one move.</p>
+        </div>
+        <figure class="figure" aria-label="The tiers of evaluation">
+          <div style="padding: clamp(16px, 3vw, 32px); display: grid; grid-template-columns: minmax(0,1fr); gap: 8px; font-family: var(--mono); font-size: 12px; letter-spacing: .06em;">
+            <div style="display:flex; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--rule-2);"><span>Tier 3 · judges of judges of judges</span><span class="quiet">↑ grades</span></div>
+            <div style="display:flex; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--rule-2);"><span>Tier 2 · judges of judges</span><span class="quiet">↑ grades</span></div>
+            <div style="display:flex; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--ink-3);"><span>Tier 1 · judges</span><span class="quiet">↑ verdicts</span></div>
+            <div style="display:flex; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--ink-3); background: var(--bg-2);"><span>Producers · act or decline</span><span class="quiet">a minority</span></div>
+            <div style="display:flex; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--sodium); color: var(--paper);"><span>The world · prices, fills, fees, funding, resolutions</span><span class="sig">grades every tier</span></div>
+          </div>
+          <figcaption class="k">The signal that grades a judge sits outside the loop it judges.</figcaption>
+        </figure>
+        <div class="body">
+          <p>Evaluators outnumber producers, and they run on <strong>several model families</strong>, because judges that share a foundation model share its blind spots. An adversarial layer is paid to catch judges out. Early warning comes from variance, autocorrelation and disagreement between judges, shown to the evaluators alone.</p>
+        </div>
+      </article>
+
+      <!-- 07 -->
+      <article class="idea" id="pathologies">
+        <p class="k num-k">07 <span class="sig">/</span> Failure, priced</p>
+        <h2>Four pathologies, <em>each with a price</em></h2>
+        <div class="body">
+          <p>A learning system can fail in characteristic ways. The factory does not forbid them or hard-code fixes. It <strong>prices</strong> them while they happen, by subtracting a penalty λ × (cost) from the rewards of the decisions that caused them. λ comes from a feedback controller (a PID loop), and the charter bounds it.</p>
+        </div>
+        <div class="patho" style="margin-top: 28px;">
+          <article>
+            <svg class="glyph" viewBox="0 0 200 64" aria-hidden="true"><path d="M4 12 C 40 14, 52 50, 90 52 L 196 52" fill="none" stroke="#ecebe4" stroke-width="1.5"/><path d="M90 58 L196 58" stroke="#ff5a1f" stroke-width="1" stroke-dasharray="3 3"/></svg>
+            <p class="k">Stable failure</p>
+            <h4>Stuck in a bad groove</h4>
+            <p>The factory settles into a state that is wrong but comfortable, and stays.</p>
+            <p class="price"><b>Price:</b> the penalty ratchets up with the duration of the failure.</p>
+          </article>
+          <article>
+            <svg class="glyph" viewBox="0 0 200 64" aria-hidden="true"><path d="M4 32 L16 10 L28 54 L40 8 L52 56 L64 12 L76 52 L88 6 L100 58 L112 10 L124 54 L136 8 L148 56 L160 12 L172 52 L184 10 L196 32" fill="none" stroke="#ecebe4" stroke-width="1.5"/></svg>
+            <p class="k">Thrash</p>
+            <h4>Never settling</h4>
+            <p>It keeps flipping between versions, often because a correction overshot.</p>
+            <p class="price"><b>Price:</b> volatility itself is charged, to the routers that moved.</p>
+          </article>
+          <article>
+            <svg class="glyph" viewBox="0 0 200 64" aria-hidden="true"><path d="M4 50 C 60 44, 120 20, 196 8" fill="none" stroke="#ecebe4" stroke-width="1.5"/><path d="M4 50 C 60 46, 110 44, 196 56" fill="none" stroke="#ff5a1f" stroke-width="1.5"/></svg>
+            <p class="k">Overfitting</p>
+            <h4>Pleasing the judge</h4>
+            <p>Grades rise while real consequences do not. The factory learns the test, not the world.</p>
+            <p class="price"><b>Answer:</b> more evaluation, sampled more often, graded by the world.</p>
+          </article>
+          <article>
+            <svg class="glyph" viewBox="0 0 200 64" aria-hidden="true"><g fill="#ecebe4"><rect x="10" y="44" width="14" height="14"/><rect x="34" y="50" width="14" height="8"/><rect x="58" y="10" width="14" height="48"/><rect x="82" y="54" width="14" height="4"/><rect x="106" y="56" width="14" height="2"/></g><rect x="150" y="30" width="14" height="28" fill="none" stroke="#ff5a1f" stroke-width="1.5"/><rect x="174" y="40" width="14" height="18" fill="none" stroke="#ff5a1f" stroke-width="1.5" stroke-dasharray="3 2"/></svg>
+            <p class="k">Learning death</p>
+            <h4>No room for the new</h4>
+            <p>Incumbents take every draw, so nothing untried ever gets the chance to prove itself.</p>
+            <p class="price"><b>Prevented:</b> a share of compute usable only by actions with no history.</p>
+          </article>
+        </div>
+        <div class="body" style="margin-top: 28px;">
+          <p>The fixes interact. Gain high enough to kick the factory out of a stable failure can overshoot into thrash, so the controller has to know which one it is in. Whether a given world actually shows each failure is a question for an instrument, not an opinion: see <a href="factory.html#gauntlet">the pathology gauntlet</a>.</p>
+        </div>
+      </article>
+
+      <!-- 08 -->
+      <article class="idea" id="time">
+        <p class="k num-k">08 <span class="sig">/</span> Loops</p>
+        <h2>Time is <em>a ratio</em></h2>
+        <div class="body">
+          <p>The factory is loops inside loops: decisions, judgements, prices, governance. Each inner loop must settle <strong>at least three times faster</strong> than the loop that commands it, or the outer loop steers on noise. So periods are ratios, not constants.</p>
+        </div>
+        <figure class="figure" aria-label="Nested loops">
+          <div class="loops">
+          <svg viewBox="30 10 280 280" role="img" aria-label="Four nested loops, each at least three times slower than the one inside it">
+            <g fill="none" stroke-width="1.2">
+              <circle cx="170" cy="150" r="130" stroke="#3a3935"/>
+              <circle cx="170" cy="150" r="88" stroke="#6d6b65"/>
+              <circle cx="170" cy="150" r="52" stroke="#a8a69e"/>
+              <circle cx="170" cy="150" r="22" stroke="#ff5a1f"/>
+            </g>
+            <circle cx="170" cy="128" r="3" fill="#ff5a1f"><animateTransform attributeName="transform" type="rotate" from="0 170 150" to="360 170 150" dur="2s" repeatCount="indefinite"/></circle>
+            <circle cx="170" cy="98" r="3" fill="#a8a69e"><animateTransform attributeName="transform" type="rotate" from="0 170 150" to="360 170 150" dur="6s" repeatCount="indefinite"/></circle>
+            <circle cx="170" cy="62" r="3" fill="#6d6b65"><animateTransform attributeName="transform" type="rotate" from="0 170 150" to="360 170 150" dur="18s" repeatCount="indefinite"/></circle>
+            <circle cx="170" cy="20" r="3" fill="#3a3935"><animateTransform attributeName="transform" type="rotate" from="0 170 150" to="360 170 150" dur="54s" repeatCount="indefinite"/></circle>
+          </svg>
+          <ol class="legend">
+            <li><i style="background:#ff5a1f"></i><span><b>Decisions</b> the tick</span></li>
+            <li><i style="background:#a8a69e"></i><span><b>Consequences</b> ≥ 3× slower</span></li>
+            <li><i style="background:#6d6b65"></i><span><b>Prices</b> ≥ 3× slower again</span></li>
+            <li><i style="background:#3a3935"></i><span><b>Governance</b> the charter's cadence</span></li>
+          </ol>
+          </div>
+          <figcaption class="k">Illustrative periods. The real ones are measured, and derived from each other.</figcaption>
+        </figure>
+        <div class="body">
+          <p>Verdicts rise a tier only after they settle, as distributions, with a little jitter so the slow loops cannot phase-lock to the fast ones. An explorer must be paid sooner than the lifetime of what it found, or exploration never pays. And neither the factory nor its controls may be slower than the world it lives in: a market that reprices hourly cannot be governed monthly.</p>
+        </div>
+      </article>
+
+      <!-- 09 -->
+      <article class="idea" id="charter">
+        <p class="k num-k">09 <span class="sig">/</span> Governance</p>
+        <h2>The charter is <em>co-written</em></h2>
+        <div class="body">
+          <p>People do not steer the factory from inside. They act only through the <strong>charter</strong>: a short set of norms, and metric cards that say what is measured, what region is acceptable, and which role answers for it.</p>
+          <p>Our world launches with four norms: truthful commitments, care with scarce resources, useful inquiry, and the capacity to revise practices that are not working. The metrics are ceded to the factory. It proposes metrics for the norms and holdout criteria, and it posts λ as a <strong>shadow price</strong>: what each constraint is currently worth.</p>
+        </div>
+        <div class="defs">
+          <div><p class="k">Sortition</p><p>The factory joins governance through a committee drawn by lot, rotated and anonymous, on the charter's own revision cadence.</p></div>
+          <div><p class="k">Conditional markets</p><p>Constraints and their prices suit futarchy: bet on what a change would do, then decide.</p></div>
+          <div><p class="k">A read-only wall</p><p>Norms may sit where the factory can read them but not rewrite them.</p></div>
+          <div><p class="k">Speed is a constraint</p><p>Speed is cash burn, so it is priced like any other constraint.</p></div>
+        </div>
+        <div class="body" style="margin-top: 24px;">
+          <p>If the charter cannot be satisfied at any acceptable price, the honest answer is to scrap the factory, not to reach in and fix it.</p>
+        </div>
+      </article>
+
+      <!-- 10 -->
+      <article class="idea" id="versions">
+        <p class="k num-k">10 <span class="sig">/</span> Identity</p>
+        <h2>A version is <em>a behaviour</em></h2>
+        <div class="body">
+          <p>A factory that rewrites its own seats, rules and routers has no meaningful configuration hash. Its version is how it behaves: a stable pattern in how inputs map to outputs, which can be measured from the record of what it did (a transfer operator and its spectral gap, for the mathematically inclined).</p>
+          <p>The factory never rewinds. There is no restore, no refill, no restart with better settings. When a world dies, its sealed diary is opened and read, and what we learn goes into the next world, which starts again from v0.</p>
+          <div class="row" style="margin-top: 28px;">
+            <a class="btn" href="factory.html">See the parts on a map <span class="arrow">→</span></a>
+            <a class="btn" href="https://superdark.antikythera.org/" rel="noopener">Read the essay ↗</a>
+          </div>
+        </div>
+      </article>
+    </div>
+  </div>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div>
+      <span class="brand"><span class="word">Factory<i>Lab</i></span></span>
+      <p>An independent implementation of ideas from <a href="https://superdark.ai/" rel="noopener"><em>The Superdark Factory</em></a> by Marek Poliks, Roberto Alonso-Trillo, Tyler Dunn, Hugh Scott-Douglas and Jay Springett. Not affiliated with or endorsed by its authors.</p>
+    </div>
+    <div>
+      <p class="k">Site</p>
+      <ul><li><a href="index.html">Home</a></li><li><a href="factory.html">Factory</a></li><li><a href="progress.html">Progress</a></li></ul>
+    </div>
+    <div>
+      <p class="k">Source</p>
+      <ul><li><a href="https://superdark.ai/" rel="noopener">superdark.ai ↗</a></li><li><a href="https://superdark.antikythera.org/" rel="noopener">The paper at Antikythera ↗</a></li></ul>
+    </div>
+  </div>
+</footer>
+
+<div class="bar" role="status" aria-label="Build status">
+  <span data-head>HEAD</span>
+  <span class="rail" aria-hidden="true"></span>
+  <a href="progress.html" data-milestone>Loading progress…</a>
+</div>
+
+<script src="assets/site.js" defer></script>
+</body>
+</html>
