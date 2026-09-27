@@ -2341,11 +2341,12 @@ def test_sf2a_a_single_seat_arm_is_not_comparable_not_failed():
 # --- Codex pass on 2c85f43 ----------------------------------------------------------------
 
 
-def test_th1c_a_seat_learner_failure_does_not_excuse_a_missing_router_charge():
-    """Codex P2 (gauntlet.py:1633): only a router's own learning failure (a
-    ``propensity.unlearned`` naming a router ``learner_id``) unlearns its round; a
-    seat's declared-propensity failure (``assembly_id``, compute.py:3003, :3015) leaves
-    the round learned, so its missing charge fails."""
+def test_th1c_no_learning_failure_excuses_a_missing_router_charge():
+    """Codex P2 (gauntlet.py:1633), corrected by Codex on 2ad8e46: a seat's declared-
+    propensity failure (``assembly_id``) leaves the round as it was, and a router's own
+    update failure comes after the charge (feedback.py 2199 charges before
+    ``_apply_router_round`` at 2203 and the universe check at 2211), so a settled,
+    sampled core draw with a positive expected charge needs its charge row either way."""
     rows = _seq([
         _w(1, lam=0.4),
         _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
@@ -2357,7 +2358,11 @@ def test_th1c_a_seat_learner_failure_does_not_excuse_a_missing_router_charge():
     assert result.status == g.FAIL and result.evidence["missing"] == ["d2"]
     router = [*rows[:-1], {"kind": "propensity.unlearned", "handle": "d2",
                            "learner_id": "router:Tick", "reason": "outside the universe"}]
-    assert g.th1c_movement(router, M).status == g.UNSUPPORTED  # unlearned: pending
+    result = g.th1c_movement(router, M)
+    assert result.status == g.FAIL and result.evidence["missing"] == ["d2"]
+    charged = [*router, {"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+                         "charge": 0.4 * 0.7, "reward": 0.4}]
+    assert g.th1c_movement(charged, M).ok
 
 
 @pytest.mark.parametrize("weights", [{"a": 1.0}, {"a": 1.0, "b": 1.0, "c": 0.0}, [1.0]])

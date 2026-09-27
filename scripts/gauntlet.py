@@ -1729,19 +1729,16 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     counts = Counter(need(row, "handle") for row in charged)
     landed = set(counts)
     duplicated = sorted(h for h, n in counts.items() if n > 1)
-    # A charge is ledgered only when its round is learned (feedback.py
+    # A charge is ledgered when its round reaches the router's learning (feedback.py
     # ``_learn_router_return`` -> ``_thrash_charged``: a seat round at its settlement, an
     # abstention when its deferred credit is priced). A positive charge whose round has
-    # not been learned yet is pending, never missing.
-    # Only a router's own learning failure unlearns its round: a ``propensity.unlearned``
-    # naming a router ``learner_id`` (feedback.py ``_learn_router_return`` and
-    # ``_apply_router_round``). One naming an ``assembly_id`` is a seat's declared-
-    # propensity learner failing (compute.py:3003, :3015; feedback.py:2094), which leaves
-    # the router's round, and its charge, as it was.
-    router_unlearned = {row.get("handle") for row in rows_of(events, "propensity.unlearned")
-                        if str(row.get("learner_id", "")).startswith("router:")}
-    learned = ({need(row, "return.handle") for row in rows_of(events, "decision.settle")}
-               - router_unlearned)
+    # not reached it yet is pending, never missing. The charge is taken (feedback.py
+    # 2199, ``charged = self._thrash_charged(...)``) before every router-update branch
+    # that can ledger ``propensity.unlearned``: ``_apply_router_round`` (2203, its row
+    # at 2402) and the arm outside the universe (2211). So a round whose router update
+    # failed afterwards still carries its charge row: a router-learning failure never
+    # excuses a missing charge (Codex on 2ad8e46).
+    learned = {need(row, "return.handle") for row in rows_of(events, "decision.settle")}
     noops = {h for h, seat in decision_seats(events).items() if seat == "NOOP"}
     credited = {need(row, "handle") for row in rows_of(events, "router.abstention_priced")}
     learned = {h for h in learned if h not in noops} | credited
