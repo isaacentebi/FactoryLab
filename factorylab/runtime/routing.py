@@ -196,17 +196,42 @@ class ContractQueue:
                 if reason is not None and rt._settle_declined(decision.handle, reason):
                     continue
                 due.append(decision.handle)
-        return self.queue.time_out(due, now_ns)
+        return self.time_out(due, now_ns)
+
+    def time_out(self, handles, now_ns):
+        """Time out ``handles`` in the kernel queue; each closes its role's settle loop.
+
+        R16b-2: a cutoff is how long the loop took to close. Guarantees each decision
+        this timed out adds one ``settle:<role>`` closure, from its opening to its tick
+        cutoff (the tick it timed out at when it has none), so the meter measures every
+        closure and never only the survivors; a policy decision is no role's sample.
+        A late settlement after it is not a first closure and records nothing.
+        """
+        expired = self.queue.time_out(handles, now_ns)
+        rt = self.runtime
+        for handle in expired:
+            opened = self.opened_tick(handle)
+            if opened is None or self.queue.get(handle).channel == "policy":
+                continue
+            cutoff = self.deadline_tick(handle)
+            closed = rt.ticks_consumed if cutoff is None else min(cutoff, rt.ticks_consumed)
+            rt.clockwork.record(f"settle:{rt._decision_role(handle)}", max(0, closed - opened))
+        return expired
 
     def forget_ticks(self) -> None:
         """Drop the tick record of every decision whose outcome is final.
 
-        A final decision is never cut off again and its router has learned it in
-        the event that settled it, so only pending and timed-out ones (whose late
-        settlement still reaches a learner) keep their record.
+        A final decision is never cut off again, so only pending and timed-out ones
+        (whose late settlement still reaches a learner) keep their record, and a
+        final one its router is still owed (a decline, censoring or cutoff credited
+        at its window's close, D5): that credit closes the router's loop from the
+        tick it opened (R16b-2).
         """
         rt = self.runtime
+        owed = getattr(rt, "noop_credits", {})
         for handle in list(rt.decision_ticks):
+            if handle in owed:
+                continue
             try:
                 status = self.queue.get(handle).status
             except KeyError:

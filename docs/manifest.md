@@ -1409,12 +1409,15 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
 
 * **Measured loops** (`runtime/clockwork.py`, checkpointed): the settle loop of
   each measured role (`settle:<role>`, a decision's open to the tick the world
-  fixed its first outcome, censorings included: a score whose settlement waits for
-  its window's close counts at the tick it was fixed, never at the close, R16b-1;
-  a policy-channel decision, an outer loop on its own schedule, is no role's
-  sample), its scored loop (`scored:<role>`, the same when a real score closed it), each router kind's rounds (`router:<kind>`), settled forecasts
-  (`forecast`) and conversions (`capital`). A meter reports its p90, never below
-  one tick.
+  fixed its first outcome, censorings and cutoffs included, a cutoff at its cutoff
+  tick, R16b-2: a score whose settlement waits for its window's close counts at the
+  tick it was fixed, never at the close, R16b-1; a policy-channel decision, an
+  outer loop on its own schedule, is no role's sample), its scored loop
+  (`scored:<role>`, the same when a real score closed it), each router kind's
+  learned seat rounds (`router:<kind>`, open to learned, a decline, censoring or
+  cutoff credited at its window's close included; a NOOP is never a sample),
+  settled forecasts (`forecast`) and conversions (`capital`). A meter reports its
+  p90, never below one tick.
 * **Derived loops**: each outer loop's next period is drawn as
   `min_ratio × inner × (1 + jitter_fraction × u)`, where `u` is a continuous
   draw seeded by the world, the loop and its firing count, and each is due only

@@ -2693,20 +2693,32 @@ class FeedbackMixin:
         # Booked only for a round that trained the router: the seat's own baseline, the
         # delay abstentions wait for and the scales they are priced on all describe
         # rounds the router learned from, never one that trained nothing.
-        opened = self.queue.opened_tick(lr.handle)
-        if opened is not None:
-            # The router's own loop, in world ticks (time audit T3): the delay its
-            # abstentions wait and the period its epochs and gain steps respect (T6).
-            ticks = max(0, self.ticks_consumed - opened)
-            target.latency[0] += ticks
-            target.latency[1] += 1
-            self.clockwork.record(f"router:{state.kind}", ticks)
+        self._record_router_round(state, target, lr.handle)
         if settled:
             target.observed.record(prop.chosen, charged)
             # Read, not consumed: the seat's own learner reads it too (R10-g); the
             # price evidence is pruned once both have (``_prune_price_evidence``).
             target.record_round(lr.definition_version,
                                 self.raw_scores.get(lr.handle, float(lr.score)))
+
+    def _record_router_round(self, state: Any, target: Any, handle: str) -> None:
+        """One learned seat round closes its router's loop, from its opening to now.
+
+        The router's own loop, in world ticks (time audit T3): the delay its
+        abstentions wait and the period its epochs and gain steps respect (T6).
+        Guarantees one closure per learned round, whichever path learned it (the
+        direct return, or a decline, censoring or cutoff credited at its window's
+        close, R16b-2): a meter fed only by the rounds that did not wait measured
+        the survivors (D5's selection bias). A NOOP is never a sample: its own due
+        is derived from this meter.
+        """
+        opened = self.queue.opened_tick(handle)
+        if opened is None:
+            return
+        ticks = max(0, self.ticks_consumed - opened)
+        target.latency[0] += ticks
+        target.latency[1] += 1
+        self.clockwork.record(f"router:{state.kind}", ticks)
 
     def _abstention_owed_or_credited(self, lr: LearningReturn) -> bool:
         """Whether this abstention is already owed, or was credited on an earlier return.
@@ -2783,7 +2795,10 @@ class FeedbackMixin:
                                 **({"status": credit["status"]} if "status" in credit else {}),
                                 "penalty": penalty, "reward": reward, "ts": now})
             fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
-            self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
+            learned = self._apply_router_round(drawer, handle, credit["p"], credit["executed"],
+                                               fb)
+            if learned and action != NOOP:
+                self._record_router_round(drawer, self._successor_state(drawer), handle)
 
     def _priced_abstention(self, handle: str) -> float:
         """An abstention's price: the card penalty charged against the router's

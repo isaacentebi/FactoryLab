@@ -1,0 +1,91 @@
+"""A cutoff is how long a loop took to close (R16b-2).
+
+A decision that reaches its tick cutoff closes its role's settle loop at that cutoff;
+a meter that saw only the decisions that returned measured the survivors. A decline,
+censoring or cutoff credited to its router at its window's close (D5) is a learned
+round and closes the router's loop too; a NOOP never does (its own due is derived
+from that meter). No closure is recorded twice.
+"""
+
+from __future__ import annotations
+
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from tests.runtime.test_penalty_attribution import _runtime
+
+
+def _open(rt, channel: str, *, at: int, cutoff: int) -> str:
+    rt.ticks_consumed = at
+    handle = rt.queue.open(
+        actor="test-router", event_id=f"e-{channel}-{at}", channel=channel,
+        deadline_ns=10**18, deadline_tick=cutoff, parent_handle=None, cost_ceiling=0,
+        propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0,
+                                    "test-router", "state"))
+    rt.handle_to_assembly[handle] = "seed-decider"
+    rt._contribution(handle, "producer")
+    return handle
+
+
+def test_a_cutoff_closes_its_roles_settle_loop_at_the_cutoff_once(monkeypatch):
+    rt = _runtime(monkeypatch)
+    handle = _open(rt, "verdict", at=10, cutoff=20)
+    rt.ticks_consumed = 25  # timed out after its cutoff tick passed
+    assert rt.queue.expire_due() == [handle]
+    assert rt.clockwork.latencies["settle:producer"] == [10]  # open to cutoff
+    assert "scored:producer" not in rt.clockwork.latencies  # no score closed it
+    rt.queue.settle(handle, channel="verdict", score=0.0, status=SettleStatus.CENSORED,
+                    definition_version="late", sampling_ref=None)
+    assert rt.clockwork.latencies["settle:producer"] == [10]  # a late settle is no closure
+
+
+def test_a_policy_cutoff_is_no_roles_sample(monkeypatch):
+    rt = _runtime(monkeypatch)
+    handle = _open(rt, "policy", at=10, cutoff=20)
+    rt.ticks_consumed = 25
+    assert rt.queue.expire_due() == [handle]
+    assert not [name for name in rt.clockwork.latencies if name.startswith("settle:")]
+
+
+def _drawn_at(rt, chosen: str, at: int):
+    """One Tick-router decision that drew ``chosen``, opened at tick ``at``."""
+    import random
+
+    rt.ticks_consumed = at
+    state = rt.routers["Tick"][0]
+    feasible = lambda a: (a == chosen, "")  # noqa: E731 - only this arm may be woken
+    sample = next(s for s in (state.router.route("Tick", feasible, random.Random(i))
+                              for i in range(200)) if s.chosen == chosen)
+    handle = rt.queue.open(actor=state.learner.id, event_id=f"tick-{chosen}-{at}",
+                           propensity=rt._propensity(sample), channel="verdict",
+                           deadline_ns=10**18, deadline_tick=at + 1_000, parent_handle=None,
+                           cost_ceiling=rt.wallet.available)
+    return state, handle
+
+
+def test_a_decline_credited_at_its_windows_close_closes_the_routers_loop_once(
+        monkeypatch):
+    from types import SimpleNamespace
+
+    from factorylab.kernel.events import Event, EventKind
+    from factorylab.runtime.shared import NOOP
+    from tests.runtime.test_refusal_price import _past_the_verdict_timeout, _priced_runtime
+
+    rt = _priced_runtime(monkeypatch)
+    state, refused = _drawn_at(rt, "seed-decider", at=10)
+    rt.n += 1
+    rt._producer_step(Event(f"tick-{rt.n}", EventKind.TICK, rt.clock.now_ns, {"index": 0},
+                            "test"), refused, SimpleNamespace(chosen="seed-decider"),
+                      rt.queue.get(refused).deadline_ns)
+    _noop_state, noop = _drawn_at(rt, NOOP, at=10)
+    rt._contribution(noop, "producer")
+    _past_the_verdict_timeout(rt)  # the refusal settles declined, its window still open
+    rt._deliver_returns()
+    assert refused in rt.noop_credits  # owed until its window's close (D5)
+    meter = f"router:{state.kind}"
+    assert meter not in rt.clockwork.latencies
+    learned_at = rt.ticks_consumed
+    rt._close_price_window()
+    rt._deliver_returns()
+    assert refused not in rt.noop_credits
+    assert rt.clockwork.latencies[meter] == [learned_at - 10]  # one sample: the decline
+    rt._deliver_returns()
+    assert rt.clockwork.latencies[meter] == [learned_at - 10]  # never twice, NOOP never
