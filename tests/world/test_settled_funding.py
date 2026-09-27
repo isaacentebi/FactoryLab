@@ -30,7 +30,9 @@ def test_live_named_outcome_waits_for_backdated_settled_rate(missing):
             raise OSError("unavailable")
         return published
 
-    exchange._info = SimpleNamespace(funding_history=history)
+    exchange._info = SimpleNamespace(
+        funding_history=history,
+        l2_snapshot=lambda coin: {"coin": coin, "time": 0, "levels": [[], []]})
     exchange._guarded = lambda name, call: call()
     exchange.mids = lambda: {"BTC": Decimal(100)}
     exchange.funding = lambda: [FundingEvent("BTC", Decimal("0.09"), None, 3 * H)]
@@ -71,6 +73,7 @@ def test_live_named_outcome_waits_for_backdated_settled_rate(missing):
     # after the measuring mid and cursor have passed the horizon.
     state["rates"] = [[H, "0.09"]]
     state["cursor"] = 3 * H
+    assert rt._reference_outcome(frozen) == ("open", None)
     published = [{"time": H // 1_000_000, "fundingRate": "0.001"}]
     deliver(venue.on_tick(4 * H))
     status, rates = rt._reference_outcome(frozen)

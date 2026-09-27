@@ -183,6 +183,8 @@ def advance_funding(state: dict, ts_ns: int, rate: str, mark: str | None = None,
     otherwise (None when the world had read none: an unread rate is never a number).
     ``mark`` is the price the venue states this print's payment used, at its own
     funding time ``ts_ns``: it is that time's price, over any mid (D7).
+    Strict live states instead accept only explicitly settled boundary prints and
+    retain their timestamps as evidence independently of provisional rate rows.
     """
     interval = int(state["interval"])
     # Chapter II §III.b: live predictions are not measured payments. Exact fake/tape
@@ -192,6 +194,9 @@ def advance_funding(state: dict, ts_ns: int, rate: str, mark: str | None = None,
             return
         if ts_ns % interval:
             return
+        settled_times = state.setdefault("settled_times", [])
+        if ts_ns not in settled_times:
+            settled_times.append(ts_ns)
     else:
         tau = (int(state["cursor"]) // interval + 1) * interval
         while tau <= ts_ns:
@@ -273,7 +278,8 @@ def funding_due(state: dict | None, open_ns: int, due_ns: int
     rates = [(tau, rate) for tau, rate in state["rates"] if open_ns < tau <= due_ns]
     if state.get("strict"):
         required = range((open_ns // interval + 1) * interval, last + 1, interval)
-        assigned = {tau for tau, rate in rates if rate is not None}
+        assigned = {tau for tau, rate in rates if rate is not None
+                    and tau in state.get("settled_times", [])}
         if any(tau not in assigned for tau in required):
             return FUNDING_PENDING
     if any(rate is None for _tau, rate in rates):
