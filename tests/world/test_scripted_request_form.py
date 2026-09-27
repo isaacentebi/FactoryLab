@@ -110,3 +110,18 @@ def test_a_recursive_union_terminates_at_its_least_fixed_point():
     only_itself = {"$defs": {"u": {"anyOf": [{"$ref": "#/$defs/u"}]}}, "required": ["a"],
                    "$ref": "#/$defs/u"}
     assert _shape_required(only_itself) == [frozenset({"a"})]
+
+
+def test_a_combined_contract_is_answered_whole_never_by_the_one_form_it_picked():
+    """R16b-7 (Codex on #149, scripted.py:577): a valid contract requiring both a vote and
+    a verdict is classified a ballot; the reply carries every field the contract
+    obliges, the ballot's and the verdict's, never a ballot without its verdict."""
+    combined = {"type": "object", "required": ["vote", "verdict"],
+                "properties": {"vote": {"type": "boolean"}, "verdict": {"type": "number"}}}
+    model_req, text = _model_request("Vote on the motion.", {}, combined)
+    assert request_form(model_req, text, _inputs_from_prompt(text)) == "vote"
+    reply = json.loads(ScriptedProvider().complete(model_req).text)
+    assert reply["vote"] is True and isinstance(reply["verdict"], int | float), reply
+    ballot = {"type": "object", "required": ["vote"], "properties": {"vote": {"type": "boolean"}}}
+    only, _text = _model_request("Vote on the motion.", {}, ballot)
+    assert "verdict" not in json.loads(ScriptedProvider().complete(only).text)

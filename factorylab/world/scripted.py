@@ -76,10 +76,32 @@ class ScriptedProvider:
             reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
+        reply = self._satisfy_contract(reply, req, text, inputs)
         reply = names_declined_trade(reply, text, inputs, self._producer_calls)
         return ModelResponse(
             req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
         )
+
+    def _satisfy_contract(self, reply: Any, req: ModelRequest, text: str,
+                          inputs: dict[str, Any]) -> Any:
+        """``reply`` with every recognised field the contract obliges (``contract_requires``)
+        that it lacks, each as this population answers that field alone (R16b-7).
+
+        Guarantees a combined contract (a ballot that must also carry a verdict, say) is
+        satisfied whole, never answered by the one form its classifier picked; a field
+        the reply already carries is kept. Harness only: the kernel never reads this.
+        """
+        if not isinstance(reply, dict):
+            return reply
+        answers = {"conformity": lambda: self._meta(inputs),
+                   "vote": lambda: {"vote": True, "reason": "scripted yes"},
+                   "assessment": lambda: {"assessment": "scripted testimony"},
+                   "verdict": lambda: self._evaluate(req, inputs)}
+        required = contract_requires(req, text)
+        for field, answer in answers.items():
+            if field in required and field not in reply:
+                reply = {**answer(), **reply}
+        return reply
 
     @staticmethod
     def _trading_equity(seat: Any) -> Any:
