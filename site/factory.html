@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Factory · FactoryLab</title>
+<meta name="description" content="An interactive map of FactoryLab's superdark factory: seats, the two channels, the kernel as the hard cast, the price controller, the charter, the world, and the pathology gauntlet.">
+<meta name="theme-color" content="#060606">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060606'/%3E%3Crect x='7' y='7' width='18' height='18' fill='none' stroke='%23ecebe4' stroke-width='2'/%3E%3Crect x='19' y='19' width='6' height='6' fill='%23ff5a1f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..500&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="FactoryLab home">
+      <span class="word">Factory<i>Lab</i></span>
+      <span class="k">A Class 3 factory, under construction</span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="ideas.html">Ideas</a>
+      <a href="factory.html" aria-current="page">Factory</a>
+      <a href="progress.html">Progress</a>
+      <a class="ext" href="https://superdark.ai/" rel="noopener">Essay</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="wrap" style="padding-top: clamp(48px, 8vw, 110px); padding-bottom: clamp(28px, 4vw, 48px);">
+    <div class="load">
+      <p class="k">Factory <span class="sig">/</span> the parts, on one map</p>
+      <h1 class="display">Inside<br><em>the hard cast.</em></h1>
+      <p class="lede quiet" style="margin-top: 28px;">Every part of the factory, from the world outside it to the rules nobody is told. Select a part to see what it does, which idea it answers to, and where it lives in the code. Or trace one turn of the loop.</p>
+    </div>
+  </section>
+
+  <section class="wrap" aria-label="Factory map">
+    <div class="map-wrap">
+      <div class="map-shell trace">
+        <button type="button" class="btn solid" data-trace aria-pressed="false">Trace one turn <span class="arrow" aria-hidden="true">▶</span></button>
+        <button type="button" class="btn" data-step>Step <span class="arrow" aria-hidden="true">→</span></button>
+        <p class="cap" data-cap aria-live="polite">Thirteen steps, from an event in the world to a score back at the decision that earned it.</p>
+      </div>
+      <div class="map" data-map>
+        <noscript><p class="quiet" style="padding: 24px;">The map needs JavaScript. The <a href="ideas.html">ideas page</a> describes every part in prose.</p></noscript>
+      </div>
+      <aside class="panel" data-panel aria-live="polite">
+        <p class="k">How to read the map</p>
+        <h3>Select a part</h3>
+        <p>Layers run from outside the factory at the top, through the kernel's frame, down to the world at the bottom. Dashed parts are the world, which is not architecture: a venue or a market is simply there. Everything in the heavy frame is bound by the kernel.</p>
+        <p class="small">Parts marked ● are seats: language-model agents that are woken, answer, and are paid. The rest is the machinery they live in.</p>
+        <p class="small quiet" style="margin-top: auto; font-size: 13px;">Code paths are relative to <code>factorylab/</code>, except those under <code>worlds/</code> and <code>scripts/</code>.</p>
+      </aside>
+    </div>
+  </section>
+
+  <section class="section" id="gauntlet" style="margin-top: clamp(48px, 8vw, 110px);">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="k">Instrument <span class="sig">/</span> in review</p>
+        <div>
+          <h2>The pathology <em>gauntlet</em></h2>
+          <p class="lede quiet">Does a given world show each of the four failures, and does the factory's price for each one actually bite? The gauntlet answers from the ledger alone: it reads the rows a world wrote and the physics it was launched with, and nothing else. The same checks run in tests, over a dead world's diary, and across many seeds.</p>
+        </div>
+      </div>
+
+      <div class="truth" style="margin: 0 0 32px;">
+        <p class="k sig">Status, honestly</p>
+        <p style="margin: 6px 0 0; color: var(--ink-2); font-size: 16px;">The gauntlet is still being built and reviewed, and no world is live, so there are no verdicts to publish yet. When a world runs, its verdict on each pathology appears on the <a href="progress.html">Progress</a> page: present, absent, or can't tell yet.</p>
+      </div>
+
+      <div class="gauntlet">
+        <article>
+          <span class="code-big">SF</span>
+          <h4>Stable failure</h4>
+          <p>Is a lasting violation flagged, does its price ratchet with duration, and does the controller stop cleanly at its cap?</p>
+          <div class="crit" data-crit="SF-0 SF-1a SF-1b SF-1c SF-1d SF-1e SF-1f SF-2a SF-2b"></div>
+          <p class="says" data-says>Select a criterion.</p>
+        </article>
+        <article>
+          <span class="code-big">TH</span>
+          <h4>Thrash</h4>
+          <p>Is oscillation caught in time, charged to the routers that moved, and cleared once it stops, without false alarms on noise?</p>
+          <div class="crit" data-crit="TH-1a TH-1b TH-1c TH-1d TH-1e TH-1f TH-2 TH-3 TH-4"></div>
+          <p class="says" data-says>Select a criterion.</p>
+        </article>
+        <article>
+          <span class="code-big">OF</span>
+          <h4>Overfitting</h4>
+          <p>Are consequences facts of the world, are holdouts the seats' own, and is every judge drawn only after the work it judges?</p>
+          <div class="crit" data-crit="OF-1a OF-2c OF-2d OF-3a"></div>
+          <p class="says" data-says>Select a criterion.</p>
+        </article>
+        <article>
+          <span class="code-big">LD</span>
+          <h4>Learning death</h4>
+          <p>Does the novelty reserve accrue as promised, stay unpenalised, and flag a router that has stopped learning?</p>
+          <div class="crit" data-crit="LD-1a LD-1d LD-1e LD-1f"></div>
+          <p class="says" data-says>Select a criterion.</p>
+        </article>
+      </div>
+
+      <div class="verdicts" aria-label="Possible readings">
+        <span><i style="background: var(--paper);"></i>Pass</span>
+        <span><i style="background: var(--sodium);"></i>Fail</span>
+        <span><i style="box-shadow: inset 0 0 0 1px var(--ink-3);"></i>Unsupported: no evidence either way, never a pass</span>
+      </div>
+      <p class="quiet small" style="margin-top: 24px; max-width: 46em;">Every threshold is derived from the world's own parameters; the only constant is the 3:1 loop ratio the essay names. A criterion may assert a property of the physics under a price, never a target behaviour, hold rate or count. Alongside these sit structural checks every run must pass. One open question we are checking: whether the factory ever raises its evaluation sampling rate when grades and consequences diverge, as the essay's answer to overfitting requires.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div>
+      <span class="brand"><span class="word">Factory<i>Lab</i></span></span>
+      <p>An independent implementation of ideas from <a href="https://superdark.ai/" rel="noopener"><em>The Superdark Factory</em></a> by Marek Poliks, Roberto Alonso-Trillo, Tyler Dunn, Hugh Scott-Douglas and Jay Springett. Not affiliated with or endorsed by its authors.</p>
+    </div>
+    <div>
+      <p class="k">Site</p>
+      <ul><li><a href="index.html">Home</a></li><li><a href="ideas.html">Ideas</a></li><li><a href="progress.html">Progress</a></li></ul>
+    </div>
+    <div>
+      <p class="k">Source</p>
+      <ul><li><a href="https://superdark.ai/" rel="noopener">superdark.ai ↗</a></li><li><a href="https://superdark.antikythera.org/" rel="noopener">The paper at Antikythera ↗</a></li></ul>
+    </div>
+  </div>
+</footer>
+
+<div class="bar" role="status" aria-label="Build status">
+  <span data-head>HEAD</span>
+  <span class="rail" aria-hidden="true"></span>
+  <a href="progress.html" data-milestone>Loading progress…</a>
+</div>
+
+<script src="assets/site.js" defer></script>
+<script src="assets/factory.js" defer></script>
+</body>
+</html>
