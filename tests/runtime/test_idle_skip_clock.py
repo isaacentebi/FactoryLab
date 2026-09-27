@@ -360,3 +360,84 @@ def test_a_call_past_the_tapes_end_invents_nothing_and_ends_the_world():
     assert venue.lookup("tail").status == "filled"  # the tail row still met it
     boundaries = {p.ts_ns for p in venue.funding_payments(0)}
     assert all(ts <= tape.end_ns for ts in boundaries)
+
+
+def _winding_world():
+    """A tape world with a wind-down owed, at its last recorded tick."""
+    tape = _traded_tape()
+    base = load_manifest("scripted")
+    manifest = replace(base, kill=replace(base.kill, wind_down=True), exchange=replace(
+        base.exchange, tape=TapeSpec.of(tape, allow_unknown_cutoff=True)))
+    venue = TapeVenue(tape, coins=manifest.exchange.coins, start_cash_usd=Decimal(1000))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(), exchange=venue,
+                 clock_source=IdleSkipClock(10 * S, 5, origin_ns=tape.start_ns,
+                                            monotonic=Monotonic()))
+    return rt, tape, venue
+
+
+def test_the_wind_down_books_an_owned_lots_pnl_to_its_owner_once():
+    """Sol on #152: the wind-down's close of a decision's open lot is bound to the
+    kernel's wind-down account, so its fill closes that lot (never left open), and the
+    owner's realised P&L is booked to it once, as late money, before the seal. The
+    outcome it was graded on at H is unchanged."""
+    from factorylab.kernel.queue import PropensityRecord
+    from factorylab.world.exchange import Position
+
+    rt, tape, venue = _winding_world()
+    rt.clock.now_ns = tape.start_ns
+    prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
+    handle = rt.queue.open(actor="router:Tick", event_id="long", propensity=prop,
+                           channel="verdict", deadline_ns=tape.end_ns + 10**18,
+                           parent_handle=None, cost_ceiling=0)
+    rt.handle_to_assembly[handle] = "seed-decider"
+    rt.consequences.start(handle, rt.n)
+    rt.consequences.order_result(handle, {"status": "filled", "order_id": "o-long",
+                                          "filled_size": "0.01"}, {"size": "0.01"}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o-long", "coin": "BTC", "is_buy": True,
+                                     "size": "0.01", "px": "84000", "fee_usd": "0",
+                                     "ts_ns": tape.start_ns}, rt.n)
+    rt.consequences.finish(handle, 0)
+    rt.exchange.advance(tape.end_ns)
+    rt.clock.now_ns = tape.end_ns
+    mid = str(tape.mid_at("BTC", tape.end_ns)[1])
+    at_h = tape.start_ns + rt._horizon_ns()
+    for ts in (at_h, at_h + 1):
+        rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": mid, "ts_ns": ts}, rt.n)
+    rt.consequences.resolve(rt.n)
+    graded = rt.consequences.payoff(handle)
+    assert graded is not None and graded.marked  # fixed at H with its lot still open
+    venue._positions["BTC"] = Position("BTC", Decimal("0.01"), Decimal(84000))
+    claims = rt.budget.venue_claims().get("seed-decider", 0)
+    report = rt.kill("explicit_kill:budget")
+    assert report["exposure_state"] == "flat"
+    assert not rt.consequences.table.lots  # the lot the venue flattened is closed
+    items = rt.ledger._recovery_items()
+    (late,) = [i for i in items if i["kind"] == "consequence.late" and i["handle"] == handle]
+    assert late["micro"] != 0
+    assert rt.budget.venue_claims().get("seed-decider", 0) - claims == late["micro"]
+    kinds = [i["kind"] for i in items]
+    assert kinds.index("consequence.late") < kinds.index("decision.censored")
+    assert not [i for i in items if i["kind"] == "consequence.unattributed"]
+    assert rt.consequences.payoff(handle) == graded  # nothing is graded again
+    rt._settle_late()  # once: nothing more to book
+    assert len([i for i in rt.ledger._recovery_items()
+                if i["kind"] == "consequence.late" and i["handle"] == handle]) == 1
+
+
+def test_the_wind_downs_close_of_unowned_inventory_stays_unattributed():
+    """A venue position no decision's lot holds is closed by the wind-down: nothing is
+    booked to anyone, and the quantity is ledgered unattributed, never given an owner."""
+    from factorylab.world.exchange import Position
+
+    rt, tape, venue = _winding_world()
+    rt.exchange.advance(tape.end_ns)
+    rt.clock.now_ns = tape.end_ns
+    venue._positions["BTC"] = Position("BTC", Decimal("0.01"), Decimal(84000))
+    report = rt.kill("explicit_kill:budget")
+    assert report["exposure_state"] == "flat"
+    items = rt.ledger._recovery_items()
+    (row,) = [i for i in items if i["kind"] == "consequence.unattributed"]
+    assert row["coin"] == "BTC" and row["residual"] == "1/100" and row["unowned"] == "0"
+    assert not [i for i in items if i["kind"] in ("consequence.late", "consequence.refused")]
+    assert not rt.consequences.table.lots

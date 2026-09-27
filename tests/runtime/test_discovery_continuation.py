@@ -13,6 +13,7 @@ from factorylab.runtime.worlds import PromptSpec, load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import ScriptedProvider
+from tests.runtime.test_loop import lists_nothing
 
 
 def runtime():
@@ -81,7 +82,7 @@ def packed(text):
 
 
 def test_compact_discovery_invocation_receipt_and_next_decision(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     prompts: list[str] = []
     scripted(rt, monkeypatch, [
@@ -130,7 +131,7 @@ def test_compact_discovery_invocation_receipt_and_next_decision(monkeypatch):
 
 
 def test_repeated_lookup_cannot_buy_a_further_round(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     prompts: list[str] = []
     scripted(rt, monkeypatch, [
@@ -160,7 +161,7 @@ def test_repeated_lookup_cannot_buy_a_further_round(monkeypatch):
     {"tool": "venue.place_market", "args": {"coin": "ETH", "side": "buy", "size": "0.001"}},
 ])
 def test_text_from_outside_keeps_the_narrow_continuation(monkeypatch, remote_catalogue, write):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     prompts: list[str] = []
     # The fetch rail itself is stubbed; what is under test is which tools a round
@@ -219,7 +220,7 @@ def inbox(rt, seat="seed-decider", count=1):
 
 
 def test_reading_on_reaches_an_addressed_outcome_and_still_acts(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     inbox(rt, count=2)
     req = request(rt)
     prompts: list[str] = []
@@ -275,7 +276,7 @@ LOOKUPS = [
 
 @pytest.mark.parametrize("multiple", [2, 6, 40])
 def test_a_round_is_not_bought_unless_the_final_answer_is_still_covered(monkeypatch, multiple):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     inbox(rt)
     base = request(rt)
     reserve = rt._call_reserve(rt.assemblies["seed-decider"], base)
@@ -305,7 +306,7 @@ def test_a_round_is_not_bought_unless_the_final_answer_is_still_covered(monkeypa
 def test_a_larger_ceiling_reads_further_and_a_small_one_still_answers(monkeypatch):
     read_counts = []
     for multiple in (2, 6, 40):
-        rt = runtime()
+        rt = lists_nothing(runtime())
         inbox(rt)
         base = request(rt)
         reserve = rt._call_reserve(rt.assemblies["seed-decider"], base)
@@ -324,7 +325,7 @@ def test_a_larger_ceiling_reads_further_and_a_small_one_still_answers(monkeypatc
 
 
 def test_older_bodies_travel_as_references_that_read_again(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     monkeypatch.setattr(rt, "RECENT_RESULT_BYTES", 1)  # Force exact-body eviction.
     inbox(rt)
     req = request(rt)

@@ -14,7 +14,7 @@ from tests.helpers import keep_every_checkpoint
 def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch(monkeypatch):
     keep_every_checkpoint(monkeypatch)  # the launch checkpoint is read after the run
     rt = make_runtime(live=True, clock_source=LiveClock(10, 0, now_ns=lambda: 12345))
-    assert rt.consequence_fills.since_ns == rt.venue.last_fill_ns == 12345
+    assert rt.consequence_fills.since_ns == 12345  # the one fill path
     assert rt.venue.last_funding_ns == 12345
     rt.run()
     items = rt.ledger._recovery_items()

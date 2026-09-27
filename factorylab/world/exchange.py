@@ -210,6 +210,16 @@ class Exchange(Protocol):
 # --------------------------------------------------------------------------- fake
 
 
+#: The most fills Hyperliquid's ``userFillsByTime`` answers in one read.
+FILLS_PAGE = 2000
+
+
+def _venue_fill_id(row: dict) -> str:
+    """Hyperliquid's identity of one execution, its transaction hash and trade id: what
+    a page reread at its boundary millisecond is deduplicated by (``fills``)."""
+    return f"{row.get('hash', '')}:{row['tid']}"
+
+
 @dataclass
 class FakeExchange:
     """A deterministic venue for the ``scripted`` world.
@@ -827,7 +837,12 @@ class FakeExchange:
                     WorldEventKind.FUNDING,
                     self._now_ns,
                     self.name,
-                    {"coin": coin, "rate": str(self.funding_rate), "paid_usd": str(paid)},
+                    # The hour boundary this payment is for, which the advance that
+                    # applies it may have passed.
+                    {"coin": coin, "rate": str(self.funding_rate), "paid_usd": str(paid),
+                     "funding_ns": self._last_funding_ns,
+                     # The price the payment is on: size times this times the rate.
+                     "mark": str(self._mids[coin])},
                 )
             )
         return events
@@ -1117,6 +1132,11 @@ class HyperliquidExchange:
     than raising on venue-side rejection.
     """
 
+    #: The venue's funding times: Hyperliquid settles perp funding every hour, on the
+    #: hour. A fact about the venue, read by the price of a named road not taken
+    #: (wave 16, D1), never a setting.
+    funding_interval_ns = NS_PER_HOUR
+
     def __init__(
         self,
         *,
@@ -1197,6 +1217,16 @@ class HyperliquidExchange:
             except (KeyError, TypeError, ArithmeticError, ValueError):
                 rates[market] = {"fee_rates": "unavailable", "reason": reason}
         return rates
+
+    def refresh_fee_rates(self) -> None:
+        """Read this account's fee rates again, keeping a market's last stated rates when
+        the venue does not state them now (wave 16, D1: the schedule a named road not
+        taken is priced at is re-read once per world repricing). Nothing is written."""
+        fresh = self._read_fee_rates()
+        previous = getattr(self, "_fee_rates", None) or {}
+        self._fee_rates = {market: (row if "taker_fee_rate" in row
+                                    else previous.get(market, row))
+                           for market, row in fresh.items()}
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
@@ -1550,15 +1580,42 @@ class HyperliquidExchange:
 
         Runtime polling may defer a failed read, while terminal reconciliation
         reports that failure explicitly. Neither advances the inclusive cursor.
+        Guarantees every fill at or after ``since_ns`` the venue holds: the venue
+        answers at most ``FILLS_PAGE`` rows per read, so a full page is followed by the
+        next from its latest millisecond (reread, and deduplicated by trade id), until
+        a short page proves the rest delivered (Codex on #152: a caller's watermark
+        may pass only what was read). A full page that does not advance fails closed.
         """
         if not self._address:
             raise RuntimeError("fills() needs an address or a private key")
-        raw = self._guarded(
-            "user_fills_by_time",
-            lambda: self._info.user_fills_by_time(self._address, since_ns // NS_PER_MS),
-        )
-        if not isinstance(raw, list):
-            raise VenueUnavailable("invalid fill response")
+        start = since_ns // NS_PER_MS
+        rows: dict = {}
+        while True:
+            page = self._guarded(
+                "user_fills_by_time",
+                lambda start=start: self._info.user_fills_by_time(self._address, start),
+            )
+            if not isinstance(page, list):
+                raise VenueUnavailable("invalid fill response")
+            stamps = []
+            for f in page:
+                if not isinstance(f, dict):
+                    rows[("row", len(rows))] = f  # refused below, as before
+                    continue
+                key = (("tid", _venue_fill_id(f)) if f.get("tid") is not None else
+                       tuple(sorted((k, str(v)) for k, v in f.items())))
+                rows[key] = f
+                try:
+                    stamps.append(int(f["time"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if len(page) < FILLS_PAGE:
+                break
+            latest = max(stamps, default=start)
+            if latest <= start:
+                raise VenueUnavailable("fill pagination stalled at a full timestamp")
+            start = latest
+        raw = list(rows.values())
         out: list[Fill] = []
         for f in raw:
             try:

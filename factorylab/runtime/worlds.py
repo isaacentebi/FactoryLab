@@ -406,9 +406,11 @@ class TreasurySpec:
 class PricesSpec:
     """Price controller parameters. Not money: bare rates and bounds."""
 
-    eta: float = 0.5
+    #: The integral gain. Unstated, it is derived from the SF-0 relation (wave 16,
+    #: second addendum Q-G1; ``derived_eta``); here at the defaults (penalty_cap 0.5, kp
+    #: 0, timing.min_ratio 3, immune.k 3).
+    eta: float = 0.5 / 9
     decay: float = 0.1
-    lambda_max: float = 1.0
     min_window_events: int = 1
     penalty_cap: float = 0.5
     # Floor on a decision's share of a generic (non-attributable) violation, so
@@ -429,12 +431,6 @@ class EvaluationSpec:
     min_coverage: float = 0.5
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
-    #: Anticipatory settlement (essay II.IV.b): world ticks after a judged return opens
-    #: at which its mark settles its judges' consequence reward. At most the backstop.
-    consequence_horizon_ticks: int = 10
-    #: The scale, in basis points, of a declined trade's gross move in
-    #: ``opportunity-cost-v2``: y = 0.5 - 0.5 * tanh(gross_bps / scale).
-    opportunity_scale_bps: float = 50.0
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
     sampling_step: float = 0.1  # consequence-mix step per divergent window
@@ -700,19 +696,67 @@ class WorldManifest:
     # ---- derived
 
     @property
-    def max_tick_ns(self) -> int | None:
-        """The slowest tick at which a governance tier can keep up with the world, or None.
+    def consequence_horizon_ns(self) -> int | None:
+        """H, the one horizon a judged return's outcome is fixed at, on the venue's clock.
 
-        Essay II.IV.c: governance must not lag the world. Its period is at least
-        ``min_ratio`` consequence backstops, so a tick is admissible while that many
-        ticks fit within the world's repricing period. A world that states no
-        repricing period has no upper bound here.
+        Wave 16, D2 and ruling R-C. Realized consequence is the slowest loop, and
+        governance must fit ``min_ratio`` of it inside the world's repricing period
+        (essay II.IV.c: "an inner loop must resolve itself several times faster than
+        the outer loop that commands it, with ratios that start from 3:1"), so the
+        longest horizon the ratio admits is ``timing.world_repricing / timing.min_ratio``.
+        It is counted in venue nanoseconds, never ticks, so the fact a verdict is graded
+        on does not depend on the factory's own latency. None when the world states no
+        repricing period (a world that lists no venue).
         """
         repricing = self.timing.world_repricing_ns
         if repricing is None:
             return None
-        return repricing // (self.timing.min_ratio
-                             * self.evaluation.consequence_backstop_events)
+        return repricing // self.timing.min_ratio
+
+    def gain_headroom(self) -> dict[str, int | float | bool]:
+        """Whether the duration price of stable failure has room to exist in this world.
+
+        Essay II.II.b: in stable failure, "price the duration of failure, ratcheting up
+        penalties the longer the factory spends" in the attractor; ruling R-E: the one
+        bound is ``penalty_cap``. The ratchet can price duration only while the price
+        law has not already pressed a violation onto the cap by the time the organ can
+        see an attractor. ``saturation_windows`` is the fewest windows in which the
+        PID alone takes a unit violation's penalty to the cap, the least ``w >= 1``
+        with ``kp + w * eta >= penalty_cap`` (``lambda = kp * v + I``, ``I = w * eta *
+        v``, penalty ``lambda * v``, at ``v = 1``); ``diagnosis_windows`` is the
+        fewest closed windows in which stable failure can be diagnosed, ``immune.k``
+        (``versions.diagnose``: a card violated in every one of the last ``k``
+        windows, the tail full). The relation holds when the first exceeds the second
+        by the ratio ``timing.min_ratio`` (§IV.c: 3:1+), a ratio between two loops
+        and no new constant; it also leaves the organ, which acts at most once every
+        ``min_ratio`` windows, room to ratchet after its first diagnosis. It is
+        published (``world.mechanics.controller``) and a manifest that fails it is
+        refused at load (wave 16, second addendum, Q-G1). A proportional gain at or
+        above the cap saturates in one window whatever ``eta`` is.
+        """
+        from math import ceil
+
+        p, r = self.prices, self.timing.min_ratio
+        # A float quotient a hair above an integer is that integer: eta stated as
+        # (cap - kp) / n saturates in n windows.
+        saturation = max(1, ceil((p.penalty_cap - p.kp) / p.eta - 1e-9))
+        diagnosis = self.immune.k
+        return {"saturation_windows": saturation, "diagnosis_windows": diagnosis,
+                "min_ratio": r, "holds": saturation >= r * diagnosis}
+
+    @property
+    def max_tick_ns(self) -> int | None:
+        """The slowest tick at which the loops a consequence commands can keep up, or None.
+
+        Essay II.IV.c: the decision loop must settle ``min_ratio`` times faster than
+        the consequence horizon it is graded on, so a tick is admissible while it is at
+        most ``consequence_horizon_ns / min_ratio``. A world that states no repricing
+        period has no upper bound here.
+        """
+        horizon = self.consequence_horizon_ns
+        if horizon is None:
+            return None
+        return horizon // self.timing.min_ratio
 
     def price_table(self) -> PriceTable:
         t = PriceTable()
@@ -1341,9 +1385,8 @@ class WorldManifest:
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
         step = self.immune.price_step
-        if (type(step) not in (int, float) or not isfinite(step)
-                or not 0 < step <= self.prices.lambda_max):
-            raise ValueError("immune.price_step must be finite and in (0, prices.lambda_max]")
+        if type(step) not in (int, float) or not isfinite(step) or step <= 0:
+            raise ValueError("immune.price_step must be finite and positive")
         for name in ("registration_bins", "revision_bins"):
             cuts = getattr(self.immune, name)
             if (not isinstance(cuts, (tuple, list)) or not cuts
@@ -1363,13 +1406,6 @@ class WorldManifest:
         backstop = self.evaluation.consequence_backstop_events
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
-        horizon = self.evaluation.consequence_horizon_ticks
-        if type(horizon) is not int or not 1 <= horizon <= backstop:
-            raise ValueError("evaluation.consequence_horizon_ticks must be an integer in "
-                             "[1, consequence_backstop_ticks]")
-        scale = self.evaluation.opportunity_scale_bps
-        if type(scale) not in (int, float) or not isfinite(scale) or scale <= 0:
-            raise ValueError("evaluation.opportunity_scale_bps must be a positive number")
         share = self.evaluation.multi_judge_share
         if type(share) not in (int, float) or not isfinite(share) or not 0 <= share <= 1:
             raise ValueError("evaluation.multi_judge_share must be finite and in [0, 1]")
@@ -1402,6 +1438,14 @@ class WorldManifest:
         repricing = self.timing.world_repricing_ns
         if repricing is not None and (type(repricing) is not int or repricing <= 0):
             raise ValueError("timing.world_repricing must be a positive duration")
+        if repricing is None and (self.exchange.coins or self.exchange.spot_pairs
+                                  or self.polymarket.enabled):
+            # Wave 16, D2: a world with any trading venue (Hyperliquid perps or spot, or
+            # Polymarket; Codex on #152) grades its consequences at world_repricing /
+            # min_ratio, so it must state the venue's repricing period.
+            raise ValueError("timing.world_repricing is required in a world that lists a "
+                             "venue (exchange coins, spot pairs or polymarket): the "
+                             "consequence horizon is world_repricing / min_ratio")
         maximum = self.max_tick_ns
         if (type(self.tick_interval_ns) is not int
                 or self.tick_interval_ns < self.clock.min_tick_ns
@@ -1446,9 +1490,8 @@ class WorldManifest:
         for card_id, value in self.charter_prices:
             if card_id not in {c.id for c in self.charter.cards}:
                 raise ValueError(f"card {card_id} lambda: unknown card id")
-            if (type(value) not in (int, float) or not isfinite(value)
-                    or not 0 <= value <= self.prices.lambda_max):
-                raise ValueError(f"card {card_id} lambda: must be in [0, prices.lambda_max]")
+            if type(value) not in (int, float) or not isfinite(value) or value < 0:
+                raise ValueError(f"card {card_id} lambda: must be a finite number >= 0")
         p = self.prices
         if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
                 or not 0 < p.penalty_cap < 1):
@@ -1456,13 +1499,27 @@ class WorldManifest:
         if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
                 or not 0 <= p.min_blame_share <= 1):
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
-        if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
-            raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
+        if min(p.eta, p.decay) <= 0 or p.min_window_events < 1:
+            raise ValueError("prices: eta, decay > 0 and min_window_events >= 1")
         for name in ("kp", "kd"):
             value = getattr(p, name)
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
                 raise ValueError(f"prices.{name} must be finite and nonnegative")
         self._validate_evaluator_population()
+        # Essay II.II.b: stable failure is priced by its duration, which exists only
+        # while the price law has not pressed a violation onto the cap before the organ
+        # can see the attractor (wave 16, SF-0; second addendum, Q-G1). Checked last,
+        # so a world refused for another reason is refused for that one.
+        headroom = self.gain_headroom()
+        if not headroom["holds"]:
+            raise ValueError(
+                "prices: no gain headroom for the duration price: the PID alone takes a "
+                f"unit violation's penalty to prices.penalty_cap ({p.penalty_cap}) in "
+                f"{headroom['saturation_windows']} window(s) (the least w >= 1 with kp + "
+                f"w * eta >= penalty_cap; kp {p.kp}, eta {p.eta}); it must take at least "
+                f"timing.min_ratio ({headroom['min_ratio']}) times the "
+                f"{headroom['diagnosis_windows']} windows (immune.k) stable failure is "
+                f"diagnosed in, {headroom['min_ratio'] * headroom['diagnosis_windows']}")
 
 
 def duration_ns(value: Any) -> int:
@@ -1560,6 +1617,27 @@ def _manifest_immune(raw: Any) -> ImmuneSpec:
         raise ValueError("immune.price_step is required: the stable-failure ratchet's "
                          "lambda step per window")
     return ImmuneSpec(**raw)
+
+
+def derived_eta(penalty_cap: object, kp: object, min_ratio: object, k: object) -> float:
+    """The integral gain the SF-0 relation derives, for a manifest that states none.
+
+    Guarantees ``(penalty_cap - kp) / (min_ratio * k)``: the price law alone presses a
+    unit violation's penalty onto the cap in exactly ``timing.min_ratio`` times the
+    ``immune.k`` windows stable failure is diagnosed in (``gain_headroom``), a ratio
+    between two loops and no architect's constant (essay II.IV.c). When ``kp`` already
+    reaches the cap no integral gain can give the relation room; the gain is then
+    ``penalty_cap / (min_ratio * k)`` and the manifest is refused on its headroom, not
+    on a sign. Unusable inputs are left to ``validate`` to refuse.
+    """
+    numbers = (penalty_cap, kp, min_ratio, k)
+    if any(type(v) not in (int, float) or not isfinite(v) for v in numbers):
+        return 0.5 / 9
+    span = min_ratio * k
+    if span <= 0:
+        return 0.5 / 9
+    room = penalty_cap - kp
+    return (room if room > 0 else penalty_cap) / span
 
 
 def _committee(raw: dict) -> CommitteeSpec:
@@ -1774,6 +1852,18 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             raise ValueError(f"evaluation.{key} was removed (ruling R1): a producer's "
                              "reward is its judges' verdict, and realized consequence "
                              "grades the judges")
+    if "consequence_horizon_ticks" in ev:
+        # Wave 16, D2: one horizon, timing.world_repricing / timing.min_ratio on the
+        # venue's clock, and no mark before it. A mark in ticks is refused (R8).
+        raise ValueError("evaluation.consequence_horizon_ticks was removed (wave 16, D2): "
+                         "a judged return's outcome is fixed once, at timing.world_repricing "
+                         "/ timing.min_ratio on the venue's clock")
+    if "opportunity_scale_bps" in ev:
+        # Wave 16, D1: the road not taken is a binary money fact, net of the venue's own
+        # round-trip fee and funding. A scale no world fact states is refused (R8).
+        raise ValueError("evaluation.opportunity_scale_bps was removed (wave 16, D1): a "
+                         "declined trade is priced net of the venue's round-trip fee, as "
+                         "1 when it would not have beaten it and 0 otherwise")
     if "sibling_share" in ev:
         # Evaluations U2: an unread verdict borrows no grade from the one a meta read.
         raise ValueError("evaluation.sibling_share was removed (evaluations U2): an "
@@ -1785,8 +1875,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
-        consequence_horizon_ticks=ev.get("consequence_horizon_ticks", 10),
-        opportunity_scale_bps=ev.get("opportunity_scale_bps", 50.0),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
         sampling_step=ev.get("sampling_step", 0.1),
@@ -1797,15 +1885,22 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         meta_read_share=ev.get("meta_read_share", 0.5),
     )
     pr = d.get("prices") or {}
+    if "lambda_max" in pr:
+        # Wave 16, ruling R-E: one bound, penalty_cap, on the reward. A price bound
+        # beside it is refused, never loaded as though it bounded anything (R8).
+        raise ValueError("prices.lambda_max was removed (wave 16, R-E): the one bound is "
+                         "prices.penalty_cap; a card's price is held where its penalty "
+                         "takes the whole cap")
     for key in ("kappa", "controller"):
         if key in pr:
             # Charter audit U3: the PID is the only price law, so there is no law to
             # name and no integrator damping; a manifest that says so would lie.
             raise ValueError(f"prices.{key} was removed: the PID is the only price law")
     prices = PricesSpec(
-        eta=float(pr.get("eta", 0.5)),
+        eta=(float(pr["eta"]) if "eta" in pr else derived_eta(
+            pr.get("penalty_cap", 0.5), pr.get("kp", 0.0),
+            (d.get("timing") or {}).get("min_ratio", 3), (d.get("immune") or {}).get("k", 3))),
         decay=float(pr.get("decay", 0.1)),
-        lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),

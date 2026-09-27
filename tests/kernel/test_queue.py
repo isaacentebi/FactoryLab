@@ -139,11 +139,16 @@ def test_outcome_channel_and_status_cannot_be_rewritten(queue, open_decision):
 
 
 @pytest.mark.parametrize("status", [SettleStatus.CENSORED, SettleStatus.INAPPLICABLE])
-def test_missing_outcomes_are_distinct_from_settled_performance(status, queue, open_decision):
+def test_any_settled_delivery_is_a_reward_trail(status, queue, open_decision):
+    """Wave 16, ruling R10-b: a decline, abstention or censored decision is credited at
+    its published price, a reward trail (essay II.II.b: unhistoried actions carry "no
+    reward trail"). Its status stays distinct from a score; a timeout alone leaves
+    no trail (``test_timeout_has_no_manufactured_outcome...``)."""
     handle = open_decision()
+    assert not queue.has_history("new")
     settle(queue, handle, status=status)
     assert queue.history(handle)[0].status == status
-    assert not queue.has_history("new")
+    assert queue.has_history("new")
 
 
 def test_propensity_sequence_inputs_are_detached():
@@ -155,12 +160,13 @@ def test_propensity_sequence_inputs_are_detached():
 
 
 @pytest.mark.parametrize("status", ["censored", "inapplicable"])
-def test_retirement_does_not_turn_missingness_into_performance(status, queue, open_decision):
+def test_retirement_keeps_the_reward_trail_of_an_unscored_settlement(status, queue,
+                                                                     open_decision):
     handle = open_decision()
     queue.retire_actor("learner")
     settle(queue, handle, status=status)
     assert queue.history(handle)[0].status == SettleStatus.HISTORICAL
-    assert not queue.has_history("new")
+    assert queue.has_history("new")  # ruling R10-b: a settled delivery, whatever it said
 
 
 def test_returns_for_matches_a_scan_of_every_delivery_the_queue_made(

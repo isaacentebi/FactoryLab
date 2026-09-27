@@ -300,9 +300,10 @@ class WallClock:
 class LiveVenue:
     """Adapts a real ``Exchange`` to per-tick world events.
 
-    Each tick reads mids and funding; when the exchange has an account, new
-    fills since the last poll are emitted with their realised P&L. Rates remain
-    observations; separate venue-identified funding payments carry actual cash.
+    Each tick reads mids and funding. Rates remain observations; separate
+    venue-identified funding payments carry actual cash. Fills are never read here:
+    the consequence fill cursor (``settlement.consequence.FillCursor``) is the one fill
+    path, whose watermark is the fills stream's.
 
     ``markets`` bounds the per-tick broadcast to the world's own trading
     markets: the manifest seed plus every market the population has registered,
@@ -318,12 +319,15 @@ class LiveVenue:
     """
 
     exchange: Any
-    last_fill_ns: int = field(default_factory=time.time_ns)
-    seen_fills: set[str] = field(default_factory=set)
     ledger: Any = None
     last_funding_ns: int | None = None
     seen_funding: set[str] = field(default_factory=set)
     markets: Callable[[], tuple[str, ...]] | None = None
+    # Ruling R10-o: per polled fact stream (``mids``, ``rates``, ``funding``, ``fills``),
+    # the request time of its latest SUCCESSFUL read: every fact of that stream with
+    # fact-time at or before it has been delivered. A failed or skipped read does not
+    # advance it.
+    through: dict[str, int] = field(default_factory=dict)
 
     def funding_payments(self, now_ns: int) -> list[WorldEvent]:
         """Emit post-launch funding once, with an inclusive cursor that keeps timestamp peers."""
@@ -333,11 +337,13 @@ class LiveVenue:
             self.last_funding_ns = now_ns
         method = getattr(self.exchange, "funding_payments", None)
         if method is None:
+            self.through["funding"] = now_ns  # no payment stream to wait for
             return []  # read-only legacy/test adapter
         try:
             payments = method(self.last_funding_ns)
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             return []  # no key or transient venue outage: preserve cursor
+        self.through["funding"] = max(self.through.get("funding", now_ns), now_ns)
         payments = sorted((p for p in payments if p.ts_ns >= self.last_funding_ns
                            and p.id not in self.seen_funding), key=lambda p: (p.ts_ns, p.id))
         if not payments:
@@ -360,11 +366,12 @@ class LiveVenue:
             return None
         return frozenset(self.markets())
 
-    def on_tick(self, now_ns: int, *, include_fills: bool = True) -> list[WorldEvent]:
+    def on_tick(self, now_ns: int) -> list[WorldEvent]:
         traded = self._broadcast()
         out: list[WorldEvent] = []
         try:
             mids = self.exchange.mids()
+            self.through["mids"] = now_ns
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             mids = {}
         for coin, mid in mids.items():
@@ -380,6 +387,7 @@ class LiveVenue:
             )
         try:
             funding = self.exchange.funding()
+            self.through["rates"] = now_ns
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             # VenueUnavailable is a RuntimeError: an unanswered funding read emits no
             # funding event this tick, which is true, and says nothing about rates.
@@ -397,34 +405,8 @@ class LiveVenue:
                         "rate": str(f.rate),
                         "premium": str(f.premium),
                         "paid_usd": "0",
-                    },
-                )
-            )
-        try:
-            fills = self.exchange.fills(self.last_fill_ns) if include_fills else []
-        except (RuntimeError, OSError, ValueError, ArithmeticError):  # no account: read-only venue
-            fills = []
-        for fl in fills:
-            if fl.ts_ns < self.last_fill_ns or fl.order_id in self.seen_fills:
-                continue
-            self.seen_fills.add(fl.order_id)
-            self.last_fill_ns = max(self.last_fill_ns, fl.ts_ns)
-            out.append(
-                WorldEvent(
-                    WorldEventKind.FILL,
-                    max(now_ns, fl.ts_ns),
-                    self.exchange.name,
-                    {
-                        "order_id": fl.order_id,
-                        "coin": fl.coin,
-                        "is_buy": fl.is_buy,
-                        "size": str(fl.size),
-                        "px": str(fl.px),
-                        "fee_usd": str(fl.fee),
-                        "realized_usd": str(fl.realized),
-                        "market": getattr(fl, "market", "perp"),
-                        "inventory_size": str(getattr(fl, "inventory_size", None) or fl.size),
-                        "liquidation": fl.liquidation,
+                        # The instant the venue stated this rate at.
+                        "funding_ns": int(f.ts_ns),
                     },
                 )
             )

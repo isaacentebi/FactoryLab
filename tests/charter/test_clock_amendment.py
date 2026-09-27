@@ -8,15 +8,16 @@ BURN = {"observation": "burn_per_window", "direction": "decrease", "window": 1}
 
 
 def runtime():
-    """The scripted world, stating a world repricing period of forty minutes.
+    """The scripted world, stating a world repricing period of six minutes.
 
-    max_tick is derived from it (time audit T7): 2,400 s over timing.min_ratio (3)
-    consequence backstops (20 ticks) is a 40 s tick.
+    max_tick is derived from it (time audit T7; wave 16, D2): the consequence horizon
+    is 360 s over timing.min_ratio (3), 120 s, and a tick settles min_ratio times faster
+    than that: a 40 s tick.
     """
     from dataclasses import replace
 
     base = load_manifest("scripted")
-    manifest = replace(base, timing=replace(base.timing, world_repricing_ns=2400 * 10**9))
+    manifest = replace(base, timing=replace(base.timing, world_repricing_ns=360 * 10**9))
     return Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
                    ledger_path=None, router_gamma=0.1)
 

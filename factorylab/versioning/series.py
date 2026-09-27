@@ -5,6 +5,7 @@ from math import isfinite
 from statistics import fmean, pstdev
 
 from factorylab.kernel.events import EventKind
+from factorylab.versioning.live import ORGAN_RECORD
 
 type Profile = dict[str, float | None]
 
@@ -172,8 +173,8 @@ def windows(items: list[dict], *, window_items: int = 200) -> list[dict]:
             start_edition = evidence["charter_edition"]
             # What the live organ recorded beside the profile: the routers' draws, the
             # configuration lifespans, the world's terms and the tick it closed at.
-            live = {name: deepcopy(evidence[name]) for name in (
-                "frontier_invocation", "lifespans", "terms", "tick") if name in evidence}
+            live = {name: deepcopy(evidence[name]) for name in ORGAN_RECORD
+                    if name in evidence}
         elif "regions" in marker:
             regions = deepcopy(marker["regions"])
             start_edition = marker.get("charter_edition", start_edition)

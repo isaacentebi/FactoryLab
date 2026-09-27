@@ -7,6 +7,7 @@ rule the world did not run under.
 """
 
 from collections import Counter
+from copy import deepcopy
 from math import fsum
 from statistics import fmean, pvariance
 
@@ -50,7 +51,8 @@ def _runs(flags: list[bool]) -> list[tuple[int, int]]:
 
 def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
              gap_threshold: float, registration_bins: tuple[float, ...],
-             revision_bins: tuple[float, ...]) -> dict:
+             revision_bins: tuple[float, ...], held: tuple[str, ...] | list[str] = ()
+             ) -> dict:
     """The three convergence pathologies at the newest window, and their evidence.
 
     ``windows`` are the retained windows ending with the newest; ``state`` is the
@@ -62,7 +64,12 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
       persistent_violations``; never activity, versioning audit P3) while the
       rolling operator over those cards has a gap of at least
       ``immune.gap_threshold`` (``card_gap``: registrations and revisions, which the
-      organ's raised gain invites, cannot narrow it and reset the duration);
+      organ's raised gain invites, cannot narrow it and reset the duration). An
+      unmeasured card holds its state (wave 16, second addendum, M-6): a card of the
+      previous diagnosis's failing set (``held``) that no tail window measured stays
+      in the failing set, so its duration is neither reset nor read as relief, and a
+      card never measured never enters it. With the card gap unreadable and the
+      attractor held only by such cards, the attractor holds too;
     * **thrash** is a factory that "never settles". Four signals, each priced
       (``unsettled``, the measurement the thrash price observes, is the largest):
       the current version's gap series is volatile (its mean change, above
@@ -84,7 +91,16 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
     bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
     dims, tail_cells = live.cells(tail, **bins)
     failing = live.persistent_violations(tail) if supported else []
-    wide = state.get("card_gap") is not None and state["card_gap"] >= gap_threshold
+    # Missing evidence is neither failure nor relief (M-6): a failing card the whole
+    # tail left unmeasured keeps its place; a card never measured never gains one.
+    # A card the charter no longer carries (no region in the newest window) is gone,
+    # not unmeasured.
+    carried = sorted(name for name in held if supported and name not in failing
+                     and name in tail[-1].get("regions", {})
+                     and all(live.card_violation(w, name) is None for w in tail))
+    failing = sorted([*failing, *carried])
+    wide = ((state.get("card_gap") is not None and state["card_gap"] >= gap_threshold)
+            or (state.get("card_gap") is None and bool(carried)))
     volatile = state.get("volatility") is not None and state["volatility"] > tv_threshold
     short_lived = [row for w in tail for row in w.get("lifespans", ())
                    if row.get("ratio") is not None and row["ratio"] < 1]
@@ -107,6 +123,7 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
         "settled": state.get("settled_tick") is not None, "abandoned": abandoned,
         "period": state.get("period"), "unsettled": unsettled if supported else None,
         "violated_cards": failing, "short_lived": short_lived, "frontier": frontier,
+        "unmeasured_held": carried,
     }
 
 
@@ -188,25 +205,51 @@ def frontier_evidence(tail: list[dict]) -> dict:
     }
 
 
+def organ_step(state: dict, retained: list[dict], held: list[str], *, k: int, horizon: int,
+               tv_threshold: float, gap_threshold: float,
+               registration_bins: tuple[float, ...],
+               revision_bins: tuple[float, ...]) -> tuple[dict, list[dict], dict]:
+    """One closed window through the organ: the ONE function the live organ and every
+    forensic replay run, so they cannot diverge (Codex on #152).
+
+    Guarantees, over the retained windows (the newest last): each card is read only
+    from windows that measured what it measures now (``live.current_metrics``); a card
+    the newest window redefined leaves the held failing set (a new metric, M-6); the
+    versions advance and the window is diagnosed on those metrics; and the state's
+    ``failing`` is the diagnosis's violated cards. Returns (state, events, diagnosis).
+    """
+    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
+    metrics = live.current_metrics(retained)
+    held = [name for name in held if not live.redefined(retained, name)]
+    state, events = live.advance(state, metrics, k=k, horizon=horizon,
+                                 tv_threshold=tv_threshold, **bins)
+    diagnosis = diagnose(metrics, state, k=k, tv_threshold=tv_threshold,
+                         gap_threshold=gap_threshold, held=held, **bins)
+    state["failing"] = list(diagnosis["violated_cards"])
+    return state, events, diagnosis
+
+
 def replay(windows: list[dict], *, k: int, horizon: int, tv_threshold: float,
            gap_threshold: float, registration_bins: tuple[float, ...],
            revision_bins: tuple[float, ...]) -> list[dict]:
     """Every window read through the live versioning and diagnosis, in order.
 
     Returns, per window, the versioning state after it, the events it produced
-    and the diagnosis: the forensic reconstruction of what the live organ saw.
+    and the diagnosis: the forensic reconstruction of what the live organ saw, by the
+    organ's own step (``organ_step``) over the same retention.
     """
-    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
     state = live.fresh()
     retained: list[dict] = []
     result = []
+    held: list[str] = []
     for window in windows:
         retained = [*retained, window][-live.retention(horizon, k):]
-        state, events = live.advance(state, retained, k=k, horizon=horizon,
-                                     tv_threshold=tv_threshold, **bins)
-        result.append({"state": state, "events": events,
-                       "diagnosis": diagnose(retained, state, k=k, tv_threshold=tv_threshold,
-                                             gap_threshold=gap_threshold, **bins)})
+        state, events, diagnosis = organ_step(
+            state, retained, held, k=k, horizon=horizon, tv_threshold=tv_threshold,
+            gap_threshold=gap_threshold, registration_bins=registration_bins,
+            revision_bins=revision_bins)
+        held = diagnosis["violated_cards"]
+        result.append({"state": deepcopy(state), "events": events, "diagnosis": diagnosis})
     return result
 
 

@@ -153,7 +153,8 @@ def test_censored_forecast_has_no_outcome_or_score_and_does_not_train(
             forecast.handle, "consequence", 0.0, "brier-v1", SettleStatus.CENSORED, None
         ),
     )
-    assert not queue.has_history(queue.get(forecast.handle).propensity.chosen)
+    # A settled delivery, even a censored one, is a reward trail (ruling R10-b).
+    assert queue.has_history(queue.get(forecast.handle).propensity.chosen)
     assert baseline.baseline_q("wallet_up") == 0.5
     # A censored commitment is no fact, so it trains nothing and only costs coverage.
     assert standing.snapshot() == {}

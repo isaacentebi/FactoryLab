@@ -9,12 +9,13 @@ from test_discovery_continuation import packed, request, rows, runtime, scripted
 from factorylab.cortex.request import Return
 from factorylab.runtime.compute import _bounded_result_history, _compacted_result
 from factorylab.runtime.continuity import HARD_STATE_BYTES
+from tests.runtime.test_loop import lists_nothing
 
 
 def test_invalid_read_is_answered_in_its_slot_without_dispatch(monkeypatch):
     """A read-only batch keeps its turn: the bad read is refused, not dispatched,
     and its error answers in its own tool_results slot (PR121 seq 11547)."""
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     prompts = []
     scripted(rt, monkeypatch, [
@@ -56,7 +57,7 @@ def test_invalid_tool_only_reply_reaches_own_inbox_without_dispatch(monkeypatch,
 
 
 def test_discover_page_read_and_act_in_one_budget(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     seat = "seed-decider"
     for i in range(12):
@@ -308,7 +309,7 @@ def test_first_call_can_read_transient_world_history_through_its_own_handle(monk
 
 
 def test_recent_results_carry_four_plus_two_facts_without_working_state(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     facts = [f"unknown-fact-{letter}" for letter in "abcdef"]
     for index, fact in enumerate(facts):
@@ -362,7 +363,7 @@ def test_large_prior_result_history_is_bounded_and_exactly_retrievable():
 
 
 def test_oversize_intermediate_state_is_refused_without_changing_the_head(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     seat = "seed-decider"
     rt.working_state.put(seat, {"keep": "baseline"}, handle="before")
     before_head = dict(rt.working_state.head(seat))
@@ -411,7 +412,7 @@ def test_intermediate_state_commit_survives_a_later_final_failure(monkeypatch):
 ])
 def test_loop_ending_tool_return_handles_working_state_only_once(
         monkeypatch, state, accepted):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     prompts = []
     scripted(rt, monkeypatch, [
@@ -449,7 +450,7 @@ def test_connector_body_cannot_become_intermediate_working_state():
 
 
 def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = request(rt)
     monkeypatch.setattr(rt, "_call_reserve", lambda *_: None)
     prompts = []
@@ -464,7 +465,7 @@ def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch
 
 
 def test_large_unaffordable_result_preserves_answer_without_claiming_delivery(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     seat = "seed-decider"
     rt.outcomes.append(seat, handle="large", outcome={"evidence": "x" * 250_000})
     base = request(rt)
@@ -483,7 +484,7 @@ def test_large_unaffordable_result_preserves_answer_without_claiming_delivery(mo
 
 
 def test_unaffordable_recent_working_set_falls_back_to_exact_references(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     seat = "seed-decider"
     for index in range(2):
         rt.outcomes.append(seat, handle=f"fact-{index}",

@@ -189,8 +189,13 @@ def runs(tmp_path_factory):
 def test_release_changes_nothing_any_reader_sees(runs):
     """With and without release, one manifest and seed write the same diary."""
     released, kept = runs["released"], runs["kept"]
-    assert sum(released.queue.released_counts().values()) > len(released.queue.retained())
-    assert len(kept.queue.retained()) > 2 * len(released.queue.retained())
+    # Wave 16 keeps a decision until its outcome is fixed at the horizon on the venue's
+    # clock and its margin window is read (D2; 40 of this world's ticks with the verdict
+    # window), a longer tail of a 150-event run than before: release still frees a
+    # large share, and the kept run retains every decision.
+    total = sum(released.queue.released_counts().values())
+    assert total > 0.8 * len(released.queue.retained())
+    assert len(kept.queue.retained()) == total + len(released.queue.retained())
     assert _diary(released) == _diary(kept)
     assert _plain(runs["summary"]) == _plain(runs["kept_summary"])
     # Every order a released account placed was confirmed terminal by the venue's own
@@ -256,7 +261,9 @@ def test_invariant_a_release_never_drops_a_decision_still_owed_a_score(runs):
                                                   "reason": "external_unobservable"}
     table = rt.consequences.table
     lot = Lot(holding, "BTC", True, Fraction(1), Fraction(100), Fraction(0))
-    accounts = tuple(replace(r, opened_at_tick=rt.ticks_consumed) if r.handle == young else r
+    # Young on the venue's clock, where the horizon is counted (wave 16, D2).
+    accounts = tuple(replace(r, opened_at_tick=rt.ticks_consumed, opened_at_ns=rt.clock.now_ns)
+                     if r.handle == young else r
                      for r in table.returns)
     confirmed = LotOrder("probe-order", rejected, Fraction(0), Fraction(1), Fraction(1),
                          confirmed=Fraction(1))

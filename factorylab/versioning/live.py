@@ -331,6 +331,87 @@ def advance(state: dict, windows: list[dict], *, k: int, horizon: int, tv_thresh
     return state, events
 
 
+#: What the live organ records per window beside its profile and regions (the
+#: ``immune.window`` row), and so what a forensic reader of that row must carry into the
+#: window it replays: the routers' draws, the configuration lifespans, the world's terms,
+#: the tick it closed at and each card's meaning at its close.
+ORGAN_RECORD = ("frontier_invocation", "lifespans", "terms", "tick", "semantics")
+
+
+def organ_record(row: dict) -> dict:
+    """The window the live organ read, rebuilt from its ``immune.window`` ledger row.
+
+    Guarantees exactly the fields the organ's own window carried (``ORGAN_RECORD`` with
+    its index, charter edition, profile and regions), so a replay reads what the live
+    organ read.
+    """
+    record = {"index": row["window"], "charter_edition": row.get("charter_edition"),
+              "profile": dict(row.get("profile") or {}),
+              "regions": dict(row.get("regions") or {})}
+    for name in ORGAN_RECORD:
+        if name in row:
+            record[name] = row[name]
+    record.setdefault("tick", row["window"])
+    record.setdefault("lifespans", [])
+    return record
+
+
+def same_metric(was: dict, now: dict) -> bool:
+    """Whether two recorded meanings of a card measure the same rows.
+
+    Guarantees the comparison of their full ``identity`` (``measurement.metric_identity``:
+    observation, role answered for, sample kind, scope) when both carry one, and of the
+    observation alone when either was recorded before identities were kept.
+    """
+    if was.get("identity") is not None and now.get("identity") is not None:
+        return list(was["identity"]) == list(now["identity"])
+    return was.get("observation") == now.get("observation")
+
+
+def redefined(windows: list[dict], name: str) -> bool:
+    """Whether card ``name`` measured a different metric (``same_metric``) in the newest
+    window than in the one before it: a new metric under the same id (Codex on #152)."""
+    if len(windows) < 2:
+        return False
+    before, after = windows[-2].get("semantics"), windows[-1].get("semantics")
+    if before is None or after is None:
+        return False
+    return not same_metric(before.get(name) or {}, after.get(name) or {})
+
+
+def current_metrics(windows: list[dict]) -> list[dict]:
+    """``windows`` with each card kept only where it measured what it measures now.
+
+    Guarantees a window keeps a card's reading and region only when the metric it
+    recorded for that card (``semantics``) is the one the newest window recorded
+    (``same_metric``: its identity, or its observation for an older record): a
+    card redefined under the same id is a new metric, so its old readings are neither
+    violation nor movement of the new one (Codex on #152), and a card the newest window
+    no longer carries is gone. Windows recorded before semantics were kept, and a
+    newest window without them, are returned as they are.
+    """
+    if not windows or windows[-1].get("semantics") is None:
+        return windows
+    newest = windows[-1]["semantics"]
+    result = []
+    for window in windows:
+        recorded = window.get("semantics")
+        if recorded is None:
+            result.append(window)
+            continue
+        stale = {name for name, meaning in recorded.items()
+                 if not same_metric(meaning, newest.get(name) or {})}
+        if not stale:
+            result.append(window)
+            continue
+        result.append({**window,
+                       "profile": {k: v for k, v in window["profile"].items()
+                                   if k not in stale},
+                       "regions": {k: v for k, v in window.get("regions", {}).items()
+                                   if k not in stale}})
+    return result
+
+
 def persistent_violations(tail: list[dict]) -> list[str]:
     """Cards violated in every tail window that measured them, measured at least once.
 

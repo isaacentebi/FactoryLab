@@ -149,6 +149,10 @@ class WindDownExecutor:
             "attempted": True, "orders": 0, "cancelled": 0, "closed": 0, "sold": 0,
             "failed": 0, "reconciled": 0, "refused": 0, "ledger_failures": 0,
             "operations": 0, "operation_log": [], "errors": [],
+            # Every closing order the venue identified (a perp close, a spot sell),
+            # which the runtime binds to the kernel's wind-down account so its fills
+            # close the lots they flatten (``settlement.lots.WIND_DOWN``).
+            "closing_orders": [],
             "production_state": KILLED, "exposure_state": UNKNOWN,
             # The earlier name for the same fact, kept so readers written against
             # the first kill contract (and GPT-6's converted regressions) still read.
@@ -169,6 +173,15 @@ class WindDownExecutor:
         kill: the count reaches the witness line outside the diary and stderr
         reaches the operator, and the executor keeps going.
         """
+        result = row.get("result") if row.get("kind") == OP_RESULT else None
+        if (isinstance(result, dict) and row.get("op") in ("close", "sell")
+                and result.get("order_id") is not None
+                and all(o["order_id"] != str(result["order_id"])
+                        for o in self.report["closing_orders"])):
+            self.report["closing_orders"].append({
+                "order_id": str(result["order_id"]), "coin": row.get("coin"),
+                "market": row.get("market"), "size": row.get("size"),
+                "filled_size": result.get("filled_size")})
         try:
             self.ledger.append(row)
         except Exception as exc:  # noqa: BLE001 - a store may never block a kill
@@ -412,7 +425,8 @@ class WindDownExecutor:
         self._reconcile()
         self._append({"kind": STEP, "step": "summary",
                       **{k: v for k, v in self.report.items()
-                         if k not in ("errors", "operation_log", "residual")}})
+                         if k not in ("errors", "operation_log", "residual",
+                                      "closing_orders")}})
         return self.report
 
     def _pass(self, only: set | None) -> None:

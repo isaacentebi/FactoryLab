@@ -17,6 +17,7 @@ from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import ScriptedProvider
 from tests.conftest import make_runtime
+from tests.runtime.test_loop import lists_nothing
 
 FOUNDER = "seed-decider"
 
@@ -175,13 +176,13 @@ def test_explicit_endowment_requires_known_founder_and_rejects_self_or_live_id()
 
 
 def test_endowment_replays_and_child_calls_charge_the_right_seat(monkeypatch):
-    rt = _runtime()
+    rt = lists_nothing(_runtime())
     handle = _handle(rt)
     amount = 2_000_000
     rt._register(handle, _proposal(endowment_micro=amount))
     state = runtime_state(rt)
 
-    restored = make_runtime()
+    restored = lists_nothing(make_runtime())
     restore_runtime(restored, state)
     assert restored.budget.state() == rt.budget.state()
     assert restored.budget.check_invariant()
