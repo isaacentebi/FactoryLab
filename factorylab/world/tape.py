@@ -934,6 +934,14 @@ class TapeVenue(FakeExchange):
             self._advance_vaults()
         return events
 
+    def funding_boundaries(self, ts_ns: int) -> tuple[tuple[str, int], ...]:
+        """Only crossed boundaries with unpublished evidence require retained ownership."""
+        through = min(ts_ns, self._tape.end_ns)
+        return tuple(sorted({(coin, row["funding_ns"])
+                             for coin, rows in self._tape.data.get("settled_funding", {}).items()
+                             for row in rows[self._settled_seen.get(coin, 0):]
+                             if self._last_funding_ns < row["funding_ns"] <= through}))
+
     def _settle_funding(self, ts_ns: int) -> list[WorldEvent]:
         """One funding settlement per hour boundary of tape time crossed up to ``ts_ns``."""
         events: list[WorldEvent] = []
@@ -987,12 +995,27 @@ class TapeVenue(FakeExchange):
                 events.append(WorldEvent(WorldEventKind.FUNDING, row["published_at_ns"],
                                          self.name, {"coin": coin, "rate": str(rate),
                                          "paid_usd": str(paid), "funding_ns": boundary,
+                                         **({"allocation_boundary_ns": boundary,
+                                             "allocation_final": not any(
+                                                 future["funding_ns"] == boundary
+                                                 and any(future.get(k) != row.get(k) for k in (
+                                                     "rate", "premium", "mark",
+                                                     "oracle_observed_at_ns"))
+                                                 for future in rows[index:])}
+                                            if boundary in self._funding_sizes else {}),
                                          "settled": True,
                                          **({"published_at_ns": row["venue_published_at_ns"]}
                                             if "venue_published_at_ns" in row else {}),
                                          "mark": None if mark is None else str(mark),
                                          "oracle_observed_at_ns": row["oracle_observed_at_ns"]}))
             self._settled_seen[coin] = index
+        # Chapter II §III.b: retain boundary cash bases only while a recorded
+        # publication can still consume them. Emitted events carry their allocation key.
+        pending = {row["funding_ns"]
+                   for coin, rows in self._tape.data.get("settled_funding", {}).items()
+                   for row in rows[self._settled_seen.get(coin, 0):]}
+        self._funding_sizes = {at: sizes for at, sizes in self._funding_sizes.items()
+                               if at in pending}
         return events
 
     def _accrue(self, ts_ns: int) -> None:

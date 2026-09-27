@@ -396,7 +396,10 @@ class ReturnConsequences:
             at = payload.get("ts_ns", self._now_ns())
             if at is not None:
                 self._saw_fact(int(at))
-            table = self.table.funding(payload["coin"], str(payload["paid_usd"]))
+            table = self.table.funding(
+                payload["coin"], str(payload["paid_usd"]),
+                boundary=payload.get("allocation_boundary_ns"),
+                final=payload.get("allocation_final", False))
             # Funding at its funding time: charged to the lots of the returns holding
             # them then; a funding time after a return's H is late money (R10-m).
             self._record_effects(at, str(payload["coin"]), self.table, table)

@@ -592,6 +592,14 @@ class VenueMixin:
         """Advance a fake or recorded venue to ``ts_ns``: every fact it holds through
         that instant is delivered by the call, so every stream is delivered through it
         (``advance_through_ns``; ruling R10-o)."""
+        boundaries = getattr(self.exchange, "funding_boundaries", None)
+        if boundaries is not None:
+            # Chapter II §III.b: tape settles all crossed boundaries before arrivals.
+            # Retain only ownership with a future publication, never a lifetime fill log.
+            for coin, boundary in boundaries(ts_ns):
+                self.consequences.ledger.append({"kind": "consequence.funding_boundary",
+                                                 "coin": coin, "boundary_ns": boundary})
+                self.consequences.table = self.consequences.table.capture_funding(coin, boundary)
         events = self.exchange.advance(ts_ns)
         self.advance_through_ns = max(getattr(self, "advance_through_ns", None) or ts_ns,
                                       ts_ns)
