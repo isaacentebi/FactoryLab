@@ -488,6 +488,7 @@ def render_governance(name: str) -> Rendered:
         rt._hold_vote(dc_replace(base, id="class2-connector"),
                       rt._seat_internal("class2-connector", eligible)[0], connector=connector)
         rt._testify({"sequence": 1, "norms": list(rt.charter.norms)}, standing)
+        _render_counter(rt)
         rendered.status = "completed"
     except Exception as exc:  # noqa: BLE001 - what rendered before a failure still counts
         rendered.status = f"failed: {type(exc).__name__}: {exc}"[:300]
@@ -496,6 +497,39 @@ def render_governance(name: str) -> Rendered:
                        and not _population_authored(t, rendered.emitted, frozenset())]
     # A partial governance render is never returned: every caller gets the refusal.
     return require_complete(rendered)
+
+
+def _render_counter(rt) -> None:
+    """The counter-verdict request (``Runtime._counter_step``) through its real builder,
+    for every world with an adversarial judge: a first-tier verdict on a return is put
+    to one counter seat as its router would draw it. A short run no longer reaches a
+    counter (wave 16: a verdict's judges wait on the venue's consequence horizon), so
+    its request is built here, as the committee's are."""
+    from factorylab.kernel.events import Event, EventKind
+    from factorylab.learners.router import Sample
+    from factorylab.runtime.propensity import as_public
+
+    counters = sorted(aid for aid, a in rt.assemblies.items()
+                      if tuple(a.spec.emits or ()) == ("CounterVerdict",))
+    if not counters:
+        return
+    aid = counters[0]
+    lid = f"router:{EventKind.VERDICT}"
+    # The one seat on the menu, drawn with certainty (the seeded draw replays exactly).
+    sample = Sample((aid,), (1.0,), aid, 0, lid, "class2-static", ())
+    # The verdict travels forward with its judge's propensity (``_public_propensity``),
+    # which the counter reads as its subject's.
+    ev = Event("class2-verdict", EventKind.VERDICT, rt.clock.now_ns, {
+        "about_handle": "class2-return", "evaluator_handle": "class2-verdict",
+        "verdict": 0.5, "rationale": "class2", "producer_outputs": {"answer": "class2"},
+        "propensity": as_public(rt._propensity(sample))}, "kernel")
+    channels = rt._return_channels(aid, ev)
+    handle = rt.queue.open(actor=lid, event_id=ev.id, propensity=rt._propensity(sample),
+                           channel=next(iter(channels.values())), parent_handle=None,
+                           horizon_ticks=rt.ev.verdict_timeout_ticks,
+                           cost_ceiling=max(0, rt.wallet.available),
+                           return_channels=channels)
+    rt._counter_step(ev, handle, sample, rt.queue.get(handle).deadline_ns)
 
 
 #: Every kernel function that builds a request a seat is sent, by ``file::function``.
