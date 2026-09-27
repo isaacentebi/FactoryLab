@@ -100,9 +100,6 @@ def ld1(shared_run):
     return shared_run("ld1", lambda: P.run(*P.ld1(at_window=10), events=350))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} R-E (amended), Q-G2: a niche decision bears no "
-                   "more penalty than a NOOP of its window; today it bears the generic share")
 def test_i3c_a_niche_decision_is_never_priced_above_a_noop(ld1):
     result = g.i3c_niche_no_worse_than_noop(ld1.events, ld1.manifest)
     assert result.ok, result.evidence

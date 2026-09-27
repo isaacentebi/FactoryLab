@@ -42,6 +42,9 @@ NOT_EMITTED = {
                         "handle as return.handle); no captured run timed a decision out",
     "runtime.event_done": "emitted by loop.py after every event's _deliver_returns (with "
                           "n and the pace record); the captured set holds none",
+    "router.unscored_priced": "emitted by feedback.py (_learn_router_return and "
+                              "_credit_abstentions) with the abstention row's fields "
+                              "plus status; the captured set holds none",
     "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
     "uptake.forecast": "emitted by runtime/uptake.py; no captured run reached it",
 }
@@ -177,6 +180,8 @@ NOT_SCORES = {
 }
 #: Reward-bearing kinds no run captured here, each with its reason.
 UNCAPTURED = {
+    "router.unscored_priced": "emitted by feedback.py for a censored or timed-out round "
+                              "(wave 16 D4); no captured gauntlet run reached it",
     "consequence.uninformative": "emitted by feedback.py _uninformative (with q and y) and by "
                                  "the settlement-side fee/mark/funding paths; no captured "
                                  "gauntlet run reached it",

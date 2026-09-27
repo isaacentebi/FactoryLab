@@ -1179,6 +1179,26 @@ def test_s5_and_s5b_abstention_credit():
     assert g.s5b_observed_neutral(ok + settled, M).status == g.UNSUPPORTED
 
 
+def test_s5_reads_wave_16s_one_map_with_the_rounds_thrash_charge():
+    """Wave 16 (R10-l): a credited round is learned as ``(r + B - P) / (1 + B)``, B twice
+    the cap for a router, P the card penalty plus its thrash charge; a pre-wave-16 diary
+    (its manifest states lambda_max) keeps the clipped difference."""
+    w16 = {**M, "prices": {k: v for k, v in M["prices"].items() if k != "lambda_max"}}
+    bound = 2 * w16["prices"]["penalty_cap"]
+    row = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+           "neutral": 0.6, "penalty": 0.1}
+    plain = row | {"reward": (0.6 + bound - 0.1) / (1.0 + bound)}
+    assert g.s5_neutral_imputation([plain], w16).ok
+    charged = row | {"reward": (0.6 + bound - (0.1 + 0.05)) / (1.0 + bound)}
+    charge = {"kind": "thrash.charged", "handle": "z", "router": "router:Tick",
+              "charge": 0.05, "penalty": 0.1, "raw": 0.6, "reward": charged["reward"]}
+    assert g.s5_neutral_imputation([charged, charge], w16).ok
+    assert g.s5_neutral_imputation([charged], w16).status == g.FAIL
+    assert g.s5_neutral_imputation([row | {"reward": 0.5}], w16).status == g.FAIL
+    unscored = plain | {"kind": "router.unscored_priced", "status": "censored"}
+    assert g.s5_neutral_imputation([unscored], w16).ok
+
+
 def test_s5b_compares_neutral_with_the_routers_computed_mean():
     """Codex review: a router whose settled raw scores truly average 0.5 credits 0.5 and
     passes; one averaging 0.7 that credits 0.5 fails."""

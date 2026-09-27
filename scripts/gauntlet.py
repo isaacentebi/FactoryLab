@@ -2618,6 +2618,8 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
     "price.penalty": ("raw", "effective"),
     "router.abstention_priced": ("neutral", "reward"),
     "router.decline_priced": ("neutral", "reward"),
+    # Wave 16 (D4): a censored or timed-out round is imputed like an abstention.
+    "router.unscored_priced": ("neutral", "reward"),
     "router.carried": ("reward",),
     "router.step_rescaled": ("reward", "stepped_as"),
     # Wave 16 (R10-l): the round's raw score and its learned value on the one map; a
@@ -2650,7 +2652,8 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
 #: A penalty that is a weighted sum over roles (``_priced_abstention``): its float sum
 #: may pass the cap by an ulp, so it alone is compared with 1e-12 of slack. Every other
 #: capped field is ``min(…, penalty_cap)`` times a share ≤ 1 and is compared exactly.
-WEIGHTED_PENALTY_KINDS = frozenset({"router.abstention_priced", "router.decline_priced"})
+WEIGHTED_PENALTY_KINDS = frozenset({"router.abstention_priced", "router.decline_priced",
+                                    "router.unscored_priced"})
 #: The unit fields the kernel writes as a boolean outcome: a motion's kept promise
 #: (``policy.outcome``'s ``y = promise_kept(...)``, governance.py). Every other unit
 #: field (a reward, a grade, a probability, a score, a realized y) is a number, and a
@@ -2710,6 +2713,7 @@ CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
     "price.penalty": ("penalty",),
     "router.abstention_priced": ("penalty",),
     "router.decline_priced": ("penalty",),
+    "router.unscored_priced": ("penalty",),
     "thrash.charged": ("charge",),
 }
 
@@ -2803,15 +2807,34 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
 
 @criterion("S5")
 def s5_neutral_imputation(events: list[Mapping], manifest: Mapping) -> Result:
-    """S5: an abstention and a declined commission are credited by one formula:
-    ``clip(neutral − penalty, 0, 1)`` on the router's own neutral (R9, D4), exactly as
-    ``_priced_abstention`` computes it from the two values it ledgers."""
-    rows = rows_of(events, "router.abstention_priced", "router.decline_priced")
+    """S5: an abstention, a declined commission and an unscored round are credited by
+    one formula on the router's own neutral and the penalty it ledgers.
+
+    Wave 16 (R10-l, D4): every round is learned on the one map, ``(r + B - P) / (1 + B)``
+    (pricing.py ``_learned``, through feedback.py ``_learning_value``): ``r`` the raw
+    neutral, ``P`` the card penalty plus the round's thrash charge (its ``thrash.charged``
+    row, when it bore one), ``B = 2 · penalty_cap`` for a router (``_charge_bound``),
+    compared exactly. A pre-wave-16 diary (its launched manifest states
+    ``prices.lambda_max``, which wave 16 removed) was credited ``clip(neutral − penalty,
+    0, 1)`` (R9, D4 as then)."""
+    rows = rows_of(events, "router.abstention_priced", "router.decline_priced",
+                   "router.unscored_priced")
     if not rows:
         return _unsupported("S5", "no abstention or decline was priced")
-    bad = [need(row, "handle") for row in rows
-           if float(need(row, "reward")) != min(1.0, max(0.0, float(need(row, "neutral"))
-                                                   - float(need(row, "penalty"))))]
+    prices = _section(manifest, "prices")
+    before_wave16 = "lambda_max" in prices
+    bound = 2 * float(prices.get("penalty_cap") or physics(manifest).cap)
+    thrash = {need(row, "handle"): float(need(row, "charge"))
+              for row in rows_of(events, "thrash.charged")}
+
+    def credited(row: Mapping) -> float:
+        neutral, penalty = float(need(row, "neutral")), float(need(row, "penalty"))
+        if before_wave16:
+            return min(1.0, max(0.0, neutral - penalty))
+        charge = penalty + thrash.get(need(row, "handle"), 0.0)
+        return (neutral + bound - charge) / (1.0 + bound)
+
+    bad = [need(row, "handle") for row in rows if float(need(row, "reward")) != credited(row)]
     return _result("S5", not bad, priced=len(rows), bad=bad[:5])
 
 

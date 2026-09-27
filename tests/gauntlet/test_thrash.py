@@ -16,6 +16,7 @@ import pytest
 from factorylab.runtime import immune
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.feedback import FeedbackMixin
+from factorylab.versioning import versions
 from factorylab.versioning.versions import replay
 from scripts import gauntlet as g
 from tests.gauntlet import populations as P
@@ -76,7 +77,9 @@ def test_th1c_each_core_round_is_charged_price_times_its_own_movement(th1):
 
 def test_th1c_negative_control_a_charge_that_never_lands_fails():
     mutant = P.run(*P.th1(until_window=UNTIL), events=300, patches=[
-        (FeedbackMixin, "_thrash_charged", lambda self, state, handle, reward: reward)])
+        # Wave 16 takes the charge in ``_thrash_charge`` (R10-l): a mutant that takes
+        # none leaves every moved core round uncharged.
+        (FeedbackMixin, "_thrash_charge", lambda self, handle: 0.0)])
     assert g.th1c_movement(mutant.events, mutant.manifest).status == g.FAIL
 
 
@@ -161,7 +164,9 @@ def _ignore_lifespans(original):
 
 def test_th2_negative_control_an_organ_blind_to_lifespans_fails():
     mutant = P.run(*P.th2_reversion(), events=300,
-                   patches=[(immune, "diagnose", _ignore_lifespans(immune.diagnose))])
+                   # Wave 16: the organ diagnoses through ``versions.organ_step``, which
+                   # calls the module's own ``diagnose``.
+                   patches=[(versions, "diagnose", _ignore_lifespans(versions.diagnose))])
     result = g.th2_short_lived(mutant.events, mutant.manifest, loop="seat:molt-seat")
     assert result.status == g.FAIL and result.evidence["misread"], result.evidence
 

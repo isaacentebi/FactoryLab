@@ -95,9 +95,6 @@ def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
     assert any("missed_reset" in problem for problem in result.evidence["problems"])
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} R-E (amended): the integrator freezes while "
-                   "the penalty sits at penalty_cap (anti-windup)")
 def test_sf1c_the_integral_is_frozen_while_the_penalty_sits_at_the_cap(sf1):
     result = g.sf1c_anti_windup(sf1.events, sf1.manifest, card=UPTAKE)
     assert result.ok, result.evidence
@@ -148,9 +145,6 @@ def test_sf1_s3_an_action_label_moves_no_penalty():
                for h in one)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} D4: after a router's first settled round an "
-                   "abstention is credited its observed mean, never the 0.5 prior (I-2b)")
 def test_s5b_nothing_delivered_is_credited_the_observed_mean(sf2_low):
     """Read in SF-2's world, whose producers' verdicts (0.5 and 0.5 − δ) do not average
     0.5: in SF-1 every verdict is 0.5, so the prior and the observed mean coincide and
@@ -199,9 +193,6 @@ def test_sf2a_the_price_gradient_follows_relief(sf2_low):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} D5: n_nonrelieving is frozen at the window's "
-                   "close, so shares do not depend on settlement order")
 def test_sf2b_shares_are_blind_to_settlement_order(sf2_low):
     result = g.sf2b_order_blind(sf2_low.events, sf2_low.manifest, card=UPTAKE)
     assert result.ok, result.evidence
