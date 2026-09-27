@@ -413,7 +413,7 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
         cap_micro=10_000,
         max_calls=2,
         provider=provider,
-        source_root="/Users/isaacentebi/Desktop/FactoryLab",
+        source_root=str(Path(__file__).resolve().parents[2]),  # this checkout, wherever it is
         now_ns=lambda: 1_000_000_000,
         minimum_ticks=60,
     )
