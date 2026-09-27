@@ -1,5 +1,7 @@
 # Local source snapshots, review packets, logs and scratch work
 /work/
+/scratch/
+/.helm/
 
 # Local configuration and credentials
 .env
