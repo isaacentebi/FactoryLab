@@ -29,6 +29,7 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelRequest, ModelResponse
 from factorylab.world.scripted import _description_from_prompt, _inputs_from_prompt
+from tests.runtime.test_loop import lists_nothing
 
 ARTIFACT_ID = "journey-verifier"
 ARTIFACT_SCHEMA = {
@@ -215,7 +216,9 @@ def _runtime(provider: JourneyProvider) -> Runtime:
         prompt=PromptSpec(mode="compact"),
         evaluation=replace(manifest.evaluation, verdict_timeout_events=4),
     )
-    return Runtime(
+    # Written when an unquoted world listed nothing: since 10e9c67 (Codex on #152) the
+    # counterfactual contract reads the venue's listing, so the premise is stated.
+    return lists_nothing(Runtime(
         manifest,
         events=0,
         seed=1,
@@ -224,7 +227,7 @@ def _runtime(provider: JourneyProvider) -> Runtime:
         router_gamma=0.2,
         provider=provider,
         exchange=FakeExchange(coins=manifest.exchange.coins),
-    )
+    ))
 
 
 def _decision(runtime: Runtime, seat: str, channel: str = CH_VERDICT) -> str:
