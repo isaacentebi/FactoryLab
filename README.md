@@ -253,8 +253,13 @@ imports nothing from the runtime, so it reads a dead world's diary as readily as
 live test run.
 
 `tests/gauntlet/` runs purpose-built populations through real worlds against those
-criteria. `uv run python scripts/gauntlet.py sweep --population <name>` runs one
-population over several seeds; `replay` runs every criterion over a dead diary.
+criteria. The script runs them by hand too: `sweep` drives one population over the
+seeds given and prints every reading, and `replay` runs every criterion over a dead
+diary.
+
+```bash
+uv run python scripts/gauntlet.py sweep --population ld1 --seeds 1
+```
 
 `scripts/class2_audit.py` guards the other flank: the architect's text leaking into
 what the seats see. A static audit in the check tier (`tests/audit/test_class2_static.py`)
@@ -288,9 +293,9 @@ Tests come in three tiers, assigned in `tests/conftest.py`:
 
 ```bash
 uv run pytest                                             # check: no world runs, about 40 s
-uv run pytest -m gate -n 2                                # gate: every test that runs a world
+uv run pytest -m gate -n 2                                # gate: every test that runs a world, about 10 min
 uv run pytest -m gate -n 2 tests/gauntlet/test_learning_death.py
-uv run pytest -m slow tests/audit/test_a1_composition.py  # slow: kills and resumes real processes
+uv run pytest -m slow tests/audit/test_a1_composition.py  # slow: the tier that kills and resumes real processes
 ```
 
 A `check` test that takes more than 2 s of CPU, or 10 s of wall time, fails and asks
