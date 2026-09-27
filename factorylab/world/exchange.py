@@ -1218,8 +1218,11 @@ class HyperliquidExchange:
         rates: dict[str, dict[str, str]] = {}
         for market, (taker, maker) in self.FEE_FIELDS.items():
             try:
-                rates[market] = {"taker_fee_rate": str(Decimal(str(answer[taker]))),
-                                 "maker_fee_rate": str(Decimal(str(answer[maker]))),
+                pair = Decimal(str(answer[taker])), Decimal(str(answer[maker]))
+                if not all(value.is_finite() for value in pair):
+                    raise ValueError("nonfinite fee rate")
+                rates[market] = {"taker_fee_rate": str(pair[0]),
+                                 "maker_fee_rate": str(pair[1]),
                                  "fee_basis": "fraction of notional, the venue's userFees "
                                               "for this account"}
             except (KeyError, TypeError, ArithmeticError, ValueError):
@@ -1227,9 +1230,9 @@ class HyperliquidExchange:
         return rates
 
     def refresh_fee_rates(self) -> dict:
-        """Return the actual userFees answer, retaining last stated rates in the cache.
+        """Return fresh answer/status/markets, retaining last stated rates only in cache.
 
-        An unanswered read returns an empty mapping, never the previous answer.
+        An unanswered read reports unavailable, never the previous answer.
         The journal retains this outside fact at the existing repricing cadence
         (Chapter II §III.b), independently of the cached instrument listing.
         """
@@ -1238,7 +1241,9 @@ class HyperliquidExchange:
         self._fee_rates = {market: (row if "taker_fee_rate" in row
                                     else previous.get(market, row))
                            for market, row in fresh.items()}
-        return dict(self._fee_answer)
+        markets = sorted(market for market, row in fresh.items() if "taker_fee_rate" in row)
+        return {"status": "ok" if markets else "unavailable",
+                "answer": dict(self._fee_answer), "markets": markets}
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""

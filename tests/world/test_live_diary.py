@@ -164,6 +164,7 @@ def test_settled_tape_charges_boundary_position_at_retained_oracle_on_publicatio
     assert event.payload["settled"] is True
     assert event.payload["oracle_observed_at_ns"] == h + 1
     assert event.payload["mark"] == "120.123456789"
+    assert venue.funding()[0].mark == Decimal("120.123456789")
     assert Decimal(event.payload["paid_usd"]) == Decimal("2.40246913578")
     assert venue._cash == Decimal("997.59753086422")
     assert not [e for e in venue.advance(h + 20) if e.kind == "Funding"]
@@ -180,7 +181,41 @@ def test_settled_tape_never_substitutes_mid_for_missing_oracle(tmp_path):
     assert venue.settled_funding is True
     assert venue._cash == Decimal(1000)
     assert venue.funding_payments(0) == []
-    assert venue.funding()[0].mark == Decimal("120.123456789")
+
+
+@pytest.mark.parametrize("answer", [{}, {"userCrossRate": "bad"},
+                                    {"userCrossRate": "NaN"},
+                                    {"userSpotCrossRate": "0.02"},
+                                    {"status": "unavailable", "answer": {}, "markets": []}])
+def test_unusable_fee_refresh_cannot_mask_cached_listing(tmp_path, answer):
+    from tests.world.test_tape import _diary
+
+    path = tmp_path / "fees.json"
+    _diary(path, reads=[(0, {"perp": [{"coin": "BTC", "taker_fee_rate": "0.0004",
+                                     "maker_fee_rate": "0.0001", "fee_basis": "userFees"}]})])
+    items = json.loads(path.read_text())
+    items.extend([{"kind": "io.call", "seq": 900, "name": "exchange.refresh_fee_rates"},
+                  {"kind": "io.result", "call": 900, "ts": T, "result": answer}])
+    path.write_text(json.dumps(items))
+    tape = Tape.from_data(cut(path))
+    assert tape.fees("BTC", T) == (Decimal("0.0004"), Decimal("0.0001"))
+
+
+def test_raw_fee_suppression_is_per_side_and_not_retroactive(tmp_path):
+    from tests.world.test_tape import _diary
+
+    path = tmp_path / "fees.json"
+    cached = {"perp": [{"coin": "BTC", "taker_fee_rate": "0.0004",
+                         "maker_fee_rate": "0.0001", "fee_basis": "userFees"}]}
+    _diary(path, reads=[(0, cached), (4, cached)])
+    items = json.loads(path.read_text())
+    items.extend([{"kind": "io.call", "seq": 900, "name": "exchange.refresh_fee_rates"},
+                  {"kind": "io.result", "call": 900, "ts": T + 20 * S,
+                   "result": {"userCrossRate": "0.0005"}}])
+    path.write_text(json.dumps(items))
+    tape = Tape.from_data(cut(path))
+    assert tape.fees("BTC", T) == (Decimal("0.0004"), Decimal("0.0001"))
+    assert tape.fees("BTC", T + 40 * S) == (Decimal("0.0005"), Decimal("0.0001"))
 
 
 def test_settled_tape_emits_zero_cash_corrections_and_prelaunch_evidence(tmp_path):
@@ -205,3 +240,21 @@ def test_settled_tape_rejects_mixed_legacy_market_semantics(tmp_path):
     tape.data["funding"]["ETH"] = [[NS_PER_HOUR, "0.01", None]]
     with pytest.raises(ValueError, match="mixed legacy and settled"):
         TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
+
+
+def test_fee_refresh_journals_failure_separately_from_cached_rates(tmp_path):
+    now = [T]
+    ledger = Ledger(clock_ns=lambda: now[0])
+    journal = RecoveryJournal(ledger, lambda: now[0])
+    journal.active = True
+    adapter = _adapter(now, [], {"userCrossRate": "0.0004", "userAddRate": "0.0001"})
+    exchange = JournalProxy(adapter, journal, "exchange")
+    good = exchange.refresh_fee_rates()
+    assert good["status"] == "ok" and good["markets"] == ["perp"]
+    adapter._info.user_fees = lambda address: {}
+    bad = exchange.refresh_fee_rates()
+    assert bad == {"status": "unavailable", "answer": {}, "markets": []}
+    assert adapter.instruments()["perp"][0]["taker_fee_rate"] == "0.0004"
+    adapter._info.user_fees = lambda address: {"userCrossRate": "NaN", "userAddRate": "0.1"}
+    assert exchange.refresh_fee_rates()["status"] == "unavailable"
+    assert adapter.instruments()["perp"][0]["taker_fee_rate"] == "0.0004"

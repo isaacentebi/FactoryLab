@@ -263,13 +263,23 @@ def _steps(observations: list[tuple[int, str, str]], *, every: bool) -> list[lis
 
 
 def _fee_record(kept: list[str], reads: list, fills: list, orders: dict,
-                fee_reads: list, *, raw_fees: bool) -> dict:
+                fee_reads: list) -> dict:
     """Each kept market's fee rates as the diary recorded them, by source and side."""
     observed: dict[tuple[str, str, str], list] = {}
     for ts, call, answer in fee_reads:
         if not isinstance(answer, dict):
             continue
+        applicable = None
+        if "status" in answer:
+            if answer["status"] != "ok":
+                continue
+            applicable = answer.get("markets", ())
+            answer = answer.get("answer")
+            if not isinstance(answer, dict):
+                continue
         for market in kept:
+            if applicable is not None and ("spot" if "/" in market else "perp") not in applicable:
+                continue
             fields = ("userSpotCrossRate", "userSpotAddRate") if "/" in market else (
                 "userCrossRate", "userAddRate")
             for side, name in zip(("taker", "maker"), fields, strict=True):
@@ -280,9 +290,10 @@ def _fee_record(kept: list[str], reads: list, fills: list, orders: dict,
                 if rate.is_finite():
                     observed.setdefault((market, "venue_read", side), []).append(
                         (ts, str(rate.normalize()), f"exchange.refresh_fee_rates call {call}"))
-    # Chapter II §III.b: a cached listing is not a fresh fee observation. Legacy
-    # diaries carried only listings; new diaries retain the actual userFees read.
-    for ts, call, listing in (() if raw_fees else reads):
+    # Chapter II §III.b: only an applicable parsed outside fact supersedes cached
+    # evidence, and never before it was observed. Failed refreshes establish nothing.
+    raw_since = {key: min(row[0] for row in rows) for key, rows in observed.items()}
+    for ts, call, listing in reads:
         if not isinstance(listing, dict):
             continue
         for kind in ("perp", "spot"):
@@ -291,11 +302,16 @@ def _fee_record(kept: list[str], reads: list, fills: list, orders: dict,
                         or "userFees" not in str(row.get("fee_basis", ""))):
                     continue
                 for side in ("taker", "maker"):
-                    rate = row.get(f"{side}_fee_rate")
-                    if rate is not None:
-                        observed.setdefault((row["coin"], "venue_read", side), []).append(
-                            (ts, str(Decimal(str(rate)).normalize()),
-                             f"exchange.instruments call {call}"))
+                    key = (row["coin"], "venue_read", side)
+                    if key in raw_since and ts >= raw_since[key]:
+                        continue
+                    try:
+                        rate = Decimal(str(row.get(f"{side}_fee_rate")))
+                    except (TypeError, ArithmeticError, ValueError):
+                        continue
+                    if rate.is_finite():
+                        observed.setdefault(key, []).append(
+                            (ts, str(rate.normalize()), f"exchange.instruments call {call}"))
     seen: dict[tuple[str, int], int] = {}
     for ts, payload in fills:
         market = str(payload.get("coin"))
@@ -342,7 +358,6 @@ def cut(path: str | Path) -> dict:
     names: dict[int, str] = {}
     reads: list[tuple[int, int, Any]] = []
     fee_reads: list[tuple[int, int, Any]] = []
-    raw_fees = False
     fills: list[tuple[int, dict]] = []
     intents: dict[str, str] = {}
     acks: dict[str, tuple[dict, int]] = {}
@@ -369,7 +384,6 @@ def cut(path: str | Path) -> dict:
                 answer = _decode(item["result"])
                 # Old refresh calls returned None; they did not record userFees.
                 if isinstance(answer, dict):
-                    raw_fees = True
                     fee_reads.append((int(item.get("ts") or 0), item.get("call"), answer))
             elif name == "exchange.order_book":
                 book = _decode(item["result"])
@@ -418,7 +432,7 @@ def cut(path: str | Path) -> dict:
                 intents[client_id], result.get("status"),
                 Decimal(str(result.get("filled_size") or 0)), ack_ts)
     live = exchange.get("kind") == "hyperliquid"
-    fees = _fee_record(kept, reads, fills, orders, fee_reads, raw_fees=raw_fees) if live else {}
+    fees = _fee_record(kept, reads, fills, orders, fee_reads) if live else {}
     listing = None
     if isinstance(instruments, dict):
         listing = {market: [row for row in rows if isinstance(row, dict)
