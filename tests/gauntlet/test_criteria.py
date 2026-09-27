@@ -1194,6 +1194,23 @@ def test_a_self_child_is_no_router_draw():
     assert g.s5b_observed_neutral(s5, M).ok
 
 
+def test_s5b_a_late_score_after_a_timeout_is_not_in_the_routers_mean():
+    """Codex on 37f568a: a decision that timed out was learned neutrally at its cutoff;
+    its late settlement is never learned again (``_learn_router_return``), so the raw
+    score it later carries does not enter S5b's mean."""
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.5, "penalty": 0.0, "reward": 0.5}
+    late = [_open("s0", "seat"), _penalty("s0", 0.0) | {"raw": 0.3},
+            _open("s1", "seat"), _penalty("s1", 0.0) | {"raw": 0.7},
+            _open("t1", "seat"),
+            {"kind": "decision.timeout", "return": {"handle": "t1", "status": "timed_out"}},
+            _penalty("t1", 0.0) | {"raw": 1.0}, credit]
+    assert g.s5b_observed_neutral(late, M).ok
+    # Without the timeout, the same score is a learned round and moves the mean.
+    learned = [row for row in late if row.get("kind") != "decision.timeout"]
+    assert g.s5b_observed_neutral(learned, M).status == g.FAIL
+
+
 def test_s7_s8_gain_names_routers_and_moves_gamma_by_one_common_step():
     assert g.s7_gain_targets([_gain(1, 0.1, 0.15)]).ok
     assert g.s7_gain_targets([_gain(1, 0.1, 0.15, router="learner:seat")]).status == g.FAIL

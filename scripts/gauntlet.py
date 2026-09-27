@@ -2772,8 +2772,18 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     drawn = {need(row, "handle") for row in rows_of(events, "decision.open") if router_draw(row)}
     raws: dict[str, list[float]] = defaultdict(list)
     bad, checked, untraced = [], 0, 0
+    # A decision that timed out was learned once, neutrally, at its cutoff: a late
+    # settlement after it (the queue's late-settlement right) is never learned again
+    # (feedback.py ``_learn_router_return``: "learned once already, neutrally, at its
+    # cutoff", 2160-2165), so its raw score is no round of the router's mean.
+    timed_out: set[str] = set()
     for row in events:
         kind = row.get("kind")
+        if kind == "decision.timeout":
+            timed_out.add(need(row, "return.handle"))
+            continue
+        if kind == "price.penalty" and row.get("handle") in timed_out:
+            continue
         if kind == "price.penalty":
             handle = row.get("handle")
             # ``raw`` is always written, None when unresolved (pricing.py).

@@ -38,6 +38,8 @@ NOT_EMITTED = {
     "consequence.outcome": "emitted by settlement/consequence.py as asdict(Payoff) (handle, "
                            "y, net_micro, cost_micro, earned_micro, censored, ...); the "
                            "captured set holds none",
+    "decision.timeout": "emitted by DecisionQueue.time_out with the timeout return (its "
+                        "handle as return.handle); no captured run timed a decision out",
     "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
     "uptake.forecast": "emitted by runtime/uptake.py; no captured run reached it",
 }
