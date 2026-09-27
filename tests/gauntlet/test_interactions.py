@@ -81,15 +81,20 @@ def test_i10_either_half_of_the_definition_alone_refuses_the_phantom():
     assert not _producer_card_flagged(alone)
 
 
-def test_i10_the_thrash_price_lands_on_the_core_router_only(i10):
-    """Where the thrash price lands (TH-1d): only no-swap-regret (core) routers are
-    charged. In edition 6's physics the core is the Tick router, so an evaluation tier in
-    thrash is priced on the producers' core router, not on the judges' own (frontier)
-    router — recorded here as the observed coupling, for the architect (Astra H-3)."""
+def test_i10_the_thrash_price_lands_on_the_tier_that_moved(i10):
+    """Where the thrash price lands (TH-1d, wave 16 I-10): on the routers of the tier
+    whose behaviour moved, which the organ names in ``thrash.roles``. The judges
+    oscillate, so the charges land on the judges' router, not the producers' core one;
+    TH-1c requires each attributed round the diary shows delivered to be charged, its
+    price times its movement."""
     result = g.th1d_frontier(i10.events, i10.manifest)
     assert result.ok, result.evidence
+    roles = {role for w in g.windows(i10.events) for role in w["thrash"].get("roles") or ()}
+    assert "evaluator" in roles
     charged = {r["router"] for r in i10.rows("thrash.charged")}
-    assert charged <= {"router:Tick"}
+    assert charged and "router:Tick" not in charged, charged
+    movement = g.th1c_movement(i10.events, i10.manifest)
+    assert movement.status != g.FAIL, movement.evidence
 
 
 # --- I-3, I-4, I-5 ------------------------------------------------------------------------

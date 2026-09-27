@@ -524,9 +524,37 @@ def test_th1a_and_th1b_detection_and_a_price_that_holds_duration():
     assert g.th1b_duration(falling, M).status == g.FAIL
 
 
-#: The row loop.py writes right after ``_deliver_returns``: every return settled before
-#: it was delivered to its router's learning.
+#: The row loop.py writes right after ``_deliver_returns``; delivery alone is no
+#: learning attempt (a keyed router's spent frozen round learns nothing).
 DONE = {"kind": "runtime.event_done", "n": 0}
+
+
+def _carried(handle):
+    """A learning row naming the round (feedback.py ``router.carried``)."""
+    return {"kind": "router.carried", "handle": handle, "from": "router:Tick",
+            "to": "router:Tick@1", "action": "a", "reward": 0.5}
+
+
+def _thrash_update(i):
+    return {"kind": "price.update", "card_id": "pathology:thrash", "i": i, "p": 0.0,
+            "d": 0.0, "lambda_before": 0.0, "lambda_after": i, "violation": 0.8}
+
+
+def test_th1b_reads_the_integral_while_the_derivative_relaxes():
+    """Wave 16's PID: λ = P + I + D, and D (kd on a deepening violation) returns to 0
+    when the violation holds, so λ may fall while the pressure accumulates. TH-1b reads
+    the integral term ``i``: it must not fall across a flagged run."""
+    def diary(integrals):
+        rows = [_w(1, lam=0.0, pen=0.0, unsettled=0.1)]
+        for window, (lam, i) in enumerate(integrals, start=2):
+            rows += [_thrash_update(i), _w(window, thrash=True, lam=lam, pen=0.1 * lam,
+                                           unsettled=1.0)]
+        return rows
+    relaxing = diary([(0.27, 0.05), (0.09, 0.10), (0.12, 0.15)])
+    result = g.th1b_duration(relaxing, M)
+    assert result.ok and result.evidence["term"] == "integral", result.evidence
+    leaking = diary([(0.27, 0.10), (0.30, 0.05)])
+    assert g.th1b_duration(leaking, M).status == g.FAIL
 
 
 def test_th1c_every_charge_is_price_times_movement_and_some_round_is_charged():
@@ -544,7 +572,7 @@ def test_th1c_every_charge_is_price_times_movement_and_some_round_is_charged():
     assert g.th1c_movement(wrong, M).status == g.FAIL
     # The negative control's shape: a charge that never lands on a learned round fails;
     # on a round not learned yet it is pending (``_thrash_charged`` runs at learning).
-    assert g.th1c_movement(rows + [_settled("d2"), DONE], M).status == g.FAIL
+    assert g.th1c_movement(rows + [_settled("d2"), _carried("d2")], M).status == g.FAIL
     assert g.th1c_movement(rows, M).status == g.UNSUPPORTED
 
 
@@ -560,7 +588,7 @@ def test_th1c_one_of_two_expected_charges_missing_fails():
                     "charge": c, "reward": 0.4} for h, c in (("d2", 0.4 * 0.7),
                                                              ("d3", 0.4 * 0.5))]
     assert g.th1c_movement(both, M).ok
-    one = [*both[:-1], _settled("d3"), DONE]
+    one = [*both[:-1], _settled("d3"), _carried("d3")]
     result = g.th1c_movement(one, M)
     assert result.status == g.FAIL and result.evidence["missing"] == ["d3"]
     # Codex P2 (gauntlet.py:1598): not learned yet, the same round is pending.
@@ -573,8 +601,8 @@ def test_th1c_one_of_two_expected_charges_missing_fails():
 def test_th1c_a_settled_round_is_required_only_once_it_reached_learning():
     """Codex on b7ae050: settlement and delivery are two ledger steps. A settled round
     with a positive expected charge but no evidence it reached the router (no learning
-    row naming it, no ``runtime.event_done`` after its settlement) is pending; once the
-    diary shows its delivery, a missing charge fails."""
+    row naming it) is pending; once the diary shows a learning attempt, a missing charge
+    fails."""
     rows = _seq([
         _w(1, lam=0.4),
         _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
@@ -584,13 +612,10 @@ def test_th1c_a_settled_round_is_required_only_once_it_reached_learning():
     pending = g.th1c_movement(rows, M)
     assert pending.status == g.UNSUPPORTED and pending.evidence["pending"] == 1
     assert g.delivered_rounds(rows) == set()
-    for evidence in (DONE, {"kind": "router.carried", "handle": "d2", "from": "router:Tick",
-                            "to": "router:Tick@1", "action": "a", "reward": 0.5}):
-        result = g.th1c_movement([*rows, evidence], M)
-        assert result.status == g.FAIL and result.evidence["missing"] == ["d2"], evidence
-    # A delivery row before the settlement proves nothing about it.
-    early = [*rows[:-1], DONE, rows[-1]]
-    assert g.th1c_movement(early, M).status == g.UNSUPPORTED
+    result = g.th1c_movement([*rows, _carried("d2")], M)
+    assert result.status == g.FAIL and result.evidence["missing"] == ["d2"]
+    # Delivery alone is no learning attempt: still pending.
+    assert g.th1c_movement([*rows, DONE], M).status == g.UNSUPPORTED
 
 
 def test_th1c_compares_each_charge_exactly():

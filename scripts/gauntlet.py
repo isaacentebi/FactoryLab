@@ -1624,23 +1624,47 @@ def th1a_detection(events: list[Mapping], manifest: Mapping, *, cycle_start: int
                    cycle_start=cycle_start, first_flag=first, H=ph.H)
 
 
+def thrash_integrals(events: list[Mapping]) -> dict[int, float]:
+    """The thrash price's integral term at each closed window: the ``i`` of the
+    ``price.update`` of ``pathology:thrash`` the organ's close wrote just before that
+    window's ``immune.window`` (immune.py ``thrash_penalty`` observes, then the close
+    ledgers the window). A close that observed nothing carries the integral as it was."""
+    out: dict[int, float] = {}
+    current: float | None = None
+    for row in events:
+        kind = row.get("kind")
+        if kind == "price.update" and row.get("card_id") == "pathology:thrash":
+            current = float(need(row, "i"))
+        elif kind == "immune.window" and current is not None:
+            out[need(row, "window")] = current
+    return out
+
+
 @criterion("TH-1b")
 def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
-    """TH-1b: the thrash price does not fall across consecutive flagged windows until its
-    penalty reaches the cap, and rises over some such run (its integral holds duration)."""
+    """TH-1b: the thrash price's accumulated pressure, its integral term, does not fall
+    across consecutive flagged windows until its penalty reaches the cap, and rises over
+    some such run (the integral holds duration).
+
+    Wave 16's price is a PID (charter/controller.py ``_pid``: ``P + I + D``, ``P = kp·v``,
+    ``I`` integrating ``eta·v`` up to ``penalty_cap / v``, ``D`` the positive part of
+    ``kd`` times the violation's deepening), so λ itself relaxes when the violation
+    stops deepening (``D`` returns to 0) while the violation holds: the duration is the
+    integral's to hold, and TH-1b reads ``i`` from the controller's ``price.update``
+    (``thrash_integrals``). A pre-wave-16 diary has no such row and reads λ, the
+    integral alone then."""
     ph = physics(manifest)
     series = thrash_series(events)
+    integrals = thrash_integrals(events)
     runs = _runs([w for w, _lam, _pen, flag in series if flag])
-    by_window = {w: (lam, pen) for w, lam, pen, _flag in series}
+    by_window = {w: (integrals.get(w, lam) if integrals else lam, pen)
+                 for w, lam, pen, _flag in series}
     # The thrash PID integrates ``eta · v`` each window its violation ``v`` is positive,
-    # up to ``lambda_max``, where ``v`` is the organ's unsettledness above
-    # ``tv_threshold`` (immune.py ``thrash_controller``: region ``max`` at
-    # ``tv_threshold``, scale 1; ``thrash_penalty`` observes ``unsettled``). ``v`` is
-    # read from the organ's own ``unsettled``, never from the price rows under test. A
-    # rise is owed only at a flagged window with ``v > 0`` whose price had room below
-    # ``lambda_max``: a thrash flagged on a short-lived configuration whose
-    # unsettledness sits inside ``tv_threshold`` (``v = 0``), or one at ``lambda_max``,
-    # holds its price validly.
+    # where ``v`` is the organ's unsettledness above ``tv_threshold`` (immune.py
+    # ``thrash_controller``: region ``max`` at ``tv_threshold``, scale 1;
+    # ``thrash_penalty`` observes ``unsettled``). ``v`` is read from the organ's own
+    # ``unsettled``, never from the price rows under test. A rise is owed only at a
+    # flagged window with ``v > 0`` whose price had room below ``lambda_max``.
     violation = {need(w, "window"): max(0.0, float(need(w, "unsettled")) - ph.tv_threshold)
                  if need(w, "unsettled") is not None else 0.0 for w in windows(events)}
     falls, rose, room = [], False, False
@@ -1661,7 +1685,8 @@ def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
                 room = True
     if not runs:
         return _unsupported("TH-1b", "thrash was never flagged")
-    evidence = {"runs": runs[:8], "falls": falls[:5], "rose": rose, "room": room}
+    evidence = {"runs": runs[:8], "falls": falls[:5], "rose": rose, "room": room,
+                "term": "integral" if integrals else "lambda"}
     if falls or (room and not rose):
         return _result("TH-1b", False, **evidence)
     if not rose:
@@ -1719,20 +1744,14 @@ LEARNING_ROWS = frozenset({"propensity.learned", "propensity.unlearned", "thrash
 
 def delivered_rounds(events: list[Mapping]) -> set[str]:
     """The settled rounds the diary shows reached their router's learning: a
-    ``LEARNING_ROWS`` row names the handle, or a ``runtime.event_done`` / ``resume`` row
-    follows its ``decision.settle`` (loop.py delivers every settled return,
-    ``_deliver_returns``, right before it)."""
+    ``LEARNING_ROWS`` row names the handle. A ``runtime.event_done`` after the
+    settlement is not enough: ``_learn_router_return`` has returns before any charge
+    (a keyed router's spent frozen round: "nothing trains, nothing is booked"), so
+    delivery is not a learning attempt. (The i10 world holds three judge rounds,
+    decision-71, -86 and -109, settled and delivered with no learning row.)"""
     touched = {row.get("handle") for row in events if row.get("kind") in LEARNING_ROWS}
-    delivered: set[str] = set()
-    waiting: list[str] = []
-    for row in events:
-        kind = row.get("kind")
-        if kind == "decision.settle":
-            waiting.append(need(row, "return.handle"))
-        elif kind in ("runtime.event_done", "resume"):
-            delivered.update(waiting)
-            waiting = []
-    return delivered | {h for h in waiting if h in touched}
+    return {need(row, "return.handle") for row in rows_of(events, "decision.settle")
+            if need(row, "return.handle") in touched}
 
 
 @criterion("TH-1c")
@@ -1750,13 +1769,17 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     Every ``thrash.charged`` row is checked against that arithmetic whatever
     ``evaluation.no_swap_regret_kinds`` says: a charge on any router's draw must be its
     price × movement, under the cap, one row per handle (wave 16's I-10 lets a charge
-    land on any router), so an empty core list never leaves a charge unread. The core
-    list only names the draws that must be charged.
+    land on any router), so an empty core list never leaves a charge unread. The draws
+    that must be charged are the ones the diary attributes the price to
+    (``thrash_attributed``, TH-1d's rule).
     """
-    expected = expected_thrash_charges(events, manifest)
     amounts = expected_thrash_charges(events, manifest, core_only=False)
+    # The draws that must be charged are the ones the diary attributes the price to
+    # (``thrash_attributed``: the routers of the tiers whose behaviour moved, wave 16
+    # I-10; the core list for a diary that names no roles).
+    attributed = thrash_attributed(events, manifest)
     charged = rows_of(events, "thrash.charged")
-    positive = {h for h, c in expected.items() if c > 0}
+    positive = {h for h, c in amounts.items() if c > 0 and attributed.get(h, False)}
     priced = {h for h, c in amounts.items() if c > 0}
     if not positive and not charged:
         return _unsupported("TH-1c", "no core draw moved under a thrash price")
@@ -1770,9 +1793,7 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     # the router: a row naming its handle that only learning writes (``LEARNING_ROWS``:
     # feedback.py 2100 ``propensity.learned``, 2211 and 2402 ``propensity.unlearned``,
     # 2407 ``router.carried``, ``router.step_rescaled``, ``router.decline_priced``, and
-    # ``thrash.charged`` itself), or a ``runtime.event_done`` (or ``resume``) after its
-    # settlement: loop.py 467-468 runs ``_deliver_returns`` for every settled return
-    # right before that row. A settled round with neither is pending, never missing.
+    # ``thrash.charged`` itself). A settled round with none is pending, never missing.
     # The charge is taken (feedback.py 2199) before every router-update branch that can
     # ledger ``propensity.unlearned`` (``_apply_router_round`` 2203, the universe check
     # 2211), so a failed update never excuses a missing charge (Codex on 2ad8e46).
