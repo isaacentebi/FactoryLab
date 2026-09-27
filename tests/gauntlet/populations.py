@@ -47,6 +47,14 @@ from scripts import gauntlet
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCH_WORLD = "edition6-capital-loop"
+#: The venue repricing period of every gauntlet world. Wave 16 (D2) grades a return at
+#: the consequence horizon H = world_repricing / min_ratio in venue time; the launch
+#: world's hour would make H 1200 one-second ticks, longer than a whole gauntlet run,
+#: so no consequence, verdict or late window would ever complete. At 60 s, H is 20
+#: ticks (the scripted world's own), a small fraction of every run, and the tick
+#: still fits the load relation (max_tick = world_repricing / min_ratio^2 = 6.7 s).
+#: A test world's clock steers no seat.
+GAUNTLET_REPRICING = "60s"
 PHYSICS_BLOCKS = ("prices", "immune", "timing", "evaluation", "novelty")
 
 #: The organ's own row kinds a close may append (S6): prices, versions, pathologies,
@@ -279,6 +287,7 @@ def world(seats: Iterable[Seat], *, cards: list[dict], name: str = "gauntlet",
     seats, later = list(seats), list(later)
     for block in PHYSICS_BLOCKS:
         raw[block] = copy.deepcopy(launch.get(block, {}))
+    raw["timing"]["world_repricing"] = GAUNTLET_REPRICING
     for block, values in (changes or {}).items():
         raw.setdefault(block, {}).update(values)
     raw["name"] = name
