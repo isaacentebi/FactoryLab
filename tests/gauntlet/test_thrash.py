@@ -21,11 +21,6 @@ from factorylab.versioning.versions import replay
 from scripts import gauntlet as g
 from tests.gauntlet import populations as P
 
-#: Wave 16's price-loop runaway, for wave 16b (reported on the wave 16 merge).
-RUNAWAY = ("kernel gap (a): price-loop runaway — the price window's measured inner loop "
-           "includes the deferred-settlement wait for the price window itself (§IV.c); "
-           "fixed by wave 16b")
-
 pytestmark = pytest.mark.gate
 
 UNTIL = 50  # the window after which flip is steady
@@ -145,7 +140,6 @@ def th2r(shared_run):
     return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=300))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 @pytest.mark.parametrize("loop", ["seat:molt-seat", "router:ProducerReturn"])
 def test_th2_a_seat_driven_reversion_is_read_as_thrash(th2r, loop):
     """TH-2 exercised on the path a seat drives: retire a seat (the committee votes, the
@@ -170,7 +164,6 @@ def _ignore_lifespans(original):
     return diagnose
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_th2_negative_control_an_organ_blind_to_lifespans_fails():
     mutant = P.run(*P.th2_reversion(), events=300,
                    # Wave 16: the organ diagnoses through ``versions.organ_step``, which

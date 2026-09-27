@@ -1316,7 +1316,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: the one ratio every derived loop keeps to the measured loop it commands (price, immune organ, sampling actuator, cascade tiers, novelty patience, policy grading, governance), and the ratio slack on every decision cutoff. |
 | `timing.jitter_fraction` | finite nonnegative number | `0.2` | Yes: how far each derived loop's own continuous jitter may lengthen its period. |
 | `timing.world_repricing` | A positive duration; required in a world with any trading venue (`exchange.coins`, `exchange.spot_pairs` or an enabled `polymarket`), refused at load otherwise | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). The consequence horizon is `world_repricing / min_ratio` on the venue's clock, and `max_tick` is that over `min_ratio` (wave 16, D2). A named trade opens at its coin's latest venue mid, or, with none read yet, at the coin's first venue mid at or after the return (R10-h). Every named trade's outcome is fixed at its horizon, judged or not, and enters the non-acting observations and the keyed base rate (R10-j). An acting return's open lots exit at the venue's taker rate most recently read at or before its horizon; a read that states no rate keeps the last one; with none read by then the outcome is uninformative (`consequence.uninformative`, reason `fee_unknown`), never pending (R10-i). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`). |
-| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: the conservative governance period floor and the tick-counted waits that are not a consequence (a requester's credit, a tool-use window). A judged return's outcome is fixed at the consequence horizon on the venue's clock, not here (wave 16, D2). |
+| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: the tick-counted waits that are not a consequence (a requester's credit, a tool-use window), and, for a world that lists no venue, the consequence loop's floor. A judged return's outcome is fixed at the consequence horizon on the venue's clock, not here (wave 16, D2), and a venue world's consequence loop is floored at that horizon in delivered ticks (`ceil(H / tick)`, the first tick at or after H, read at the delivered tick whenever it is used, so a clock change moves it at once, and ledgered `cadence.floor` as each window opens and at a clock change; R16b-4): patience, the novelty accrual, the sampling actuator, uptake and observation trials and the governance floor all see H, so a protected trial lasts at least `min_ratio × H` = `world_repricing`. |
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a producer return waits for its judges' verdicts before it is censored, and how long an evaluator decision whose judgement no cascade window took waits for a grade. A routed evaluator decision's grade window is its cascade window's read, not this constant (see "The grade window is the read above it"). |
 | `prices.eta` | finite positive number | Derived: `(penalty_cap - kp) / (timing.min_ratio * immune.k)` (`0.5 / 9` at the defaults) | Yes: the PID's integral gain. Unstated, it is derived from the SF-0 relation (wave 16), so the price law alone presses a unit violation onto the cap in exactly `min_ratio` times the windows stable failure is diagnosed in; stated, the manifest is refused unless the relation holds (`gain_headroom`). A `kp` at or above `penalty_cap` saturates in one window whatever `eta` is and is refused. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution, and the one bound on a card's price (wave 16, ruling R-E): a card is priced at most `penalty_cap / v`, the price at which its own penalty takes the whole cap. `prices.lambda_max` is refused by name. |
@@ -1397,7 +1397,12 @@ uncharged): one affine map applied once, with no clip and one scale per router f
 world's life, so a charge never raises a reward and a card penalty and a thrash charge
 of equal size lower it equally (wave 16, rulings R10-c, R10-l; `thrash.charged`). The price is published in
 `world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
-(`thrash_controller`), and each open round's charge with `thrash_charges`.
+(`thrash_controller`), and each open round's charge with `thrash_charges`. Every round
+a router trains on writes one `router.learned` row (R16b-5; the diary only, never seen
+by a seat): the drawing and the learning router, the arm, its raw score, card
+penalty, thrash charge (`exempt: "niche"` when a stored charge was dropped for a
+round drawn in the niche) and reward, and the path (`direct`, `carried` to a
+successor, or `credit` at its window's close, a NOOP credit included).
 
 ## The clock (Chapter II §IV.b-c; time audit T1-T13)
 
@@ -1408,11 +1413,19 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
 `novelty.max_lifetime_windows` and `treasury.forward_wait_windows` are refused.
 
 * **Measured loops** (`runtime/clockwork.py`, checkpointed): the settle loop of
-  each measured role (`settle:<role>`, a decision's open to its first outcome,
-  censorings included), its scored loop (`scored:<role>`, the same when a real
-  score closed it), each router kind's rounds (`router:<kind>`), settled forecasts
-  (`forecast`) and conversions (`capital`). A meter reports its p90, never below
-  one tick.
+  each measured role (`settle:<role>`, a decision's open to the tick the world
+  fixed its first outcome, censorings and cutoffs included, a cutoff at its cutoff
+  tick, R16b-2: a score whose settlement waits for its window's close counts at the
+  tick it was fixed, never at the close, R16b-1; a policy-channel decision, an
+  outer loop on its own schedule, and a sealed forecast's consequence-channel
+  decision, whose loop is `forecast`, are no role's sample), its scored loop
+  (`scored:<role>`, the same when a real score closed it), each router kind's
+  learned seat rounds (`router:<kind>`, one sample per round learned, from its
+  open to its first terminal tick, the same tick its role's settle loop closed at:
+  a decline, censoring or cutoff credited at its window's close counts to its cutoff
+  or settlement, never to the close or a late score; a NOOP is never a sample),
+  settled forecasts (`forecast`) and conversions (`capital`). A meter reports its
+  p90, never below one tick.
 * **Derived loops**: each outer loop's next period is drawn as
   `min_ratio × inner × (1 + jitter_fraction × u)`, where `u` is a continuous
   draw seeded by the world, the loop and its firing count, and each is due only

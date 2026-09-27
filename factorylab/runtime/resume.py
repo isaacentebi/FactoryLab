@@ -936,7 +936,9 @@ _COMPONENT_FIELDS = (
                        "current_event", "last_activation_event", "outstanding", "min_support",
                        # Time audit T7, T13: settling times, the unsettled version, the
                        # censored one and the capital loop. An older checkpoint has none.
-                       "settling", "unsettled", "censored", "capital")),
+                       "settling", "unsettled", "censored", "capital",
+                       # R16b-4: the consequence floor (H in delivered ticks).
+                       "floor")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
     ("settler", "_Settler__", ("snapshots", "recorded", "retired")),
     ("charter_book", "_CharterBook__", (
@@ -1375,7 +1377,8 @@ def restore_runtime(rt, state: dict) -> None:
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.
                 continue
-            if (name == "cadence" and field in ("settling", "unsettled", "censored", "capital")
+            if (name == "cadence"
+                    and field in ("settling", "unsettled", "censored", "capital", "floor")
                     and field not in components[name]):
                 # Older checkpoints predate the settling and capital loops: none measured.
                 continue

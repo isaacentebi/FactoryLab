@@ -49,7 +49,7 @@ def test_i10_oscillating_judges_are_read_as_thrash_not_as_producer_stable_failur
     assert not [r for r in i10.rows("immune.price_ratchet") if r["card_id"] == "verdict-floor"]
 
 
-def _any_violation(tail):
+def _any_violation(tail, held=()):
     """A mutant attractor: every card violated in any tail window, measured or not."""
     names = sorted({name for w in tail for name in w.get("regions", {})})
     return [name for name in names
@@ -90,12 +90,9 @@ def test_i10_the_thrash_price_lands_on_the_tier_that_moved(i10):
     whose behaviour moved, which the organ names in ``thrash.roles``. The judges
     oscillate, so the charges land on the judges' router, not the producers' core one;
     TH-1c requires each attributed round the diary shows delivered to be charged, its
-    price times its movement.
-
-    A lead for wave 16b: in this world three judge rounds (decision-71, -86 and -109)
-    settle and are delivered to the judges' router, with a positive expected charge, yet
-    no ``thrash.charged`` and no learning row names them (TH-1c reads them pending, as
-    its learning-attempt rule says)."""
+    price times its movement; a round drawn in the niche is charged nothing (the
+    kernel's niche predicate, ``g.niche_rounds``), and every round a router learned
+    writes ``router.learned`` (R16b-5), so none is read as unlearned."""
     result = g.th1d_frontier(i10.events, i10.manifest)
     assert result.ok, result.evidence
     roles = {role for w in g.windows(i10.events) for role in w["thrash"].get("roles") or ()}
@@ -144,9 +141,6 @@ def test_i5_an_unmeasured_card_is_never_a_failing_card(i5):
                 if r["card_id"] == "independent-consequence"]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="blocked by SF-1d: the ld1 card never saturates for min_ratio "
-                   "updates, for the price-loop runaway reported with SF-1d (kernel gap)")
 def test_i8_saturation_informs_governance_but_never_shortens_its_period(ld1):
     assert g.sf1d_escalation(ld1.events, ld1.manifest, card="independent-uptake").ok
     assert g.th3_governance_gap(ld1.events, ld1.manifest).status != g.FAIL

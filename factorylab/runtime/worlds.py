@@ -1072,7 +1072,7 @@ class WorldManifest:
 
         judges = {kind: [a for a in self.assemblies if kind in a.accepts
                          and shapes[a.id].get("Verdict") == "forecast"]
-                  for kind in {k for s in shapes.values() for k in s}}
+                  for kind in sorted({k for s in shapes.values() for k in s})}
         need = self.evaluation.multi_judge_count if self.evaluation.multi_judge_share > 0 else 1
         verdict_chains: set[tuple[str, str]] = set()
         for author in producers:

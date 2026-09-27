@@ -286,7 +286,9 @@ class MarketsMixin:
         read.
         """
         tracked = {h for row in self.margin_windows.values() for h in row["decisions"]}
-        for handle in tracked - set(self.measured_consequences):
+        # Sorted (R16b-9): a set's order is the process's hash seed, and this order
+        # is the checkpoint's; one seed must write one checkpoint in every process.
+        for handle in sorted(tracked - set(self.measured_consequences)):
             outcome = self.world_outcomes.get(handle)
             if outcome is not None and outcome.get("state") == "measured":
                 self.measured_consequences[handle] = float(outcome["y"])

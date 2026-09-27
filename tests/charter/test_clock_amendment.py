@@ -61,8 +61,11 @@ def test_clock_duration_exact_and_inclusive():
 
 
 def _at_threshold(rt):
-    """Move the world to the first governance boundary the backstop cadence allows."""
-    threshold = (rt.m.timing.min_ratio * rt.m.evaluation.consequence_backstop_events
+    """Move the world to the first governance boundary its consequence loop allows: the
+    floor H (120 one-second ticks here), installed when the runtime is built (R16b-4),
+    never the 20-tick backstop."""
+    assert rt.cadence.consequence_period_events() == 120
+    threshold = (rt.m.timing.min_ratio * rt.cadence.consequence_period_events()
                  * rt.tick_clock.interval_ns)
     rt.clock.now_ns = threshold - 1
     rt._activate_charter_if_due()

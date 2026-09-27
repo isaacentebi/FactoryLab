@@ -205,6 +205,13 @@ class PricingMixin:
     def _init_fidelity(self) -> None:
         """Manifest settings and attributed observations are initialized before any decision."""
         self.cadence.configure(min_support=self.m.timing.min_support)
+        # R16b-4: the consequence loop is floored at H from the start, before any
+        # schedule, patience, novelty accrual or viability is derived from it (Sol and
+        # Astra on #157), and read at the delivered tick whenever it is used, so a tick
+        # change mid-window never leaves it stale (Codex on #157). Each window's open
+        # ledgers it (``cadence.floor``) and checkpoints it.
+        self.cadence.bind_floor(self._horizon_ticks)
+        self.cadence.set_floor(self._horizon_ticks())
         self.price_windows: dict[int, MeasureWindow] = {}
         self.price_origins: dict[str, dict[str, int]] = {}
 
@@ -325,6 +332,11 @@ class PricingMixin:
         closed = self.window.index if self.reserve_window_start is not None else None
         if closed is not None:
             self._close_price_window()
+        # R16b-4: the consequence floor, read live from the delivered tick
+        # (``_init_fidelity``), is ledgered as each window opens, before anything this
+        # window derives from it: at launch, the sampling actuator's first period and
+        # the governance viability it publishes (Astra and Sol on #157).
+        self.cadence.set_floor(self._horizon_ticks())
         schedule = self.clockwork.fire("price", now, inner)
         self._ledger_loop("price", schedule, inner_loop="card samples")
         if closed is None:
@@ -1395,7 +1407,10 @@ class PricingMixin:
             self._settle_priced(handle, channel=row["channel"], score=row["score"],
                                 definition_version=row["definition_version"],
                                 sampling_ref=row["sampling_ref"], cards=row["cards"],
-                                unresolved=tuple(row["unresolved"]))
+                                unresolved=tuple(row["unresolved"]),
+                                # A row checkpointed before R16b-1 has none: its meter
+                                # closes at this close, as it did.
+                                ready_tick=row.get("ready_tick"))
 
     def _settle_priced(
         self,
@@ -1407,6 +1422,7 @@ class PricingMixin:
         sampling_ref: str | None,
         cards: str,
         unresolved: tuple[str, ...] = (),
+        ready_tick: int | None = None,
     ) -> None:
         """Settle a judged score less the card penalty, clipped to [0, 1]; both are ledgered.
 
@@ -1429,7 +1445,10 @@ class PricingMixin:
             # decisions, frozen when the window closes, so it settles then.
             self.deferred_settlements[handle] = {
                 "channel": channel, "score": score, "definition_version": definition_version,
-                "sampling_ref": sampling_ref, "cards": cards, "unresolved": list(unresolved)}
+                "sampling_ref": sampling_ref, "cards": cards, "unresolved": list(unresolved),
+                # R16b-1: the world fixed this score now. Its settle loop closes here;
+                # the wait for the price close is the outer loop's own phase (II.IV.c).
+                "ready_tick": self.ticks_consumed}
             self.ledger.append({"kind": "price.deferred", "handle": handle,
                                 "window": self.price_origins[handle]["origin"],
                                 "ts": self.clock.now_ns})
@@ -1454,6 +1473,7 @@ class PricingMixin:
             status=status,
             definition_version=definition_version,
             sampling_ref=sampling_ref,
+            ready_tick=ready_tick,
         )
         self.window.outcomes += 1
         # Codex on #152: a settlement with no measured world outcome is censored, the

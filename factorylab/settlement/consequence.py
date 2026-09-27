@@ -567,7 +567,7 @@ class ReturnConsequences:
                 needs[stream] = until if stream not in needs else max(needs[stream], until)
 
         held = self._instruments_of(handle)
-        for coin, market in held:
+        for coin, market in sorted(held):  # a canonical order, never the hash seed's
             until = None
             if horizon is not None and coin not in rested:
                 until = self._flat_at_horizon(handle, coin, horizon)

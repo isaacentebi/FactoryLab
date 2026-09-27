@@ -115,6 +115,9 @@ def test_a_settled_decision_feeds_its_roles_settle_loop_and_a_scored_one_its_sco
                     definition_version="t", sampling_ref=None)
     assert rt.clockwork.latencies["settle:producer"] == [4, 6]
     assert rt.clockwork.latencies["scored:producer"] == [4]
+    rt.queue.forget_ticks()  # delivered and not yet read: a learner still reads them
+    assert scored in rt.decision_ticks and censored in rt.decision_ticks
+    rt._release_read_deliveries()  # no reader of this actor: released as made
     rt.queue.forget_ticks()
     assert scored not in rt.decision_ticks and censored not in rt.decision_ticks
 
@@ -297,11 +300,79 @@ def test_governance_is_ledgered_nonviable_when_its_period_outlasts_the_run_or_th
                    router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
     long._manage_reserve_window()
     assert not _items(long, "governance.nonviable") and long.governance_viable
-    lagging = replace(manifest, timing=replace(manifest.timing, world_repricing_ns=59 * 10**9))
-    world = Runtime(lagging, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
+    # A world repriced every 59 s: H = 59/3 s is 20 one-second ticks (the first tick at
+    # or after it), and 3 x 20 = 60 does not fit in 59.
+    lagging = _repriced(manifest, 59)
+    assert lagging._horizon_ticks() == 20
+    (item,) = _items(lagging, "governance.nonviable")
+    assert (item["needed_ticks"], item["world_ticks"]) == (60, 59)
+
+
+def _repriced(manifest, seconds):
+    world = Runtime(replace(manifest, timing=replace(manifest.timing,
+                                                     world_repricing_ns=seconds * 10**9)),
+                    events=500, seed=1, initial_balance_micro=None, ledger_path=None,
                     router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
     world._manage_reserve_window()
-    assert _items(world, "governance.nonviable")[-1]["world_ticks"] == 59
+    return world
+
+
+def test_launch_publishes_viability_on_the_h_floor_never_on_the_backstop():
+    """Astra on #157 (R16b-4; T7): the floor H is installed before launch derives its
+    first periods and checks viability. Repriced every 57 s at a 1 s tick, H is 19 ticks
+    and 3 x 19 = 57 fits: viable. Checked on the 20-tick backstop first (60 > 57), launch
+    published nonviable, then installed the floor it should have read."""
+    manifest = load_manifest("scripted")
+    assert manifest.evaluation.consequence_backstop_events == 20
+    world = _repriced(manifest, 57)
+    assert world._horizon_ticks() == 19
+    assert not _items(world, "governance.nonviable") and world.governance_viable
+    (sampling,) = [i for i in _items(world, "clock.loop") if i.get("loop") == "sampling"]
+    assert sampling["inner_ticks"] == 19
+
+
+def test_a_short_backstop_never_schedules_launch_or_passes_viability_below_h():
+    """Sol on #157 (R16b-4; T7): a 3-tick backstop, H = 20 ticks (repriced every 60 s at
+    a 1 s tick) and a 20-tick run. The floor is H from the runtime's construction, so
+    launch draws the sampling loop over 20 ticks, never 3, and governance needs
+    3 x 20 = 60 ticks, which a 20-tick run does not hold: nonviable at launch."""
+    base = load_manifest("scripted")
+    manifest = replace(base, timing=replace(base.timing, world_repricing_ns=60 * 10**9),
+                       evaluation=replace(base.evaluation, consequence_backstop_events=3))
+    rt = Runtime(manifest, events=20, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+    assert rt._horizon_ticks() == 20
+    assert rt.cadence.consequence_period_events() == 20  # before any window opens
+    rt._manage_reserve_window()
+    (sampling,) = [i for i in _items(rt, "clock.loop") if i.get("loop") == "sampling"]
+    assert sampling["inner_ticks"] == 20
+    (item,) = _items(rt, "governance.nonviable")
+    assert (item["needed_ticks"], item["run_ticks"]) == (60, 20)
+    assert not rt.governance_viable
+
+
+def test_a_faster_clock_mid_window_moves_the_floor_at_once():
+    """Codex on #157 (R16b-4; II.IV.c): H = 20 s at a 2 s tick is 10 ticks. A clock
+    amended to 1 s mid-window makes it 20 ticks at once: the consequence loop and every
+    period derived over it (patience, the policy floor, governance's need) read
+    ``ceil(H / new tick)``, never the 10 the window opened with, so no outer period
+    falls below ``min_ratio × H``."""
+    base = load_manifest("scripted")
+    manifest = replace(base, tick_interval_ns=2 * 10**9,
+                       timing=replace(base.timing, world_repricing_ns=60 * 10**9))
+    rt = Runtime(manifest, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+    rt._manage_reserve_window()
+    assert rt.cadence.consequence_period_events() == 10
+    rt.tick_clock.set_interval(10**9)  # what an activated clock amendment does, mid-window
+    ratio, floor = rt.m.timing.min_ratio, 20  # ceil(20 s / 1 s)
+    assert rt._horizon_ticks() == floor
+    assert rt.cadence.consequence_period_events() >= floor
+    assert rt.cadence.slowest_period_events() >= floor
+    assert rt._patience() >= ratio * floor
+    assert rt._policy_floor() >= ratio * floor
+    assert rt.cadence.viability(run_ticks=500, world_ticks=None)["needed_ticks"] >= (
+        ratio * floor)
 
 
 def test_a_promise_is_graded_no_sooner_than_min_ratio_consequence_periods():

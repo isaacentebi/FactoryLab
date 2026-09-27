@@ -743,6 +743,56 @@
    "status": "untriaged"
   },
   {
+   "id": "cdc7cd0c46b1",
+   "world": "edition6-capital-loop",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "d73b9b5cd034",
+   "world": "edition6-capital-loop",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "243a92c19da0",
+   "world": "edition6-capital-loop",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "43aaababb42a",
+   "world": "edition6-capital-loop",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/counter/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "ad488acc9488",
+   "world": "edition6-capital-loop",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/counter/request/#prose",
+   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "8e0728c59dc1",
    "world": "edition6-capital-loop",
    "surface": "rendered",
@@ -1450,6 +1500,56 @@
    "path": "edition6-testnet-rehearsal/request/produce/you/working_state.state.lens",
    "quote": "your starting prior is that the value of any use of resources depends on its best available alternative.",
    "design_ref": "B3 (opportunity lens; Astra M-1)",
+   "status": "untriaged"
+  },
+  {
+   "id": "16c8aaa8a0ab",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "4cc0b2f27972",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "18129d061a7d",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "e852297d8ff8",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/counter/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "acd5c3b0c0f4",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/counter/request/#prose",
+   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {

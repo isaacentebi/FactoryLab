@@ -68,6 +68,15 @@ def card_violation(window: dict, name: str) -> float | None:
     return violation(CardRegion(**dict(window["regions"][name], card_id=name)), value)
 
 
+def card_cell(window: dict, name: str) -> int | None:
+    """A card's region-relative bin in one window (0 inside, 1 up to one scale unit
+    outside, 2 beyond), or None when the window did not measure it."""
+    amount = card_violation(window, name)
+    if amount is None:
+        return None
+    return 0 if amount == 0 else 1 if amount <= 1 else 2
+
+
 def dimensions(windows: list[dict], *, activity: bool = True) -> list[str]:
     """The dimensions every one of ``windows`` supports: cards first, then activity."""
     if not windows:
@@ -412,18 +421,29 @@ def current_metrics(windows: list[dict]) -> list[dict]:
     return result
 
 
-def persistent_violations(tail: list[dict]) -> list[str]:
-    """Cards violated in every tail window that measured them, measured at least once.
+def persistent_violations(tail: list[dict], held=()) -> list[str]:
+    """The failing attractor over ``tail``: cards violated with the support the one
+    rule demands (R16b-10).
 
-    The failing attractor is this set (versioning audit P3): activity dimensions
-    never enter it, so a registration cannot reset its duration, and a window that
-    did not measure a card is missing evidence, not compliance.
+    Guarantees a card enters the attractor only when every tail window measured it and
+    every reading violates: a window that did not measure it is missing evidence,
+    neither compliance nor violation, so it cannot complete a persistence the thrash
+    reading (``dimensions``: support in every window) would call unsupported (essay
+    II.a: a failing attractor is "a robust version", a property of observed windows;
+    IV.c: no diagnosis below sampling noise). A card already in the attractor
+    (``held``, the previous diagnosis's failing set) stays in it while every tail
+    window that measured it violates, measured at least once: a gap never reads as
+    relief (M-6). Activity dimensions never enter it (versioning audit P3), so a
+    registration cannot reset its duration.
     """
+    held = set(held)
     names = sorted({name for w in tail for name in w.get("regions", {})})
     result = []
     for name in names:
         readings = [card_violation(w, name) for w in tail]
         measured = [v for v in readings if v is not None]
-        if measured and all(v > 0 for v in measured):
+        if not measured or not all(v > 0 for v in measured):
+            continue
+        if name in held or len(measured) == len(readings):
             result.append(name)
     return result

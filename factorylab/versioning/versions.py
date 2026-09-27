@@ -60,8 +60,9 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
 
     * **stable failure** is "a robust version with a wide spectral gap whose
       input–output distribution is failing against its input": a nonempty set of
-      cards violated in every tail window that measured them (``live.
-      persistent_violations``; never activity, versioning audit P3) while the
+      cards violated in every tail window, a card entering it measured in every one
+      and a card already held (``held``) in every one that measured it (``live.
+      persistent_violations``, R16b-10; never activity, versioning audit P3) while the
       rolling operator over those cards has a gap of at least
       ``immune.gap_threshold`` (``card_gap``: registrations and revisions, which the
       organ's raised gain invites, cannot narrow it and reset the duration). An
@@ -90,7 +91,7 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
     supported = len(tail) == k
     bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
     dims, tail_cells = live.cells(tail, **bins)
-    failing = live.persistent_violations(tail) if supported else []
+    failing = live.persistent_violations(tail, held) if supported else []
     # Missing evidence is neither failure nor relief (M-6): a failing card the whole
     # tail left unmeasured keeps its place; a card never measured never gains one.
     # A card the charter no longer carries (no region in the newest window) is gone,

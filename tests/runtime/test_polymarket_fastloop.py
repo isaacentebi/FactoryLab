@@ -113,10 +113,10 @@ def test_the_edition6_world_reads_event_markets_and_settles_forecasts_on_them_of
 def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkeypatch):
     """The write path through the reward chain, which the surface tests (check tier)
     own piece by piece: intents, fills, the pot, a late resolution with a receipt to
-    every holder, and a learning signal. 92 ticks is the fewest that reach the seeded
+    every holder, and a learning signal. 95 ticks is the fewest that reach the seeded
     market's resolution (900 s) and the refusal after it closes."""
     monkeypatch.setattr(fastloop, "PolicyProvider", EventMarketPolicy)
-    card = fastloop.run("scripted", 92, WORLD, tmp_path, cap_usd="2", seed=1)
+    card = fastloop.run("scripted", 95, WORLD, tmp_path, cap_usd="2", seed=1)
     assert card["status"] == "completed", card.get("error")
     events = json.loads(Path(card["out"], "events.json").read_text())
     kinds = [e.get("kind") for e in events]
