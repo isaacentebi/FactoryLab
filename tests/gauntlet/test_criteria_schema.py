@@ -45,6 +45,11 @@ NOT_EMITTED = {
     "router.unscored_priced": "emitted by feedback.py (_learn_router_return and "
                               "_credit_abstentions) with the abstention row's fields "
                               "plus status; the captured set holds none",
+    "consequence.opportunity": "emitted by feedback.py _final_outcome with grounded.py's "
+                               "_net fields (moves, gross/fee/funding/net bps, declined, "
+                               "score); no captured gauntlet run named a declined trade",
+    "consequence.attempted": "emitted beside consequence.opportunity for a refused answer "
+                             "order (attempted); no captured gauntlet run reached it",
     "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
     "uptake.forecast": "emitted by runtime/uptake.py; no captured run reached it",
 }

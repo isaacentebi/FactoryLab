@@ -2313,7 +2313,13 @@ CONSEQUENCE_FACTS = {
     ("opportunity-cost-v2", "mark"): "consequence.opportunity_mark",
     ("attempted-trade-v1", "final"): "consequence.attempted",
     ("attempted-trade-v1", "mark"): "consequence.attempted_mark",
+    # Wave 16 (D1, D2): one grading horizon, and the roads not taken net of the venue's
+    # round trip and funding (grounded.py ``opportunity_cost`` / ``attempted_cost``).
+    ("declined-trade-net-v1", "final"): "consequence.opportunity",
+    ("attempted-trade-net-v1", "final"): "consequence.attempted",
 }
+#: The wave 16 definitions graded on the net of the named trade (grounded.py ``_net``).
+NET_DEFINITIONS = frozenset({"declined-trade-net-v1", "attempted-trade-net-v1"})
 
 
 #: A ``y`` the world's recorded facts do not decide: a pre-wave-16 ``consequence.marked``
@@ -2347,18 +2353,34 @@ def consequence_y(fact: Mapping, outcome: str, manifest: Mapping) -> float | str
             earned = int(need(fact, "earned_micro"))
             censored = fact.get("censored") is not None
             return float(int(not censored and net + earned > cost))
-        trade = need(fact, "attempted" if outcome == "attempted-trade-v1" else "declined")
+        attempted = outcome in ("attempted-trade-v1", "attempted-trade-net-v1")
+        trade = need(fact, "attempted" if attempted else "declined")
         moves = {need(m, "coin"): Decimal(str(need(m, "move_bps")))
                  for m in need(fact, "moves")}
         move = moves.get(need(trade, "coin"))
         side = need(trade, "side")
-        recorded = float(need(fact, "scale_bps"))
+        recorded = float(fact.get("scale_bps") or 0.0)
         scale = float(_section(manifest, "evaluation").get("opportunity_scale_bps")
                       or recorded)
+        if outcome in NET_DEFINITIONS:
+            # Wave 16, D1 (grounded.py ``_net``): net = the gross move signed by the
+            # side, less the round-trip taker fee, plus the funding term; a declined
+            # trade was right (y = 1) when net <= 0, an attempted one when net > 0.
+            # The recorded parts are quantized (moves to 0.01 bp), so the recomputed net
+            # must agree with the recorded one within that rounding; its sign decides.
+            if move is None or side not in ("buy", "sell"):
+                return None
+            net = ((move if side == "buy" else -move)
+                   - Decimal(str(need(fact, "round_trip_fee_bps")))
+                   + Decimal(str(need(fact, "funding_bps"))))
+            recorded_net = Decimal(str(need(fact, "net_bps")))
+            if abs(net - recorded_net) > Decimal("0.02"):
+                return None
+            return float(recorded_net > 0) if attempted else float(recorded_net <= 0)
         if move is None or recorded != scale or side not in ("buy", "sell"):
             return None
         gross = move if side == "buy" else -move
-        sign = 1.0 if outcome == "attempted-trade-v1" else -1.0
+        sign = 1.0 if attempted else -1.0
         return round(0.5 + sign * 0.5 * math.tanh(float(gross) / scale), 6)
     except (Malformed, KeyError, TypeError, ValueError, ArithmeticError):
         return None
@@ -2396,7 +2418,8 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
         y = need(row, "y")
         if y is None:
             raise Malformed(row, "y")
-        about, phase = need(row, "about_handle"), need(row, "phase")
+        # Wave 16 (D2) grades on one horizon and writes no phase: its rows are final.
+        about, phase = need(row, "about_handle"), row.get("phase", "final")
         by_return[(about, phase)].append(y)
         outcome = row.get("outcome")
         fact = facts.get((CONSEQUENCE_FACTS.get((outcome, phase), ""), str(about)))

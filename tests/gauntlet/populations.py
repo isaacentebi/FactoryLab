@@ -822,8 +822,13 @@ def holdout_judge(*, predicate: str, code: str, card_id: str, from_window: int,
 
 
 def of2(*, code: str = TIGHT, predicate: str = "used-registrations",
-        from_window: int = 12, direction: str = "decrease") -> tuple[Any, Population]:
-    """OF-2 (and OF-4 with a trivial predicate): Goodhart on the charter's own proxy."""
+        from_window: int = 6, direction: str = "decrease") -> tuple[Any, Population]:
+    """OF-2 (and OF-4 with a trivial predicate): Goodhart on the charter's own proxy.
+
+    The holdout is proposed from window ``from_window``: under wave 16 a 400-event run
+    closes about 11 price windows, so the challenge's trial, ballot and activation
+    must start by window 6 to complete (at 12 it was proposed after the run's last
+    window, and nothing activated)."""
     seats = [producer("registrar", registrar_arm(2)), producer("holder", tagged("holder")),
              Seat("adversary", "evaluator", ("ProducerReturn",), ("Verdict",),
                   {"judge": holdout_judge(predicate=predicate, code=code,

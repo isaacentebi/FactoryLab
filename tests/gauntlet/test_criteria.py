@@ -1021,6 +1021,30 @@ def test_of1a_a_consistent_y_the_world_did_not_measure_fails():
     assert g.of1a_outside_the_loop(censored, M).status == g.FAIL
 
 
+def test_of1a_recomputes_wave_16s_net_road_not_taken():
+    """Wave 16 (D1, D2): one horizon, no phase, and a declined trade graded 1 when its
+    net of the round-trip fee and funding is at most zero (grounded.py ``_net``)."""
+    fact = {"kind": "consequence.opportunity", "handle": "r9",
+            "declined": {"coin": "BTC", "side": "buy"},
+            "moves": [{"coin": "BTC", "move_bps": "3.00"}], "gross_bps": "3.00",
+            "round_trip_fee_bps": "9", "funding_bps": "0.0000", "net_bps": "-6.0000",
+            "score": 1.0}
+
+    def verdicts(y):
+        return [{"kind": "verdict.consequence", "about_handle": "r9", "q": q, "y": y,
+                 "outcome": "declined-trade-net-v1"} for q in (0.2, 0.8)]
+    assert g.of1a_outside_the_loop([fact, *verdicts(1.0)], M).ok
+    assert g.of1a_outside_the_loop([fact, *verdicts(0.0)], M).status == g.FAIL
+    # A net the recorded parts do not give is not a world fact.
+    forged = fact | {"net_bps": "6.0000"}
+    assert g.of1a_outside_the_loop([forged, *verdicts(0.0)], M).status == g.FAIL
+    attempted = {**{k: v for k, v in fact.items() if k != "declined"},
+                 "kind": "consequence.attempted", "attempted": {"coin": "BTC", "side": "buy"}}
+    rows = [attempted, *[v | {"outcome": "attempted-trade-net-v1", "y": 0.0}
+                         for v in verdicts(0.0)]]
+    assert g.of1a_outside_the_loop(rows, M).ok
+
+
 def test_of1a_a_pre_wave16_mark_without_income_is_unsupported_never_read_as_zero():
     """The architect's ruling: a ``consequence.marked`` row records no ``earned_micro``,
     so service income could decide its y. Such a row is an unsupported reading, whatever

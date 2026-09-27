@@ -38,8 +38,8 @@ def test_of1a_the_worlds_y_is_the_same_for_every_judge_of_a_return(of1):
 
 def _y_reads_the_verdict(original):
     """A mutant that feeds the judge's own q into y: the verdict grading itself."""
-    def score(self, rec, y, kind, phase):
-        return original(self, rec, (y + (rec.q or 0.0)) / 2, kind, phase)
+    def score(self, rec, y, kind, *rest):
+        return original(self, rec, (y + (rec.q or 0.0)) / 2, kind, *rest)
     return score
 
 
