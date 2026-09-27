@@ -159,3 +159,36 @@ def test_a_forecast_is_no_producers_settle_sample(monkeypatch):
                     definition_version="brier-v1", sampling_ref=None)
     assert not [name for name in rt.clockwork.latencies
                 if name.startswith(("settle:", "scored:"))]
+
+
+def _polymorphic(rt, at: int, cutoff: int) -> str:
+    """A seat's decision declaring outputs on two reward channels, which selects its
+    forecast output (channel ``consequence``) before it returns."""
+    rt.ticks_consumed = at
+    handle = rt.queue.open(
+        actor="test-router", event_id=f"poly-{at}", channel="verdict",
+        return_channels={"Verdict": "verdict", "Forecast": "consequence"},
+        deadline_ns=10**18, deadline_tick=cutoff, parent_handle=None, cost_ceiling=0,
+        propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0,
+                                    "test-router", "state"))
+    rt.handle_to_assembly[handle] = "seed-decider"
+    rt._contribution(handle, "producer")
+    assert rt.queue.bind(handle, "Forecast") == "consequence"
+    return handle
+
+
+def test_a_polymorphic_seats_forecast_output_is_no_roles_sample(monkeypatch):
+    """Codex on #157: a seat whose selected output is a forecast returns on the
+    ``consequence`` channel, though the kernel's raw channel is ``emits``. The roleless
+    guard reads the resolved channel, so neither its settlement nor its timeout lands in
+    a role's settle or scored meter."""
+    rt = _runtime(monkeypatch)
+    settled = _polymorphic(rt, at=10, cutoff=30)
+    rt.ticks_consumed = 12
+    rt.queue.settle(settled, channel="consequence", score=0.2, status=SettleStatus.SETTLED,
+                    definition_version="brier-v1", sampling_ref=None)
+    stalled = _polymorphic(rt, at=20, cutoff=25)
+    rt.ticks_consumed = 40
+    assert rt.queue.expire_due() == [stalled]
+    assert not [name for name in rt.clockwork.latencies
+                if name.startswith(("settle:", "scored:"))]

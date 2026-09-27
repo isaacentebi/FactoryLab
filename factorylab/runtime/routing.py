@@ -253,8 +253,8 @@ class ContractQueue:
             cutoff = self.deadline_tick(handle)
             closed = rt.ticks_consumed if cutoff is None else min(cutoff, rt.ticks_consumed)
             self._close_round(handle, closed)
-            if self.queue.get(handle).channel in ROLELESS_CHANNELS:
-                continue
+            if self.get(handle).channel in ROLELESS_CHANNELS:
+                continue  # the resolved channel: a polymorphic return's selected one
             rt.clockwork.record(f"settle:{rt._decision_role(handle)}", max(0, closed - opened))
         return expired
 
@@ -307,8 +307,10 @@ class ContractQueue:
         if first and opened is not None:
             self._close_round(
                 handle, ready_tick if ready_tick is not None else self.runtime.ticks_consumed)
+        # The resolved channel (``get``): a polymorphic seat's selected output, never
+        # its raw ``emits`` (Codex on #157).
         if (first and opened is not None
-                and self.queue.get(handle).channel not in ROLELESS_CHANNELS):
+                and self.get(handle).channel not in ROLELESS_CHANNELS):
             # The settle loop of this decision's measured role (time audit T2): how long
             # a return waits for the signal its learners and its cards are fed from, a
             # censoring at its horizon included. The scored loop is the same closure
