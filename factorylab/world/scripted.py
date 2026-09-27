@@ -92,9 +92,9 @@ class ScriptedProvider:
         built from the admitted schema: only the fields an admitted shape names (a
         closed schema, ``additionalProperties: false``, gets no stray field), each
         value this population gives that field alone, fitted to that field's own
-        bounds and enum; it is returned only if its admitted shape admits it
-        (``_admits``), else ``reply`` is returned unchanged (Sol on #157). Harness
-        only: the kernel never reads this.
+        bounds and enum; it is returned only if the original contract admits it
+        (``_admits``, nested unions included), else ``reply`` is returned unchanged
+        (Sol and Codex on #157). Harness only: the kernel never reads this.
         """
         if not isinstance(reply, dict):
             return reply
@@ -118,7 +118,7 @@ class ScriptedProvider:
                     if value is not None:
                         answer[field] = value
             answer = {k: _fit(v, properties.get(k)) for k, v in answer.items()}
-            if _admits(answer, shape):
+            if _admits(answer, schema):  # the original contract, never the flat shape
                 return answer
         return reply
 
@@ -491,33 +491,45 @@ def _contract_schema(req: ModelRequest | None, text: str) -> dict | None:
 
 
 def _admitted_shapes(schema: dict) -> list[dict]:
-    """The flat shapes a schema admits one level down: the schema itself, or each
-    ``anyOf`` / ``oneOf`` alternative (a local ``$ref`` resolved) with the enclosing
-    level's properties, requirements and closure merged in. A deeper union is not
-    flattened: its answer is checked against the level it names only."""
+    """The flat shapes a schema admits: along every path through its ``anyOf`` /
+    ``oneOf`` unions, however deep (a local ``$ref`` resolved beside its siblings),
+    each level's properties and requirements merged, and the shape closed when any
+    level on the path is. Guarantees a nested branch's requirement (a ``verdict`` two
+    unions down) is in the shape (Codex on #157); a union that refers back to a node
+    already on its path is not walked again, so a recursive one terminates."""
     defs = schema.get("$defs") if isinstance(schema.get("$defs"), dict) else {}
 
-    def resolved(node: dict) -> dict:
+    def target(node: dict) -> dict | None:
         ref = node.get("$ref")
         if isinstance(ref, str) and ref.startswith("#/$defs/"):
             found = defs.get(ref[len("#/$defs/"):])
-            if isinstance(found, dict):
-                return {**found, **{k: v for k, v in node.items() if k != "$ref"}}
-        return node
+            return found if isinstance(found, dict) else None
+        return None
 
-    root = resolved(schema)
-    alts = root.get("anyOf") or root.get("oneOf")
-    if not isinstance(alts, list) or not alts:
-        return [root]
-    shapes = []
-    for alt in (resolved(a) for a in alts if isinstance(a, dict)):
-        closed = (alt.get("additionalProperties") is False
-                  or root.get("additionalProperties") is False)
-        shapes.append({
-            "properties": {**(root.get("properties") or {}), **(alt.get("properties") or {})},
-            "required": [*(root.get("required") or ()), *(alt.get("required") or ())],
-            **({"additionalProperties": False} if closed else {})})
-    return shapes
+    def merge(a: dict, b: dict) -> dict:
+        return {"properties": {**a["properties"], **b["properties"]},
+                "required": [*a["required"], *b["required"]],
+                "closed": a["closed"] or b["closed"]}
+
+    def shapes(node: dict, path: frozenset[int]) -> list[dict]:
+        own = {"properties": dict(node.get("properties") or {}),
+               "required": [f for f in node.get("required") or () if isinstance(f, str)],
+               "closed": node.get("additionalProperties") is False}
+        found = [own]
+        ref = target(node)
+        if ref is not None and id(ref) not in path:
+            found = [merge(a, b) for a in found for b in shapes(ref, path | {id(ref)})]
+        alts = node.get("anyOf") or node.get("oneOf")
+        if isinstance(alts, list):
+            below = [shape for alt in alts if isinstance(alt, dict) and id(alt) not in path
+                     for shape in shapes(alt, path | {id(alt)})]
+            if below:
+                found = [merge(a, b) for a in found for b in below]
+        return found
+
+    return [{"properties": shape["properties"], "required": shape["required"],
+             **({"additionalProperties": False} if shape["closed"] else {})}
+            for shape in shapes(schema, frozenset({id(schema)}))]
 
 
 #: The JSON types a scripted answer's fields are checked against (``_admits``).
@@ -525,35 +537,53 @@ _JSON_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool,
                "number": (int, float), "integer": int, "null": type(None)}
 
 
-def _admits(answer: dict, shape: dict) -> bool:
-    """Whether a flat admitted shape admits ``answer``: every required field present,
-    no field a closed shape does not name, and each named field of its type, inside
-    its enum and its numeric bounds. The world layer imports nothing of the factory's
-    validator (package boundary), so the scripted seat checks its own answer here."""
-    properties = shape.get("properties") or {}
-    if any(f not in answer for f in shape.get("required") or ()):
+def _admits(answer: Any, schema: dict, root: dict | None = None,
+            path: frozenset[int] = frozenset()) -> bool:
+    """Whether ``schema`` admits ``answer``, read level by level as the kernel's
+    ``validate_schema`` reads it: a local ``$ref`` binds beside its siblings, some
+    ``anyOf`` / ``oneOf`` alternative must admit it, however deep, and each level's
+    type, enum, numeric bounds, required fields, closure and properties hold. The
+    world layer imports nothing of the factory's validator (package boundary), so the
+    scripted seat checks its own answer against the original contract here (Codex on
+    #157). A node already on the path is not entered again: a recursive union ends."""
+    if not isinstance(schema, dict):
+        return True
+    root = schema if root is None else root
+    if id(schema) in path:
         return False
-    if shape.get("additionalProperties") is False and set(answer) - set(properties):
+    path = path | {id(schema)}
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        defs = root.get("$defs") if isinstance(root.get("$defs"), dict) else {}
+        found = defs.get(ref[len("#/$defs/"):]) if ref.startswith("#/$defs/") else None
+        if not isinstance(found, dict) or not _admits(answer, found, root, path):
+            return False
+    alts = schema.get("anyOf") or schema.get("oneOf")
+    if isinstance(alts, list) and not any(
+            _admits(answer, alt, root, path) for alt in alts if isinstance(alt, dict)):
         return False
-    for key, value in answer.items():
-        field = properties.get(key)
-        if not isinstance(field, dict):
-            continue
-        kinds = field.get("type")
-        kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
-        if kinds and not any(
-                isinstance(value, _JSON_TYPES.get(k, ())) and not (
-                    k in ("number", "integer") and isinstance(value, bool))
-                for k in kinds):
+    kinds = schema.get("type")
+    kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
+    if kinds and not any(isinstance(answer, _JSON_TYPES.get(k, ())) and not (
+            k in ("number", "integer") and isinstance(answer, bool)) for k in kinds):
+        return False
+    if isinstance(schema.get("enum"), list) and answer not in schema["enum"]:
+        return False
+    if type(answer) in (int, float) and (
+            ("minimum" in schema and answer < schema["minimum"])
+            or ("maximum" in schema and answer > schema["maximum"])
+            or ("exclusiveMinimum" in schema and answer <= schema["exclusiveMinimum"])
+            or ("exclusiveMaximum" in schema and answer >= schema["exclusiveMaximum"])):
+        return False
+    if isinstance(answer, dict):
+        properties = schema.get("properties") or {}
+        if any(f not in answer for f in schema.get("required") or ()):
             return False
-        if isinstance(field.get("enum"), list) and value not in field["enum"]:
+        if schema.get("additionalProperties") is False and set(answer) - set(properties):
             return False
-        if type(value) in (int, float) and (
-                ("minimum" in field and value < field["minimum"])
-                or ("maximum" in field and value > field["maximum"])
-                or ("exclusiveMinimum" in field and value <= field["exclusiveMinimum"])
-                or ("exclusiveMaximum" in field and value >= field["exclusiveMaximum"])):
-            return False
+        for key, value in answer.items():
+            if key in properties and not _admits(value, properties[key], root):
+                return False
     return True
 
 

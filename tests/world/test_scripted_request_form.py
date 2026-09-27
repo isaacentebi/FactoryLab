@@ -144,3 +144,21 @@ def test_a_combined_closed_bounded_contract_is_answered_inside_its_schema():
     assert set(reply) == {"vote", "verdict"} and reply["vote"] is True, reply
     assert 0 <= reply["verdict"] <= 0.2, reply
     validate_schema(reply, closed)
+
+
+def test_a_requirement_in_a_nested_union_is_answered_and_admitted():
+    """Codex on #157: the outer branch requires a vote and a union nested inside it
+    also requires a verdict (bounded at 0.2). The answer carries both, inside the
+    bound, and the kernel's ``validate_schema`` admits it; shaped from the first union
+    level only, the verdict was dropped and the kernel refused the reply."""
+    from factorylab.cortex.assembly import validate_schema
+
+    nested = {"type": "object", "anyOf": [{
+        "required": ["vote"], "properties": {"vote": {"type": "boolean"}},
+        "anyOf": [{"required": ["verdict"],
+                   "properties": {"verdict": {"type": "number", "minimum": 0,
+                                              "maximum": 0.2}}}]}]}
+    model_req, text = _model_request("Vote on the motion.", {}, nested)
+    reply = json.loads(ScriptedProvider().complete(model_req).text)
+    assert reply["vote"] is True and 0 <= reply["verdict"] <= 0.2, reply
+    validate_schema(reply, nested)
