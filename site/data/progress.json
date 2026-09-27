@@ -1,0 +1,469 @@
+{
+  "_readme": "The single source for the Progress page and the status bar. Edit this file only; the layout reads it. status is one of merged | open | planned. kind is wave | run | audit | milestone. Dates are ISO (UTC). Every merged row names the merge commit on fast-loop-harness it came from.",
+  "updated": "2026-09-27",
+  "head": {
+    "branch": "fast-loop-harness",
+    "sha": "ecc718d2",
+    "subject": "Merge wave 16: reward physics",
+    "date": "2026-09-26"
+  },
+  "milestone": {
+    "title": "Wave 16 merged: the reward physics",
+    "date": "2026-09-26",
+    "summary": "The world now grades judges on the question the wallet asks: would the trade a decision named, or declined, have beaten the venue's own fees and funding over one horizon measured on the venue's clock? Rounds where nothing happened are credited what rounds actually earn, not a constant. Penalties follow cause. Because this changes the reward physics, it is a kernel change, and a kernel change is lethal: the next world starts again from v0.",
+    "next": "Wave 16b (loop timing after the new penalty rule) and the pathology gauntlet, then the live-readiness wave before any new testnet run."
+  },
+  "not_yet": [
+    "<strong>No live run under the current physics.</strong> The last live world was longrun1 on 24 Sep 2026, a six-hour Hyperliquid testnet rehearsal. Waves 13 to 17 landed after it. Its diary is now the practice tape the accelerated replay runs on.",
+    "<strong>Never run with real money on mainnet.</strong> The code refuses mainnet until the launch checks in deploy/README.md are met.",
+    "<strong>The pathology gauntlet is not merged.</strong> It lives on the phase2-gauntlet-and-class2-audit branch and is still under review.",
+    "<strong>Wave 12 (hosting) is not merged.</strong> Its branch exists; it has not landed on fast-loop-harness.",
+    "<strong>Wave 16b is designed, not built.</strong> The architect's rulings are binding; the code has not merged."
+  ],
+  "eras": [
+    {
+      "id": "foundations",
+      "title": "Foundations",
+      "dates": "11 – 18 Sep 2026",
+      "summary": "A kernel, a sealed diary, a world with a wallet, and the first populations. Then rounds of cold audits against the essay.",
+      "items": [
+        {
+          "id": "F1",
+          "kind": "milestone",
+          "status": "merged",
+          "date": "2026-09-11",
+          "title": "The kernel and the world",
+          "what": "Exchange adapters (a deterministic fake and Hyperliquid), a clock, priced model providers and metering; a sealed, hash-chained ledger; then evaluators, metas, sealed forecasts, a protected share for newcomers, registration and the live path.",
+          "why": "The factory needs a world before it can have objectives: money that moves only for real, time it cannot fake, and a record it cannot rewrite.",
+          "ref": "#1, #11"
+        },
+        {
+          "id": "F2",
+          "kind": "audit",
+          "status": "merged",
+          "date": "2026-09-13",
+          "title": "Cold audits, and the defects they found",
+          "what": "Independent audits of the code against the essay, then a run of fix branches (A to L) that closed each finding with a reproduction test that had to fail first.",
+          "why": "An audit whose findings are not reproduced in tests can quietly regress.",
+          "ref": "#48 – #66"
+        },
+        {
+          "id": "F3",
+          "kind": "milestone",
+          "status": "merged",
+          "date": "2026-09-18",
+          "title": "Audit fixes: money, recovery, learning signal",
+          "what": "Venue, money, treasury and jail defects closed; exact crash recovery with a checkpoint coverage guard; rewards that mean what they claim; a linear scripted runtime and tiered tests.",
+          "why": "A factory that cannot survive its own crash, or whose reward lies, learns the wrong thing.",
+          "ref": "#107"
+        }
+      ]
+    },
+    {
+      "id": "rehearsals",
+      "title": "Rehearsals",
+      "dates": "19 – 22 Sep 2026",
+      "summary": "Editions 4 and 5: populations run as experiments, and the capital loop closes.",
+      "items": [
+        {
+          "id": "E4",
+          "kind": "run",
+          "status": "merged",
+          "date": "2026-09-21",
+          "title": "Edition 4 population experiments",
+          "what": "Gated world experiments with sealed results, spend reconciled against the providers' own bills.",
+          "why": "Evidence first: every later design memo is argued from these diaries.",
+          "ref": "#108 – #123"
+        },
+        {
+          "id": "E5",
+          "kind": "milestone",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "The capital loop closes",
+          "what": "Converted profit becomes spending authority: the factory can pay for its own inference with what it earns. Event markets and exchange vaults arrive as off-by-default surfaces.",
+          "why": "Speed is cash burn. A factory that cannot fund its own thinking has an objective handed to it by whoever refills it.",
+          "ref": "edition5-integrate"
+        },
+        {
+          "id": "A2",
+          "kind": "audit",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "Chapter II becomes the design authority",
+          "what": "Seven audit reports read the whole codebase against Chapter II of the essay, and the architect issued binding rulings. Every mechanism must now name the passage it implements.",
+          "why": "Without a single authority, every clever addition drifts the factory back toward Class 2.",
+          "ref": "2f1b73ea, 9a8d4a2b"
+        }
+      ]
+    },
+    {
+      "id": "rebuild",
+      "title": "Waves 1 – 6: rebuilding to Chapter II",
+      "dates": "22 Sep 2026",
+      "summary": "Ten waves in one day, each answering an audit ruling. Most of them delete things.",
+      "items": [
+        {
+          "id": "1a",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "Two channels only, and judges see a machine",
+          "what": "Deleted direct messages between seats and the public notebook. Artifacts became private. Judges now read a machine view with no author, role or payoff.",
+          "why": "Chapter II allows a rich request and a thin reward, and nothing else between seats. A judge who knows who wrote something is judging the author.",
+          "ref": "#125"
+        },
+        {
+          "id": "1c",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "One price law, honest identity, dead code out",
+          "what": "Manifest keys no world set, dead providers and hash-neutral shims removed. A manifest now hashes exactly what it says.",
+          "why": "Robust simplicity: a mechanism no passage calls for is a deletion candidate.",
+          "ref": "#126"
+        },
+        {
+          "id": "1b",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "Contracts state physics; one guardrail out; edition 6",
+          "what": "Kernel text states facts, never method. A tool-call limit states the limit, not a strategy. A guardrail that refused duplicate orders across decisions was deleted; the physics stayed. Edition 6 seats start from one-sentence priors.",
+          "why": "Surfaces, not strategies. A rule that is announced is read as advice.",
+          "ref": "#127"
+        },
+        {
+          "id": "2",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "The reward chain",
+          "what": "Producers learn from their judges' verdicts. Each verdict is also a prediction, scored by a proper rule against what the world later measured. A judgement of a judge sits one tier above it, end to end.",
+          "why": "The signal that grades an evaluator must come from outside the loop it judges.",
+          "ref": "#128"
+        },
+        {
+          "id": "6a",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "A standing committee, unbundled motions, the norm edition",
+          "what": "A committee on the governance cadence, motions voted one at a time, and a signed norm edition from the human house applied at a boundary after testimony. Saturation and violation duration per card are public.",
+          "why": "Governance acts only through the charter, never inside the factory.",
+          "ref": "#129"
+        },
+        {
+          "id": "6b",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "Posted λ, futarchy on motions, holdouts",
+          "what": "λ is posted as a shadow price and its posts are scored on the realized one. Motions can be decided by conditional markets. Seats can propose holdout criteria.",
+          "why": "The metrics layer is ceded to the factory; constraints and their prices suit markets.",
+          "ref": "#131"
+        },
+        {
+          "id": "4",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "Composition through contracts",
+          "what": "Credit flows only from verdicts, whole chains and held builders, through the reward channel. No adversary for hire. Every seeded kind that is paid by its readers has a seeded reader.",
+          "why": "Seats compose through contracts, not through a pipeline the architect drew.",
+          "ref": "#130"
+        },
+        {
+          "id": "5a",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "Tier 3, many judges, many families",
+          "what": "Evaluator seats must outnumber producer seats across at least three model families. Judging chains avoid a shared family. An adversarial layer and early-warning signals, shown to evaluators alone.",
+          "why": "Evaluations are recursive and heterogeneous; a shared foundation model is a forcing function.",
+          "ref": "#132"
+        },
+        {
+          "id": "3",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "The clock",
+          "what": "One time domain. Every loop period is derived as a ratio of the one below it. Safety never waits on a slow loop.",
+          "why": "An inner loop must settle several times faster than the loop that commands it, starting from 3:1.",
+          "ref": "#133"
+        },
+        {
+          "id": "5b",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-22",
+          "title": "Versioning, the immune organ, the niche",
+          "what": "Versions are read live by behaviour (a rolling transfer operator and its spectral gap). The immune organ prices thrash and stable failure. A niche of compute is reserved for actions with no history.",
+          "why": "A version is a behaviour, not a hash. Pathologies are priced as they happen. Learning death is prevented as a fact about the world.",
+          "ref": "#134"
+        }
+      ]
+    },
+    {
+      "id": "edition6",
+      "title": "Edition 6 meets the world",
+      "dates": "23 – 24 Sep 2026",
+      "summary": "A new roster, a charter the population ratified, live event markets, real money on the compute rail, and the longest live run so far.",
+      "items": [
+        {
+          "id": "E6",
+          "kind": "milestone",
+          "status": "merged",
+          "date": "2026-09-23",
+          "title": "Edition 6 roster and its own ratified charter",
+          "what": "A seed roster across several model families, chosen on cost, latency and whether answers parse. The world runs the charter its population ratified.",
+          "why": "The seed roster is the architect's one model choice; after genesis, seats move models only by proposal.",
+          "ref": "#135, #139"
+        },
+        {
+          "id": "9",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-23",
+          "title": "Forecasts settle on real markets",
+          "what": "Edition 6 reads Polymarket live. Event forecasts settle on a market's resolution or price. Reads are free and marks are never invented.",
+          "why": "Realized consequence must be a fact the world measures.",
+          "ref": "#145"
+        },
+        {
+          "id": "7",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-24",
+          "title": "The factory can see its own context",
+          "what": "Context size is measured on real invocations and published as four seed observations.",
+          "why": "What the factory spends on reading is a cost it should be able to see and price.",
+          "ref": "#143"
+        },
+        {
+          "id": "8",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-24",
+          "title": "Declining is priced as an abstention",
+          "what": "A producer's or a judge's decline settles on its own channel at the abstention price, never as a timeout.",
+          "why": "The price of doing nothing must be a price, not an accident of plumbing.",
+          "ref": "#148"
+        },
+        {
+          "id": "10",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-24",
+          "title": "The rail, hardened",
+          "what": "The compute rail was hardened before its first real conversion: torn transactions resolve only on final nonces, every reserve signature is on the record, and no test can touch the network.",
+          "why": "Money-path code gets a cold, adversarial review before it merges.",
+          "ref": "#144"
+        },
+        {
+          "id": "11",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-24",
+          "title": "The wallet moves only when money moves",
+          "what": "Every debit names a real counterparty. Reads are bounded by the venues' published limits, and retained private state is capped by a finite disk as a limit, not a charge.",
+          "why": "A scarce resource that costs nothing at the margin is a constraint, not a debit.",
+          "ref": "#146"
+        },
+        {
+          "id": "13·14",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-24",
+          "title": "Every decision faces the world; grades land in time",
+          "what": "A return that executes nothing must name the trade it did not take, so the world can price that road. A refused order is priced on the trade it named. Grades from the tier above land inside the window that reads them.",
+          "why": "Inaction is a decision too, and it needs a consequence.",
+          "ref": "a090593c"
+        },
+        {
+          "id": "13b",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-24",
+          "title": "The published contract is the enforced one",
+          "what": "What a request publishes about its contract is exactly what the kernel enforces.",
+          "why": "Schematics are public, and a public schematic that differs from the physics is a lie.",
+          "ref": "c0aa9ec8"
+        },
+        {
+          "id": "LR1",
+          "kind": "run",
+          "status": "merged",
+          "date": "2026-09-24",
+          "title": "longrun1: six hours on testnet",
+          "what": "A capital-loop world on Hyperliquid testnet: 925 ticks over 6.1 hours, through chop, a jump and an outage. It died, and its sealed diary was opened and read.",
+          "why": "Its evidence drove waves 15 to 17. It is still the last live run.",
+          "ref": "worlds/tapes/library.toml"
+        }
+      ]
+    },
+    {
+      "id": "truth",
+      "title": "Truth, memory and reward physics",
+      "dates": "25 – 26 Sep 2026",
+      "summary": "What the longrun1 diary taught: the world must tell the truth, memory must stay bounded, and the reward must ask the wallet's question.",
+      "items": [
+        {
+          "id": "HF",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-25",
+          "title": "Hotfix: a decline never reaches the venue",
+          "what": "A decline writes nothing to the venue, however it is spelled and whatever order fields sit beside it.",
+          "why": "One definition of a decline, read everywhere.",
+          "ref": "d914948a"
+        },
+        {
+          "id": "15",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-25",
+          "title": "The world tells the truth",
+          "what": "Money facts are true: gas is scoped and fees are published. A request says what it is and shows nothing hollow. Published contracts for judges, registration and the wire are the enforced ones.",
+          "why": "Physics is public. Disclosure only works if acting on it is in the reader's interest, and that needs it to be true.",
+          "ref": "789b5777"
+        },
+        {
+          "id": "17",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-25",
+          "title": "Bounded memory",
+          "what": "One rolling checkpoint beside the diary, large answers stored once, unreachable state dropped, and a backup uploaded only once proven restorable.",
+          "why": "The diary grows with events, not with the world's state. The factory never rewinds.",
+          "ref": "f10eb634"
+        },
+        {
+          "id": "17b",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-25",
+          "title": "Settled decisions release: the plateau",
+          "what": "A decision stays addressable exactly while a score is still owed to it, then releases.",
+          "why": "The reward finds its way back to the exact decision, and only while it can still arrive.",
+          "ref": "8365fc0f"
+        },
+        {
+          "id": "P1",
+          "kind": "milestone",
+          "status": "merged",
+          "date": "2026-09-25",
+          "title": "Replay a diary as an accelerated world",
+          "what": "A dead world's diary becomes a tape: prices, fills and fee rates replayed as a world that runs faster than real time, with no invented market values.",
+          "why": "The factory can be tested against the real market it met, without spending money or waiting hours.",
+          "ref": "#151"
+        },
+        {
+          "id": "16",
+          "kind": "wave",
+          "status": "merged",
+          "date": "2026-09-26",
+          "title": "Reward physics",
+          "what": "Seven decisions ship as one new world. A declined trade's outcome is binary and net of the venue's own fee and funding. One grading horizon, measured on the venue's clock. Base rates are keyed per question, and an easy question stops paying. A round where nothing happened is credited the router's observed mean, not a constant. A penalty falls on the decisions that caused the violation, and saturation is ledgered and published.",
+          "why": "In longrun1 the judges' question carried almost no information, and 'nothing happened' was paid above what acting earned. Numbers the world did not produce were removed.",
+          "ref": "ecc718d2"
+        }
+      ]
+    },
+    {
+      "id": "open",
+      "title": "Open now",
+      "dates": "in progress",
+      "summary": "Work that exists on a branch or in a binding design, and has not merged.",
+      "items": [
+        {
+          "id": "16b",
+          "kind": "wave",
+          "status": "open",
+          "date": "2026-09-26",
+          "title": "Time after the new penalty rule",
+          "what": "The gauntlet found that loop meters closed at settlement, so the price loop measured its own period and ran away. The fix closes every meter when the score is ready, counts timeouts, and floors the consequence period at the grading horizon.",
+          "why": "An inner loop must settle faster than the loop that commands it. Designed, with binding rulings; not merged.",
+          "ref": "design note"
+        },
+        {
+          "id": "P2",
+          "kind": "milestone",
+          "status": "open",
+          "date": "2026-09-27",
+          "title": "The pathology gauntlet and a Class 2 audit",
+          "what": "An instrument that reads only ledger rows and says, per criterion, pass, fail or unsupported for each of the four pathologies; plus a scan of every text a seat can see for instructions.",
+          "why": "If the factory cannot tell whether a world is failing, it cannot price the failure. On a branch, under review.",
+          "ref": "phase2-gauntlet-and-class2-audit"
+        },
+        {
+          "id": "12",
+          "kind": "wave",
+          "status": "open",
+          "date": "2026-09-24",
+          "title": "Hosting",
+          "what": "The factory books every hosting charge billed against its own server, from the provider's invoices.",
+          "why": "Hosting is a real counterparty. The branch exists; it has not merged.",
+          "ref": "wave12-hosting"
+        }
+      ]
+    },
+    {
+      "id": "next",
+      "title": "Next: the plan",
+      "dates": "not started",
+      "summary": "In order. A plan, not a promise; any of it may change when the evidence does.",
+      "items": [
+        {
+          "id": "T",
+          "kind": "milestone",
+          "status": "planned",
+          "title": "Test-audit cutover",
+          "what": "Reclassify misfiled tests, measure test time by CPU rather than wall clock, and shrink the merge gate from about 19 minutes to under 6.",
+          "why": "A slow gate slows every loop that depends on it."
+        },
+        {
+          "id": "EP",
+          "kind": "milestone",
+          "status": "planned",
+          "title": "Engine performance",
+          "what": "Byte-identical speedups only, each proven by diffing the diary and checkpoint of a fixed-seed run before and after.",
+          "why": "Neither the factory nor its control apparatus may be slower than its environment."
+        },
+        {
+          "id": "LV",
+          "kind": "milestone",
+          "status": "planned",
+          "title": "Live-readiness",
+          "what": "Price funding from the venue's settled history and oracle price, trail the fill watermark by a measured propagation bound, and record order books, fee reads and each fill's maker or taker side in the diary.",
+          "why": "Must land before any live testnet run: the fake and tape venues are exact, the live one is not yet."
+        },
+        {
+          "id": "E7",
+          "kind": "milestone",
+          "status": "planned",
+          "title": "Edition 7: a new world from v0",
+          "what": "The first world under the wave 16 physics. Refusal and error text rewritten to state facts, never to instruct.",
+          "why": "A kernel change is lethal. Nothing resumes across it."
+        },
+        {
+          "id": "LR2",
+          "kind": "run",
+          "status": "planned",
+          "title": "The next live testnet run",
+          "what": "Edition 7 on Hyperliquid testnet, tested against wave 16's published, falsifiable predictions.",
+          "why": "If a prediction fails, the mechanism's premise was wrong. The predictions are diagnostics, not targets."
+        },
+        {
+          "id": "MN",
+          "kind": "milestone",
+          "status": "planned",
+          "title": "Mainnet, with real money",
+          "what": "Only after the launch checks in the deployment runbook are met. One move at launch, then no refill, no restart and no steering.",
+          "why": "Enough money at stake that the results mean something."
+        }
+      ]
+    }
+  ]
+}
