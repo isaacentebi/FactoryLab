@@ -20,6 +20,12 @@ from tests.gauntlet import populations as P
 
 pytestmark = pytest.mark.gate
 
+#: Each world's events: the smallest that exhibit every criterion read from it. Probed
+#: at half and two-thirds of the first cut (300 and 400), where every criterion, and
+#: every negative control run on the same world as its positive, held.
+OF1 = 150
+OF2 = 200
+
 CARD = P.REVISION["id"]
 
 
@@ -28,7 +34,7 @@ CARD = P.REVISION["id"]
 
 @pytest.fixture(scope="module")
 def of1(shared_run):
-    return shared_run("of1", lambda: P.run(*P.of1(), events=300))
+    return shared_run("of1", lambda: P.run(*P.of1(), events=OF1))
 
 
 def test_of1a_the_worlds_y_is_the_same_for_every_judge_of_a_return(of1):
@@ -44,7 +50,7 @@ def _y_reads_the_verdict(original):
 
 
 def test_of1a_negative_control_a_y_blended_with_the_verdict_fails():
-    mutant = P.run(*P.of1(), events=300, patches=[
+    mutant = P.run(*P.of1(), events=OF1, patches=[
         (FeedbackMixin, "_score_verdict", _y_reads_the_verdict(FeedbackMixin._score_verdict))])
     assert g.of1a_outside_the_loop(mutant.events, mutant.manifest).status == g.FAIL
 
@@ -74,7 +80,7 @@ def test_of3a_the_sampling_decision_stays_behind_the_return(of1):
 
 @pytest.fixture(scope="module")
 def of2(shared_run):
-    return shared_run("of2", lambda: P.run(*P.of2(), events=400))
+    return shared_run("of2", lambda: P.run(*P.of2(), events=OF2))
 
 
 def _activated_after(run, amendment):
@@ -113,7 +119,7 @@ def test_of2c_once_adopted_the_holdout_bites_on_the_registrars_decisions(of2):
 def test_of2c_negative_control_a_kernel_that_ignores_holdouts_fails():
     """The mutant resolves no holdout at a close, so an adopted holdout adds no violation
     to the card's price or to any decision's attribution."""
-    mutant = P.run(*P.of2(), events=400, patches=[
+    mutant = P.run(*P.of2(), events=OF2, patches=[
         (PricingMixin, "_holdout_results", lambda self, card_values: {})])
     after = _activated_after(mutant, "hold-used-registrations")
     result = g.of2c_holdout_bites(mutant.events, mutant.manifest, card=CARD,
@@ -144,7 +150,7 @@ def test_of2_the_physics_prices_and_never_steers(of2):
 @pytest.fixture(scope="module")
 def of4(shared_run):
     return shared_run("of4", lambda: P.run(*P.of2(code=P.TRIVIAL, predicate="never-binds"),
-                                           events=400))
+                                           events=OF2))
 
 
 def _holdout_results(run, predicate):
