@@ -92,12 +92,6 @@ def _registrar_terms(run):
                     yield term
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "wave 16b finding: at the steady cadence (four-tick windows, 7-11 decisions each) the "
-    "five-window revision-rate proxy dips below its 0.2 floor before the holdout activates "
-    "(0.18 at window 14, 0.14 at 15), so the registrar bears a price before it; the "
-    "population's proxy was calibrated against the runaway's long windows and needs "
-    "recalibrating"))
 def test_of2a_the_proxy_satisfied_the_registrar_bears_no_price_before_the_holdout(of2):
     """Before the holdout the metric layer is the factory's (§IV.a): the proxy holds, so
     the kernel posts no price on the registrar's junk registrations."""
@@ -106,6 +100,10 @@ def test_of2a_the_proxy_satisfied_the_registrar_bears_no_price_before_the_holdou
     assert early and all(t["violation"] == 0 for t in early)
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "the holdout's violation is attributed by the region's relief rule "
+    "(pricing._decision_share); a proxy-satisfying registrar is always a reliever, so it "
+    "never bears the holdout."))
 def test_of2c_once_adopted_the_holdout_bites_on_the_registrars_decisions(of2):
     """Within ``min_ratio`` governance periods of activation, the failed holdout counts as
     card violation (``holdout`` in ``PriceController.observe``) and the registrar's

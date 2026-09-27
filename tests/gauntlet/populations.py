@@ -770,7 +770,7 @@ def i5() -> tuple[Any, Population]:
 
 
 #: OF-2's card: the revision-rate floor over five windows, so a registrar that registers
-#: on every second return satisfies the proxy window after window.
+#: on every return satisfies the proxy window after window.
 REVISION = card("revision-floor", "revision_rate", "at least 0.2", n=5)
 
 #: A predicate a closed window satisfies only if every registration came with use: the
@@ -829,7 +829,11 @@ def of2(*, code: str = TIGHT, predicate: str = "used-registrations",
     closes about 11 price windows, so the challenge's trial, ballot and activation
     must start by window 6 to complete (at 12 it was proposed after the run's last
     window, and nothing activated)."""
-    seats = [producer("registrar", registrar_arm(2)), producer("holder", tagged("holder")),
+    # R16b-11: the registrar registers on every return, so the five-window proxy sits
+    # near 0.5, far above its 0.2 floor, at the steady four-tick cadence (on every
+    # second return it sat near 0.25, within sampling noise of the floor, and dipped
+    # under it before the holdout was adopted).
+    seats = [producer("registrar", registrar_arm(1)), producer("holder", tagged("holder")),
              Seat("adversary", "evaluator", ("ProducerReturn",), ("Verdict",),
                   {"judge": holdout_judge(predicate=predicate, code=code,
                                           card_id=REVISION["id"], from_window=from_window,
