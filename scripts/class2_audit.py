@@ -639,12 +639,19 @@ def _blob(repo: Path, rev: str, path: str) -> str | None:
 
 
 #: The audit's own policy: the calibration set, the protocol (its rubric and its
-#: calibration), the lexicon's source and the design authority's digest. The audited
-#: release carries them, so a release could swap in easy canaries or a softer rubric:
-#: a change to any of them is never quiet (``policy_changes``). The allowlist and the
-#: rejected findings are reviewed apart, in the provenance pass (``JUSTIFICATION_PATHS``).
+#: calibration), the design authority's digest, and the audit tool's own code, which
+#: defines what is audited: this script and every ``tests/audit/class2_*.py`` module
+#: (the seat-text scanner, the corpus, the lexicon, the audit helpers). The audited
+#: release carries them, so a release could swap in easy canaries, a softer rubric or a
+#: weaker scanner that the recompute would then faithfully use: a change to any of them
+#: is never quiet (``policy_changes``). The artifacts ``baseline`` regenerates
+#: (``class2_findings.json``, ``class2_surfaces.toml``) are derived, recomputed and
+#: compared, and are not policy; the allowlist and the rejected findings are reviewed
+#: apart, in the provenance pass (``JUSTIFICATION_PATHS``). Entries are git pathspecs
+#: (a glob matches with ``fnmatch``).
 LEXICON_REL = "tests/audit/class2_lexicon.py"
-POLICY_PATHS = (CANARIES_REL, PROTOCOL_REL, LEXICON_REL, ESSAY_DIGEST_REL)
+POLICY_PATHS = (CANARIES_REL, PROTOCOL_REL, ESSAY_DIGEST_REL, "scripts/class2_audit.py",
+                "tests/audit/class2_*.py")
 
 
 def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
@@ -677,9 +684,10 @@ def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
         names = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r",
                      *(["--cc"] if merge else []), sha).split()
         message = _git(repo, "log", "-1", "--format=%B", sha).strip()
-        for path in POLICY_PATHS:
-            if path not in names:
-                continue
+        import fnmatch
+
+        for path in sorted({n for n in names
+                            if any(fnmatch.fnmatchcase(n, p) for p in POLICY_PATHS)}):
             old = _blob(repo, parents[0], path)
             new = _blob(repo, sha, path)
             if old is None or old == new:

@@ -213,9 +213,13 @@ the skeleton):
 - **POLICY.** A change of audit policy (and only such a finding): a commit in the
   range that modifies one of the audit-policy files: `docs/audits/class2/canaries.json`
   (the calibration set), this protocol (its rubric and calibration),
-  `tests/audit/class2_lexicon.py` (the lexicon) and `docs/audits/class2/essay.sha256`
-  (the design authority). The release audited carries them, so it could otherwise swap
-  in easy canaries, a softer rubric or another authority. Every world's triage carries
+  `docs/audits/class2/essay.sha256` (the design authority), and the audit tool's own
+  code, which defines what is audited: `scripts/class2_audit.py` and every
+  `tests/audit/class2_*.py` module (the seat-text scanner, the corpus, the lexicon, the
+  audit helpers). The release audited carries them, so it could otherwise swap in easy
+  canaries, a softer rubric, another authority or a weaker scanner that the recompute
+  would faithfully use. The artifacts `baseline` regenerates (`class2_findings.json`,
+  `class2_surfaces.toml`) are derived, recomputed and compared, and are not policy. Every world's triage carries
   each change as a mandatory HIGH finding (A1, POLICY-CHANGE) with the file, the commit
   and a diff summary (for the essay, its old and new digest), whatever the message
   says; POLICY, with the architect's reason, is its only releasable disposition, and
@@ -323,7 +327,8 @@ against inconsistency, stale artifacts, operator error and artifacts rewritten t
   essay must hash to the digest committed at the release, and a changed essay needs a
   commit changing that file, which the provenance pass shows. A repository writer is
   outside the threat model, but a change of audit policy is never quiet: the canaries,
-  this protocol, the lexicon and the essay's digest are read from the release audited,
+  this protocol, the essay's digest and the audit tool's own code (the scanner, the
+  corpus, the lexicon) are read from the release audited,
   so every commit in the range that modifies one is a mandatory POLICY-CHANGE finding
   in every world's triage, released only as POLICY with a reason (the essay's digest
   changed by a commit of its own), and easier canaries, a softer rubric or a digest

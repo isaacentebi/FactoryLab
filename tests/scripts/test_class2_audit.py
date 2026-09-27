@@ -2388,13 +2388,18 @@ def test_an_allow_or_reject_justification_is_reviewed_in_the_provenance_pass(tmp
     (tool.CANARIES_REL, '{"about": "one"}\n', '{"about": "two"}\n'),
     (tool.PROTOCOL_REL, "# Protocol\n", "# Protocol, softened\n"),
     (tool.LEXICON_REL, "RULES = 1\n", "RULES = 0\n"),
-], ids=["essay-digest", "canaries", "protocol", "lexicon"])
+    ("tests/audit/class2_seat_text.py", "SEAT_KEYS = 2\n", "SEAT_KEYS = 1\n"),
+    ("tests/audit/class2_corpus.py", "LEAVES = 2\n", "LEAVES = 1\n"),
+    ("scripts/class2_audit.py", "MIN_CANARIES = 8\n", "MIN_CANARIES = 1\n"),
+], ids=["essay-digest", "canaries", "protocol", "lexicon", "scanner", "corpus", "tool"])
 def test_a_change_of_audit_policy_is_never_quiet(tmp_path, path, old, new):
     """Codex on 6f22238 and a80a5b2: a commit changing an audit-policy file (the essay's
     digest, the canaries, the protocol, the lexicon) under an innocuous message is a
     POLICY-CHANGE: a HIGH finding in every world's triage, carrying the file, the commit
     and its diff summary, releasable only as POLICY with a reason. The commit that first
-    writes a file (a root) establishes the policy and changes none."""
+    writes a file (a root) establishes the policy and changes none. The audit tool's
+    own code defines what is audited (Codex on 4668d58): a weaker scanner is a policy
+    change too."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -2439,6 +2444,22 @@ def test_a_change_of_audit_policy_is_never_quiet(tmp_path, path, old, new):
     # POLICY releases nothing else.
     other = {**finding, "policy_change": False, "question": "Q4", "class": "C1"}
     assert "POLICY" not in tool.allowed_dispositions(other)
+
+
+def test_a_derived_audit_artifact_is_no_policy_change(tmp_path):
+    """The files ``baseline`` regenerates change with ordinary product edits and are
+    recomputed and compared anyway; the allowlist is a Justification. None is policy."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    paths = ("tests/audit/class2_findings.json", "tests/audit/class2_surfaces.toml",
+             tool.ALLOWLIST_REL)
+    for path in paths:
+        _commit(repo, path, "one\n", "root")
+    base = _commit(repo, "README.md", "x\n", "readme")
+    for path in paths:
+        _commit(repo, path, "two\n", "refresh")
+    assert tool.policy_changes(repo, f"{base}..HEAD") == []
 
 
 def test_a_commit_mixing_an_authority_change_with_other_files_is_refused(tmp_path):
