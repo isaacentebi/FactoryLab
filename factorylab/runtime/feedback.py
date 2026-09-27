@@ -1417,13 +1417,14 @@ class FeedbackMixin:
         return horizon
 
     def _horizon_ticks(self) -> int:
-        """H in delivered ticks, at least one: floor division, so ``min_ratio`` of it
-        never exceeds the world's repricing period in ticks after rounding (a world at
-        D2's boundary stays viable). A world that lists no venue has no H: its
-        consequence backstop (R16b-4)."""
+        """H in delivered ticks, rounded up (``ticks_for``): the first tick at or after H,
+        so no loop derived from the consequence loop is shorter than ``min_ratio`` times
+        H in wall time (essay II.IV.c; Codex on #157: at a tick that does not divide H,
+        floor division put the consequence loop short of H). A world that lists no venue
+        has no H: its consequence backstop (R16b-4)."""
         if self.m.consequence_horizon_ns is None:
             return self.ev.consequence_backstop_ticks
-        return max(1, self.m.consequence_horizon_ns // tick_ns(self.tick_clock))
+        return ticks_for(self.m.consequence_horizon_ns, self.tick_clock)
 
     def _patience_ns(self) -> int:
         """How long a consequence may stay unanswered after its judgement opened.

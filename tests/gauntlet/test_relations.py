@@ -145,12 +145,12 @@ def test_ld3_counter_case_a_world_that_fits_its_repricing_is_viable():
 
 def _horizon_relations(rt):
     """Every period derived from the consequence loop, against H in delivered ticks
-    (floor division; a world that lists no venue grades at its backstop)."""
+    (rounded up; a world that lists no venue grades at its backstop)."""
     from factorylab.runtime.clockwork import tick_ns
 
     horizon_ns = rt.m.consequence_horizon_ns
     horizon = (rt.ev.consequence_backstop_ticks if horizon_ns is None
-               else max(1, horizon_ns // tick_ns(rt.tick_clock)))
+               else -(-horizon_ns // tick_ns(rt.tick_clock)))
     return {"H_ticks": horizon, "period": rt._consequence_period(),
             "patience": rt._patience(), "slowest": rt.cadence.slowest_period_events(),
             "min_ratio": rt.m.timing.min_ratio}
@@ -175,6 +175,53 @@ def test_ld2c_guaranteed_patience_covers_the_worlds_repricing_period(name):
     assert got["period"] >= got["H_ticks"], got
     assert got["patience"] >= got["min_ratio"] * got["H_ticks"], got
     assert got["slowest"] >= got["H_ticks"], got
+
+
+def _venue_worlds():
+    """The launchable worlds that state a consequence horizon H (they list a venue)."""
+    from tests.audit.class2_corpus import simulated_manifest
+
+    return [n for n in _worlds() if simulated_manifest(n).consequence_horizon_ns is not None]
+
+
+def _non_dividing_tick(manifest):
+    """The slowest admissible tick that does not divide H: at most ``H / min_ratio``
+    (``max_tick_ns``), one nanosecond under it when it divides H."""
+    horizon, tick = manifest.consequence_horizon_ns, manifest.max_tick_ns
+    if horizon % tick == 0:
+        tick -= 1
+    assert horizon % tick and tick >= manifest.clock.min_tick_ns
+    return tick
+
+
+@pytest.mark.parametrize("name", _venue_worlds())
+def test_ld2c_at_a_tick_that_does_not_divide_h_every_derived_period_nests_over_h(name):
+    """Codex on #157 (essay II.IV.c: an inner loop settles at least ``min_ratio`` times
+    faster than the outer loop that commands it). Before the consequence meter has
+    support, its loop is H in delivered ticks, and the sampling actuator, the novelty
+    accrual and the governance floor derive from it: at a tick that does not divide H,
+    that loop must still cover H in wall time (rounded up), so each loop drawn over it is
+    at least ``min_ratio × H``. Floor division gave ``min_ratio`` ticks, short of H."""
+    from dataclasses import replace
+
+    from factorylab.runtime.clockwork import tick_ns
+    from scripts import fastloop
+    from tests.audit.class2_corpus import WORLDS, simulated_manifest
+
+    base = simulated_manifest(name)
+    manifest = replace(base, tick_interval_ns=_non_dividing_tick(base))
+    manifest.validate()
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1, provider=fastloop.PolicyProvider(WORLDS / f"{name}.toml"))
+    rt.events_budget = 10_000
+    rt._manage_reserve_window()  # launch
+    tick, horizon = tick_ns(rt.tick_clock), manifest.consequence_horizon_ns
+    ratio = manifest.timing.min_ratio
+    assert rt._consequence_period() * tick >= horizon, name
+    assert rt.cadence.slowest_period_events() * tick >= horizon, name
+    sampling = rt.clockwork.loops["sampling"]
+    assert sampling["inner"] * tick >= horizon, (name, sampling)
+    assert sampling["period"] * tick >= ratio * horizon, (name, sampling)
 
 
 def test_ld2c_a_backstop_shorter_than_the_horizon_no_longer_shortens_patience():

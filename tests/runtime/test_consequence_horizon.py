@@ -54,6 +54,17 @@ def _walk(rt, start_ns: int, tick_s: int, until_s: int, price):
         _advance(rt, 1)
 
 
+def test_h_in_ticks_is_the_first_tick_at_or_after_h():
+    """Codex on #157 (essay II.IV.c): H = 10 s at a 3 s tick is 4 ticks, the first tick at
+    or after H, never 3 (9 s, short of H), so the consequence loop every derived period
+    nests over is at least H in wall time before its meter has support."""
+    rt = _world(3, repricing_s=30)
+    assert rt.m.consequence_horizon_ns == 10 * S
+    assert rt._horizon_ticks() == 4
+    assert rt._consequence_period() >= 4
+    assert rt._consequence_period() * 3 * S >= rt.m.consequence_horizon_ns
+
+
 def test_the_same_prices_at_10s_and_30s_ticks_give_the_same_y_at_the_same_venue_time():
     """The mids a slow factory and a fast one saw, on the same venue clock, grade the
     same verdict identically and at the same venue nanosecond, whatever their ticks."""
