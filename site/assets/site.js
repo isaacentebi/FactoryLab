@@ -8,8 +8,10 @@
 
   // SMIL animations ignore CSS; pause them for visitors who asked for less motion.
   var pauseSvg = function () {
-    if (!reduce.matches) return;
-    document.querySelectorAll("svg").forEach(function (s) { if (s.pauseAnimations) s.pauseAnimations(); });
+    document.querySelectorAll("svg").forEach(function (s) {
+      if (reduce.matches && s.pauseAnimations) s.pauseAnimations();
+      else if (!reduce.matches && s.unpauseAnimations) s.unpauseAnimations();
+    });
   };
   pauseSvg();
   if (reduce.addEventListener) reduce.addEventListener("change", pauseSvg);
@@ -29,8 +31,7 @@
 
   /* ---------- progress data, shared by the bar and the progress page ---------- */
   var dataPromise = null;
-  window.FL = window.FL || {};
-  window.FL.progress = function () {
+  var progress = function () {
     if (!dataPromise) {
       dataPromise = fetch("data/progress.json", { cache: "no-cache" }).then(function (r) {
         if (!r.ok) throw new Error("progress.json: HTTP " + r.status);
@@ -39,27 +40,36 @@
     }
     return dataPromise;
   };
-  window.FL.fmtDate = function (iso) {
-    if (!iso) return "";
+  var fmtDate = function (iso) {
+    if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso) || !Number.isFinite(Date.parse(iso))) return "—";
     var m = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     var p = iso.split("-");
     return parseInt(p[2], 10) + " " + m[parseInt(p[1], 10) - 1] + " " + p[0];
   };
 
+  Object.defineProperty(window, "FL", {
+    value: Object.freeze({ progress: progress, fmtDate: fmtDate }),
+    writable: false,
+    configurable: false
+  });
+
   /* ---------- status bar ---------- */
   var bar = document.querySelector(".bar");
   if (bar) {
     document.body.classList.add("has-bar");
-    window.FL.progress().then(function (d) {
+    progress().then(function (d) {
+      d = d || {};
+      var status = d.status || {};
       // One cell per world ever launched: sodium while it runs, grey once it has ended.
       var rail = bar.querySelector(".rail");
-      var worlds = d.worlds || [];
+      var worlds = Array.isArray(d.worlds) ? d.worlds : [];
       if (rail) {
         rail.innerHTML = "";
         worlds.forEach(function (w) {
+          w = w || {};
           var i = document.createElement("i");
           i.className = w.state === "running" ? "now" : "m";
-          i.title = w.name + " (" + w.state + ")";
+          i.title = (w.name == null ? "—" : w.name) + " (" + (["running", "ended"].indexOf(w.state) >= 0 ? w.state : "—") + ")";
           rail.appendChild(i);
         });
         if (!worlds.length) {
@@ -74,9 +84,13 @@
         }
       }
       var head = bar.querySelector("[data-head]");
-      if (head) head.innerHTML = (d.status.live ? "<b class='sig'>●</b>&nbsp;Live" : "○&nbsp;Not live");
+      if (head) head.innerHTML = status.live === true ? "<b class='sig'>●</b>&nbsp;Live" : status.live === false ? "○&nbsp;Not live" : "—";
       var ms = bar.querySelector("[data-state]");
-      if (ms) ms.innerHTML = "<b>" + d.status.headline + "</b>";
+      if (ms) {
+        var headline = document.createElement("b");
+        headline.textContent = status.headline == null ? "—" : status.headline;
+        ms.replaceChildren(headline);
+      }
     }).catch(function () {
       var ms = bar.querySelector("[data-state]");
       if (ms) ms.textContent = "Factory status unavailable";
@@ -235,7 +249,7 @@
       var step = 90;
       while (acc > step) { place(now - acc); acc -= step; }
       draw(now);
-      raf = visible ? requestAnimationFrame(loop) : 0;
+      raf = visible && !reduce.matches ? requestAnimationFrame(loop) : 0;
     };
 
     // History before the visitor arrived: most of the field already filled and faded.
@@ -249,18 +263,22 @@
       draw(now);
     };
 
+    var syncMotion = function () {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0; last = 0; acc = 0;
+      if (reduce.matches) draw(performance.now());
+      else if (visible) raf = requestAnimationFrame(loop);
+    };
     layout();
-    if (reduce.matches) {
-      still();
-    } else {
-      prefill(performance.now(), 0.6);
-      raf = requestAnimationFrame(loop);
-      if ("IntersectionObserver" in window) {
-        new IntersectionObserver(function (es) {
-          visible = es[0].isIntersecting;
-          if (visible && !raf) { last = 0; raf = requestAnimationFrame(loop); }
-        }).observe(field);
-      }
+    if (reduce.matches) still();
+    else prefill(performance.now(), 0.6);
+    syncMotion();
+    if (reduce.addEventListener) reduce.addEventListener("change", syncMotion);
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (es) {
+        visible = es[0].isIntersecting;
+        syncMotion();
+      }).observe(field);
     }
     var rt = 0;
     window.addEventListener("resize", function () {
