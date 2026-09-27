@@ -671,16 +671,19 @@ CONSTITUTION = AGENTS_REL
 def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
                    ) -> list[dict]:
     """Every change the audited range makes to an audit-policy file (``POLICY_PATHS``):
-    a commit that modifies one (its first parent had the file), once per file, oldest
-    first, with the file, the commit, its message and a diff summary (the design
-    authority's digest also with its old and new value).
+    a commit that adds, modifies, deletes or renames one, once per file, oldest first,
+    with the file, the commit, its message and a diff summary (the design authority's
+    digest also with its old and new value).
 
     Guarantees a change of audit policy is never quiet: ``world_findings`` makes each a
     mandatory HIGH POLICY-CHANGE finding in every world's triage, released only as
     POLICY with a reason. A commit that changes the essay's digest and any other file
-    is refused (``AuditInputInvalid``): a change of design authority stands alone. A
-    commit that first writes a file (its parent had none, the root of a first release)
-    establishes the policy and changes none. A merge is read by its combined diff (the
+    is refused (``AuditInputInvalid``): a change of design authority stands alone. Only
+    the first release (``from_root``, the root range) establishes policy: there a
+    commit that first writes a file changes none. In any later range an added policy
+    file is a change like any other (Codex on b075c08: a new ``tests/audit/class2_*.py``
+    a render imports would otherwise escape), and a rename is the deletion of one path
+    and the addition of another, each a change. A merge is read by its combined diff (the
     files it changes against every parent), so the side commit that made a change
     carries it.
     """
@@ -703,8 +706,8 @@ def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
                             if any(fnmatch.fnmatchcase(n, p) for p in POLICY_PATHS)}):
             old = _blob(repo, parents[0], path)
             new = _blob(repo, sha, path)
-            if old is None or old == new:
-                continue
+            if old == new or (old is None and from_root):
+                continue  # unchanged, or written first in the release that establishes
             if path == ESSAY_DIGEST_REL and set(names) != {ESSAY_DIGEST_REL}:
                 raise AuditInputInvalid(
                     f"{sha[:12]} changes the design authority ({ESSAY_DIGEST_REL}) "
@@ -714,6 +717,8 @@ def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
             summary = (f"essay digest {old} -> {new}" if path == ESSAY_DIGEST_REL
                        else f"THE CONSTITUTION changed ({stat or 'changed'})"
                        if path == CONSTITUTION else stat or "changed")
+            if old is None or new is None:
+                summary = f"{'added' if old is None else 'deleted'}: {summary}"
             change = {"sha": sha, "path": path, "summary": summary, "message": message}
             if path == ESSAY_DIGEST_REL:
                 change |= {"old": old, "new": new}

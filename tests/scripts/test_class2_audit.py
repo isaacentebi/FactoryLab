@@ -2613,6 +2613,43 @@ def test_every_policy_input_a_render_reads_is_policy(history, tmp_path, monkeypa
     assert all(_classified(p) == "policy" for p in prompt_inputs)
 
 
+def test_a_policy_file_added_deleted_or_renamed_after_the_first_release_is_a_change(
+        tmp_path):
+    """Codex on b075c08: only the first release (the root range) establishes policy. A
+    later range that adds ``tests/audit/class2_backdoor.py`` (matched by POLICY_PATHS, so
+    a render may import it) is a POLICY-CHANGE whose row the gate requires; so is a
+    deletion, and a rename (a deletion and an addition)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, "tests/audit/class2_lexicon.py", "RULES = 1\n", "root")
+    base = _commit(repo, "README.md", "x\n", "readme")
+    backdoor = "tests/audit/class2_backdoor.py"
+    added = _commit(repo, backdoor, "def scan(text):\n    return []\n", "helper")
+    (change,) = tool.policy_changes(repo, f"{base}..{added}")
+    assert (change["sha"], change["path"]) == (added, backdoor)
+    assert change["summary"].startswith("added: ")
+    # The same addition inside the first release establishes it and changes nothing.
+    assert tool.policy_changes(repo, f"{root}..{added}", from_root=True) == []
+    (finding,) = tool.world_findings([], [], {"canaries": [], "policy_changes": [change]},
+                                     WORLD)
+    assert (finding["class"], finding["file"]) == ("POLICY-CHANGE", backdoor)
+    assert tool.allowed_dispositions(finding) == {"POLICY"}
+    head_rows = ("| id | path | question | class | severity | confidence | quote | "
+                 "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
+    assert any("has no row" in p for p in tool.release_gate(head_rows, expected=[finding]))
+    _git(repo, "mv", backdoor, "tests/audit/class2_helpers.py")
+    _git(repo, "commit", "-q", "-m", "rename")
+    renamed = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "rm", "-q", "tests/audit/class2_lexicon.py")
+    _git(repo, "commit", "-q", "-m", "drop the lexicon")
+    deleted = _git(repo, "rev-parse", "HEAD")
+    later = tool.policy_changes(repo, f"{added}..{deleted}")
+    assert [(c["sha"], c["path"], c["summary"].split(":")[0]) for c in later] == [
+        (renamed, backdoor, "deleted"), (renamed, "tests/audit/class2_helpers.py", "added"),
+        (deleted, "tests/audit/class2_lexicon.py", "deleted")]
+
+
 def test_a_derived_audit_artifact_is_no_policy_change(tmp_path):
     """The files ``baseline`` regenerates change with ordinary product edits and are
     recomputed and compared anyway; the allowlist is a Justification. None is policy."""
