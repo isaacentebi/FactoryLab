@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 
+# Single writer is a kernel invariant: every owner path against every contender path
+# (the kill path contends in test_r3_f1_kill).
 @pytest.mark.parametrize("owner", ["run", "resume"])
 @pytest.mark.parametrize("contender", ["run", "resume"])
 @pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop

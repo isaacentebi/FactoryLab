@@ -55,8 +55,10 @@ def _clock():
 def test_transient_venue_outage_is_weather_not_death(tmp_path):
     """Finding 1 (part 1): one failed mids() poll on a tick must not stop the world."""
     m = _live_manifest()
+    venue = FlakyVenue()
     summary = run_world(m, events=6, seed=1, ledger_path=str(tmp_path / "w.jsonl"),
-                        provider=RecordedProvider(), exchange=FlakyVenue(), clock_source=_clock())
+                        provider=RecordedProvider(), exchange=venue, clock_source=_clock())
+    assert venue.polls > 3  # the third poll failed, and the world polled on past it
     assert summary["stats"]["events"] >= 6
 
 
@@ -94,9 +96,12 @@ def test_lone_surrogate_does_not_wedge_resume(tmp_path):
     """Finding 2 (part 2): the reply is journaled, so every resume replays the same crash."""
     m = load_manifest("scripted")
     path = str(tmp_path / "w.jsonl")
+    provider = SurrogateProvider()
+    # Five events reach the 12th producer call; the sixth runs on past the reply.
     try:
-        run_world(m, events=40, seed=1, ledger_path=path, provider=SurrogateProvider())
+        run_world(m, events=6, seed=1, ledger_path=path, provider=provider)
     except UnicodeEncodeError:
         pass
+    assert provider._done  # the cut reply was written
     summary = resume_world(m, path, provider=SurrogateProvider())
-    assert summary["stats"]["events"] >= 40
+    assert summary["stats"]["events"] >= 6

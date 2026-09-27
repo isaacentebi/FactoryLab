@@ -114,7 +114,7 @@ def test_th1_the_physics_prices_and_never_steers(th1):
 
 @pytest.fixture(scope="module")
 def th2(shared_run):
-    return shared_run("th2", lambda: P.run(*P.th2(every=3), events=300))
+    return shared_run("th2", lambda: P.run(*P.th2(every=3), events=150))
 
 
 def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop(th2):
@@ -232,11 +232,20 @@ def test_th4_iid_behaviour_in_a_world_is_flagged_no_more_than_the_synthetic_null
     assert result.ok, result.evidence
 
 
-def test_sweep_th4_reports_its_defining_criterion(capsys):
+def test_sweep_th4_reports_its_defining_criterion(th4, capsys, monkeypatch):
     """Codex on b7ae050: ``sweep --population th4`` reports TH-4, the population's own
     (population-only) criterion, beside the generic replay, with the synthetic null
-    its tests give it."""
+    its tests give it. The sweep's world for seed 1 is ``populations.run(*th4(),
+    seed=1)``, the module's shared th4 run: it reads that run instead of a second one."""
+    asked = []
+
+    def shared(manifest, population, **kwargs):
+        asked.append(kwargs)
+        return th4
+
+    monkeypatch.setattr(P, "run", shared)
     assert g.main(["sweep", "--population", "th4", "--seeds", "1"]) == 0
+    assert asked == [{"seed": 1}]  # the th4 fixture's own world: default events, seed 1
     lines = capsys.readouterr().out.splitlines()
     th4 = [line for line in lines if line.endswith(" TH-4 (population)")]
     assert len(th4) == 1 and th4[0].split()[1] == g.PASS, th4

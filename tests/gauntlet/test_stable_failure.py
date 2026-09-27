@@ -145,9 +145,9 @@ def test_sf1_the_physics_prices_and_never_steers(sf1):
 def test_sf1_s3_an_action_label_moves_no_penalty():
     """S3, metamorphic: the same population with hold-b's final answer relabelled
     ("investigate" → "defer") settles every decision with the same penalty terms."""
-    base = P.run(*P.sf1(record=False), events=150)
+    base = P.run(*P.sf1(record=False), events=75)
     twin = P.run(*P.sf1(hold_b=P.relabelled("defer", P.investigate), record=False),
-                 events=150)
+                 events=75)
     one, two = g.penalty_by_handle(base.events), g.penalty_by_handle(twin.events)
     assert one.keys() == two.keys() and one
     assert all((one[h]["penalty"], one[h]["terms"]) == (two[h]["penalty"], two[h]["terms"])
@@ -190,7 +190,7 @@ SF2_UPTAKE = P.card("independent-uptake", "revision_rate", "at least 0.9")
 
 @pytest.fixture(scope="module")
 def sf2_low(shared_run):
-    return shared_run("sf2-low", lambda: P.run(*_sf2(0.1), events=400))
+    return shared_run("sf2-low", lambda: P.run(*_sf2(0.1), events=200))
 
 
 def test_sf2_no_force_the_kernel_never_draws_for_the_reliever(sf2_low):

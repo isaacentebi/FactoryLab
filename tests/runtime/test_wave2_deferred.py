@@ -15,7 +15,6 @@ import pytest
 
 from factorylab.runtime.feedback import exposure_score
 from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE
-from factorylab.runtime.worlds import load_manifest
 from tests.runtime.test_loop import _consequence_runtime
 from tests.runtime.test_reward_chain import Population, _mids, _rows
 
@@ -48,10 +47,10 @@ def test_an_old_checkpoint_with_retired_fields_restores_and_drops_them():
     runtime fields, retired pending channels and retired records, on an old checkpoint."""
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.resume import encode, restore_runtime, runtime_state
+    from tests.conftest import make_runtime
 
-    rt = Runtime(load_manifest("scripted"), events=30, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
-    rt.run()
+    # A launched runtime's own checkpoint carries every field below: no world is run.
+    rt = make_runtime()
     state = runtime_state(rt)
     runtime = state["runtime"]["$map"]
     # Retired runtime fields: the grounded judge, the fidelity queue, the sibling share.

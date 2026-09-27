@@ -89,14 +89,11 @@ def test_a_mixed_menu_abstention_is_priced_as_the_draw_would_have_woken(monkeypa
     assert rt._abstention_roles(judges) == {"evaluator": 1.0}
 
 
-@pytest.mark.gate
-def test_every_abstention_a_world_draws_is_priced_on_the_roles_of_its_menu():
-    from factorylab.runtime.loop import Runtime
-
-    rt = Runtime(load_manifest("scripted"), events=40, seed=3, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
-    rt.run()
-    items = rt.ledger._recovery_items()
+def test_every_abstention_a_world_draws_is_priced_on_the_roles_of_its_menu(
+        scripted_runtime_run):
+    manifest = load_manifest("scripted")
+    record = scripted_runtime_run(manifest, 100, 1)  # the shared uninterrupted run
+    rt, items = record.runtime(manifest), record.entries
     opened = {i["handle"]: i for i in items if i.get("kind") == "decision.open"
               and i["propensity"]["chosen"] == NOOP and i.get("parent_handle") is None}
     assert opened

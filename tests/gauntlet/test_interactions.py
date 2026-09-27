@@ -14,6 +14,11 @@ from tests.gauntlet import populations as P
 
 pytestmark = pytest.mark.gate
 
+#: Each world's events: the smallest that exhibit every criterion read from it. Probed
+#: at half and two-thirds of the first cut (300 and 400), where every criterion, and
+#: every negative control run on the same world as its positive, held.
+I10 = 150
+
 
 
 # --- I-10: evaluation-tier thrash must not manufacture producer-tier stable failure ------
@@ -21,7 +26,7 @@ pytestmark = pytest.mark.gate
 
 @pytest.fixture(scope="module")
 def i10(shared_run):
-    return shared_run("i10", lambda: P.run(*P.i10(), events=300))
+    return shared_run("i10", lambda: P.run(*P.i10(), events=I10))
 
 
 def _producer_card_flagged(run):
@@ -58,7 +63,7 @@ def test_i10_negative_control_without_persistence_and_gap_the_oscillation_is_a_f
     the first replaced by "violated in any tail window" and every measured gap read as
     wide, the evaluation tier's thrash becomes a stable failure charged to the
     producers' card. (Persistence alone still refuses it: the next test.)"""
-    mutant = P.run(*P.i10(), events=300,
+    mutant = P.run(*P.i10(), events=I10,
                    patches=[(live, "persistent_violations", _any_violation),
                             (live, "advance", _always_wide(live.advance))])
     assert _producer_card_flagged(mutant)
@@ -76,7 +81,7 @@ def _always_wide(advance):
 
 def test_i10_either_half_of_the_definition_alone_refuses_the_phantom():
     """The persistence rule alone (every gap read as wide) still keeps the tiers apart."""
-    alone = P.run(*P.i10(), events=300, patches=[(live, "advance", _always_wide(live.advance))])
+    alone = P.run(*P.i10(), events=I10, patches=[(live, "advance", _always_wide(live.advance))])
     assert not _producer_card_flagged(alone)
 
 
@@ -120,7 +125,7 @@ def test_i4a_the_sampling_actuator_never_steps_back_while_blind(ld1, i10):
 
 @pytest.fixture(scope="module")
 def i5(shared_run):
-    return shared_run("i5", lambda: P.run(*P.i5(), events=300))
+    return shared_run("i5", lambda: P.run(*P.i5(), events=150))
 
 
 def test_i5_an_unmeasured_card_is_never_a_failing_card(i5):

@@ -697,7 +697,8 @@ def test_a_program_seat_s_decisions_commit_zero():
     from tests.cortex.test_jail import require_jail
 
     require_jail()
-    rt = Runtime(load_manifest("scripted"), events=40, seed=1, initial_balance_micro=None,
+    # Ten events already make four program calls, each metered through the jail.
+    rt = Runtime(load_manifest("scripted"), events=10, seed=1, initial_balance_micro=None,
                  ledger_path=None, router_gamma=.1, provider=Proposer())
     items = []
     append = rt.ledger.append

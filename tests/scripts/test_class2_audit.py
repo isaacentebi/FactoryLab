@@ -79,6 +79,12 @@ def _commit(repo, path, text, message):
 BEHAVIOUR_MIX = "Soften the hold wording: seats held too much in the last run"
 
 
+#: The tier (tests/conftest.py): every test here reads the seat-text scan and the history
+#: repository its autouse fixtures build once per module (about 5 s of CPU, twice the
+#: check limit), so the module is gate as a whole and runs on one worker.
+GATE_MODULE = "every test shares a 5 s autouse module setup: the seat-text scan and a git history"
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _seat_text_scan():
     """The seat-text scan every render reads (``class2_seat_text``), taken once in setup."""

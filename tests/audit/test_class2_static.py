@@ -70,6 +70,7 @@ def test_identifiers_and_enum_values_are_not_read():
     assert lexicon.lint_text("*/institutions/x", "venue.read") == []
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_planted_violations_are_caught_inside_a_real_corpus(static):
     """The mutation, end to end: each planted sentence, appended to a real leaf of its
     surface in a launch world's corpus, comes out of the lint with its rule."""
@@ -148,6 +149,7 @@ def test_an_allow_entry_whose_context_drifted_comes_back_as_review(allowlist):
         assert bool(result.review) is not excused
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_every_allow_entry_matches_a_current_finding(static, allowlist):
     """An entry that matches nothing fails, so the list cannot silently cover text that has
     since changed. Entries on rendered surfaces are checked by the gate test."""
@@ -163,6 +165,7 @@ def test_every_allow_entry_matches_a_current_finding(static, allowlist):
 # --- the static corpus against the triage baseline -------------------------------------
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 @pytest.mark.parametrize("world", WORLDS)
 def test_the_static_corpus_has_no_untriaged_finding_and_no_stale_one(world, static, allowlist):
     result = audit.triage(static[world], allowlist)
@@ -171,6 +174,7 @@ def test_the_static_corpus_has_no_untriaged_finding_and_no_stale_one(world, stat
     assert drift == {"new": [], "stale": []}, drift
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_every_static_surface_is_registered_and_every_registered_one_is_rendered(static,
                                                                                   seat):
     """The coverage registry: a new surface forces its classification; a registered surface
@@ -232,6 +236,7 @@ def test_every_request_builder_in_the_code_is_rendered_by_the_corpus():
         "a request builder the corpus never renders"
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_the_committee_requests_are_in_the_static_corpus(static):
     """The ballots and the testimony no short run reaches are rendered statically, through
     the real builders (``class2_corpus.render_governance``)."""
@@ -309,6 +314,7 @@ def seat():
     return class2_seat_text.scan()
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_every_seat_text_source_is_registered_and_rendered(seat):
     """The class, not the instance (Codex P2, ``_refuse_request``): every function whose
     text can reach a seat is registered, every registered one is still in the code, and
@@ -325,6 +331,7 @@ def test_every_seat_text_source_is_registered_and_rendered(seat):
     assert {text for _path, text in leaves} == {t.text for t in seat.texts}
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_the_seat_text_scan_reaches_what_short_runs_do_not(seat):
     """The scan finds each class of seat text on its own path: a child request's
     refusal (the reported instance), a tool dispatch's refusal, a recorded venue's
@@ -346,6 +353,7 @@ def test_the_seat_text_scan_reaches_what_short_runs_do_not(seat):
         seat.reachable)
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_the_kernel_seat_text_has_no_untriaged_finding_and_no_stale_one(seat, allowlist):
     result = audit.triage(corpus.render_seat_text(seat), allowlist)
     assert not result.review, [f.key for f in result.review]
@@ -353,6 +361,7 @@ def test_the_kernel_seat_text_has_no_untriaged_finding_and_no_stale_one(seat, al
     assert drift == {"new": [], "stale": []}, drift
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_a_seat_text_source_the_registry_lacks_fails_the_check(seat, monkeypatch):
     registry = audit.load_surfaces()
     dropped = {**registry, "seat_text": registry["seat_text"][1:]}
@@ -409,6 +418,7 @@ def test_the_renderer_collects_every_alternative_of_every_shape(source, expected
     assert class2_seat_text.snippet_texts(source) == expected
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_the_composition_refusal_the_first_branch_hid_is_in_the_corpus(seat):
     """Codex P2: composition.py's ``_draw_executor`` returns one of three refusals; the
     one in the conditional's second branch is in the corpus too."""
@@ -418,6 +428,7 @@ def test_the_composition_refusal_the_first_branch_hid_is_in_the_corpus(seat):
 
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_every_literal_a_seat_receives_in_a_payload_is_in_the_corpus(seat):
     """Codex P2: not only error and reason values: every literal placed into a request's
     text or inputs, or a seat's inbox, whatever its key, through spreads, mutations and
@@ -435,6 +446,7 @@ def test_every_literal_a_seat_receives_in_a_payload_is_in_the_corpus(seat):
 # --- Sol's coverage pass on the audit tooling (b75003b) --------------------------------------
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_cov1_every_kernel_tool_spec_is_read_connector_fetch_included(static):
     """Sol COV-1: the connector fetch tool is the kernel's (``cortex.tools.connector_spec``);
     only a population tool is excluded, by provenance. A world replaying a tape publishes
@@ -474,6 +486,7 @@ def test_cov4_population_text_is_dropped_by_provenance_never_by_substring():
     assert corpus._population_authored("I will publish the final answer", emitted, kernel)
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_cov5_a_tool_result_under_any_key_is_seat_text(seat):
     """Sol COV-5: a successful tool result's text is read whatever its key: every value a
     tool entry point returns is a payload."""
@@ -488,6 +501,7 @@ def test_cov5_a_tool_result_under_any_key_is_seat_text(seat):
 # --- Codex pass on 5ba444a: seat-bound calls read from their real signatures -------------
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_a_multi_argument_exception_is_scanned_by_its_message_arguments(seat):
     """Codex P2 (class2_seat_text.py:652): an exception is scanned by the arguments its
     constructor makes its message of, not its first. ``SectionError(section, reason,
@@ -505,6 +519,7 @@ def test_a_multi_argument_exception_is_scanned_by_its_message_arguments(seat):
         "factorylab/world/venice.py::VeniceError.__init__"]
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_a_positional_child_request_reaches_the_scan(seat):
     """Codex P2 (class2_seat_text.py:77): ``_invoke_child`` builds its ``Request``
     positionally. Its description, inputs, schema (``with_counterfactual``'s published
@@ -589,6 +604,7 @@ def _published_by_returns(seat):
     return out
 
 
+@pytest.mark.gate  # reads a whole corpus, 4 to 5 s to build once per worker
 def test_every_key_a_return_publishes_is_a_traced_seat_text(seat):
     """Codex on b6b1d1e: ``public_return`` publishes every key of a Return's outputs to
     the judges, a parent and the world block, so each is a seat-bound sink, not only
