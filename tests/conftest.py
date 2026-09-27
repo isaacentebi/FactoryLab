@@ -226,6 +226,12 @@ GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
         "65 s: SF-1 (sf1c reads the integral frozen at the cap, which a two-thirds run "
         "does not reach) with its two negative controls, and the transient world and its "
         "control, strict xfails wave 16b turns green, all at 300 events; sf2 is halved"),
+    "tests/audit/test_class2_rendered.py": (
+        "56-61 s: every launchable world's launch path run for 60 ticks on the scripted "
+        "population, each once and shared by the file's tests, and every request it sends "
+        "rendered and linted; since wave 16b the edition6 worlds reach the counter-verdict "
+        "request inside those 60 ticks, whose surfaces the audit must read (the budget "
+        "sits inside the run-to-run noise)"),
     "tests/gauntlet/test_overfitting.py": (
         "105-124 s: three 400-event worlds at about 40 s each, the fewest in which a seated "
         "adversary's holdout is proposed, trialled, balloted and activated at the steady "
