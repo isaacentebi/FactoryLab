@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -20,6 +20,7 @@ from typing import Any
 from factorylab.runtime.reasons import CredentialMissing
 from factorylab.world.clock import ClockIterator
 from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.world.exchange import fill_identity
 
 NS_PER_SECOND = 1_000_000_000
 
@@ -417,10 +418,19 @@ class LiveVenue:
                 self.through["fills"] = now_ns
         except (RuntimeError, OSError, ValueError, ArithmeticError):  # no account: read-only venue
             fills = []
+        # One key per execution (``fill_identity``), never per order: an order filled
+        # in parts is several fills, each money (Codex on #152). A checkpoint written
+        # before kept order ids here; an order it names is taken as seen only at or
+        # before the instant it had read through, never for its later parts.
+        through, occurrences = self.last_fill_ns, Counter()
         for fl in fills:
-            if fl.ts_ns < self.last_fill_ns or fl.order_id in self.seen_fills:
+            base = fill_identity(fl)
+            occurrences[base] += 1
+            key = fill_identity(fl, occurrences[base] - 1)
+            if fl.ts_ns < through or key in self.seen_fills or (
+                    fl.ts_ns <= through and fl.order_id in self.seen_fills):
                 continue
-            self.seen_fills.add(fl.order_id)
+            self.seen_fills.add(key)
             self.last_fill_ns = max(self.last_fill_ns, fl.ts_ns)
             out.append(
                 WorldEvent(
