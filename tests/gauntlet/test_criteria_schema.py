@@ -40,6 +40,8 @@ NOT_EMITTED = {
                            "captured set holds none",
     "decision.timeout": "emitted by DecisionQueue.time_out with the timeout return (its "
                         "handle as return.handle); no captured run timed a decision out",
+    "runtime.event_done": "emitted by loop.py after every event's _deliver_returns (with "
+                          "n and the pace record); the captured set holds none",
     "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
     "uptake.forecast": "emitted by runtime/uptake.py; no captured run reached it",
 }

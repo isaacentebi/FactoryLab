@@ -1701,6 +1701,29 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
     return out
 
 
+#: The rows only a round's learning writes, each naming the round's handle (TH-1c).
+LEARNING_ROWS = frozenset({"propensity.learned", "propensity.unlearned", "thrash.charged",
+                           "router.carried", "router.step_rescaled", "router.decline_priced"})
+
+
+def delivered_rounds(events: list[Mapping]) -> set[str]:
+    """The settled rounds the diary shows reached their router's learning: a
+    ``LEARNING_ROWS`` row names the handle, or a ``runtime.event_done`` / ``resume`` row
+    follows its ``decision.settle`` (loop.py delivers every settled return,
+    ``_deliver_returns``, right before it)."""
+    touched = {row.get("handle") for row in events if row.get("kind") in LEARNING_ROWS}
+    delivered: set[str] = set()
+    waiting: list[str] = []
+    for row in events:
+        kind = row.get("kind")
+        if kind == "decision.settle":
+            waiting.append(need(row, "return.handle"))
+        elif kind in ("runtime.event_done", "resume"):
+            delivered.update(waiting)
+            waiting = []
+    return delivered | {h for h in waiting if h in touched}
+
+
 @criterion("TH-1c")
 def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1c: every charge is price × the router's own movement, and every one lands.
@@ -1730,15 +1753,19 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     landed = set(counts)
     duplicated = sorted(h for h, n in counts.items() if n > 1)
     # A charge is ledgered when its round reaches the router's learning (feedback.py
-    # ``_learn_router_return`` -> ``_thrash_charged``: a seat round at its settlement, an
-    # abstention when its deferred credit is priced). A positive charge whose round has
-    # not reached it yet is pending, never missing. The charge is taken (feedback.py
-    # 2199, ``charged = self._thrash_charged(...)``) before every router-update branch
-    # that can ledger ``propensity.unlearned``: ``_apply_router_round`` (2203, its row
-    # at 2402) and the arm outside the universe (2211). So a round whose router update
-    # failed afterwards still carries its charge row: a router-learning failure never
-    # excuses a missing charge (Codex on 2ad8e46).
-    learned = {need(row, "return.handle") for row in rows_of(events, "decision.settle")}
+    # ``_learn_router_return`` -> ``_thrash_charged``: a seat round at its delivery, an
+    # abstention when its deferred credit is priced). Settlement and delivery are two
+    # ledger steps, so a settled round is required only with evidence that it reached
+    # the router: a row naming its handle that only learning writes (``LEARNING_ROWS``:
+    # feedback.py 2100 ``propensity.learned``, 2211 and 2402 ``propensity.unlearned``,
+    # 2407 ``router.carried``, ``router.step_rescaled``, ``router.decline_priced``, and
+    # ``thrash.charged`` itself), or a ``runtime.event_done`` (or ``resume``) after its
+    # settlement: loop.py 467-468 runs ``_deliver_returns`` for every settled return
+    # right before that row. A settled round with neither is pending, never missing.
+    # The charge is taken (feedback.py 2199) before every router-update branch that can
+    # ledger ``propensity.unlearned`` (``_apply_router_round`` 2203, the universe check
+    # 2211), so a failed update never excuses a missing charge (Codex on 2ad8e46).
+    learned = delivered_rounds(events)
     noops = {h for h, seat in decision_seats(events).items() if seat == "NOOP"}
     credited = {need(row, "handle") for row in rows_of(events, "router.abstention_priced")}
     learned = {h for h in learned if h not in noops} | credited
