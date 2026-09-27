@@ -2703,7 +2703,7 @@ class FeedbackMixin:
         # delay abstentions wait for and the scales they are priced on all describe
         # rounds the router learned from, never one that trained nothing.
         self._router_learned(state, target, lr.handle, prop.chosen,
-                             "direct" if target is state else "carried")
+                             "direct" if target is state else "carried", scored=settled)
         self._record_router_round(state, target, lr.handle)
         if settled:
             target.observed.record(prop.chosen, charged)
@@ -2713,15 +2713,16 @@ class FeedbackMixin:
                                 self.raw_scores.get(lr.handle, float(lr.score)))
 
     def _router_learned(self, drawer: Any, target: Any, handle: str, action: str,
-                        path: str) -> None:
+                        path: str, *, scored: bool) -> None:
         """Ledger the one ``router.learned`` row of a router round that trained (R16b-5).
 
         Observability only, never physics (the ledger is not seat-visible): the round,
         the router that drew it and the one that learned it, the drawn arm, its raw
         score, card penalty, thrash charge (``exempt: "niche"`` when a stored charge
-        was dropped by the niche rule) and learned reward, and the path that trained
-        it (``direct``, ``carried`` to a successor, or ``credit`` at its window's
-        close). Guarantees "every round learned exactly once" (essay I.a,
+        was dropped by the niche rule) and learned reward, whether a real score trained
+        it (``scored``: only those enter the router's observed mean, D4), and the path
+        that trained it (``direct``, ``carried`` to a successor, or ``credit`` at its
+        window's close). Guarantees "every round learned exactly once" (essay I.a,
         Blum-Mansour) is a diary invariant: one row per trained round, NOOP included.
         """
         value = getattr(self, "_router_round_value", None) or {}
@@ -2730,7 +2731,7 @@ class FeedbackMixin:
             value = {}
         self.ledger.append({
             "kind": "router.learned", "handle": handle, "router": drawer.learner.id,
-            "learner": target.learner.id, "action": action, "path": path,
+            "learner": target.learner.id, "action": action, "path": path, "scored": scored,
             **{k: v for k, v in value.items() if k != "handle"},
             "ts": self.clock.now_ns})
 
@@ -2832,7 +2833,7 @@ class FeedbackMixin:
                                                fb)
             if learned:
                 self._router_learned(drawer, self._successor_state(drawer), handle, action,
-                                     "credit")
+                                     "credit", scored=False)
             if learned and action != NOOP:
                 self._record_router_round(drawer, self._successor_state(drawer), handle)
 
