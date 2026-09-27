@@ -2848,3 +2848,38 @@ def test_s5b_a_learned_round_traces_to_its_routers_open():
         [_open("s0", "seat", actor="router:Other"), _learned_row("s0", 0.9), credit], M)
     assert other.status == g.FAIL and other.evidence["untraced_learned"][0]["opened_by"] == (
         "router:Other")
+
+
+def test_sf1e_a_credited_round_closes_at_its_timeout_not_where_it_was_learned():
+    """Codex on #157 (the gauntlet's mirror of Astra A): a round of router:Slow times out
+    one window after it opens, and its credit waits for a price close, so its
+    ``router.learned`` row is ledgered three windows after the open. The kernel's meter
+    closes the round at its cutoff (``closed_window``), so the router's period is 1, not
+    3; a gain climbing one step every 9 windows is then too slow for the organ's cadence
+    and fails. Read at the learned row's position, the period was 3 and it passed."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 120)]
+
+    def diary(closed_after):
+        rows = []
+        for w in range(1, 118):
+            rows.append({"kind": "price.window", "window": w})
+            if w % 5 == 0:
+                rows.append(_open(f"r{w}", "a", actor="router:Slow"))
+            if w % 5 == 1 and w > 5:
+                rows.append(_timeout(f"r{w - 1}"))
+            if w % 5 == 3 and w > 5:
+                rows.append({"kind": "router.learned", "handle": f"r{w - 3}",
+                             "router": "router:Slow", "learner": "router:Slow",
+                             "action": "a", "path": "credit", "scored": False,
+                             "closed_window": w - 3 + 1 + closed_after})
+        return rows
+
+    at_cutoff = diary(closed_after=1)  # opened in window w + 1, cut off in w + 2
+    assert g.router_round_periods(at_cutoff)["router:Slow"] == 1
+    climb = [_gain(w, round(0.1 + 0.05 * n, 2), round(0.15 + 0.05 * n, 2),
+                   router="router:Slow") for n, w in enumerate(range(3, 84, 9))]
+    assert g.sf1e_gain(at_cutoff + closes + climb, M).status == g.FAIL
+    # Negative control: a round that truly closed three windows after its open allows it.
+    at_close = diary(closed_after=3)
+    assert g.router_round_periods(at_close)["router:Slow"] == 3
+    assert g.sf1e_gain(at_close + closes + climb, M).ok

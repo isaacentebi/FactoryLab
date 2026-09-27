@@ -2721,9 +2721,11 @@ class FeedbackMixin:
         the router that drew it and the one that learned it, the drawn arm, its raw
         score, card penalty, thrash charge (``exempt: "niche"`` when a stored charge
         was dropped by the niche rule) and learned reward, whether a real score trained
-        it (``scored``: only those enter the router's observed mean, D4), and the path
+        it (``scored``: only those enter the router's observed mean, D4), the path
         that trained it (``direct``, ``carried`` to a successor, or ``credit`` at its
-        window's close). Guarantees "every round learned exactly once" (essay I.a,
+        window's close), and where its loop closed: its opening and first terminal tick
+        and the price window it closed in (``closed_window``; None when unrecorded).
+        Guarantees "every round learned exactly once" (essay I.a,
         Blum-Mansour) is a diary invariant: one row per trained round, NOOP included.
         """
         value = getattr(self, "_router_round_value", None) or {}
@@ -2733,6 +2735,12 @@ class FeedbackMixin:
         self.ledger.append({
             "kind": "router.learned", "handle": handle, "router": drawer.learner.id,
             "learner": target.learner.id, "action": action, "path": path, "scored": scored,
+            # Where the round's loop closed, as its router meter reads it (Codex on
+            # #157): opened and first terminal tick, and the price window it closed in,
+            # never the later tick or window it was learned in.
+            "opened_tick": self.queue.opened_tick(handle),
+            "closed_tick": self.queue.terminal_tick(handle),
+            "closed_window": self.queue.terminal_window(handle),
             **{k: v for k, v in value.items() if k != "handle"},
             "ts": self.clock.now_ns})
 

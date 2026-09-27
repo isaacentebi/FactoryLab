@@ -192,11 +192,19 @@ class ContractQueue:
         clock = self.runtime.decision_ticks.get(handle)
         return None if clock is None or len(clock) < 3 else clock[2]
 
+    def terminal_window(self, handle: str) -> int | None:
+        """The price window a decision's round first closed in (``terminal_tick``), or
+        None while it is open or when it closed before any window opened."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None or len(clock) < 4 else clock[3]
+
     def _close_round(self, handle: str, closed: int) -> None:
-        """Record ``handle``'s first terminal tick; a later one records nothing."""
+        """Record ``handle``'s first terminal tick and the price window open then; a
+        later terminal event records nothing."""
         clock = self.runtime.decision_ticks.get(handle)
         if clock is not None and len(clock) < 3:
-            clock.append(closed)
+            window = getattr(self.runtime, "window", None)
+            clock.extend([closed, getattr(window, "index", None)])
 
     def expire_due(self) -> list[str]:
         """Time out every pending decision whose tick cutoff has passed (time audit T3).

@@ -1396,10 +1396,13 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     rows it bounds. A round closes once: a late settlement after its timeout is not a
     second closure.
 
-    A diary that writes ``router.learned`` (R16b-5) states when each round was learned,
-    which is exactly what the kernel's meter measures (open to learned, a decline,
-    censoring or cutoff credited at its window's close included; a NOOP never): its
-    closures are read from those rows, per drawing router."""
+    A diary that writes ``router.learned`` (R16b-5) names every round the kernel's meter
+    samples (a decline, censoring or cutoff credited at its window's close included; a
+    NOOP never), and states where its loop closed: ``closed_window``, the price window
+    of its first terminal tick (the cutoff, or the tick its outcome was fixed), which is
+    what the meter measures to (Codex on #157). A round learned later, a credit waiting
+    on a price close, is never measured to where it was learned. A row without the field
+    (an older diary) is read at its own position."""
     opened = _decision_windows(events)
     if any(row.get("kind") == "router.learned" for row in events):
         window, closures = 1, defaultdict(list)
@@ -1408,8 +1411,11 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
                 window = need(row, "window") + 1
             elif row.get("kind") == "router.learned" and need(row, "action") != "NOOP":
                 start = opened.get(need(row, "handle"))
+                closed = row.get("closed_window")
+                closed = window if not isinstance(closed, int) or isinstance(closed, bool) \
+                    else closed
                 if start is not None:
-                    closures[need(row, "router")].append(max(0, window - start))
+                    closures[need(row, "router")].append(max(0, closed - start))
         return {router: max(1, sorted(values)[min(len(values) - 1,
                                                   math.ceil(0.9 * len(values)) - 1)])
                 for router, values in closures.items()}
