@@ -39,6 +39,9 @@ REVIEWED = {
         "a registration proposal's accepts is a tuple",
     ("runtime/governance.py", '"accepts": list(prop.accepts),'):
         "a registration proposal's accepts is a tuple",
+    ("cortex/schematics.py", "for owner in {d.actor, self.handle_to_assembly.get(d.handle)}:"):
+        "dedups the two owners of one decision; each owner's list gets it once, in "
+        "outstanding order, and the lists are read by seat, never iterated as a whole",
     ("runtime/loop.py", "for actor in holding:"):
         "the list delivery_actors() returns; the name is a set only further down",
 }
