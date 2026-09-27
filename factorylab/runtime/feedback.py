@@ -2368,7 +2368,11 @@ class FeedbackMixin:
         return self.ticks_consumed - (judgement.opened_at_tick or 0)
 
     def _sampling_actuator(self) -> None:
-        """The live sampling-rate actuator (essay II.IV.b: increase the sampling rate).
+        """The paid evaluation rate and standing mix adapt on their settled loop (§IV.b).
+
+        Additional-judge probability rises on measured divergence or loss of a
+        previously measured card's support; it never falls while consequence-blind.
+        Initial warm-up and never-measured cards supply no support-gap trigger.
 
         When the evaluator role's verdict mean rises while its payoff skill falls
         over the last ``immune.k`` closed windows (the offline overfitting
@@ -2401,6 +2405,7 @@ class FeedbackMixin:
             "consequence": (self._evaluator_skill()
                             if getattr(self, "last_window_consequences", 0) else None),
         })
+        gaps = self._sampling_gaps()
         k = self.m.immune.k
         del self.sampling_history[:-k]
         now, inner = self.ticks_consumed, self.cadence.consequence_period_events()
@@ -2411,6 +2416,14 @@ class FeedbackMixin:
         base, step, cap = self.ev.consequence_share, self.ev.sampling_step, self.ev.sampling_cap
         before = self.consequence_mix
         supported = sum(1 for w in self.sampling_history if w["consequence"] is not None)
+        verdict_slope = outcome_slope = None
+        if supported == k:
+            verdict_slope = slope([w["verdict"] for w in self.sampling_history])
+            outcome_slope = slope([w["consequence"] for w in self.sampling_history])
+        diverging = (verdict_slope is not None and outcome_slope is not None
+                     and verdict_slope > 0 and outcome_slope < 0)
+        # §IV.b: more evaluation draws, not merely a different standing blend.
+        self._sampling_rate(gaps, diverging, supported == k, verdict_slope, outcome_slope)
         if supported < k:
             self.sampling_blind = {"supported": supported, "needed": k,
                                    "window": self.stats.reserve_windows - 1}
@@ -2418,12 +2431,6 @@ class FeedbackMixin:
                                 "mix": before, "ts": self.clock.now_ns})
             return
         self.sampling_blind = None
-        verdict_slope = outcome_slope = None
-        if len(self.sampling_history) == k:
-            verdict_slope = slope([w["verdict"] for w in self.sampling_history])
-            outcome_slope = slope([w["consequence"] for w in self.sampling_history])
-        diverging = (verdict_slope is not None and outcome_slope is not None
-                     and verdict_slope > 0 and outcome_slope < 0)
         after = min(cap, before + step) if diverging else max(base, before - step)
         after = round(after, 12)
         if after == before:
@@ -2435,6 +2442,51 @@ class FeedbackMixin:
             "ts": self.clock.now_ns,
         })
         self.consequence_mix = after
+
+    def _sampling_gaps(self) -> dict[str, dict]:
+        """Only previously measured current metric identities can lose support."""
+        from factorylab.charter.measurement import metric_identity
+
+        support = self.sampling_card_support
+        current = {card.id: list(metric_identity(card)) for card in self.charter.cards}
+        for cid in list(support):
+            if current.get(cid) != support[cid]["meaning"]:
+                del support[cid]
+        gaps = {}
+        for cid, meaning in current.items():
+            unmeasured = self.card_unmeasured.get(cid, 0)
+            if not unmeasured and cid in self.card_samples.values:
+                support[cid] = {"meaning": meaning,
+                                "window": self.stats.reserve_windows - 1}
+            elif unmeasured and cid in support:
+                gaps[cid] = {"unmeasured_windows": unmeasured,
+                             "last_measured_window": support[cid]["window"]}
+        return gaps
+
+    def _sampling_rate(self, gaps: dict, diverging: bool, supported: bool,
+                       verdict_slope: float | None, outcome_slope: float | None) -> None:
+        """Additional paid draws rise on evidence; blindness never lowers their rate."""
+        base, cap = self.ev.multi_judge_share, self.ev.sampling_cap
+        before = self.multi_judge_share
+        if base >= cap:
+            return  # Existing manifests may already buy more draws than the adaptive cap.
+        if gaps or diverging:
+            after = min(cap, before + self.ev.sampling_step)
+        elif supported:
+            after = max(base, before - self.ev.sampling_step)
+        else:
+            return
+        after = round(after, 12)
+        if after == before:
+            return
+        self.ledger.append({
+            "kind": "sampling.rate_raise" if after > before else "sampling.rate_lower",
+            "window": self.stats.reserve_windows - 1,
+            "rate_before": before, "rate_after": after,
+            "verdict_slope": verdict_slope, "outcome_slope": outcome_slope,
+            "gaps": gaps, "ts": self.clock.now_ns,
+        })
+        self.multi_judge_share = after
 
     def _evaluator_skill(self) -> float | None:
         """The evaluators' mean consequence skill, forecasts and scored verdicts pooled

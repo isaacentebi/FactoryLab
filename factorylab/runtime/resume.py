@@ -708,7 +708,7 @@ _RUNTIME_FIELDS = (
     # Vault writes by client id, the vaults this world's seats created or hold, and
     # the cursor of the venue's vault ledger rows already read.
     "vault_intents", "vault_book", "vault_ledger_cursor_ns", "vault_ledger_seen",
-    "consequence_mix", "sampling_history",
+    "consequence_mix", "sampling_history", "multi_judge_share", "sampling_card_support",
     # Wave 16 (R-B): the last closed window's consequence count and the actuator's
     # blindness. An older checkpoint has neither: no reading, not blind yet.
     "last_window_consequences", "sampling_blind",

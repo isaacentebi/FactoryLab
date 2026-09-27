@@ -1937,6 +1937,7 @@ class SchematicsMixin:
             # Whether the sampling actuator holds the mix for want of consequence
             # readings (wave 16, R-B): {supported, needed, window}, or None.
             "sampling_blind": getattr(self, "sampling_blind", None),
+            "multi_judge_share": getattr(self, "multi_judge_share", self.ev.multi_judge_share),
             # The thrash price in force (world.mechanics.thrash_price): it moves each window.
             "thrash_price": {"lambda": thrash.get("lambda", 0.0),
                              "penalty": thrash.get("penalty", 0.0),
@@ -2267,6 +2268,18 @@ class SchematicsMixin:
                 "weighs each role by the odds its draw gave that role's seats); before the "
                 "router's first settled round r is the published prior "
                 f"{NEUTRAL_REWARD}. A seat's own learner is credited the same"
+            ),
+            "evaluation_sampling": (
+                f"Additional-judge probability starts at {ev.multi_judge_share}; its live "
+                "value is world.adaptive_scoring.multi_judge_share. On the sampling loop, "
+                "measured verdict-up/skill-down divergence or a previously measured current "
+                "metric identity losing support raises it "
+                f"by {ev.sampling_step}, capped at {ev.sampling_cap}; a starting probability "
+                "at or above that cap stays fixed. Initial warm-up and never-measured cards "
+                "are not support gaps. Without either trigger it steps toward its starting "
+                "value only with supported consequence readings; blindness never lowers it. "
+                "Additional draws retain ordinary provider bills, compute limits, family "
+                "exclusions and the router's option to wake nobody."
             ),
             "consequence_standing": (
                 "0.5 + skill, clipped to [0, 1] and capped at 0.5 below minimum coverage; "
