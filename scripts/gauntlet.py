@@ -1746,14 +1746,22 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     missing = sorted(unlanded & learned)
     pending = sorted(unlanded - learned)
     unexpected = sorted(landed - positive - priced)
+    # A charge lands on the router that drew its round (feedback.py ``_thrash_charged``
+    # books ``state.learner.id``, the drawing router): the row's router is the opening
+    # draw's actor (``router_draw``), or the charge is another router's.
+    drew = {need(row, "handle"): need(row, "actor") for row in rows_of(events, "decision.open")
+            if router_draw(row)}
+    misrouted = [{"handle": need(row, "handle"), "router": need(row, "router"),
+                  "drew": drew.get(need(row, "handle"))}
+                 for row in charged if need(row, "router") != drew.get(need(row, "handle"))]
     bad = [{"handle": need(row, "handle"), "charge": need(row, "charge"),
             "expected": amounts.get(need(row, "handle"))}
            for row in charged
            if float(need(row, "charge")) != float(amounts.get(need(row, "handle"), 0.0))]
     evidence = {"charged": len(charged), "expected_positive": len(positive),
                 "missing": missing[:5], "pending": len(pending), "unexpected": unexpected[:5],
-                "bad": bad[:5], "duplicated": duplicated[:5]}
-    if missing or unexpected or bad or duplicated:
+                "bad": bad[:5], "duplicated": duplicated[:5], "misrouted": misrouted[:5]}
+    if missing or unexpected or bad or duplicated or misrouted:
         return _result("TH-1c", False, **evidence)
     if not landed:
         return _unsupported("TH-1c", "no positive charge's round was learned yet", **evidence)

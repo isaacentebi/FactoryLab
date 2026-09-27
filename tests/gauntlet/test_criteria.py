@@ -594,6 +594,25 @@ def test_th1c_a_duplicate_charge_fails_even_at_the_right_amount():
     assert result.status == g.FAIL and result.evidence["duplicated"] == ["d2"]
 
 
+def test_th1c_a_charge_names_the_router_that_drew_its_round():
+    """Codex on 4668d58: the charge row's ``router`` is the router that opened the
+    handle (its ``decision.open`` actor, through ``router_draw``); another router's
+    name on it fails, even at the right amount."""
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7
+    ])
+    charge = {"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+              "charge": 0.4 * 0.7, "reward": 0.4}
+    assert g.th1c_movement(rows + [charge], M).ok
+    other = charge | {"router": "router:WorldUpdate"}
+    result = g.th1c_movement(rows + [other], M)
+    assert result.status == g.FAIL
+    assert result.evidence["misrouted"] == [{"handle": "d2", "router": "router:WorldUpdate",
+                                             "drew": "router:Tick"}]
+
+
 def test_th1c_checks_every_charge_even_with_no_core_kind_configured():
     """Astra G-1: with ``no_swap_regret_kinds`` empty, a ``thrash.charged`` row is still
     read against price × movement, the cap and the one-row rule, never UNSUPPORTED."""
