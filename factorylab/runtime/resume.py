@@ -133,6 +133,23 @@ def _record_types() -> dict[str, type]:
 
 def encode(value: Any) -> Any:
     """Preserve types, mapping order, integer keys and exact numeric representations in JSON."""
+    # The exact builtin types below take the same branch of the chain that follows,
+    # and no other: an exact str has no ``definition`` and ``str(value)`` is itself,
+    # and none of them is an Enum, a dataclass or a named tuple. Dispatching on them
+    # first only spares the walk the abstract checks, never a different answer.
+    kind = type(value)
+    if kind is str:
+        return value
+    if kind is dict:
+        return {"$map": [[encode(k), encode(v)] for k, v in value.items()]}
+    if kind is list:
+        return [encode(v) for v in value]
+    if kind is int:
+        return {"$int": hex(value)} if value.bit_length() > 12000 else value
+    if kind is bool or value is None:
+        return value
+    if kind is tuple:
+        return {"$tuple": [encode(v) for v in value]}
     if isinstance(value, Enum):
         return {"$enum": type(value).__name__, "value": value.value}
     if type(value) is int and value.bit_length() > 12000:
@@ -848,6 +865,8 @@ _DERIVED_STATE = {
     "Runtime._peak_observed": "the window and tick whose position peak was already "
                               "observed; a venue write drops it and a restore re-reads",
     "Runtime._prefix_memo": "the rendered cacheable prompt prefix, keyed on what it renders",
+    "Assembly._wire_memo": "rendered wire contracts, keyed on every input wire_schema reads; "
+                           "a restore starts empty and renders each one again identically",
     "Runtime._world_chars_cache": "the world block's size, keyed on the event that measured it",
     "Runtime._artifact_listing_view": "the artifact listing, rebuilt from the archive index",
     "ArtifactStore._changed": "hashes changed since the listing last drained; a restore "

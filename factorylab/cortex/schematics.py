@@ -1634,6 +1634,16 @@ class SchematicsMixin:
         # filtered from them exactly as its own call would have read them.
         outstanding = self.queue.outstanding()
         pending = self.book.pending()
+        # Each seat's rows, grouped in one pass and in the order read, so a seat's
+        # filter below sees exactly the rows it would select from the whole list,
+        # and the world block no longer scans every row once per seat.
+        decisions_of: dict[Any, list] = {}
+        for d in outstanding:
+            for owner in {d.actor, self.handle_to_assembly.get(d.handle)}:
+                decisions_of.setdefault(owner, []).append(d)
+        forecasts_of: dict[Any, list] = {}
+        for f in pending:
+            forecasts_of.setdefault(f.evaluator_id, []).append(f)
         views: list[dict[str, Any]] = []
         for seat in self.budget.seats():
             assembly = self.assemblies.get(seat)
@@ -1671,8 +1681,9 @@ class SchematicsMixin:
                     "runway_at_observed_burn": runway,
                     "next_release_reachable": reachable,
                 },
-                "open_commitments": self._open_commitments(seat, outstanding=outstanding,
-                                                            pending=pending),
+                "open_commitments": self._open_commitments(
+                    seat, outstanding=decisions_of.get(seat, []),
+                    pending=forecasts_of.get(seat, [])),
                 # §8's ``spending_authority`` slot, kernel-serialised: the same three
                 # kernel numbers ``your_resources`` renders as USD text, in the
                 # micro-USD the budget book actually holds them in, so arithmetic on
