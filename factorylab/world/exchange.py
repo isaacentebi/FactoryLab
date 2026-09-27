@@ -133,8 +133,9 @@ class FundingEvent:
     coin: str
     rate: Decimal  # per funding interval, signed
     premium: Decimal | None
-    ts_ns: int
+    ts_ns: int  # effective boundary for settled history
     mark: Decimal | None = None
+    published_at_ns: int | None = None  # exact venue stamp, not local observation time
 
 
 @dataclass(frozen=True)
@@ -1738,14 +1739,17 @@ class HyperliquidExchange:
 
     def settled_funding_history(self, coin: str, since_ns: int,
                                 until_ns: int) -> list[FundingEvent]:
-        """Settled public rates in the inclusive range, never predicted asset contexts.
+        """Settled public rates in the inclusive effective-boundary range, never predictions.
 
         Each request covers at most 100 hourly boundaries, below the venue's page
         limit. Missing publications remain absent and are retried by the live cursor.
         """
+        interval = self.funding_interval_ns
         rows: dict[int, FundingEvent] = {}
         start = since_ns // NS_PER_MS
-        end = until_ns // NS_PER_MS
+        # Chapter II §III.b: query publication time for the entire effective period,
+        # including an exact-boundary retry; local observation time stays separate.
+        end = (until_ns - until_ns % interval + interval - 1) // NS_PER_MS
         while start <= end:
             stop = min(end, start + 99 * NS_PER_HOUR // NS_PER_MS)
             raw = self._guarded("funding_history", lambda start=start, stop=stop:
@@ -1755,10 +1759,14 @@ class HyperliquidExchange:
             for row in raw:
                 stamp = int(row["time"]) * NS_PER_MS
                 rate = Decimal(str(row["fundingRate"]))
-                if not rate.is_finite() or stamp % NS_PER_HOUR:
+                boundary = stamp - stamp % interval
+                if not rate.is_finite() or stamp < 0:
                     raise ValueError("invalid settled funding boundary")
-                if since_ns <= stamp <= until_ns:
-                    rows[stamp] = FundingEvent(coin, rate, None, stamp)
+                if since_ns <= boundary <= until_ns:
+                    previous = rows.get(boundary)
+                    if previous is None or stamp >= previous.published_at_ns:
+                        rows[boundary] = FundingEvent(
+                            coin, rate, None, boundary, published_at_ns=stamp)
             start = stop + 1
         return [rows[stamp] for stamp in sorted(rows)]
 
@@ -1776,6 +1784,7 @@ class HyperliquidExchange:
                 Decimal(str(f["fundingRate"])),
                 Decimal(str(f["premium"])) if f.get("premium") is not None else None,
                 int(f["time"]) * NS_PER_MS,
+                published_at_ns=int(f["time"]) * NS_PER_MS,
             )
             for f in sorted(raw, key=lambda f: int(f["time"]))[-n:]
         ]

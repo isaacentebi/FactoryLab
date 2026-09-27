@@ -89,6 +89,57 @@ def test_live_named_outcome_waits_for_backdated_settled_rate(missing):
     assert any(start <= H // 1_000_000 <= end for _, start, end in calls)
 
 
+def test_millisecond_publication_keeps_effective_boundary_and_exact_stamp():
+    """HH:00:00.030 remains settled evidence even in an exact-boundary retry."""
+    exchange = object.__new__(HyperliquidExchange)
+    exchange.name = "synthetic-live"
+    published_ns = H + 30_000_000
+    calls = []
+
+    def history(coin, start, end):
+        calls.append((start, end))
+        return ([{"time": published_ns // 1_000_000, "fundingRate": "0.001"}]
+                if start <= published_ns // 1_000_000 <= end else [])
+
+    exchange._info = SimpleNamespace(funding_history=history)
+    exchange._guarded = lambda name, call: call()
+    rows = exchange.settled_funding_history("BTC", H, H)
+    assert len(rows) == 1
+    assert rows[0].ts_ns == H
+    assert rows[0].published_at_ns == published_ns
+    venue = LiveVenue(exchange)
+    venue.funding_oracles = {"BTC": {H: ("100", H)}}
+    events = venue._settled_rates(published_ns, {"BTC"})
+    assert len(events) == 1
+    assert events[0].ts_ns == published_ns
+    assert events[0].payload["funding_ns"] == H
+    assert events[0].payload["published_at_ns"] == published_ns
+    assert events[0].payload["mark"] == "100"
+    assert venue._settled_rates(published_ns + 1, {"BTC"}) == []
+
+
+def test_settled_history_filters_effective_range_and_keeps_latest_publication():
+    exchange = object.__new__(HyperliquidExchange)
+    exchange._guarded = lambda name, call: call()
+    exchange._info = SimpleNamespace(funding_history=lambda *args: [
+        {"time": stamp // 1_000_000, "fundingRate": rate}
+        for stamp, rate in [(2 * H + 30_000_000, "0.003"),
+                            (H + 40_000_000, "0.002"), (H + 30_000_000, "0.001")]])
+    rows = exchange.settled_funding_history("BTC", H, H)
+    assert [(row.ts_ns, row.rate, row.published_at_ns) for row in rows] == [
+        (H, Decimal("0.002"), H + 40_000_000)]
+
+
+@pytest.mark.parametrize("offset", [-1, H, 30_000_001])
+def test_live_rejects_publication_outside_effective_period_or_in_future(offset):
+    row = FundingEvent("BTC", Decimal("0.001"), None, H, published_at_ns=H + offset)
+    exchange = SimpleNamespace(name="synthetic", funding_interval_ns=H,
+                               settled_funding_history=lambda *args: [row])
+    venue = LiveVenue(exchange)
+    assert venue._settled_rates(H + 30_000_000, {"BTC"}) == []
+    assert venue.settled_emitted["BTC"] == {}
+
+
 def test_exact_funding_keeps_interpolation_without_live_settlement_requirement():
     state = {"interval": H, "cursor": H - 1, "rate": "0.001", "rates": [],
              "marks": [[H, "100", True, H]]}

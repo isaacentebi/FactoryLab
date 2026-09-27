@@ -417,6 +417,11 @@ class LiveVenue:
                 for row in rows:
                     if not start <= row.ts_ns <= end or row.ts_ns % interval:
                         continue
+                    publication = row.published_at_ns
+                    if publication is not None and not (
+                            row.ts_ns <= publication < row.ts_ns + interval
+                            and publication <= now_ns):
+                        continue
                     stamps.add(row.ts_ns)
                     oracle = self.funding_oracles.get(coin, {}).get(row.ts_ns)
                     fingerprint = (str(row.rate), oracle[0] if oracle else None,
@@ -428,6 +433,7 @@ class LiveVenue:
                         WorldEventKind.FUNDING, now_ns, self.exchange.name,
                         {"coin": coin, "rate": str(row.rate), "paid_usd": "0",
                          "funding_ns": row.ts_ns, "settled": True,
+                         "published_at_ns": publication,
                          "mark": fingerprint[1], "oracle_observed_at_ns": fingerprint[2],
                          "oracle_offset_seconds": (
                              str(Decimal(oracle[1] - row.ts_ns) / Decimal(NS_PER_SECOND))
