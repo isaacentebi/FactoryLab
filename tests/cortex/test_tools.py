@@ -277,15 +277,15 @@ def test_population_tool_is_frozen_and_spec_only_exposes_public_fields():
     assert replace(tool, provenance="another-decision").provenance == "another-decision"
 
 
-@pytest.mark.parametrize("price", [50, 0])
-def test_a_population_tool_or_calc_cannot_be_given_a_price(price):
-    """Wave 11: a jailed tool pays no one, so no price can be stamped on it."""
+def test_a_population_tool_or_calc_cannot_be_given_a_price():
+    """Wave 11: a jailed tool pays no one, so no price can be stamped on it: the
+    signature takes none (any value, zero included, is the same TypeError)."""
     from factorylab.cortex.tools import calc_spec
 
     with pytest.raises(TypeError):
-        as_spec(_tool(), price)
+        as_spec(_tool(), 50)
     with pytest.raises(TypeError):
-        calc_spec(price)
+        calc_spec(50)
     assert calc_spec()["price_micro_per_call"] == 0
 
 

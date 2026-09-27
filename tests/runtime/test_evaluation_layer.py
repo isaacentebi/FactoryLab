@@ -767,9 +767,11 @@ def test_an_adversary_that_can_read_no_chain_is_refused():
     only_haiku = replace(base, assemblies=tuple(
         replace(a, model_id="fake-haiku") if a.role == "producer" else a
         for a in base.assemblies) + (blind,))
-    problems = only_haiku.evaluator_population_problems()
-    assert any("adversarial judge adv-a" in p for p in problems) or any(
-        "fake-haiku" in p for p in problems)
+    (problem,) = only_haiku.evaluator_population_problems()
+    assert problem.startswith("adversarial judge adv-a (fake-haiku) can read no Verdict")
+    # The same roster without the adversary has nothing to refuse: the problem is its own.
+    without = replace(only_haiku, assemblies=only_haiku.assemblies[:-1])
+    assert without.evaluator_population_problems() == []
 
 
 @pytest.mark.gate
