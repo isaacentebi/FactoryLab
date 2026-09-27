@@ -430,8 +430,12 @@ class VenueMixin:
         Guarantees every instant ``_rate_at`` can yet be asked for is at or after its
         instrument's value: a named trade still frozen (``reference_mids``) needs its
         decision, its opening and its horizon; an acting return whose outcome is not
-        fixed needs its opening and its horizon for every perp or spot lot it holds
-        (``lots._exit_rates_for``). An instrument nothing open holds is absent.
+        fixed needs its opening and its horizon for every perp or spot instrument it
+        holds now or held at any recorded fact (``_instruments_of``: the history its
+        grade at H is derived from, ``_states_at_horizon``), so a lot open at H and
+        closed after it keeps its rate at H until the payoff is fixed (Codex on #152);
+        ``lots._exit_rates_for`` asks for exactly those. An instrument nothing open
+        holds or held is absent.
         """
         needs: dict[str, int] = {}
 
@@ -450,12 +454,13 @@ class VenueMixin:
             # The horizon the book itself asks its exit rates at (``_exit_rates_for``);
             # without one it asks at the present, which the latest read answers.
             horizon = getattr(consequences, "horizon_ns", None) or 0
-            opened = {account.handle: account.opened_at_ns for account in table.returns
-                      if account.payoff is None and not account.voided}
-            for lot in table.lots:
-                at = opened.get(lot.handle)
-                if lot.market in VENUE_FEE_MARKETS and at is not None:
-                    need(lot.coin, at, at + horizon)
+            for account in table.returns:
+                at = account.opened_at_ns
+                if account.payoff is not None or account.voided or at is None:
+                    continue
+                for coin, market in sorted(consequences._instruments_of(account.handle)):
+                    if market in VENUE_FEE_MARKETS:
+                        need(coin, at, at + horizon)
         return needs
 
     def _rate_at(self, instrument: str, at_ns: int) -> str | None:

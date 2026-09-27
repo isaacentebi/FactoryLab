@@ -128,6 +128,56 @@ def test_an_unjudged_acting_return_s_outcome_is_kept_once_in_all_three():
     assert later.base_rate == 1.0 and later.support == 1  # entered, and once
 
 
+def test_a_lot_open_at_h_closed_after_it_keeps_its_rate_at_h_until_graded():
+    """Codex on #152 (e88253f): the long is open at H and closes after H, before the
+    mid at H arrives. It is graded from its state at H, so its instrument's rate at H
+    is still needed although the lot has left the table: a fee read in between (the
+    rate falls from 4.5 bp to 3.5 bp) keeps it, and the exit fee is the rate at H,
+    never fee_unknown."""
+    from factorylab.kernel.queue import PropensityRecord
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    start = rt.clock.now_ns
+    at_h = start + rt._horizon_ns()
+
+    def listing():
+        rate = "0.00045" if rt.clock.now_ns <= at_h else "0.00035"
+        return {"perp": [{"coin": "BTC", "taker_fee_rate": rate}], "spot": []}
+
+    rt.exchange.instruments = listing
+    rt.fee_schedule = None
+    rt._read_fee_schedule()
+    prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
+    handle = rt.queue.open(actor="router:Tick", event_id="held", propensity=prop,
+                           channel="verdict", deadline_ns=start + 10**18,
+                           parent_handle=None, cost_ceiling=0)
+    rt.consequences.start(handle, rt.n)
+    rt.consequences.order_result(handle, {"status": "filled", "order_id": "o-open",
+                                          "filled_size": "0.001"}, {"size": "0.001"}, rt.n)
+    rt.consequences.order_result(handle, {"status": "resting", "order_id": "o-close",
+                                          "filled_size": "0"}, {"size": "0.001"}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o-open", "coin": "BTC", "is_buy": True,
+                                     "size": "0.001", "px": "60000", "fee_usd": "0",
+                                     "ts_ns": start}, rt.n)
+    rt.consequences.finish(handle, 0)
+    rt.consequences.observe("Fill", {"order_id": "o-close", "coin": "BTC", "is_buy": False,
+                                     "size": "0.001", "px": "61000", "fee_usd": "0",
+                                     "ts_ns": at_h + 5}, rt.n)
+    assert not rt.consequences.table.lots  # closed after H: gone from the table
+    rt.clock.now_ns = at_h + 10
+    rt._read_fee_schedule()  # would have pruned the rate in force at H
+    assert rt._rate_at("BTC", at_h) == "0.00045"
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "61000", "ts_ns": at_h}, rt.n)
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "61000",
+                                          "ts_ns": at_h + 11}, rt.n)
+    rt.clock.now_ns = at_h + 11
+    rt.consequences.resolve(rt.n)
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and payoff.censored is None and payoff.marked
+    assert payoff.exit_fee_micro == 27_450  # 61 USD notional at 0.00045
+
+
 def test_a_resting_order_filled_at_h_in_the_batch_of_the_mid_at_h_is_marked_by_it():
     """A venue emits MarketMid(H) before the Fill a resting order makes at H, in the
     same batch (Codex on #152, fee12ff). The lot did not exist when the mid arrived,
