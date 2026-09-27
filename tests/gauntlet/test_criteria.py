@@ -203,6 +203,28 @@ def test_sf1a_rebases_the_demand_to_the_first_whole_tail_after_sparse_observatio
     # One window past it fails.
     late = g.sf1a_detection(rows + [_w(i, sf=i >= 31) for i in range(1, 45)], M, card="c")
     assert late.status == g.FAIL
+    # Astra's counterexample: dense from 22 to 100; a flag only at 100 fails.
+    dense = [_price_window(w, 0.0) for w in (*range(1, 22, 2), *range(22, 101))]
+    only_100 = g.sf1a_detection(dense + [_w(i, sf=i == 100) for i in range(1, 104)], M,
+                                card="c")
+    assert only_100.status == g.FAIL and only_100.evidence["failed"][0]["deadline"] == 30
+
+
+def test_sf1a_counts_no_flag_before_support_and_none_in_an_unsupported_episode():
+    """Sol on #157: a flag before the episode's support is not a detection of it, so an
+    organ that flagged once at window 5 and never after support (23) fails; and an
+    episode that never had a whole measured tail demands nothing and is never passed by
+    a stray flag in it: unsupported."""
+    rows = [_price_window(w, 0.0) for w in (*range(1, 22, 2), *range(22, 41))]
+    early = g.sf1a_detection(rows + [_w(i, sf=i == 5) for i in range(1, 45)], M, card="c")
+    assert early.status == g.FAIL and early.evidence["failed"][0]["first_flag"] is None
+    both = g.sf1a_detection(rows + [_w(i, sf=i in (5, 28)) for i in range(1, 45)], M,
+                            card="c")
+    assert both.ok and both.evidence["detected"][0]["first_flag"] == 28
+    sparse = [_price_window(w, 0.0) for w in range(1, 41, 2)]  # never a whole tail
+    stray = g.sf1a_detection(sparse + [_w(i, sf=i == 25) for i in range(1, 45)], M,
+                             card="c")
+    assert stray.status == g.UNSUPPORTED, stray.evidence
 
 
 def _ratchets(*pairs):

@@ -999,9 +999,10 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
     an episode whose support comes later, after sparse observations, is rebased to keep
     that slack: its deadline is the ``H - k + 1``-th measured violation after its
     support, never earlier than the ``H + 1``-th overall (Codex on #157: discarding the
-    deadline let an organ that never flags escape as unsupported). An episode measured
-    intermittently throughout has no support and is no evidence here (it escapes the
-    ratchet: answered by the sampling rate, a later wave).
+    deadline let an organ that never flags escape as unsupported). Only a flag at or
+    after support counts. An episode measured intermittently throughout has no support
+    and is no evidence here, a stray flag in it included (it escapes the ratchet:
+    answered by the sampling rate, a later wave).
     """
     ph = physics(manifest)
     violated = card_violations(events, card)
@@ -1014,8 +1015,12 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
     detected, failed, short = [], [], []
     for observed, end in episodes:
         onset = observed[0]
-        first = min((w for w in flags if onset <= w <= end), default=None)
         support = min((w for w in observed if w in full), default=None)
+        # A flag counts from support on (Sol on #157): one before it is not a reading of
+        # a tail the kernel could enter, and an episode never supported demands nothing
+        # and detects nothing, whatever stray flag it carries.
+        first = None if support is None else min(
+            (w for w in flags if support <= w <= end), default=None)
         due = None if support is None else max(
             ph.H, observed.index(support) + ph.H - ph.k + 1)
         deadline = observed[due] if due is not None and len(observed) > due else None
