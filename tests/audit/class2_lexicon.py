@@ -199,6 +199,21 @@ def allowlist_problems(allowlist: dict) -> list[str]:
         if ("question" in entry) != ("class" in entry):
             problems.append(f"a question without its class, or a class without its "
                             f"question: {path!r}")
+        # A cross-leaf entry (a Q11 set) binds its complete sorted leaf set and names,
+        # for each leaf, the quote and the context words it excuses there.
+        if "leaf_ids" in entry or "leaves" in entry:
+            ids, leaves = entry.get("leaf_ids"), entry.get("leaves")
+            well = (isinstance(ids, list) and len(ids) >= 2 and len(set(ids)) == len(ids)
+                    and all(isinstance(i, str) and i for i in ids)
+                    and isinstance(leaves, list)
+                    and sorted(str(x.get("leaf_id")) for x in leaves
+                               if isinstance(x, dict)) == sorted(ids)
+                    and all(isinstance(x, dict) and str(x.get("quote", "")).strip()
+                            and isinstance(x.get("context_words"), list)
+                            and x["context_words"] for x in leaves))
+            if not well:
+                problems.append(f"a cross-leaf entry names its whole leaf set, each leaf "
+                                f"with its quote and context_words: {path!r}")
     return problems
 
 

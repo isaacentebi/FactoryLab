@@ -113,6 +113,25 @@ def test_a_malformed_allowlist_entry_is_refused():
     assert any("context_words" in p for p in problems)
 
 
+def test_a_cross_leaf_allow_entry_names_its_whole_set():
+    """Codex on 0f40a8d: a Q11 entry binds its complete leaf set, each leaf with its
+    quote and context words; a partial or unkeyed one is malformed."""
+    base = {"rule": "IMP", "path": "*/tools/x", "quote": "hold", "reason": "r",
+            "passage": "§I (contract / I/O)", "context_words": ["hold"], "question": "Q11",
+            "class": "C2"}
+    leaves = [{"leaf_id": "a", "quote": "hold", "context_words": ["hold"]},
+              {"leaf_id": "b", "quote": "keep", "context_words": ["keep"]}]
+    good = base | {"leaf_ids": ["a", "b"], "leaves": leaves}
+    assert lexicon.allowlist_problems({"collocation": [], "allow": [good]}) == []
+    for bad in (base | {"leaf_ids": ["a", "b"], "leaves": leaves[:1]},
+                base | {"leaf_ids": ["a"], "leaves": leaves[:1]},
+                base | {"leaves": leaves},
+                base | {"leaf_ids": ["a", "b"],
+                        "leaves": [leaves[0], leaves[1] | {"context_words": []}]}):
+        assert any("whole leaf set" in p
+                   for p in lexicon.allowlist_problems({"collocation": [], "allow": [bad]}))
+
+
 def test_an_allow_entry_whose_context_drifted_comes_back_as_review(allowlist):
     """Astra M-4: the same quote at the same path, with its surroundings rewritten so the
     context words are gone, is no longer excused; it is a finding again, as REVIEW."""

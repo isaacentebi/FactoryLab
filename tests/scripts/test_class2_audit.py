@@ -1956,6 +1956,48 @@ def test_an_allowlist_entry_backs_only_the_finding_of_its_question_and_class(tri
         assert bool(problems) is not ok, problems
 
 
+def test_an_allow_on_a_q11_set_binds_the_whole_set(rendered):
+    """Codex on 0f40a8d: an ALLOW on a cross-leaf (Q11) finding binds its complete
+    sorted leaf set, each leaf's quote and context read again in the corpus. An entry
+    for the benign anchor alone, or for a set with a leaf added or removed, releases
+    nothing; neither does one whose context drifted in any leaf."""
+    out, key = rendered
+    records = {r["leaf_id"]: r for r in _records(out)}
+    planted = set().union(*map(tool.finding_leaves, key["canaries"]))
+    lenses = sorted(i for i, r in records.items()
+                    if r["surface_kind"] == "system" and i not in planted
+                    and len(r["text"].split()) >= 3)[:3]
+    assert len(lenses) == 3
+    finding = _set_finding(records, lenses[:2])
+    row = (f"| {finding['finding_id']} | `{finding['path']}` | Q11 | C2 | "
+           f"{finding['severity']} | both samples | x | ALLOW | a published prior |")
+    head = ("| id | path | question | class | severity | confidence | quote | "
+            "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
+    text = head + row + "\n"
+
+    def leaf(i, words=None):
+        body = records[i]["text"].split()
+        return {"leaf_id": i, "quote": " ".join(body[:3]),
+                "context_words": words or [body[0]]}
+    anchor = {"path": finding["path"], "quote": finding["quote"], "question": "Q11",
+              "class": "C2", "context_words": [finding["quote"].split()[0]]}
+    whole = anchor | {"leaf_ids": sorted(lenses[:2]),
+                      "leaves": [leaf(i) for i in lenses[:2]]}
+
+    def problems(entry):
+        return tool.disposition_problems(text, [finding], rejected=[], records=records,
+                                         allowlist={"collocation": [], "allow": [entry]})
+    assert any("complete leaf set" in p for p in problems(anchor))
+    assert problems(whole) == []
+    wider = anchor | {"leaf_ids": sorted(lenses), "leaves": [leaf(i) for i in lenses]}
+    assert any("complete leaf set" in p for p in problems(wider))
+    drifted = whole | {"leaves": [leaf(lenses[0]),
+                                  leaf(lenses[1], ["zzqx-not-in-this-leaf"])]}
+    assert any("every leaf of the set" in p for p in problems(drifted))
+    partial = whole | {"leaves": [leaf(lenses[0])]}
+    assert any("every leaf of the set" in p for p in problems(partial))
+
+
 def test_an_allow_whose_context_drifted_is_refused_at_gate(triaged):
     """Codex on d1f0903: the gate re-reads the finding's current corpus leaf; an entry
     whose context_words no longer stand near its quote, or whose quote is gone from the

@@ -189,7 +189,11 @@ the skeleton):
   drift, the entry stops excusing the finding and it returns as REVIEW). The entry
   backs the finding only when it is committed in the release commit gated: the gate
   reads the allowlist from that commit, never the worktree, so an entry added after
-  the render means commit, re-render, re-audit.
+  the render means commit, re-render, re-audit. An ALLOW on a cross-leaf (Q11) finding
+  binds the complete set: the entry names its sorted `leaf_ids` and, in `leaves`, each
+  leaf's `quote` and `context_words`, every one read again in the current corpus; a set
+  with a leaf added or removed, or a leaf whose context drifted, is not excused, and an
+  entry for one benign lens never releases the set.
 - **REJECT.** The auditor is wrong. The finding goes to `rejected.jsonl` by its full
   identity (`finding_id`, `question`, `class`), its `path` and the `reason`
   and is input 4 at the next release. Like an ALLOW entry, the record backs the REJECT

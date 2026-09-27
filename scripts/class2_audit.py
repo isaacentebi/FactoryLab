@@ -2180,6 +2180,21 @@ def allowed_dispositions(finding: dict) -> frozenset[str]:
     return frozenset({"FIX", "ALLOW", "REJECT"})
 
 
+def _set_entry_stands(entry: dict, records: dict[str, dict]) -> bool:
+    """Whether a cross-leaf allowlist entry's ``leaves`` (one ``{leaf_id, quote,
+    context_words}`` per leaf of its ``leaf_ids``) each stand in that leaf of the current
+    corpus (``allowed_in_context``)."""
+    leaves = entry.get("leaves")
+    ids = sorted(entry.get("leaf_ids") or ())
+    if not isinstance(leaves, list) or not all(isinstance(x, dict) for x in leaves):
+        return False
+    by_id = {str(x.get("leaf_id")): x for x in leaves}
+    if sorted(by_id) != ids or len(leaves) != len(ids):
+        return False
+    return all(i in records and allowed_in_context(str(records[i].get("text", "")), by_id[i])
+               for i in ids)
+
+
 def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
                          rejected: list[dict], repo: Path | None = None,
                          release: str | None = None,
@@ -2214,8 +2229,21 @@ def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
                         and entry.get("quote", "\0") in str(f.get("quote", ""))
                         and (entry.get("question"), entry.get("class")) == ident[1:]]
             leaf = (records or {}).get(str(f.get("leaf_id")))
-            if leaf is None and f.get("question") in CROSS_LEAF:
-                leaf, _why = _anchor_leaf(f, records or {})
+            if f.get("question") in CROSS_LEAF:
+                # A cross-leaf finding is the whole set: an entry binds the complete
+                # sorted leaf set, and each of its leaves' quote and context is read
+                # again in the current corpus (Codex on 0f40a8d). A benign anchor
+                # alone never releases a multi-lens objective.
+                covering = [e for e in covering
+                            if sorted(e.get("leaf_ids") or ()) == sorted(f.get("leaf_ids")
+                                                                          or ())]
+                if not covering:
+                    problems.append(f"{ident}: ALLOW with no allowlist entry binding its "
+                                    "complete leaf set (leaf_ids)")
+                elif not any(_set_entry_stands(entry, records or {}) for entry in covering):
+                    problems.append(f"{ident}: ALLOW whose allowlist entry's quote or "
+                                    "context_words no longer stand in every leaf of the set")
+                continue
             if not covering:
                 problems.append(f"{ident}: ALLOW with no allowlist entry covering its "
                                 "path, quote, question and class")
