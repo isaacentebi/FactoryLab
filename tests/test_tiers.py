@@ -43,6 +43,14 @@ def runs_something_else():
     Executor(venue).run()
     subprocess.run(["git", "status"])
 
+def runs_a_proof_not_a_world():
+    runner = proof(tmp_path, fake)
+    runner.run()
+
+def resumes_a_world():
+    resumed = resume_runtime(m, path)
+    resumed.run()
+
 def via_run_world():
     run_world(m, events=5, seed=1)
 
@@ -69,7 +77,8 @@ def imports_run_world_only():
 def test_only_a_running_loop_is_a_world_however_the_runtime_is_built():
     assert _world_functions(ast.parse(SOURCE)) == {
         "runs_its_loop", "runs_a_built_runtime", "via_run_world", "via_the_cli",
-        "via_a_helper", "via_the_operator_rehearsal", "relaunch", "via_a_rehearsal_helper"}
+        "via_a_helper", "via_the_operator_rehearsal", "relaunch", "via_a_rehearsal_helper",
+        "resumes_a_world"}  # a non-runtime object's .run() (a proof runner) stays check
 
 
 def test_a_world_run_by_a_helper_of_another_test_module_is_a_world():

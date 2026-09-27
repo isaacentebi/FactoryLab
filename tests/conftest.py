@@ -238,12 +238,20 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
-def _runs_world_here(call: ast.Call, builders=frozenset({"Runtime"})) -> bool:
+#: Calls that return a runtime ready to run: its constructor and a resume.
+_RUNTIME_BUILDERS = frozenset({"Runtime", "resume_runtime"})
+
+
+def _runs_world_here(call: ast.Call, builders=_RUNTIME_BUILDERS,
+                     runtimes=frozenset()) -> bool:
     """Whether one call, read on its own, starts a world's event loop.
 
     Building a ``Runtime`` is not a world, whatever its events budget: only running
-    its loop is (``rt.run()``, ``Runtime(...).run()`` or ``f(...).run()`` where ``f``
-    is one of ``builders``, ``run_world``, or the CLI).
+    its loop is (``rt.run()`` where ``rt`` is one of ``runtimes``, the variables this
+    function assigned from a builder; ``Runtime(...).run()`` or ``f(...).run()`` where
+    ``f`` is one of ``builders``; ``run_world``; or the CLI). Any other object's
+    ``.run()`` is not read as a world: the runtime world guard catches a world this
+    static read misses.
     """
     name = _call_name(call)
     if name in _WORLD_ENTRY_POINTS:
@@ -252,7 +260,7 @@ def _runs_world_here(call: ast.Call, builders=frozenset({"Runtime"})) -> bool:
             and not call.args and not call.keywords):
         receiver = call.func.value
         if isinstance(receiver, ast.Name):
-            return receiver.id != "subprocess"  # ``rt.run()``: the loop itself
+            return receiver.id in runtimes  # ``rt.run()``: the loop itself
         if isinstance(receiver, ast.Call):
             return _call_name(receiver) in builders
     # The CLI, in process or as a child: ``main(["run", ...])`` or ``[..., "resume", ...]``.
@@ -318,11 +326,20 @@ def _world_functions(tree: ast.Module, world_functions_of=None) -> set[str]:
     imported = (_imported_world_calls(tree, world_functions_of)
                 if world_functions_of is not None else frozenset())
     # A helper that builds a Runtime: ``_runtime(path).run()`` runs its loop.
-    builders = frozenset({"Runtime"} | {name for name, found in calls.items()
-                                        if any(_call_name(c) == "Runtime" for c in found)})
+    builders = _RUNTIME_BUILDERS | {name for name, found in calls.items()
+                                    if any(_call_name(c) in _RUNTIME_BUILDERS
+                                           for c in found)}
+
+    def runtimes(node) -> frozenset[str]:
+        """The names this function binds to a builder's result (``rt = Runtime(...)``)."""
+        return frozenset(
+            target.id for assign in ast.walk(node) if isinstance(assign, ast.Assign)
+            and isinstance(assign.value, ast.Call) and _call_name(assign.value) in builders
+            for target in assign.targets if isinstance(target, ast.Name))
+
     world = {name for name, found in calls.items()
-             if any(_runs_world_here(c, builders) or _spelling(c) in imported
-                    for c in found)}
+             if any(_runs_world_here(c, builders, runtimes(functions[name]))
+                    or _spelling(c) in imported for c in found)}
     changed = True
     while changed:
         changed = False
