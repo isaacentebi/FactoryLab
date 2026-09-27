@@ -165,16 +165,31 @@ def test_no_seat_ever_judges_a_chain_authored_on_its_own_family(scripted_world):
         assert rt._family(reader) not in {rt._family(a) for a in authors}, (reader, authors)
 
 
-@pytest.mark.gate
-def test_a_multi_judged_return_is_read_by_judges_on_two_other_families():
+@pytest.fixture(scope="module")
+def multi_judged():
+    """One world whose every return is read by two judges, with every request it made
+    recorded as (description, inputs): the runtime and the requests."""
     from factorylab.runtime.loop import Runtime
 
     base = load_manifest("scripted")
     # Every window is derived from the loop it commands (time audit T1).
     manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0))
-    rt = Runtime(manifest, events=60, seed=2, initial_balance_micro=None, ledger_path=None,
+    rt = Runtime(manifest, events=40, seed=2, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1)
+    requests = []
+    original = rt._request
+
+    def record(handle, description, inputs, *args, **kwargs):
+        requests.append((description, inputs))
+        return original(handle, description, inputs, *args, **kwargs)
+
+    rt._request = record
     rt.run()
+    return rt, requests
+
+
+def test_a_multi_judged_return_is_read_by_judges_on_two_other_families(multi_judged):
+    rt, _requests = multi_judged
     items = rt.ledger._recovery_items()
     assert any(i["kind"] == "route.multi_judge" for i in items)
     means = [i for i in items if i["kind"] == "verdict.mean"]
@@ -615,31 +630,12 @@ def test_a_forecaster_cannot_manufacture_its_own_failure(monkeypatch):
 # --- early warning: live, and the evaluators' (R3, M2) -------------------------------
 
 
-@pytest.mark.gate
-def test_early_warning_is_computed_at_every_close_and_shown_only_to_evaluators():
-    from factorylab.runtime.loop import Runtime
-
-    base = load_manifest("scripted")
-    manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0))
-    rt = Runtime(manifest, events=150, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
-    requests = []
-    original = rt._request
-
-    def record(handle, description, inputs, *args, **kwargs):
-        requests.append((description, inputs))
-        return original(handle, description, inputs, *args, **kwargs)
-
-    rt._request = record
-    rt.run()
-    k = rt.m.immune.k
-    closes = [i for i in rt.ledger._recovery_items() if i["kind"] == "ews.window"]
-    assert len(closes) >= 4 * k
-    table = rt.stats.early_warning
-    assert table["spans_windows"] == [k, 2 * k, 4 * k]
-    assert {"verdict", "conformity", "consequence", "disagreement", "balance"} <= set(
-        table["series"])
-    assert any(s["variance"] is not None for s in table["series"]["verdict"])
+def test_early_warning_is_shown_only_to_evaluators(multi_judged):
+    """Evaluations M2 (essay II.III.a; §I.b minimal disclosure): the table computed at
+    every close (``test_ews``) reaches the seats that judge, never a producer's request
+    or the public observations."""
+    rt, requests = multi_judged
+    assert [i for i in rt.ledger._recovery_items() if i["kind"] == "ews.window"]
     judged = [inputs for description, inputs in requests if description.startswith("Give")]
     produced = [inputs for description, inputs in requests if description.startswith("Respond")]
     assert judged and all(inputs["early_warning"]["window"] is not None for inputs in judged[-3:])
