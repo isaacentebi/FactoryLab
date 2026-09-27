@@ -185,6 +185,26 @@ def test_sf1a_counts_measured_observations_and_expires_with_the_tail():
     assert {e["observations"] for e in result.evidence["episodes"]} == {1}
 
 
+def test_sf1a_rebases_the_demand_to_the_first_whole_tail_after_sparse_observations():
+    """Codex on #157: an episode holds more than H sparse observations (every other
+    window, 1-21: eleven) before its first whole k-window tail (21, 22, 23: support at
+    23). The demand is rebased there, keeping the slack a fully measured episode gets
+    (H - k + 1 = 7 observations after support: window 30), so an organ that never flags
+    fails and is never read as unsupported."""
+    rows = [_price_window(w, 0.0) for w in (*range(1, 22, 2), *range(22, 41))]
+    never = g.sf1a_detection(rows + [_w(i) for i in range(1, 45)], M, card="c")
+    assert never.status == g.FAIL, never.evidence
+    (episode,) = never.evidence["failed"]
+    assert (episode["support"], episode["deadline"]) == (23, 30)
+    # Negative control: an organ that flags within the rebased deadline passes.
+    within = g.sf1a_detection(rows + [_w(i, sf=i >= 30) for i in range(1, 45)], M,
+                              card="c")
+    assert within.ok and within.evidence["detected"][0]["deadline"] == 30
+    # One window past it fails.
+    late = g.sf1a_detection(rows + [_w(i, sf=i >= 31) for i in range(1, 45)], M, card="c")
+    assert late.status == g.FAIL
+
+
 def _ratchets(*pairs):
     return [{"kind": "immune.price_ratchet", "card_id": "c", "window": w, "duration": d,
              "lambda_after": 1.0} for w, d in pairs]

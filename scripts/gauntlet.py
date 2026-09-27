@@ -992,10 +992,16 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
     evidence. ``pass`` needs one detected episode and no failed one.
 
     The kernel enters a card into the failing attractor only over a tail that measured
-    it in every window (R16b-10: a gap is neither compliance nor violation), so an
-    episode is demanded only once, by its deadline, some window's whole ``k``-window tail
-    measured the card violating; one measured intermittently throughout is no evidence
-    here (it escapes the ratchet: answered by the sampling rate, a later wave).
+    it in every window (R16b-10: a gap is neither compliance nor violation), so the
+    demand starts where some window's whole ``k``-window tail first measured the card
+    violating (its *support*). A fully measured episode has support at its ``k``-th
+    observation and its deadline at its ``H + 1``-th, ``H - k + 1`` observations later;
+    an episode whose support comes later, after sparse observations, is rebased to keep
+    that slack: its deadline is the ``H - k + 1``-th measured violation after its
+    support, never earlier than the ``H + 1``-th overall (Codex on #157: discarding the
+    deadline let an organ that never flags escape as unsupported). An episode measured
+    intermittently throughout has no support and is no evidence here (it escapes the
+    ratchet: answered by the sampling rate, a later wave).
     """
     ph = physics(manifest)
     violated = card_violations(events, card)
@@ -1009,11 +1015,12 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
     for observed, end in episodes:
         onset = observed[0]
         first = min((w for w in flags if onset <= w <= end), default=None)
-        deadline = observed[ph.H] if len(observed) > ph.H else None
-        if deadline is not None and not any(onset <= w <= deadline for w in full):
-            deadline = None  # never a whole measured tail by then: not demanded
+        support = min((w for w in observed if w in full), default=None)
+        due = None if support is None else max(
+            ph.H, observed.index(support) + ph.H - ph.k + 1)
+        deadline = observed[due] if due is not None and len(observed) > due else None
         entry = {"onset": onset, "observations": len(observed), "end": end,
-                 "first_flag": first, "deadline": deadline, "H": ph.H}
+                 "support": support, "first_flag": first, "deadline": deadline, "H": ph.H}
         if first is not None and (deadline is None or first <= deadline):
             detected.append(entry)
         elif first is not None or deadline is not None:
