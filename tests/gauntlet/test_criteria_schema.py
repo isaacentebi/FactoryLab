@@ -586,3 +586,15 @@ def test_s3_is_registered_and_replay_names_it_unsupported():
     s3 = [r for r in g.replay(rows) if r.name == "S3"]
     assert len(s3) == 1 and s3[0].status == g.UNSUPPORTED
     assert s3[0].evidence["why"] == g.POPULATION_METAMORPHIC["S3"]
+
+
+# --- Codex on b7ae050: sweep runs each population's defining criteria ------------------
+
+
+def test_every_defining_criterion_is_a_sweepable_populations_and_population_only():
+    """``sweep`` dispatches each sweepable population's defining criteria (``DEFINING``);
+    each one it names belongs to a population ``sweep`` runs."""
+    from tests.gauntlet import populations as P
+
+    assert set(P.DEFINING) <= P.SWEEPABLE
+    assert {"th1", "th4", "i10", "of2"} <= set(P.DEFINING)

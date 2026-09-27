@@ -3159,6 +3159,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         for result in results:
             print(f"seed={seed} {result.status:12} {result.name}")
+        # The population's defining criteria (population-only: TH-4 for th4, OF-2c for
+        # of2, ...) run with the parameters its tests give them; replay cannot.
+        for result in populations.defining_readings(args.population, run):
+            print(f"seed={seed} {result.status:12} {result.name} (population)")
     return 0
 
 

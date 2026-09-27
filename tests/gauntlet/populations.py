@@ -445,7 +445,13 @@ def organ_kinds_ok(kinds: Iterable[str]) -> list[str]:
     return [kind for kind in kinds if not kind.startswith(ORGAN_KINDS)]
 
 
-def assert_prices_not_steers(result: Run, *, s5: bool = True) -> dict[str, gauntlet.Result]:
+def prices_not_steers(result: Run, *, s5: bool = True) -> dict[str, gauntlet.Result]:
+    """The S1-S8 readings of ``assert_prices_not_steers``, without asserting them."""
+    return assert_prices_not_steers(result, s5=s5, check=False)
+
+
+def assert_prices_not_steers(result: Run, *, s5: bool = True,
+                             check: bool = True) -> dict[str, gauntlet.Result]:
     """S1–S8: the physics answered by moving prices and gain, never by steering.
 
     S1 every draw is the router's replayed sample and every act traces to a return;
@@ -483,8 +489,9 @@ def assert_prices_not_steers(result: Run, *, s5: bool = True) -> dict[str, gaunt
     readings["S8-instrumented"] = gauntlet.aggregate(
         "S8-instrumented", [gauntlet.gain_neutral(g["before"], g["after"])
                             for g in result.gains], acts=len(result.gains))
-    overall = gauntlet.aggregate("S1-S8", readings.values())
-    assert overall.status != gauntlet.FAIL, overall.evidence["failed"]
+    if check:
+        overall = gauntlet.aggregate("S1-S8", readings.values())
+        assert overall.status != gauntlet.FAIL, overall.evidence["failed"]
     return readings
 
 
@@ -873,5 +880,72 @@ def seat_shares(result: Run, router_kind: str) -> dict[int, Counter]:
 
 
 #: The populations ``scripts/gauntlet.py sweep`` runs by name, each at its defaults.
+def cycle_start(result: Run, card_id: str) -> int:
+    """The first window at which ``card_id``'s measured violation shows a full period-2
+    cycle (violated, clear, violated): TH-1a's ``cycle_start``."""
+    violated = gauntlet.card_violations(result.events, card_id)
+    return next(w for w in sorted(violated)
+                if violated[w] > 0 and violated.get(w + 1) == 0 and violated.get(w + 2, 0) > 0)
+
+
+def synthetic_null(physics: Any, windows: int, seeds: int = 12) -> tuple[int, int]:
+    """The detector's own null for TH-4: iid card draws over three cells, read by the
+    organ's own replay at this world's k and horizon; the first H windows of each seed
+    are unsupported and dropped. Returns (flagged, windows read)."""
+    import random
+
+    from factorylab.versioning.versions import replay
+
+    region = {"card:x": {"kind": "max", "lo": None, "hi": 0.5, "scale": 1.0}}
+    flagged = total = 0
+    for seed in range(seeds):
+        draw = random.Random(seed)
+        rows = [{"index": i, "tick": 10 * i, "charter_edition": 1, "terms": "t",
+                 "regions": region, "profile": {"card:x": draw.choice((0.3, 1.0, 2.0)),
+                                                "registrations": 0, "revision": 0}}
+                for i in range(windows)]
+        readings = replay(rows, k=physics.k, horizon=physics.H,
+                          tv_threshold=physics.tv_threshold,
+                          gap_threshold=physics.gap_threshold,
+                          registration_bins=(0.0, 2.0), revision_bins=(0.0,))[physics.H:]
+        flagged += sum(r["diagnosis"]["flags"]["thrash"] for r in readings)
+        total += len(readings)
+    return flagged, total
+
+
+def activated_after(result: Run, amendment: str) -> int:
+    """The last price window that closed before ``amendment`` took effect."""
+    act = next(r for r in result.rows("charter.activate") if r["amendment_id"] == amendment)
+    return max(r["window"] for r in result.rows("price.window") if r["seq"] < act["seq"])
+
+
+#: Each sweepable population's DEFINING criteria: the population-only ones
+#: (``gauntlet.POPULATION_ONLY``), with the parameters the population tests give them,
+#: which ``replay`` cannot run on a diary. ``sweep`` reports them beside the replay.
+DEFINING: dict[str, Callable[[Run], list[gauntlet.Result]]] = {
+    "th1": lambda r: [
+        gauntlet.th1a_detection(r.events, r.manifest,
+                                cycle_start=cycle_start(r, "well-formed-floor")),
+        gauntlet.th1e_release(r.events, r.manifest, steady_from=50)],
+    "th4": lambda r: [gauntlet.th4_null(
+        r.events, r.manifest,
+        synthetic=synthetic_null(r.physics, len(gauntlet.windows(r.events))))],
+    "i10": lambda r: [gauntlet.th1a_detection(
+        r.events, r.manifest, cycle_start=cycle_start(r, "verdict-floor"))],
+    "of2": lambda r: [gauntlet.of2c_holdout_bites(
+        r.events, r.manifest, card=REVISION["id"], seats={"registrar"},
+        after_window=activated_after(r, "hold-used-registrations"))],
+}
+
+
+def defining_readings(name: str, result: Run) -> list[gauntlet.Result]:
+    """The population's own readings: its defining criteria (``DEFINING``) and the
+    pricing-not-steering readings only a population run holds (S2, S6, S8-instrumented:
+    the requests, the instrumented closes and the gain acts)."""
+    readings = list(DEFINING.get(name, lambda _r: [])(result))
+    own = prices_not_steers(result)
+    return readings + [own[k] for k in ("S2", "S6", "S8-instrumented")]
+
+
 SWEEPABLE = frozenset({"sf1", "th1", "th2", "th2_reversion", "th3", "th4", "ld1", "of2",
                        "i10"})

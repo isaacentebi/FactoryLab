@@ -225,6 +225,18 @@ def test_th4_iid_behaviour_in_a_world_is_flagged_no_more_than_the_synthetic_null
     assert result.ok, result.evidence
 
 
+def test_sweep_th4_reports_its_defining_criterion(capsys):
+    """Codex on b7ae050: ``sweep --population th4`` reports TH-4, the population's own
+    (population-only) criterion, beside the generic replay, with the synthetic null
+    its tests give it."""
+    assert g.main(["sweep", "--population", "th4", "--seeds", "1"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    th4 = [line for line in lines if line.endswith(" TH-4 (population)")]
+    assert len(th4) == 1 and th4[0].split()[1] == g.PASS, th4
+    assert any(line.endswith(" S2 (population)") for line in lines)
+    assert any(line.split()[-1] == "BIND" for line in lines)
+
+
 def test_th4_negative_control_a_period_two_world_exceeds_the_null(th1):
     synthetic = _synthetic_null(th1.physics, len(g.windows(th1.events)))
     assert g.th4_null(th1.events, th1.manifest, synthetic=synthetic).status == g.FAIL
