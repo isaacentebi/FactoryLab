@@ -1,4 +1,4 @@
-"""B2: malformed venue rows are isolated from valid observations and journal errors retain type."""
+"""B2/Sol2: malformed fills fail closed; journal errors retain their type."""
 
 from decimal import Decimal
 from types import SimpleNamespace
@@ -10,7 +10,7 @@ from factorylab.runtime.resume import RecoveryJournal
 from factorylab.world.exchange import HyperliquidExchange, VenueUnavailable
 
 
-def test_malformed_fills_and_funding_rows_are_skipped():
+def test_malformed_fill_batch_is_rejected_and_funding_rows_are_skipped():
     venue = object.__new__(HyperliquidExchange)
     venue._address = "offline-account"
     venue._guarded = lambda name, call: call()
@@ -24,7 +24,8 @@ def test_malformed_fills_and_funding_rows_are_skipped():
                                          {**payment, "delta": {**payment["delta"], "usdc": "NaN"}},
                                          payment],
     )
-    assert len(venue.fills(0)) == 1
+    with pytest.raises(VenueUnavailable, match="fill normalization failed"):
+        venue.fills(0)
     funded, = venue.funding_payments(0)
     assert funded.paid_usd == Decimal("0.125")
 

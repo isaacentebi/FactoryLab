@@ -1653,7 +1653,7 @@ class HyperliquidExchange:
                         or size <= 0 or px <= 0 or stamp < 0
                         or f["side"] not in ("B", "A")
                         or not isinstance(f["coin"], str) or not f["coin"]):
-                    continue
+                    raise ValueError("invalid execution values")
                 out.append(Fill(
                     order_id=str(f["oid"]), coin=pair,
                     is_buy=f["side"] == "B",
@@ -1663,8 +1663,9 @@ class HyperliquidExchange:
                     inventory_size=size,
                     crossed=f.get("crossed") if type(f.get("crossed")) is bool else None,
                 ))
-            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
-                continue
+            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError) as exc:
+                # Chapter II §III.b: omitted executions are not evidence of absence.
+                raise VenueUnavailable("fill normalization failed") from exc
         # Chapter II §III.b: response observation is a measured outside fact. The
         # journal records it with the fills, so replay never consults a fresh clock.
         import time

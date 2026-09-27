@@ -87,6 +87,20 @@ def test_retained_history_cap_is_unknown_and_survives_journal_replay(since_ms, c
     assert row["history_complete"] == complete
 
 
+@pytest.mark.parametrize("bad", [None, {"coin": "BTC"},
+                                    {**_row(2, 2), "sz": "NaN"},
+                                    {**_row(2, 2), "side": "X"},
+                                    {**_row(2, 2), "coin": "BTC/USDC", "feeToken": "OTHER"}])
+@pytest.mark.parametrize("valid_peer", [False, True])
+def test_any_unrepresentable_execution_fails_entire_read(bad, valid_peer):
+    rows = ([_row(1, 1)] if valid_peer else []) + [bad]
+    venue = _venue(lambda user, start: rows)
+    venue._is_spot = lambda coin: coin == "BTC/USDC"
+    venue._public_coin = lambda coin: coin
+    with pytest.raises(VenueUnavailable, match="fill"):
+        venue.fills(0)
+
+
 def test_a_stalled_full_page_fails_closed():
     same = [_row(i, 5) for i in range(FILLS_PAGE)]
     with pytest.raises(VenueUnavailable, match="stalled"):
