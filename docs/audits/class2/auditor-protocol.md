@@ -216,8 +216,10 @@ the skeleton):
   REJECT stays for a flagged commit that is not a behaviour mix, with its reason.
 - **POLICY.** A change of audit policy (and only such a finding): a commit in the
   range that modifies one of the audit-policy files: `docs/audits/class2/canaries.json`
-  (the calibration set), this protocol (its rubric and calibration),
-  `docs/audits/class2/essay.sha256` (the design authority), and the audit tool's own
+  (the calibration set), this protocol (its rubric and calibration), `AGENTS.md` (the
+  constitution: its rules are rendered into both prompts, and its change is reported as
+  THE CONSTITUTION changed), `docs/audits/class2/essay.sha256` (the design authority),
+  and the audit tool's own
   code, which defines what is audited: `scripts/class2_audit.py` and every
   `tests/audit/class2_*.py` module (the seat-text scanner, the corpus, the lexicon, the
   audit helpers). The release audited carries them, so it could otherwise swap in easy
@@ -331,8 +333,10 @@ against inconsistency, stale artifacts, operator error and artifacts rewritten t
   essay must hash to the digest committed at the release, and a changed essay needs a
   commit changing that file, which the provenance pass shows. A repository writer is
   outside the threat model, but a change of audit policy is never quiet: the canaries,
-  this protocol, the essay's digest and the audit tool's own code (the scanner, the
-  corpus, the lexicon) are read from the release audited,
+  this protocol, AGENTS.md, the essay's digest and the audit tool's own code (the
+  scanner, the corpus, the lexicon) are read from the release audited, every committed
+  file the tool reads is classified as policy, justification, seat-visible text or the
+  gate's evidence (a test reads every ``committed_text`` input),
   so every commit in the range that modifies one is a mandatory POLICY-CHANGE finding
   in every world's triage, released only as POLICY with a reason (the essay's digest
   changed by a commit of its own), and easier canaries, a softer rubric or a digest

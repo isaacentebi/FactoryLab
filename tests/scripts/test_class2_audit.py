@@ -2435,7 +2435,9 @@ def test_an_allow_or_reject_justification_is_reviewed_in_the_provenance_pass(tmp
     ("tests/audit/class2_seat_text.py", "SEAT_KEYS = 2\n", "SEAT_KEYS = 1\n"),
     ("tests/audit/class2_corpus.py", "LEAVES = 2\n", "LEAVES = 1\n"),
     ("scripts/class2_audit.py", "MIN_CANARIES = 8\n", "MIN_CANARIES = 1\n"),
-], ids=["essay-digest", "canaries", "protocol", "lexicon", "scanner", "corpus", "tool"])
+    (tool.AGENTS_REL, "## Rules\n1. Surfaces.\n", "## Rules\n1. Whatever works.\n"),
+], ids=["essay-digest", "canaries", "protocol", "lexicon", "scanner", "corpus", "tool",
+        "constitution"])
 def test_a_change_of_audit_policy_is_never_quiet(tmp_path, path, old, new):
     """Codex on 6f22238 and a80a5b2: a commit changing an audit-policy file (the essay's
     digest, the canaries, the protocol, the lexicon) under an innocuous message is a
@@ -2458,6 +2460,8 @@ def test_a_change_of_audit_policy_is_never_quiet(tmp_path, path, old, new):
         assert change["summary"] == f"essay digest {'a' * 64} -> {'b' * 64}"
     else:
         assert "1 insertion" in change["summary"] and "1 deletion" in change["summary"]
+    if path == tool.AGENTS_REL:
+        assert change["summary"].startswith("THE CONSTITUTION changed")
     assert tool.policy_changes(repo, f"{root}..{base}", from_root=True) == []
     key = {"canaries": [], "policy_changes": [change]}
     (finding,) = tool.world_findings([], [], key, WORLD)
@@ -2488,6 +2492,75 @@ def test_a_change_of_audit_policy_is_never_quiet(tmp_path, path, old, new):
     # POLICY releases nothing else.
     other = {**finding, "policy_change": False, "question": "Q4", "class": "C1"}
     assert "POLICY" not in tool.allowed_dispositions(other)
+
+
+def _classified(path):
+    """Which class a committed file the tool reads falls in: audit policy, a
+    justification (the allowlist and rejected records), seat-visible text the
+    provenance pass reads, or the gate's own evidence (triage files)."""
+    import fnmatch
+
+    if any(fnmatch.fnmatchcase(path, p) for p in tool.POLICY_PATHS):
+        return "policy"
+    if path in tool.JUSTIFICATION_PATHS:
+        return "justification"
+    if any(path == p or path.startswith(p.rstrip("/") + "/") for p in tool.SURFACE_PATHS):
+        return "surface"
+    if fnmatch.fnmatchcase(path, f"{tool.TRIAGE_REL}/*.md"):
+        return "evidence"
+    return None
+
+
+def test_every_committed_input_the_tool_reads_is_classified():
+    """Codex on 0768b65: every committed file the tool reads (``committed_text``) is in
+    a class the release process reviews: policy (``POLICY_PATHS``, a POLICY-CHANGE when
+    it changes), a justification (the provenance pass's Justifications), seat-visible
+    text (the provenance pass), or the gate's evidence. AGENTS.md feeds both prompts and
+    is policy. Read statically from every ``committed_text`` call, so a new input with no
+    class fails here."""
+    import ast
+    import inspect
+
+    source = inspect.getsource(tool)
+    paths = []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and ast.unparse(node.func) == "committed_text"):
+            continue
+        arg = node.args[2]
+        if isinstance(arg, ast.Name):
+            paths.append(getattr(tool, arg.id))
+        elif isinstance(arg, ast.Call) and ast.unparse(arg.func) == "WORLD_REL.format":
+            paths.append(tool.WORLD_REL.format(world=WORLD))
+        elif isinstance(arg, ast.JoinedStr) and ast.unparse(arg).startswith("f'{TRIAGE_REL}/"):
+            paths.append(f"{tool.TRIAGE_REL}/{WORLD}.md")
+        else:
+            raise AssertionError(f"an unresolved committed_text input: {ast.unparse(arg)}")
+    assert {tool.AGENTS_REL, tool.PROTOCOL_REL, tool.CANARIES_REL,
+            tool.ESSAY_DIGEST_REL} <= set(paths)
+    unclassified = sorted({p for p in paths if _classified(p) is None})
+    assert unclassified == [], unclassified
+    assert _classified(tool.AGENTS_REL) == "policy"
+
+
+@pytest.mark.gate  # renders
+def test_every_policy_input_a_render_reads_is_policy(history, tmp_path, monkeypatch):
+    """The same, read from a render: every committed file it reads is classified, and
+    the ones rendered into a prompt or read as policy are in ``POLICY_PATHS``."""
+    repo, base, _surface, head = history
+    read = []
+    real = tool.committed_text
+
+    def recording(repo_, release, path, **kw):
+        read.append(path)
+        return real(repo_, release, path, **kw)
+    monkeypatch.setattr(tool, "committed_text", recording)
+    tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=ESSAY,
+                release_range=f"{base}..{head}", repo=repo)
+    assert read and all(_classified(p) for p in read), sorted(set(read))
+    prompt_inputs = {tool.AGENTS_REL, tool.PROTOCOL_REL, tool.CANARIES_REL,
+                     tool.ESSAY_DIGEST_REL}
+    assert prompt_inputs <= set(read)
+    assert all(_classified(p) == "policy" for p in prompt_inputs)
 
 
 def test_a_derived_audit_artifact_is_no_policy_change(tmp_path):

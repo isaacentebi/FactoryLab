@@ -639,7 +639,8 @@ def _blob(repo: Path, rev: str, path: str) -> str | None:
 
 
 #: The audit's own policy: the calibration set, the protocol (its rubric and its
-#: calibration), the design authority's digest, and the audit tool's own code, which
+#: calibration), AGENTS.md (the constitution, rendered into both prompts), the design
+#: authority's digest, and the audit tool's own code, which
 #: defines what is audited: this script and every ``tests/audit/class2_*.py`` module
 #: (the seat-text scanner, the corpus, the lexicon, the audit helpers). The audited
 #: release carries them, so a release could swap in easy canaries, a softer rubric or a
@@ -650,8 +651,11 @@ def _blob(repo: Path, rev: str, path: str) -> str | None:
 #: apart, in the provenance pass (``JUSTIFICATION_PATHS``). Entries are git pathspecs
 #: (a glob matches with ``fnmatch``).
 LEXICON_REL = "tests/audit/class2_lexicon.py"
-POLICY_PATHS = (CANARIES_REL, PROTOCOL_REL, ESSAY_DIGEST_REL, "scripts/class2_audit.py",
-                "tests/audit/class2_*.py")
+POLICY_PATHS = (CANARIES_REL, PROTOCOL_REL, AGENTS_REL, ESSAY_DIGEST_REL,
+                "scripts/class2_audit.py", "tests/audit/class2_*.py")
+#: AGENTS.md is the constitution: its rules are rendered into both auditor prompts, so a
+#: release that softened them would be audited against the softer ones.
+CONSTITUTION = AGENTS_REL
 
 
 def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
@@ -699,7 +703,8 @@ def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
                     "authority change is a commit of its own")
             stat = _git(repo, "diff", "--shortstat", parents[0], sha, "--", path).strip()
             summary = (f"essay digest {old} -> {new}" if path == ESSAY_DIGEST_REL
-                       else stat or "changed")
+                       else f"THE CONSTITUTION changed ({stat or 'changed'})"
+                       if path == CONSTITUTION else stat or "changed")
             change = {"sha": sha, "path": path, "summary": summary, "message": message}
             if path == ESSAY_DIGEST_REL:
                 change |= {"old": old, "new": new}
