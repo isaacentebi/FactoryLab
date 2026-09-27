@@ -343,6 +343,15 @@ class RecoveryJournal:
     def __getattr__(self, name):
         return getattr(self.ledger, name)
 
+    def _iter_items(self, **kwargs):
+        """Expose only the authenticated prefix already consumed by replay."""
+        next_row = self.peek()
+        boundary = None if next_row is None else next_row["seq"]
+        for row in self.ledger._iter_items(**kwargs):
+            if boundary is not None and row["seq"] >= boundary:
+                break
+            yield row
+
     @property
     def tail(self):
         return self._tail

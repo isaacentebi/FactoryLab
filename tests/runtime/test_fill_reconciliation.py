@@ -283,6 +283,45 @@ def test_retry_baseline_keeps_pre_anchor_execution_delivery():
     assert c.poll(venue, now_ns=220) == []
 
 
+def test_backward_poll_replays_identity_append_before_propagation():
+    from copy import deepcopy
+
+    from factorylab.runtime.resume import RecoveryJournal
+
+    venue = Venue()
+    ledger = Ledger(clock_ns=lambda: 0)
+    c = FillCursor(ledger, start_ns=0, measured=True)
+    c.initialize(venue.account(), now_ns=0)
+    venue.shown = venue.executed = [fill(100)]
+    c.poll(venue, now_ns=110)
+    c.poll(venue, now_ns=200)
+    venue.executed.append(fill(150))
+    c.poll(venue, now_ns=210)
+    c.recovery_span_ns = 100  # The next geometric backward read reaches the late execution.
+    before = deepcopy({k: v for k, v in vars(c).items() if k != 'ledger'})
+    prefix = len(ledger._recovery_items())
+    venue.shown = venue.executed
+    expected = c.poll(venue, now_ns=220)
+    assert [ts for ts, _ in expected] == [150]
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.tail = iter(ledger._recovery_items()[prefix:])
+    restored = object.__new__(FillCursor)
+    vars(restored).update(before, ledger=journal)
+    assert restored.poll(venue, now_ns=220) == expected
+    assert journal.peek() is None
+
+
+def test_recovery_identity_scan_cannot_see_future_ledger_rows():
+    from factorylab.runtime.resume import RecoveryJournal
+
+    ledger = Ledger()
+    ledger.append({'kind': 'before'})
+    ledger.append({'kind': 'consequence.fill_identity', 'key': [10, 'venue', 'x'], 'count': 1})
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.tail = iter(ledger._recovery_items()[1:])
+    assert [row['kind'] for row in journal._iter_items()] == ['before']
+
+
 @pytest.mark.parametrize('count', [400, 5000])
 def test_reconciled_identity_memory_is_bounded(count):
     import json
