@@ -2088,13 +2088,45 @@ class FeedbackMixin:
                             and not r.consequence_closed), key=lambda r: r.handle):
             self._score_meta(meta, score)
 
+    def _consequence_deadline_ns(self, about: str | None, deadline: int) -> int:
+        """Keep a verdict open through every unresolved consequence it depends on.
+
+        Chapter II §III.b, §IV.c: recursive grades and counter-verdicts cannot lose
+        the underlying outcome's guaranteed patience to their own verdict timeout.
+        Closed dependencies add no patience; missing dependencies retain the caller's
+        ordinary deadline. The walk is bounded even for a malformed cyclic chain.
+        """
+        seen = set()
+        while about is not None and about not in seen:
+            seen.add(about)
+            if about in self.consequence_scores or about in self.world_outcomes:
+                break
+            rec = self.pending.get(about)
+            if rec is not None and rec.evaluation:
+                if rec.consequence_closed:
+                    break
+                deadline = max(deadline, self.clock.now_ns - self._age_ns(rec)
+                               + self._patience_ns())
+                about = rec.about
+                continue
+            frozen = self.reference_mids.get(about)
+            if frozen is not None:
+                dependency_deadline = (
+                    frozen["open_ns"] + self.m.timing.world_repricing_ns
+                    if self._settled_funding_pending(frozen)
+                    else self._frozen_lapse_ns(frozen))
+                deadline = max(deadline, dependency_deadline)
+            break
+        return deadline
+
     def _settle_evaluations(self) -> None:
         """Advance every evaluator decision's two signals, then settle what is complete.
 
         A judge's consequence closes when its return's outcome is measured or known
         to be absent; a meta's when the decision it graded closes. Either closes
-        empty past its consequence patience on the world's clock (``_patience_ns``;
-        wave 16, D2). The grade window closes once the tier above has read it
+        empty past its consequence patience on the world's clock, extended through
+        unresolved dependencies (``_consequence_deadline_ns``; Chapter II §IV.c).
+        The grade window closes once the tier above has read it
         (``_grade_window_over``). A decision with both closed settles on
         ``evaluation_reward``, less its card penalty, or censored with neither.
         """
@@ -2111,11 +2143,9 @@ class FeedbackMixin:
                 if state == "none":
                     self._close_consequence(rec.handle, None, rec)
                     continue
-                if self._settled_funding_pending(self.reference_mids.get(rec.about, {})):
-                    # Chapter II §IV.c: the verdict timeout cannot shorten the
-                    # outcome's guaranteed venue-time patience.
-                    continue
-            if self._age_ns(rec) > self._patience_ns():
+            deadline = self._consequence_deadline_ns(
+                rec.about, self.clock.now_ns - self._age_ns(rec) + self._patience_ns())
+            if self.clock.now_ns > deadline:
                 self._close_consequence(rec.handle, None, rec)
         self._settle_exposures()
         self._settle_counters()
@@ -2341,7 +2371,9 @@ class FeedbackMixin:
             opened = rec.get("ns")
             age = (self.clock.now_ns - opened if opened is not None
                    else (self.ticks_consumed - rec["tick"]) * tick_ns(self.tick_clock))
-            if state == "open" and age <= patience:
+            deadline = self._consequence_deadline_ns(
+                rec["about"], self.clock.now_ns - age + patience)
+            if state == "open" and self.clock.now_ns <= deadline:
                 continue
             del self.pending_counters[handle]
             try:
