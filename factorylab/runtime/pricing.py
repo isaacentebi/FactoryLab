@@ -205,6 +205,10 @@ class PricingMixin:
     def _init_fidelity(self) -> None:
         """Manifest settings and attributed observations are initialized before any decision."""
         self.cadence.configure(min_support=self.m.timing.min_support)
+        # R16b-4: the consequence loop is floored at H from the start, before any
+        # schedule, patience, novelty accrual or viability is derived from it (Sol and
+        # Astra on #157); each window's open refreshes it at the delivered tick.
+        self.cadence.set_floor(self._horizon_ticks())
         self.price_windows: dict[int, MeasureWindow] = {}
         self.price_origins: dict[str, dict[str, int]] = {}
 
@@ -325,6 +329,13 @@ class PricingMixin:
         closed = self.window.index if self.reserve_window_start is not None else None
         if closed is not None:
             self._close_price_window()
+        # R16b-4: the consequence loop is floored at H in the ticks delivered now,
+        # installed when the runtime is built (``_init_fidelity``) and refreshed as
+        # each window opens (the delivered tick moves), before anything this window
+        # derives from it: at launch, the sampling actuator's first period and the
+        # governance viability it publishes (Astra and Sol on #157: checked against
+        # the backstop first, viability was stale).
+        self.cadence.set_floor(self._horizon_ticks())
         schedule = self.clockwork.fire("price", now, inner)
         self._ledger_loop("price", schedule, inner_loop="card samples")
         if closed is None:
@@ -340,9 +351,6 @@ class PricingMixin:
         # budget per measured consequence period, of which this window accrues the
         # part its drawn period covers. Locked backing is not spendable, and a venue
         # loss can carry the unlocked part below zero.
-        # R16b-4: the consequence loop is floored at H in the ticks delivered now,
-        # refreshed as each window opens (the delivered tick moves).
-        self.cadence.set_floor(self._horizon_ticks())
         period = self._consequence_period()
         self.reserve.open_window(
             self.clock.now_ns, max(0, self.wallet.unlocked),
