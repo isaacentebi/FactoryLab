@@ -327,6 +327,20 @@ def _fixture_runs_world(fixturedef, world_functions_of) -> bool:
     return func.__name__ in world_functions_of(path)
 
 
+def _shares_a_module_fixture(item) -> bool:
+    """Whether this test uses a class-, module- or package-scoped fixture defined under
+    ``tests/``: something built once and read by several tests of its module."""
+    info = getattr(item, "_fixtureinfo", None)
+    for definitions in (info.name2fixturedefs.values() if info is not None else ()):
+        for definition in definitions:
+            code = getattr(inspect.unwrap(getattr(definition, "func", None)
+                                          or (lambda: None)), "__code__", None)
+            if (definition.scope in ("class", "module", "package") and code is not None
+                    and Path(code.co_filename).resolve().is_relative_to(_TESTS_ROOT)):
+                return True
+    return False
+
+
 def _world_fixtures(item, world_functions_of) -> list:
     """The fixtures this test uses whose setup runs a world."""
     info = getattr(item, "_fixtureinfo", None)
@@ -354,9 +368,10 @@ def pytest_collection_modifyitems(items):
     ``run``/``resume``). A test marked ``check`` is ``check``. Everything else that is
     not ``network`` or ``slow`` is ``check``.
 
-    A gate test that shares a class- or module-scoped world fixture is grouped with its
-    module (``xdist_group``; ``--dist loadgroup`` in pyproject): the module runs on one
-    worker, so its shared reference run is built once, never once per worker.
+    A gate test that shares a class- or module-scoped fixture of ``tests/`` (a world, a
+    rendered corpus) is grouped with its module (``xdist_group``; ``--dist loadgroup`` in
+    pyproject): the module runs on one worker, so what it shares is built once, never
+    once per worker.
 
     A module's ``pytestmark = gate`` does not make every test in it gate: it is removed
     and each test is read on its own, so the unit tests beside a world test stay in the
@@ -392,7 +407,7 @@ def pytest_collection_modifyitems(items):
         if gate:
             item.add_marker(pytest.mark.gate)
             item.add_marker(pytest.mark.world)
-            if any(d.scope in ("class", "module", "package") for d in world_fixtures):
+            if _shares_a_module_fixture(item):
                 item.add_marker(pytest.mark.xdist_group(item.nodeid.split("::", 1)[0]))
         else:
             item.add_marker(pytest.mark.check)
