@@ -38,7 +38,7 @@ import math
 import sys
 import tomllib
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from fractions import Fraction
@@ -3166,6 +3166,38 @@ def s7_gain_targets(events: list[Mapping], manifest: Mapping | None = None) -> R
     return _result("S7", not bad, gains=len(gains), bad=bad[:5])
 
 
+def gain_step_ok(before: Sequence[float], after: Sequence[float],
+                 seed: Sequence[float] | None, gamma_max: float, step: float, *,
+                 raising: bool | None = None) -> str:
+    """The one reading of a gain act's γ, base by base, against ``immune._gain``
+    (immune.py:219-225), shared by S8 and S8-instrumented. Guarantees:
+
+    - ``"noop"`` when no base moved: the kernel skips such an act (``before == after``).
+    - ``"ok"`` when every base took the kernel's own step, each clamped at its own
+      bound: up ``min(gamma_max, old + step)``, down ``min(gamma_max, old,
+      max(seed, old − step))``. A base at gamma_max or at its seed steps 0 beside
+      bases that move.
+    - ``"unverified"`` for a lowering whose ``seed`` is not known, when every base is
+      within one step below its old γ, down to a clamp onto an unknown floor.
+    - ``"wrong"`` otherwise, including a γ outside ``[0, gamma_max]``.
+
+    ``raising`` names the direction (True for ``stable_failure``); None reads
+    either."""
+    pairs = list(zip(before, after, strict=True))
+    if all(a == b for a, b in pairs):
+        return "noop"
+    if any(not _bounded(b, 0.0, gamma_max) for _a, b in pairs):
+        return "wrong"
+    up = all(b == min(gamma_max, a + step) for a, b in pairs)
+    if raising or (raising is None and up):
+        return "ok" if up else "wrong"
+    if seed:
+        return "ok" if all(b == min(gamma_max, a, max(s, a - step))
+                           for (a, b), s in zip(pairs, seed, strict=True)) else "wrong"
+    return "unverified" if all(b == min(gamma_max, a - step) or a - step < b <= min(gamma_max, a)
+                               for a, b in pairs) else "wrong"
+
+
 @criterion("S8")
 def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
     """S8 (ledger half): each gain act moves every exploration row of a router by the
@@ -3186,18 +3218,13 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
               for row in gains if len(need(row, "gamma_before")) != len(need(row, "gamma_after"))]
     gains = [row for row in gains
              if len(need(row, "gamma_before")) == len(need(row, "gamma_after"))]
-    # ``immune._gain`` ledgers a row only when γ moved (``if before == after: continue``,
-    # immune.py:224): a row with no nonzero step is one the kernel never writes, a
-    # malformed row, never a uniform step of 0 (Codex on b075c08).
-    noop = [{"router": need(row, "router"), "window": need(row, "window")}
-            for row in gains if list(need(row, "gamma_before")) == list(need(row, "gamma_after"))]
     # A router's seed γ, where the diary shows it: its first gain row raised γ from the
     # seed (a lowering needs an earlier raise, and γ never goes below the seed).
     seeds: dict[str, list[float]] = {}
     for row in gains:
         if need(row, "router") not in seeds:
             seeds[need(row, "router")] = list(need(row, "gamma_before")) if raises(row) else []
-    bad, unverified = [], []
+    bad, unverified, noop = [], [], []
     for row in gains:
         pairs = list(zip(need(row, "gamma_before"), need(row, "gamma_after"), strict=True))
         steps = {b - a for a, b in pairs}
@@ -3206,37 +3233,20 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
             uneven.append({"router": need(row, "router"), "window": need(row, "window"),
                            "seed": len(seed), "gamma_after": len(pairs)})
             continue
-        # ``immune._gain``'s own step, per base, exactly (immune.py:219-223): up is
-        # min(gamma_max, old + gain_step); down is
-        # min(gamma_max, old, max(seed_gamma, old − gain_step)). Each base is clamped at
-        # its own bound, so a base already at gamma_max (up) or at the seed (down) steps
-        # 0 beside bases that move; the row as a whole moved (``noop`` above).
-        if need(row, "pathology") == "stable_failure":
-            wrong = [b for a, b in pairs if b != min(ph.gamma_max, a + ph.gain_step)]
-        else:
-            wrong = []
-            for i, (a, b) in enumerate(pairs):
-                if seed:
-                    if b != min(ph.gamma_max, a, max(seed[i], a - ph.gain_step)):
-                        wrong.append(b)
-                elif b != min(ph.gamma_max, a - ph.gain_step):
-                    # With the seed out of the diary a partial step, or none, may be the
-                    # clamp onto it: not verified, never passed.
-                    if a - ph.gain_step < b <= min(ph.gamma_max, a):
-                        unverified.append({"router": need(row, "router"),
-                                           "window": need(row, "window")})
-                    else:
-                        wrong.append(b)
-        # γ is an exploration rate: below 0 is never a γ, whatever the seed.
-        below = [b for b in need(row, "gamma_after") if not _bounded(b, 0.0, ph.gamma_max)]
-        if not seed and not wrong and not below:
-            # The seed is the floor a lowering stops at; with it out of the diary the
-            # lower bound of this row is not verified.
-            if need(row, "pathology") != "stable_failure":
-                unverified.append({"router": need(row, "router"), "window": need(row, "window")})
-        if wrong or below:
-            bad.append({"router": need(row, "router"), "window": need(row, "window"),
-                        "steps": sorted(steps), "wrong": wrong[:3]})
+        # ``immune._gain``'s own step, per base (``gain_step_ok``). A row that moved no
+        # γ is one the kernel never writes (immune.py:224): malformed, never a uniform
+        # step of 0 (Codex on b075c08).
+        verdict = gain_step_ok(need(row, "gamma_before"), need(row, "gamma_after"), seed,
+                               ph.gamma_max, ph.gain_step,
+                               raising=need(row, "pathology") == "stable_failure")
+        where = {"router": need(row, "router"), "window": need(row, "window")}
+        if verdict == "noop":
+            noop.append(where)
+        elif verdict == "unverified":
+            unverified.append(where)
+        elif verdict == "wrong":
+            bad.append({**where, "steps": sorted(steps),
+                        "gamma_after": list(need(row, "gamma_after"))[:3]})
     if noop:
         return _result("S8", False, noop=noop[:5], bad=bad[:5],
                        why="a gain row moves no γ; the kernel ledgers only a moved γ")
@@ -3253,13 +3263,17 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
 
 
 @criterion("S8-instrumented")
-def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
+def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any],
+                 manifest: Mapping | None = None) -> Result:
     """S8 (instrumented half): one gain act changed only γ, uniformly across arms.
 
     ``before`` and ``after`` are a router's saved EXP3 bases, ``{"gamma", "weights"
     (or "log_weights"), "actions"}`` lists. Guarantees: the actions (their identities
     and their order) and the weights are identical,
-    every base's γ moved by one common step, and each arm's probability moved by the
+    every base's γ took ``immune._gain``'s own step under the world's physics
+    (``gain_step_ok``, the one reading S8 shares: each base clamped at its own bound, a
+    lowering's floor at a seed the snapshot does not hold, and no act at all is no
+    steering), and each arm's probability moved by the
     arm-symmetric map ``p' = a·p + b`` with one ``(a, b)`` per base — the change is
     ``(γ' − γ)(1/K − w_i/Σw)``, never a term chosen per arm.
     """
@@ -3270,7 +3284,13 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
     if not rows_b:
         # (B): no base, no act to read.
         return _unsupported("S8-instrumented", "the router saved no base")
-    steps = set()
+    ph = physics(manifest)
+    verdict = gain_step_ok([need(b, "gamma") for b in rows_b],
+                           [need(a, "gamma") for a in rows_a], None, ph.gamma_max,
+                           ph.gain_step)
+    if verdict == "wrong":
+        problems.append({"steps": sorted(round(need(a, "gamma") - need(b, "gamma"), 12)
+                                         for b, a in zip(rows_b, rows_a, strict=True))})
     for b, a in zip(rows_b, rows_a, strict=True):
         # The arms themselves, and their order, are part of what a gain act must not
         # touch: equal weights over other arms are other weights.
@@ -3282,7 +3302,6 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
         if wb != wa:
             problems.append({"weights_changed": True})
             continue
-        steps.add(round(need(a, "gamma") - need(b, "gamma"), 12))
         pb, pa = _probs(b), _probs(a)
         if len(pb) >= 2:
             # The kernel's mixing, q = (1 − γ)·w/Σw + γ/K (learners/exp3.py:42), on the
@@ -3295,8 +3314,6 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
                                                                          strict=True))
             if off > 1e-12:
                 problems.append({"asymmetric": off})
-    if len(steps) > 1:
-        problems.append({"steps": sorted(steps)})
     return _result("S8-instrumented", not problems, problems=problems[:5])
 
 

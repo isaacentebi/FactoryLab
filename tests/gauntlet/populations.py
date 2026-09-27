@@ -496,7 +496,7 @@ def assert_prices_not_steers(result: Run, *, s5: bool = True,
     # Every gain act's instrumented reading, by the one aggregation rule: a failed or
     # unsupported act is never dropped, and no gain act at all is unsupported (B).
     readings["S8-instrumented"] = gauntlet.aggregate(
-        "S8-instrumented", [gauntlet.gain_neutral(g["before"], g["after"])
+        "S8-instrumented", [gauntlet.gain_neutral(g["before"], g["after"], manifest)
                             for g in result.gains], acts=len(result.gains))
     if check:
         overall = gauntlet.aggregate("S1-S8", readings.values())

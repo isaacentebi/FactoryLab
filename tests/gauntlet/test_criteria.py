@@ -1431,7 +1431,7 @@ def test_s8_instrumented_a_gamma_step_is_arm_symmetric_and_a_weight_change_is_no
     (which the organ never makes, S7) is exactly what S8 must refuse."""
     base = {"actions": ["a", "b", "NOOP"], "gamma": 0.1,
             "log_weights": {"a": 2.0, "b": 0.5, "NOOP": -1.0}}
-    raised = dict(base, gamma=0.15)
+    raised = dict(base, gamma=0.1 + 0.05)
     assert g.gain_neutral({"bases": [base]}, {"bases": [raised]}).ok
     probs_before, probs_after = g._probs(base), g._probs(raised)
     k = 3
@@ -2409,6 +2409,23 @@ def test_s1_an_act_follows_its_decision_and_the_seats_own_return(rows, ok):
     assert g.s1_draw_sovereignty(diary).status == (g.PASS if ok else g.FAIL)
 
 
+def test_s8_instrumented_a_base_pinned_at_gamma_max_beside_one_that_steps_is_neutral():
+    """Codex on 519e1df: S8-instrumented reads ``_gain``'s per-base clamp through the one
+    helper S8 shares (``gain_step_ok``): steps {0, gain_step}, one base at gamma_max, are
+    no steering; a base stepping other than the kernel's step is."""
+    top = g.physics(M).gamma_max
+    moving = {"actions": ["a", "b"], "gamma": 0.1, "log_weights": [2.0, 0.5]}
+    pinned = dict(moving, gamma=top)
+    before = {"bases": [moving, pinned]}
+    after = {"bases": [dict(moving, gamma=0.1 + 0.05), pinned]}
+    assert g.gain_neutral(before, after, M).ok
+    wrong = {"bases": [dict(moving, gamma=0.1 + 0.05), dict(pinned, gamma=top - 0.05)]}
+    result = g.gain_neutral(before, wrong, M)
+    assert result.status == g.FAIL and "steps" in result.evidence["problems"][0]
+    assert g.gain_step_ok([0.1, top], [0.1 + 0.05, top], None, top, 0.05) == "ok"
+    assert g.gain_step_ok([0.1, top], [0.1, top], None, top, 0.05) == "noop"
+
+
 # --- Codex pass on 3050436 ----------------------------------------------------------------
 
 
@@ -2416,11 +2433,11 @@ def test_s8_instrumented_the_arms_and_their_order_are_part_of_what_gain_must_not
     """Codex P2 (gauntlet.py:2449): the same weights over other arms, or the same arms in
     another order, are a changed policy, not a γ step."""
     base = {"actions": ["a", "b"], "gamma": 0.1, "log_weights": [1.0, 1.0]}
-    assert g.gain_neutral({"bases": [base]}, {"bases": [dict(base, gamma=0.15)]}).ok
-    swapped = dict(base, actions=["a", "c"], gamma=0.15)
+    assert g.gain_neutral({"bases": [base]}, {"bases": [dict(base, gamma=0.1 + 0.05)]}).ok
+    swapped = dict(base, actions=["a", "c"], gamma=0.1 + 0.05)
     result = g.gain_neutral({"bases": [base]}, {"bases": [swapped]})
     assert result.status == g.FAIL and "actions_changed" in result.evidence["problems"][0]
-    reordered = dict(base, actions=["b", "a"], gamma=0.15)
+    reordered = dict(base, actions=["b", "a"], gamma=0.1 + 0.05)
     assert g.gain_neutral({"bases": [base]}, {"bases": [reordered]}).status == g.FAIL
 
 
@@ -2464,7 +2481,7 @@ def test_the_instrumented_s8_aggregate_keeps_an_unsupported_gain_act():
 
     base = {"actions": ["a", "b"], "gamma": 0.1, "log_weights": [1.0, 1.0]}
     good = {"router": "router:Tick", "window": 1, "before": {"bases": [base]},
-            "after": {"bases": [dict(base, gamma=0.15)]}}
+            "after": {"bases": [dict(base, gamma=0.1 + 0.05)]}}
     empty = {"router": "router:Tick", "window": 2, "before": {"bases": []},
              "after": {"bases": []}}
     run = SimpleNamespace(events=[], manifest=M, requests=[], closes=[], gains=[good])
@@ -2551,9 +2568,10 @@ def test_s8_instrumented_a_gamma_step_at_one_is_symmetric(before, after):
     weights with the kernel's mixing (exp3.py:42), so a valid step is not asymmetric."""
     base = {"actions": ["a", "b", "NOOP"], "gamma": before,
             "log_weights": {"a": 2.0, "b": 0.5, "NOOP": -1.0}}
-    assert g.gain_neutral({"bases": [base]}, {"bases": [dict(base, gamma=after)]}).ok
+    one = {"immune": {"gamma_max": 1.0, "gain_step": 0.05}}
+    assert g.gain_neutral({"bases": [base]}, {"bases": [dict(base, gamma=after)]}, one).ok
     steered = dict(base, gamma=after, log_weights={"a": 2.0, "b": 1.5, "NOOP": -1.0})
-    assert g.gain_neutral({"bases": [base]}, {"bases": [steered]}).status == g.FAIL
+    assert g.gain_neutral({"bases": [base]}, {"bases": [steered]}, one).status == g.FAIL
 
 
 def test_th1b_a_price_with_no_room_to_rise_is_not_a_failure():
