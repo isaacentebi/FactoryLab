@@ -208,6 +208,15 @@ the skeleton):
   not stand in for it). The gate recomputes this from the repository and never trusts
   the triage row.
   REJECT stays for a flagged commit that is not a behaviour mix, with its reason.
+- **AUTHORITY.** A change of design authority (and only such a finding): a commit in
+  the range that changed `docs/audits/class2/essay.sha256` from one digest to another.
+  Every world's triage carries it as a mandatory HIGH finding (A1, AUTHORITY-CHANGE)
+  with the old and new digests and the commit, whatever its message says; AUTHORITY,
+  with the architect's reason, is its only releasable disposition, and releases no
+  other finding. Such a commit changes that file alone: a commit changing the digest
+  and anything else is refused at render and at the gate. The commit that first writes
+  the digest establishes the authority and changes none. `triage` writes the change
+  into the triage file's header, and `gate` prints the old and new digests first.
 
 ## The release gate
 
@@ -278,7 +287,8 @@ release, its release corpus's digest and the gated triage file's digest to
 `last_release`; commit it with the triage files (and `rejected.jsonl`), and nothing else, as one commit directly on the gated release: that is a gate-recording commit, the only kind that may edit `last_release`. `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
 copied into the worktree and never committed) and refuses to render without it, when
 it lacks a heading that bounds the text, or when it does not hash to the digest
-`docs/audits/class2/essay.sha256` holds at the release commit. No prompt is ever edited after rendering: both
+`docs/audits/class2/essay.sha256` holds at the release commit (a commit changing that
+digest is a change of design authority: see the AUTHORITY disposition). No prompt is ever edited after rendering: both
 prompts are bound to the key by hash.
 
 `canary_key.json` and `release_corpus.jsonl` are never part of the auditor's input: the
@@ -303,7 +313,11 @@ against inconsistency, stale artifacts, operator error and artifacts rewritten t
   dirty). The essay is never committed (`.gitignore`), so its sha256 is:
   `docs/audits/class2/essay.sha256`. At render and at every later step the supplied
   essay must hash to the digest committed at the release, and a changed essay needs a
-  commit changing that file, which the provenance pass shows. The
+  commit changing that file, which the provenance pass shows. A repository writer is
+  outside the threat model, but a change of design authority is never quiet: that
+  commit must change the digest alone, and it is a mandatory AUTHORITY-CHANGE finding
+  in every world's triage, released only as AUTHORITY with a reason, so a digest
+  swapped under an innocuous message cannot pass unseen. The
   code that rendered the corpus is the release's too: after rendering, every module of
   the repository that ran (read from the process's loaded modules, never a list) must
   be committed and unmodified at the release commit; the key records their paths and

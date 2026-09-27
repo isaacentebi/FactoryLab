@@ -283,7 +283,7 @@ SAMPLES = 2
 AUTHOR_FAMILIES = frozenset({"claude", "gpt"})
 #: The dispositions a triaged finding may carry. CHARTER: a charter card or norm finding,
 #: sent to the charter's next revision as an observation, never fixed in code.
-DISPOSITIONS = frozenset({"FIX", "ALLOW", "REJECT", "CHARTER", "REVERTED"})
+DISPOSITIONS = frozenset({"FIX", "ALLOW", "REJECT", "CHARTER", "REVERTED", "AUTHORITY"})
 
 AUDIENCE = {"produce": ["producer"], "judge": ["evaluator"], "meta": ["meta"],
             "counter": ["adversary"], "vote": ["committee"], "testify": ["committee"]}
@@ -629,6 +629,50 @@ def _file_hunks(diff: str, paths: tuple[str, ...]) -> str:
         if keep:
             out.append(line)
     return "\n".join(out)
+
+
+def _blob(repo: Path, rev: str, path: str) -> str | None:
+    """The text of ``path`` at ``rev``, or None where it does not exist."""
+    shown = subprocess.run(["git", "-C", str(repo), "show", f"{rev}:{path}"],
+                           capture_output=True, text=True)
+    return shown.stdout.strip() if shown.returncode == 0 else None
+
+
+def authority_changes(repo: Path, commits: list[dict]) -> list[dict]:
+    """Every commit of the audited range that changes the design authority: modifies
+    ``ESSAY_DIGEST_REL`` from one digest to another (its first parent's to its own).
+
+    Guarantees a change of design authority is never quiet: each is returned with its
+    old and new digests (``world_findings`` makes each a mandatory HIGH AUTHORITY-CHANGE
+    finding in every world's triage), and a commit that changes the digest and any
+    other file is refused (``AuditInputInvalid``): an authority change stands alone. A
+    commit that first writes the digest, where its parent had none, establishes the
+    authority and changes none. A merge is read by its combined diff (the files it
+    changes against every parent), so the side commit that made a change carries it.
+    """
+    out = []
+    for commit in commits:
+        sha = commit["sha"]
+        merge = commit.get("merge")
+        digest_diff = _file_hunks(commit.get("diff", ""), (ESSAY_DIGEST_REL,))
+        if "diff" in commit and (not digest_diff or "--- /dev/null" in digest_diff):
+            continue  # the digest is untouched, or first written (the authority's birth)
+        names = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root",
+                     *(["--cc"] if merge else []), sha).split()
+        if ESSAY_DIGEST_REL not in names:
+            continue
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+        old = _blob(repo, parents[0], ESSAY_DIGEST_REL) if parents else None
+        new = _blob(repo, sha, ESSAY_DIGEST_REL)
+        if old is None or old == new:
+            continue
+        if set(names) != {ESSAY_DIGEST_REL}:
+            raise AuditInputInvalid(
+                f"{sha[:12]} changes the design authority ({ESSAY_DIGEST_REL}) together "
+                f"with {sorted(set(names) - {ESSAY_DIGEST_REL})[:5]}: an authority "
+                "change is a commit of its own")
+        out.append({"sha": sha, "old": old, "new": new, "message": commit["message"]})
+    return out
 
 
 def key_commits(commits: list[dict]) -> list[dict]:
@@ -1039,7 +1083,8 @@ def identity_problem(question: Any, cls: Any) -> str | None:
     """Why ``(question, class)`` is not a finding's: a rubric question with its class
     (``CLASS_OF``), or the provenance pass's (``PROVENANCE``)."""
     if (question, cls) in ((PROVENANCE["question"], PROVENANCE["class"]),
-                           (JUSTIFICATION["question"], JUSTIFICATION["class"])):
+                           (JUSTIFICATION["question"], JUSTIFICATION["class"]),
+                           (AUTHORITY_CHANGE["question"], AUTHORITY_CHANGE["class"])):
         return None
     if CLASS_OF.get(question) != cls:
         return f"question {question!r} with class {cls!r} is not a finding's identity"
@@ -1160,6 +1205,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     released = release_commit(repo, release_range)
     first = release_base(repo, *range_shas)
     commits = provenance_commits(repo, release_range, from_root=first)
+    changes = authority_changes(repo, commits)
     provenance = provenance_section(release_range, commits)
     provenance_id = hashlib.sha256(provenance.encode()).hexdigest()
     bound = previous_problems(repo, range_shas[1], first=first, previous=previous,
@@ -1216,6 +1262,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
         "provenance_prompt_sha": sha256_file(out / "provenance_prompt.md"),
         "provenance_id": provenance_id,
         "provenance_commits": key_commits(commits),
+        "authority_changes": changes,
         "release_corpus_sha": sha256_file(out / "release_corpus.jsonl"),
         "previous_corpus_sha": (sha256_file(previous_corpus)
                                 if previous_corpus is not None else None),
@@ -1267,6 +1314,10 @@ PROVENANCE = {"question": "P1", "class": "BEHAVIOUR-MIX", "severity": "HIGH"}
 #: The justification subsection's question: an ALLOW or REJECT justification that
 #: excuses text by anything but the passage it cites (Astra R-2).
 JUSTIFICATION = {"question": "P2", "class": "UNSOUND-JUSTIFICATION", "severity": "HIGH"}
+#: A change of design authority: a commit in the range that changed the essay's
+#: committed digest. It is never an auditor's finding, and never quiet: every world's
+#: triage carries it, and only AUTHORITY (the architect's reason) releases it.
+AUTHORITY_CHANGE = {"question": "A1", "class": "AUTHORITY-CHANGE", "severity": "HIGH"}
 #: A finding's passage names a section of the authority text or an AGENTS rule.
 PASSAGE = re.compile(r"^((Ch\. I )?§(I|II|III|IV)(\.[a-c])?(\(\d\))?|(AGENTS )?rule [1-5])"
                      r"( .*)?$")
@@ -1383,7 +1434,7 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
                 "provenance_prompt_sha": str,
                 "provenance_id": str, "provenance_commits": list,
                 "canaries": list, "controls": list, "expected_leaves": list,
-                "expected_count": int, "executed_code": dict}
+                "expected_count": int, "executed_code": dict, "authority_changes": list}
     bad = [n for n, t in required.items() if not isinstance(key.get(n), t)]
     if bad or key.get("schema") != KEY_SCHEMA:
         raise AuditInputInvalid(f"the key is not a schema-{KEY_SCHEMA} key: {bad}")
@@ -1518,6 +1569,8 @@ def calibration_problems(key_path: Path, key: dict, repo: Path,
         return problems
     if key.get("provenance_commits") != key_commits(commits):
         problems.append("the key's provenance_commits are not the range's")
+    if key.get("authority_changes") != authority_changes(repo, commits):
+        problems.append("the key's authority_changes are not the range's")
     section = provenance_section(key["range"], commits)
     prompt = provenance_prompt_text(section, provenance_id=key["provenance_id"],
                                     agents=committed_text(repo, release, AGENTS_REL))
@@ -1907,7 +1960,23 @@ def world_findings(findings: list[dict], provenance: list[dict], key: dict,
     # planted and real leaves is refused at validate (``sample_problems``).
     own = [f for f in findings if f.get("world") in (world, corpus.KERNEL)
            and not (finding_leaves(f) and finding_leaves(f) <= planted)]
-    return own + provenance
+    return own + provenance + authority_findings(key)
+
+
+def authority_findings(key: dict) -> list[dict]:
+    """One mandatory HIGH AUTHORITY-CHANGE finding per change of design authority the key
+    records (``authority_changes``), for every world's triage, carrying the old and the
+    new digest and the commit."""
+    out = []
+    for change in key.get("authority_changes") or ():
+        path = f"commit:{change['sha']}"
+        out.append({"finding_id": leaf_id(path, "authority"), "leaf_id": None, "world": "*",
+                    "path": path, "quote": f"{change['old']} -> {change['new']}",
+                    **AUTHORITY_CHANGE, "old": change["old"], "new": change["new"],
+                    "rationale": "the essay's committed digest changed: a new design "
+                                 "authority", "authority_change": True, "samples": 0,
+                    "low_confidence": False})
+    return out
 
 
 def triage_skeleton(rows: list[dict], verdict: dict, *, world: str, family: str,
@@ -1931,8 +2000,12 @@ def triage_skeleton(rows: list[dict], verdict: dict, *, world: str, family: str,
              "when committed in the release gated), CHARTER (a charter card or "
              "norm: sent to the charter's next revision, never fixed in code), REVERTED (a "
              "flagged commit only: every seat-visible line it added is gone from the "
-             "release, which the gate verifies from the repository). A release passes only "
-             "when every HIGH or MED finding is ALLOW, REJECT, CHARTER or REVERTED.", "",
+             "release, which the gate verifies from the repository), AUTHORITY (a change "
+             "of design authority only, with the architect's reason; its sole releasable "
+             "disposition). A release passes only when every HIGH or MED finding is ALLOW, "
+             "REJECT, CHARTER, REVERTED or AUTHORITY.",
+             *(f"- DESIGN AUTHORITY CHANGED in {c['sha']}: essay digest {c['old']} -> "
+               f"{c['new']}" for c in key.get("authority_changes") or ()), "",
              "| id | path | question | class | severity | confidence | quote | disposition "
              "| reason |",
              "|---|---|---|---|---|---|---|---|---|"]
@@ -2047,6 +2120,8 @@ def allowed_dispositions(finding: dict) -> frozenset[str]:
     REVERTED (it is, and its seat-visible text is gone from the release: the gate
     verifies it, ``reverted_problems``); an allowlist excuses text, not a commit's
     reasons, and REVERTED is a commit's alone."""
+    if finding.get("authority_change"):
+        return frozenset({"AUTHORITY"})
     if finding.get("provenance_pass") and finding.get("question") == JUSTIFICATION["question"]:
         # An unsound justification is withdrawn or rewritten (FIX), or rejected.
         return frozenset({"FIX", "REJECT"})
@@ -2449,6 +2524,9 @@ def _run(args: argparse.Namespace) -> int:
         problems = gate(args.world, path, args.key, args.samples, args.provenance_samples,
                         release=args.release, repo=ROOT, triage_sha256=args.triage_sha256,
                         essay=args.essay)
+        for change in load_key(args.key)[0].get("authority_changes") or ():
+            print(f"DESIGN AUTHORITY CHANGED in {change['sha'][:12]}: essay digest "
+                  f"{change['old']} -> {change['new']}", file=sys.stderr)
         for problem in problems:
             print(problem, file=sys.stderr)
         if problems:

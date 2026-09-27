@@ -2330,6 +2330,71 @@ def test_an_allow_or_reject_justification_is_reviewed_in_the_provenance_pass(tmp
     assert tool.identity_problem("P2", "UNSOUND-JUSTIFICATION") is None
 
 
+def test_a_change_of_design_authority_is_never_quiet(tmp_path):
+    """Codex on 6f22238: a commit changing the essay's committed digest under an
+    innocuous message is an AUTHORITY-CHANGE: a HIGH finding in every world's triage,
+    carrying the old and new digests, releasable only as AUTHORITY with a reason. The
+    commit that first writes the digest establishes the authority and changes none."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, tool.ESSAY_DIGEST_REL, "a" * 64 + "\n", "root")
+    base = _commit(repo, "README.md", "x\n", "readme")
+    swapped = _commit(repo, tool.ESSAY_DIGEST_REL, "b" * 64 + "\n", "tidy the docs")
+    head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
+    commits = tool.provenance_commits(repo, f"{base}..{head}")
+    (change,) = tool.authority_changes(repo, commits)
+    assert (change["sha"], change["old"], change["new"]) == (swapped, "a" * 64, "b" * 64)
+    assert tool.authority_changes(repo, tool.provenance_commits(
+        repo, f"{root}..{base}", from_root=True)) == []
+    key = {"canaries": [], "authority_changes": [change]}
+    (finding,) = tool.world_findings([], [], key, WORLD)
+    assert (finding["question"], finding["class"], finding["severity"]) == (
+        "A1", "AUTHORITY-CHANGE", "HIGH")
+    assert "a" * 64 in finding["quote"] and "b" * 64 in finding["quote"]
+    assert tool.allowed_dispositions(finding) == {"AUTHORITY"}
+    head_rows = ("| id | path | question | class | severity | confidence | quote | "
+                 "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
+
+    def triage(disposition, reason):
+        return head_rows + (f"| {finding['finding_id']} | `{finding['path']}` | A1 | "
+                            f"AUTHORITY-CHANGE | HIGH | both samples | x | {disposition} | "
+                            f"{reason} |\n")
+    assert any("has no row" in p for p in tool.release_gate(head_rows, expected=[finding]))
+    assert any("untriaged" in p for p in tool.release_gate(triage("", ""),
+                                                            expected=[finding]))
+    assert any("without a reason" in p for p in tool.release_gate(
+        triage("AUTHORITY", ""), expected=[finding]))
+    for other in ("REJECT", "ALLOW", "REVERTED"):
+        assert any("not a disposition the rubric allows" in p
+                   for p in tool.disposition_problems(triage(other, "r"), [finding],
+                                                      allowlist={"allow": []}, rejected=[]))
+    released = triage("AUTHORITY", "the essay's second edition, reviewed")
+    assert tool.release_gate(released, expected=[finding]) == []
+    assert tool.disposition_problems(released, [finding], allowlist={"allow": []},
+                                     rejected=[]) == []
+    # AUTHORITY releases nothing else.
+    other = {**finding, "authority_change": False, "question": "Q4", "class": "C1"}
+    assert "AUTHORITY" not in tool.allowed_dispositions(other)
+
+
+def test_a_commit_mixing_an_authority_change_with_other_files_is_refused(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(repo, tool.ESSAY_DIGEST_REL, "a" * 64 + "\n", "root")
+    base = _commit(repo, "README.md", "x\n", "readme")
+    (repo / tool.ESSAY_DIGEST_REL).write_text("b" * 64 + "\n")
+    (repo / "factorylab/cortex/schematics.py").parent.mkdir(parents=True, exist_ok=True)
+    (repo / "factorylab/cortex/schematics.py").write_text("HOLD = 'hold'\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "small cleanup")
+    head = _git(repo, "rev-parse", "HEAD")
+    commits = tool.provenance_commits(repo, f"{base}..{head}")
+    with pytest.raises(tool.AuditInputInvalid, match="an authority change is a commit"):
+        tool.authority_changes(repo, commits)
+
+
 def _documented_commands(text):
     """Every ``uv run python scripts/class2_audit.py`` command in ``text``: continuation
     lines joined, an optional ``[...]`` kept (it must parse too) and each ``<placeholder>``
