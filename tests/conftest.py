@@ -183,6 +183,28 @@ _TESTS_ROOT = Path(__file__).resolve().parent
 CHECK_LIMIT_ENV = "FACTORYLAB_CHECK_LIMIT_S"
 CHECK_LIMIT_DEFAULT_S = 2.0
 CHECK_WALL_CEILING_S = 10.0
+# A gate file whose tests together use more CPU than this (setup, call and teardown,
+# summed across workers: its serial cost) fails the run, unless it is listed below with
+# the reason it cannot be smaller.
+GATE_FILE_BUDGET_ENV = "FACTORYLAB_GATE_FILE_BUDGET_S"
+GATE_FILE_BUDGET_DEFAULT_S = 60.0
+GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
+    "tests/runtime/test_retained_state_crash.py": (
+        "crash anywhere resumes to the uninterrupted run (a storage contract): each of the "
+        "eleven crash-point rows runs a world to its crash and resumes it to the end, over "
+        "the 30-tick horizon, the shortest that reaches every crash point; the rows share "
+        "one reference run (87 s serial CPU at 0bd468f5+lane P)"),
+    "tests/runtime/test_bounded_memory.py": (
+        "the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at 2.2 "
+        "against the 2.3 bound) and pruning changes nothing a reader sees (a 120-tick world "
+        "with and without pruning: at 60 ticks only 45% of returns are slim, under the "
+        "test's own non-vacuity bound); every other test reads these shared worlds (76 s)"),
+    "tests/runtime/test_settled_release.py": (
+        "wave 17b: release changes nothing a reader sees, over a pair of 150-event worlds, "
+        "the smallest whose decisions pass the release horizon and the charter's ten margin "
+        "windows (its module docstring), plus one crash probe resumed to the end (105 s); "
+        "not yet ledgered by the test audit"),
+}
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -346,6 +368,15 @@ def _check_limit_problem(cpu_s: float, wall_s: float, limit_s: float | None) -> 
     return None
 
 
+def _files_over_budget(cpu_by_file: dict[str, float], budget_s: float | None,
+                       exceptions: dict[str, str]) -> dict[str, float]:
+    """The gate files whose serial CPU is over the budget and not excepted by name."""
+    if budget_s is None:
+        return {}
+    return {path: s for path, s in cpu_by_file.items()
+            if s > budget_s and path not in exceptions}
+
+
 _PHASE_CPU = pytest.StashKey[dict]()
 
 
@@ -399,6 +430,53 @@ def pytest_runtest_makereport(item, call):
             f"make it faster). Raise the CPU limit with {CHECK_LIMIT_ENV}=<seconds>, or "
             f"disable both limits with {CHECK_LIMIT_ENV}=off.")
     return report
+
+
+class _GateBudget:
+    """Sums each gate file's serial CPU from the reports and fails a run whose file is
+    over the budget: a slow world is shrunk, shared or excepted by name, never let creep.
+    """
+
+    def __init__(self):
+        self.cpu: dict[str, float] = {}
+        self.wall: dict[str, float] = {}
+        self.over: dict[str, float] = {}
+
+    def pytest_runtest_logreport(self, report):
+        if getattr(report, "factorylab_tier", None) != "gate":
+            return
+        path = report.nodeid.split("::", 1)[0]
+        self.cpu[path] = self.cpu.get(path, 0.0) + (report.factorylab_cpu_s or 0.0)
+        self.wall[path] = self.wall.get(path, 0.0) + report.duration
+
+    def pytest_sessionfinish(self, session):
+        self.over = _files_over_budget(
+            self.cpu, _seconds_from_env(GATE_FILE_BUDGET_ENV, GATE_FILE_BUDGET_DEFAULT_S),
+            GATE_FILE_BUDGET_EXCEPTIONS)
+        if self.over and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    def pytest_terminal_summary(self, terminalreporter):
+        if not self.cpu:
+            return
+        write = terminalreporter.write_line
+        terminalreporter.section("gate files by serial CPU")
+        for path, cpu in sorted(self.cpu.items(), key=lambda kv: -kv[1])[:15]:
+            note = " (excepted)" if path in GATE_FILE_BUDGET_EXCEPTIONS else ""
+            write(f"{cpu:8.1f}s cpu {self.wall[path]:8.1f}s wall  {path}{note}")
+        write(f"{sum(self.cpu.values()):8.1f}s cpu {sum(self.wall.values()):8.1f}s wall  "
+              f"all {len(self.cpu)} gate files")
+        for path, cpu in sorted(self.over.items()):
+            write(f"FAILED gate budget: {path} used {cpu:.1f}s of CPU, over the "
+                  f"{GATE_FILE_BUDGET_ENV} budget; shrink or share its world, or list it "
+                  "in GATE_FILE_BUDGET_EXCEPTIONS with the reason", red=True)
+
+
+def pytest_configure(config):
+    # Only the process that sees every report judges the budget: the controller under
+    # xdist, or the one process without it.
+    if not hasattr(config, "workerinput"):
+        config.pluginmanager.register(_GateBudget(), "factorylab-gate-budget")
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):

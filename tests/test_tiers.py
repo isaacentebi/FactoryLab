@@ -1,12 +1,19 @@
-"""The tier harness in tests/conftest.py: which tests run a world, and the check limit.
+"""The tier harness in tests/conftest.py: which tests run a world, the check limit, and
+the gate file budget.
 
 A unit test misread as a world leaves the inner loop silently; a world misread as a
-unit test is caught at run time by the CPU limit. These pin both reads.
+unit test is caught at run time by the CPU limit; a gate file that creeps past its
+budget fails the run unless it is excepted by name. These pin all three.
 """
 
 import ast
 
-from tests.conftest import CHECK_WALL_CEILING_S, _check_limit_problem, _world_functions
+from tests.conftest import (
+    CHECK_WALL_CEILING_S,
+    _check_limit_problem,
+    _files_over_budget,
+    _world_functions,
+)
 
 SOURCE = '''
 from factorylab.runtime.loop import Runtime, run_world
@@ -55,3 +62,10 @@ def test_the_check_limit_is_cpu_with_a_separate_wall_ceiling():
     # A call that waits uses no CPU; the wall ceiling still fails it.
     assert "wall" in _check_limit_problem(0.1, CHECK_WALL_CEILING_S + 1, 2.0)
     assert _check_limit_problem(50.0, 50.0, None) is None
+
+
+def test_a_gate_file_over_its_budget_fails_unless_it_is_excepted_by_name():
+    spent = {"tests/a.py": 61.0, "tests/b.py": 59.0, "tests/c.py": 300.0}
+    assert _files_over_budget(spent, 60.0, {"tests/c.py": "why it cannot be smaller"}) == {
+        "tests/a.py": 61.0}
+    assert _files_over_budget(spent, None, {}) == {}
