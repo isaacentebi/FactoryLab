@@ -434,11 +434,8 @@ class Runtime(
             self._classify_financing()  # a conversion confirmed this tick is spendable now
             self._reconcile_x402()
             if self.venue is not None:
-                observed = [
-                    we
-                    for we in self.venue.on_tick(self.clock.now_ns, include_fills=False)
-                    if we.kind is not WorldEventKind.FILL
-                ]
+                # Mids and funding; fills come only through the fill cursor below.
+                observed = self.venue.on_tick(self.clock.now_ns)
                 observed.extend(
                     WorldEvent(
                         WorldEventKind.FILL, max(self.clock.now_ns, ts), self.exchange.name, payload

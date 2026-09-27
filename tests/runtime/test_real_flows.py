@@ -278,7 +278,7 @@ def test_an_unanswered_funding_read_emits_no_funding_event():
         def funding(self):
             raise VenueUnavailable("meta_and_asset_ctxs: ClientError 429")
 
-    events = LiveVenue(Silent(), last_fill_ns=0).on_tick(1, include_fills=False)
+    events = LiveVenue(Silent()).on_tick(1)
     assert not [e for e in events if e.kind.name == "FUNDING"]
 
 

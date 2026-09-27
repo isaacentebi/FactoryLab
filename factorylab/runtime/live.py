@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections import Counter, deque
+from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -20,7 +20,6 @@ from typing import Any
 from factorylab.runtime.reasons import CredentialMissing
 from factorylab.world.clock import ClockIterator
 from factorylab.world.events import WorldEvent, WorldEventKind
-from factorylab.world.exchange import fill_identity
 
 NS_PER_SECOND = 1_000_000_000
 
@@ -301,9 +300,10 @@ class WallClock:
 class LiveVenue:
     """Adapts a real ``Exchange`` to per-tick world events.
 
-    Each tick reads mids and funding; when the exchange has an account, new
-    fills since the last poll are emitted with their realised P&L. Rates remain
-    observations; separate venue-identified funding payments carry actual cash.
+    Each tick reads mids and funding. Rates remain observations; separate
+    venue-identified funding payments carry actual cash. Fills are never read here:
+    the consequence fill cursor (``settlement.consequence.FillCursor``) is the one fill
+    path, whose watermark is the fills stream's.
 
     ``markets`` bounds the per-tick broadcast to the world's own trading
     markets: the manifest seed plus every market the population has registered,
@@ -319,8 +319,6 @@ class LiveVenue:
     """
 
     exchange: Any
-    last_fill_ns: int = field(default_factory=time.time_ns)
-    seen_fills: set[str] = field(default_factory=set)
     ledger: Any = None
     last_funding_ns: int | None = None
     seen_funding: set[str] = field(default_factory=set)
@@ -368,7 +366,7 @@ class LiveVenue:
             return None
         return frozenset(self.markets())
 
-    def on_tick(self, now_ns: int, *, include_fills: bool = True) -> list[WorldEvent]:
+    def on_tick(self, now_ns: int) -> list[WorldEvent]:
         traded = self._broadcast()
         out: list[WorldEvent] = []
         try:
@@ -409,48 +407,6 @@ class LiveVenue:
                         "paid_usd": "0",
                         # The instant the venue stated this rate at.
                         "funding_ns": int(f.ts_ns),
-                    },
-                )
-            )
-        try:
-            fills = self.exchange.fills(self.last_fill_ns) if include_fills else []
-            if include_fills:
-                self.through["fills"] = now_ns
-        except (RuntimeError, OSError, ValueError, ArithmeticError):  # no account: read-only venue
-            fills = []
-        # One key per execution (``fill_identity``), never per order: an order filled
-        # in parts is several fills, each money (Codex on #152). A checkpoint written
-        # before kept order ids here; an order it names is taken as seen only at or
-        # before the instant it had read through, never for its later parts.
-        through, occurrences = self.last_fill_ns, Counter()
-        for fl in fills:
-            base = fill_identity(fl)
-            occurrences[base] += 1
-            key = fill_identity(fl, occurrences[base] - 1)
-            if fl.ts_ns < through or key in self.seen_fills or (
-                    fl.ts_ns <= through and fl.order_id in self.seen_fills):
-                continue
-            self.seen_fills.add(key)
-            self.last_fill_ns = max(self.last_fill_ns, fl.ts_ns)
-            out.append(
-                WorldEvent(
-                    WorldEventKind.FILL,
-                    max(now_ns, fl.ts_ns),
-                    self.exchange.name,
-                    {
-                        "order_id": fl.order_id,
-                        "coin": fl.coin,
-                        "is_buy": fl.is_buy,
-                        "size": str(fl.size),
-                        "px": str(fl.px),
-                        "fee_usd": str(fl.fee),
-                        "realized_usd": str(fl.realized),
-                        "market": getattr(fl, "market", "perp"),
-                        "inventory_size": str(getattr(fl, "inventory_size", None) or fl.size),
-                        "liquidation": fl.liquidation,
-                        # The execution's own venue time; the event is stamped when it
-                        # was read (R10-o).
-                        "fill_ns": int(fl.ts_ns),
                     },
                 )
             )

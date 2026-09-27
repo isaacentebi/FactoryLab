@@ -280,6 +280,12 @@ _RETIRED_FIELDS = {
 }
 
 
+#: The live venue's own fill path (``last_fill_ns``, ``seen_fills``) was never used in
+#: production (every tick read with ``include_fills=False``) and was deleted: the fill
+#: cursor is the one fill path. An older checkpoint's fields are read and ignored.
+_RETIRED_VENUE_FIELDS = frozenset({"last_fill_ns", "seen_fills"})
+
+
 class RecoveryJournal:
     """Each replay append must match the next authenticated item before state can change."""
 
@@ -1030,9 +1036,7 @@ def runtime_state(rt) -> Checkpoint:
         "assembly_learners": {aid: learner.state()
                               for aid, learner in rt.assembly_learners.items()},
         "retired_routers": [st.state() for st in rt.retired_routers.values()],
-        "venue": encode({"last_fill_ns": rt.venue.last_fill_ns,
-                         "seen_fills": rt.venue.seen_fills,
-                         "last_funding_ns": rt.venue.last_funding_ns,
+        "venue": encode({"last_funding_ns": rt.venue.last_funding_ns,
                          "seen_funding": rt.venue.seen_funding,
                          "through": rt.venue.through}) if rt.venue else None,
         "venue_tool_log": encode(rt.venue_tools.log) if rt.venue_tools else None,
@@ -1303,6 +1307,8 @@ def restore_runtime(rt, state: dict) -> None:
         rt.retired_routers[router.learner.id] = router
     if rt.venue and state["venue"] is not None:
         for name, value in decode(state["venue"]).items():
+            if name in _RETIRED_VENUE_FIELDS:
+                continue  # an older checkpoint's retired fill path: read and ignored
             setattr(rt.venue, name, value)
     if rt.venue_tools and state["venue_tool_log"] is not None:
         rt.venue_tools.log = decode(state["venue_tool_log"])

@@ -424,7 +424,7 @@ class BootstrapMixin:
         seed_markets(self.exchange, manifest.exchange)
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
-            LiveVenue(self.exchange, last_fill_ns=self.clock.now_ns, ledger=self.ledger,
+            LiveVenue(self.exchange, ledger=self.ledger,
                       last_funding_ns=self.clock.now_ns, markets=self._trading_markets)
             if self.live
             else None

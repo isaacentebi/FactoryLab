@@ -329,7 +329,7 @@ def _polled_runtime():
     rt.fee_schedule = {"rates": {}, "read_ns": 0, "history": {"BTC": [[0, "0"]]}}
     start = rt.clock.now_ns
     venue = _PolledVenue()
-    rt.venue = LiveVenue(venue, last_fill_ns=start, last_funding_ns=start)
+    rt.venue = LiveVenue(venue, last_funding_ns=start)
     rt.consequence_fills = FillCursor(rt.ledger, start_ns=start)
     prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
     handle = rt.queue.open(actor="router:Tick", event_id="polled", propensity=prop,
@@ -349,7 +349,7 @@ def _polled_tick(rt, venue, now, *, poll=True):
     rt.clock.now_ns = now
     rt.tick_through_ns, rt.last_tick_ns = rt.last_tick_ns, now
     rt.consequences.tick_through_ns = rt.tick_through_ns
-    events = rt.venue.on_tick(now, include_fills=False)
+    events = rt.venue.on_tick(now)
     if poll:
         events += [WorldEvent(WorldEventKind.FILL, max(now, ts), venue.name, payload)
                    for ts, payload in rt.consequence_fills.poll(venue, now_ns=now)]
@@ -503,12 +503,12 @@ def test_a_failing_funding_read_holds_a_named_perp_trade_never_a_spot_one():
     rt = _world(10)
     start = 4 * NS_PER_HOUR
     rt.clock.now_ns = start
-    rt.venue = LiveVenue(MidsOnly(), last_fill_ns=start, last_funding_ns=start)
+    rt.venue = LiveVenue(MidsOnly(), last_funding_ns=start)
 
     def tick(now):
         rt.clock.now_ns = now
         rt.tick_through_ns = now
-        rt._settle_exchange_effects(rt.venue.on_tick(now, include_fills=False),
+        rt._settle_exchange_effects(rt.venue.on_tick(now),
                                     observe_positions=False)
 
     tick(start)

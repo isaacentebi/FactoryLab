@@ -857,8 +857,7 @@ class FillCursor:
     Timestamp plus all Fill fields and their multiplicity distinguish observations,
     never the order id alone (an order filled in parts is several fills); only the
     latest timestamp's counts need retaining because the next poll includes that
-    timestamp. A venue's own fill id (``Fill.fill_id``) is deliberately not part of
-    the key, so a cursor checkpointed before it existed reads on exactly as it did.
+    timestamp. It is the one fill path: every fill the runtime books is read here.
     """
 
     def __init__(self, ledger: Ledger, *, start_ns: int) -> None:

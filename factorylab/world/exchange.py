@@ -122,19 +122,6 @@ class Fill:
     liquidation: bool = False
     market: str = "perp"
     inventory_size: Decimal | None = None
-    # The venue's own identity of this execution (Hyperliquid's ``hash:tid``), or None
-    # where the venue states none. Never the order id: one order fills in parts.
-    fill_id: str | None = None
-
-
-def fill_identity(fill: Fill, occurrence: int = 0) -> str:
-    """Guarantees one key per execution, never per order: the venue's ``fill_id`` when
-    it states one; else the execution's own facts with ``occurrence``, its position
-    among identical executions in the same read (Codex on #152)."""
-    if fill.fill_id is not None:
-        return f"fill:{fill.fill_id}"
-    return (f"c:{fill.ts_ns}:{fill.order_id}:{int(fill.is_buy)}:{fill.size}:{fill.px}:"
-            f"{fill.fee}#{occurrence}")
 
 
 @dataclass(frozen=True)
@@ -228,7 +215,8 @@ FILLS_PAGE = 2000
 
 
 def _venue_fill_id(row: dict) -> str:
-    """Hyperliquid's identity of one execution: its transaction hash and trade id."""
+    """Hyperliquid's identity of one execution, its transaction hash and trade id: what
+    a page reread at its boundary millisecond is deduplicated by (``fills``)."""
     return f"{row.get('hash', '')}:{row['tid']}"
 
 
@@ -1656,7 +1644,6 @@ class HyperliquidExchange:
                     liquidation=bool(f.get("liquidation")),
                     market=market,
                     inventory_size=size,
-                    fill_id=_venue_fill_id(f) if f.get("tid") is not None else None,
                 ))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
                 continue
