@@ -1,0 +1,11 @@
+{
+  "_schema": "FactoryLab public observatory, v1. The only real data file the Progress page reads. A running world's public outputs (its wake page of sealed aggregates) are meant to feed it later. Publish aggregates and public facts only: never a seat's own scores, history or learner state, never a wallet address, account or order identifier, never a balance. Money is integer micro-USD. Times are ISO 8601 UTC. Pathology verdicts are present | absent | unknown. See site/README.md for every field.",
+  "updated": "2026-09-27T00:00:00Z",
+  "example": false,
+  "status": {
+    "live": false,
+    "headline": "No world is live yet.",
+    "line": "The factory is being built. Short rehearsal worlds have run on testnet and ended; the first long-lived world is still ahead. When it launches, this page follows it."
+  },
+  "worlds": []
+}
