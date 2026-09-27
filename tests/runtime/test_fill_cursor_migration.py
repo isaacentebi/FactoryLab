@@ -25,10 +25,20 @@ def test_genuine_three_field_legacy_cursor_keeps_live_constructor_defaults():
     assert cursor.measured is True
     assert cursor.propagation_bound_ns is None
     assert cursor.observation_complete is True
+    assert cursor.reconciliation_ns is None
+    assert cursor.expected_positions is None
+    assert cursor.expected_cash is None
+    assert cursor.expected_fees is None
+    assert cursor.recovery_span_ns == 0
+    assert cursor.incomplete_since_ns is None
+    assert cursor.last_residual is None
 
 
 @pytest.mark.parametrize("field,value", [("since_ns", "bad"), ("seen", []),
-                                         ("measured", 1), ("propagation_bound_ns", -1)])
+                                         ("measured", 1), ("propagation_bound_ns", -1),
+                                         ("expected_positions", {"perp:BTC": "NaN"}),
+                                         ("expected_cash", {"perp": 1.5}),
+                                         ("expected_fees", "1"), ("recovery_span_ns", -1)])
 def test_invalid_fill_component_refuses_before_any_runtime_mutation(field, value):
     source = make_runtime(live=True)
     source.clock.now_ns += 123

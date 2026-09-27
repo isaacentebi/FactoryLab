@@ -964,7 +964,10 @@ _COMPONENT_FIELDS = (
                           # frozen at their horizon.
                           "facts_ns", "tick_through_ns", "history")),
     ("consequence_fills", "", ("launch_ns", "read_ns", "since_ns", "seen", "through_ns", "measured",
-                               "propagation_bound_ns", "observation_complete")),
+                               "propagation_bound_ns", "observation_complete",
+                               "reconciliation_ns", "expected_positions", "expected_cash",
+                               "expected_fees", "recovery_span_ns", "incomplete_since_ns",
+                               "last_residual")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
@@ -1137,10 +1140,15 @@ def _migrate_fill_cursor(saved, running) -> dict:
         raise ResumeError("invalid fill cursor component")
     migrated = {"launch_ns": saved["since_ns"], "read_ns": None,
                 "measured": running.measured, "propagation_bound_ns": None,
-                "observation_complete": True, **saved}
-    for field in ("launch_ns", "since_ns", "read_ns", "through_ns", "propagation_bound_ns"):
+                "observation_complete": True, "reconciliation_ns": None,
+                "expected_positions": None, "expected_cash": None, "expected_fees": None,
+                "recovery_span_ns": 0, "incomplete_since_ns": None,
+                "last_residual": None, **saved}
+    for field in ("launch_ns", "since_ns", "read_ns", "through_ns", "propagation_bound_ns",
+                  "reconciliation_ns", "recovery_span_ns", "incomplete_since_ns"):
         value = migrated[field]
-        optional = field in ("read_ns", "through_ns", "propagation_bound_ns")
+        optional = field in ("read_ns", "through_ns", "propagation_bound_ns",
+                             "reconciliation_ns", "incomplete_since_ns")
         if value is None and optional:
             continue
         if type(value) is not int or (field != "through_ns" and value < 0):
@@ -1155,6 +1163,40 @@ def _migrate_fill_cursor(saved, running) -> dict:
         for key, count in seen.items()
     ):
         raise ResumeError("invalid fill cursor seen")
+    positions, cash = migrated["expected_positions"], migrated["expected_cash"]
+    if (positions is None) != (cash is None):
+        raise ResumeError("invalid fill cursor accounting baseline")
+    if positions is not None:
+        if not isinstance(positions, dict) or not isinstance(cash, dict):
+            raise ResumeError("invalid fill cursor accounting maps")
+        try:
+            valid_positions = all(isinstance(key, str) and isinstance(value, str)
+                                  and Decimal(value).is_finite()
+                                  for key, value in positions.items())
+        except ArithmeticError:
+            valid_positions = False
+        if not valid_positions or set(cash) != {"perp", "spot"} or any(
+            type(value) is not int for value in cash.values()
+        ):
+            raise ResumeError("invalid fill cursor accounting facts")
+    if migrated["expected_fees"] is not None and type(migrated["expected_fees"]) is not int:
+        raise ResumeError("invalid fill cursor expected_fees")
+    residual = migrated["last_residual"]
+    if residual is not None:
+        if (not isinstance(residual, dict)
+                or set(residual) != {"position_delta", "cash_delta_micro_usd", "start_ns"}
+                or type(residual["start_ns"]) is not int or residual["start_ns"] < 0
+                or not isinstance(residual["position_delta"], dict)
+                or not isinstance(residual["cash_delta_micro_usd"], dict)):
+            raise ResumeError("invalid fill cursor last_residual")
+        try:
+            valid = all(isinstance(k, str) and isinstance(v, str) and Decimal(v).is_finite()
+                        for k, v in residual["position_delta"].items())
+        except ArithmeticError:
+            valid = False
+        if not valid or any(not isinstance(k, str) or type(v) is not int
+                            for k, v in residual["cash_delta_micro_usd"].items()):
+            raise ResumeError("invalid fill cursor residual facts")
     return migrated
 
 

@@ -54,7 +54,7 @@ def test_a_full_page_is_followed_to_the_end_and_boundary_peers_are_kept_once():
     assert len(fills) == FILLS_PAGE + 2  # every trade once, the reread boundary included
 
 
-@pytest.mark.parametrize("since_ms, complete", [(0, False), (1, True)])
+@pytest.mark.parametrize("since_ms, complete", [(0, False), (1, False)])
 def test_retained_history_cap_is_unknown_and_survives_journal_replay(since_ms, complete):
     from factorylab.runtime.resume import RecoveryJournal
     from factorylab.world.exchange import FILLS_HISTORY
@@ -129,4 +129,4 @@ def test_the_watermark_does_not_pass_fills_not_yet_read(monkeypatch):
     fills = cursor.poll(venue, strict=True, now_ns=10_001 * NS_PER_MS)
     assert len(fills) == FILLS_PAGE + 2
     assert cursor.propagation_bound_ns == 10_009 * NS_PER_MS
-    assert cursor.through_ns == -8 * NS_PER_MS
+    assert cursor.through_ns is None  # no independent baseline/fee evidence

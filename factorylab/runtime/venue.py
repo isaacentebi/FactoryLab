@@ -627,9 +627,9 @@ class VenueMixin:
         """The earliest instant through which the venue has delivered every fact of
         ``streams``, or None when this runtime keeps no venue watermark (ruling R10-o).
 
-        Guarantees live fills trail the successful read's request time by the maximum
-        observed first-seen delay (the cursor's empirical bound, not a proof of future
-        completeness). Other polled streams use ``LiveVenue.through``. An unmeasured
+        Live fills require independent position, raw cash and cumulative fee agreement.
+        A net-account recovery checkpoint or measured publication delay alone never
+        proves completeness. Other polled streams use ``LiveVenue.through``. An unmeasured
         or unread stream is minus infinity; fake and recorded venues keep their exact
         ``advance_through_ns``, every stream alike.
         """

@@ -125,6 +125,7 @@ class Fill:
     observed_at_ns: int | None = None
     crossed: bool | None = None
     history_complete: bool = True
+    venue_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,10 @@ class AccountState:
     # them at a guessed price is invented, and one unpriceable token must not make
     # the whole account unreadable.
     unpriced: tuple[str, ...] = ()
+    # Raw settled collateral, unlike withdrawable or marked equity. None means the
+    # venue supplied no independent cash evidence (Chapter II §III.b).
+    reconciliation_cash_usd: Decimal | None = None
+    cumulative_fees_usd: Decimal | None = None
 
 
 class Exchange(Protocol):
@@ -214,6 +219,10 @@ class Exchange(Protocol):
 # --------------------------------------------------------------------------- fake
 
 
+# Official info endpoint, heading "Retrieve a user's fills by time":
+# https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
+# "Returns at most 2000 fills per response and only the 10000 most recent fills are available".
+# Counts control pagination only, NEVER completeness (Chapter II §III.b).
 #: The most fills Hyperliquid's ``userFillsByTime`` answers in one read.
 FILLS_PAGE = 2000
 #: The endpoint exposes only the most recent 10,000 fills, across time pages.
@@ -1467,6 +1476,8 @@ class HyperliquidExchange:
             spot_balances=tuple(balances),
             observed_at_ns=observed_at,
             unpriced=tuple(unpriced),
+            reconciliation_cash_usd=(Decimal(str(summary["totalRawUsd"]))
+                                     if summary.get("totalRawUsd") is not None else None),
         )
         return self._last_account
 
@@ -1603,10 +1614,9 @@ class HyperliquidExchange:
         reports that failure explicitly. Neither advances the inclusive cursor.
         Time pages contain at most 2,000 rows, within the endpoint's most recent
         10,000 fills (Hyperliquid info endpoint, userFillsByTime). Inclusive pages
-        deduplicate trade ids. Exhausting retained history whose first fill follows
-        the read start marks every returned fill's history incomplete; a short final
-        page proves pagination ended, not that older venue history still exists.
-        A full page that does not advance fails closed.
+        deduplicate trade ids. Neither short nor saturated responses prove execution
+        completeness: every returned fill states history_complete=False. Independent
+        account reconciliation is required. A stalled full page fails closed.
         """
         if not self._address:
             raise RuntimeError("fills() needs an address or a private key")
@@ -1667,6 +1677,7 @@ class HyperliquidExchange:
                     market=market,
                     inventory_size=size,
                     crossed=f.get("crossed") if type(f.get("crossed")) is bool else None,
+                    venue_id=_venue_fill_id(f) if f.get("tid") is not None else None,
                 ))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError) as exc:
                 # Chapter II §III.b: omitted executions are not evidence of absence.
@@ -1677,8 +1688,7 @@ class HyperliquidExchange:
 
         observed_at_ns = time.time_ns()
         # Chapter II §III.b: the history cap cannot become a completeness assertion.
-        history_complete = not (len(rows) >= FILLS_HISTORY
-                                and min((f.ts_ns for f in out), default=since_ns + 1) > since_ns)
+        history_complete = False  # Counts never certify delivery, even at the inclusive boundary.
         return [replace(fill, observed_at_ns=observed_at_ns,
                         history_complete=history_complete) for fill in out]
 

@@ -416,6 +416,12 @@ class BootstrapMixin:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
+        if self.live:
+            # Chapter II §III.b: an independent pre-execution account anchors fills.
+            try:
+                self.consequence_fills.initialize(self.exchange.account(), now_ns=self.clock.now_ns)
+            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
+                pass  # No baseline is UNKNOWN, never inferred from a later account.
         # Every answered venue read is kept for the rest of its tick, so an identical
         # seat read is answered without a request (``ComputeMixin._tick_answer``).
         self._tick_reads = None
