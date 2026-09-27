@@ -211,7 +211,7 @@ def physics(manifest: Mapping | None) -> Physics:
         value = section.get(key)
         return default if value is None else value
 
-    return Physics(
+    ph = Physics(
         r=int(get(timing, "min_ratio", base.r)), k=int(get(immune, "k", base.k)),
         eta=float(get(prices, "eta", base.eta)), kp=float(get(prices, "kp", base.kp)),
         kd=float(get(prices, "kd", base.kd)), decay=float(get(prices, "decay", base.decay)),
@@ -234,6 +234,32 @@ def physics(manifest: Mapping | None) -> Physics:
         consequence_share=float(get(evaluation, "consequence_share", base.consequence_share)),
         no_swap_regret_kinds=tuple(get(evaluation, "no_swap_regret_kinds", ())),
     )
+    _check_physics(ph)
+    return ph
+
+
+#: The physics every iterative reading depends on (``w_sat``, ``t_release``,
+#: ``t_gamma``, ``gain_steps``): each a finite rate, a positive step where a loop
+#: advances by it. ``lambda_max`` may be infinite (wave 16 states none).
+_POSITIVE = ("decay", "gain_step", "cap", "gamma_max")
+_NONNEGATIVE = ("eta", "kp", "kd", "price_step", "tv_threshold", "gap_threshold")
+
+
+def _check_physics(ph: Physics) -> None:
+    """Refuse (``DiaryInvalid``) physics under which a reading would never end or mean
+    nothing: a non-finite rate, a step that does not advance (``decay`` or
+    ``gain_step`` at or below 0 makes ``t_release`` / ``t_gamma`` loop forever), a
+    loop ratio or tail below 1 (Codex on b1c8590)."""
+    bad = [name for name in _POSITIVE
+           if not (math.isfinite(getattr(ph, name)) and getattr(ph, name) > 0)]
+    bad += [name for name in _NONNEGATIVE
+            if not (math.isfinite(getattr(ph, name)) and getattr(ph, name) >= 0)]
+    if not (ph.lambda_max > 0 and not math.isnan(ph.lambda_max)):
+        bad.append("lambda_max")
+    bad += [name for name in ("r", "k") if getattr(ph, name) < 1]
+    if bad:
+        raise DiaryInvalid(f"the manifest's physics is unusable: {', '.join(bad)} must be "
+                           "finite and positive where a reading advances by it")
 
 
 def w_sat(ph: Physics, v: float) -> int | None:
@@ -250,9 +276,25 @@ def w_sat(ph: Physics, v: float) -> int | None:
     if ph.eta <= 0:
         return 1 if ph.kp * v * v >= ph.cap else None
     w = max(1, math.ceil((ph.cap / (v * v) - ph.kp) / ph.eta - 1e-12))
-    while min(ph.lambda_max, ph.kp * v + w * ph.eta * v) * v < ph.cap:
+    # The closed form is exact up to float rounding: a few steps settle it.
+    for _ in range(_LOOP_SLACK):
+        if min(ph.lambda_max, ph.kp * v + w * ph.eta * v) * v >= ph.cap:
+            return w
         w += 1
-    return w
+    raise Malformed({"kind": "physics"}, "prices.eta (w_sat did not converge)")
+
+
+#: Extra iterations a closed-form step count may need for float rounding.
+_LOOP_SLACK = 64
+
+
+def _bound(span: float, step: float) -> int:
+    """The iterations a loop advancing ``step`` needs to cover ``span``, with slack:
+    ``⌈span / step⌉ + _LOOP_SLACK`` (``step > 0`` by ``_check_physics``). A span or
+    step that is not finite bounds nothing, so the loop runs none and refuses."""
+    if not (math.isfinite(span) and math.isfinite(step)) or step <= 0:
+        return 0
+    return max(0, math.ceil(max(0.0, span) / step)) + _LOOP_SLACK
 
 
 def t_release(ph: Physics, lam: float) -> int:
@@ -264,9 +306,14 @@ def t_release(ph: Physics, lam: float) -> int:
     fifth leaves 2.8e-17).
     """
     lam, windows = max(0.0, lam), 0
-    while lam > 0.0:
+    # At most ⌈lam / decay⌉ steps, give or take the float slack (decay > 0: physics).
+    for _ in range(_bound(lam, ph.decay)):
+        if lam <= 0.0:
+            return windows
         lam, windows = max(0.0, lam - ph.decay), windows + 1
-    return windows
+    if lam <= 0.0:
+        return windows
+    raise Malformed({"kind": "physics"}, "prices.decay (t_release did not end)")
 
 
 def t_gamma(ph: Physics, gamma: float, organ_period: int) -> int:
@@ -274,9 +321,13 @@ def t_gamma(ph: Physics, gamma: float, organ_period: int) -> int:
     period, the steps counted by ``immune._gain``'s own float loop
     (``max(floor, old − gain_step)``)."""
     gamma, steps = max(0.0, gamma), 0
-    while gamma > 0.0:
+    for _ in range(_bound(gamma, ph.gain_step)):
+        if gamma <= 0.0:
+            return steps * organ_period
         gamma, steps = max(0.0, gamma - ph.gain_step), steps + 1
-    return steps * organ_period
+    if gamma <= 0.0:
+        return steps * organ_period
+    raise Malformed({"kind": "physics"}, "immune.gain_step (t_gamma did not end)")
 
 
 def gain_steps(ph: Physics, gamma: float) -> int:
@@ -284,9 +335,13 @@ def gain_steps(ph: Physics, gamma: float) -> int:
     float loop (``min(gamma_max, old + gain_step)``): kernel-exact, never a ceiling of a
     quotient."""
     steps = 0
-    while gamma < ph.gamma_max:
+    for _ in range(_bound(ph.gamma_max - gamma, ph.gain_step)):
+        if gamma >= ph.gamma_max:
+            return steps
         gamma, steps = min(ph.gamma_max, gamma + ph.gain_step), steps + 1
-    return steps
+    if gamma >= ph.gamma_max:
+        return steps
+    raise Malformed({"kind": "physics"}, "immune.gain_step (gain_steps did not end)")
 
 
 def t_learn(delta: float, arms: int) -> int:
@@ -2924,8 +2979,11 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     successor: dict[str, str] = {}
 
     def learner_of(router: str) -> str:
+        # A succession chain visits each router at most once: its length bounds it.
         seen = set()
-        while router in successor and router not in seen:
+        for _ in range(len(successor) + 1):
+            if router not in successor or router in seen:
+                break
             seen.add(router)
             router = successor[router]
         return router

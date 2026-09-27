@@ -672,3 +672,51 @@ def test_every_defining_criterion_is_a_sweepable_populations_and_population_only
 
     assert set(P.DEFINING) <= P.SWEEPABLE
     assert {"th1", "th4", "i10", "of2"} <= set(P.DEFINING)
+
+
+# --- Codex on b1c8590: no reading loops forever ------------------------------------------
+
+#: ``while`` loops gauntlet.py may keep, each with its reason. None today: every open
+#: iteration is a ``for`` over an explicit bound derived from the evidence.
+WHILE_ALLOWED: dict[str, str] = {}
+
+
+def test_no_open_ended_loop_in_the_gauntlet():
+    """Every iteration in gauntlet.py has an explicit bound (a ``for`` over a range the
+    evidence or the arithmetic fixes): a hang would bypass the criterion wrapper. A
+    ``while`` loop, or a ``for`` over ``itertools.count``, fails here unless allowed with
+    a reason."""
+    source = Path(g.__file__).read_text()
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def owner(node):
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.FunctionDef):
+                return node.name
+        return "<module>"
+    loops = [owner(node) for node in ast.walk(tree) if isinstance(node, ast.While)]
+    loops += [owner(node) for node in ast.walk(tree) if isinstance(node, ast.For)
+              and "count(" in ast.unparse(node.iter)]
+    assert sorted(set(loops) - set(WHILE_ALLOWED)) == [], "an unbounded loop"
+    assert all(reason.strip() for reason in WHILE_ALLOWED.values())
+
+
+@pytest.mark.parametrize("field,value", [("decay", 0.0), ("decay", -0.1),
+                                         ("decay", float("nan")), ("decay", float("inf")),
+                                         ("eta", float("inf")), ("penalty_cap", 0.0)])
+def test_physics_a_reading_cannot_advance_under_is_refused(field, value):
+    """Codex on b1c8590: decay 0 made t_release loop forever. Physics a reading would
+    never finish under is refused as DiaryInvalid, never run."""
+    manifest = {"prices": {"eta": 0.05, "decay": 0.1, "penalty_cap": 0.5, field: value}}
+    with pytest.raises(g.DiaryInvalid, match="physics is unusable"):
+        g.physics(manifest)
+
+
+def test_the_iterative_readings_are_bounded_and_kernel_exact():
+    ph = g.physics({"prices": {"decay": 0.1, "penalty_cap": 0.5}})
+    assert g.t_release(ph, 0.5) == 6  # the kernel's float loop, not ⌈0.5 / 0.1⌉
+    assert g.t_release(ph, 0.0) == 0
+    with pytest.raises(g.Malformed):
+        g.t_release(ph, float("inf"))
