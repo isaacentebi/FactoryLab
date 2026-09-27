@@ -537,7 +537,7 @@ def authority_text(essay: Path | None) -> str:
         raise AuditInputInvalid(f"no essay at {essay}: render fills the authority text "
                                 "from docs/essay.md (copied into the worktree, never "
                                 "committed), and refuses without it")
-    lines = Path(essay).read_text().splitlines()
+    lines = read_input(essay, "the essay").splitlines()
     at = {}
     for mark in ESSAY_MARKS:
         at[mark] = next((i for i, line in enumerate(lines) if mark in line), None)
@@ -884,7 +884,23 @@ class AuditInputInvalid(ValueError):
 
 
 def sha256_file(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    """The file's sha256; one that cannot be read is refused (``AuditInputInvalid``)."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise AuditInputInvalid(f"{path} cannot be read: {exc.strerror or exc}") from exc
+
+
+def read_input(path: Path, what: str) -> str:
+    """The text of an operator-supplied input (a key, a sample, a triage file, a corpus);
+    one that is missing, unreadable or not UTF-8 is refused (``AuditInputInvalid``)
+    naming the input and its path, never raised as ``OSError`` or ``UnicodeDecodeError``."""
+    try:
+        return Path(path).read_bytes().decode("utf-8")
+    except OSError as exc:
+        raise AuditInputInvalid(f"{what} {path} cannot be read: {exc.strerror or exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise AuditInputInvalid(f"{what} {path} is not UTF-8 text (byte {exc.start})") from exc
 
 
 def resolve_range(repo: Path, release_range: str) -> list[str]:
@@ -999,7 +1015,7 @@ def previous_problems(repo: Path, head: str, *, first: bool, previous: Path | No
     if sha256_file(previous_corpus) != record["release_corpus_sha"]:
         problems.append(f"{previous_corpus} is not the release corpus the last release's "
                         f"gate recorded ({record['release_corpus_sha'][:12]})")
-    text = Path(previous).read_text()
+    text = read_input(previous, "the previous triage")
     world = text.splitlines()[0].removeprefix("# Class 2 audit triage: ").strip() \
         if text else ""
     if record["triages"].get(world) != sha256_file(previous):
@@ -1043,9 +1059,17 @@ def load_canaries(text: str) -> dict:
     (``canary-q<n>``, so ids are non-empty and unique), Q6/Q7/Q9/Q10/Q11 and only they
     mandatory, a cross-leaf canary (``CROSS_LEAF``) a set of two or more texts each on its
     own surface, and ten distinct control surfaces."""
-    spec = json.loads(text)
+    try:
+        spec = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AuditInputInvalid(f"canaries.json is not JSON (line {exc.lineno}: "
+                                f"{exc.msg})") from exc
+    if not isinstance(spec, dict):
+        raise AuditInputInvalid("canaries.json is not a JSON object")
     problems = []
     canaries = spec.get("canaries") or []
+    if not isinstance(canaries, list) or not all(isinstance(c, dict) for c in canaries):
+        raise AuditInputInvalid("canaries.json's canaries are not a list of objects")
     questions = [c.get("question") for c in canaries]
     if questions != [f"Q{i}" for i in range(3, 12)]:
         problems.append(f"canary questions {questions} are not Q3-Q11 once each")
@@ -1090,7 +1114,7 @@ def load_canaries(text: str) -> dict:
 
 
 def _jsonl(path: Path, what: str) -> list[dict]:
-    return _jsonl_text(Path(path).read_text(), what)
+    return _jsonl_text(read_input(path, what), what)
 
 
 def _jsonl_text(text: str, what: str) -> list[dict]:
@@ -1169,7 +1193,12 @@ def read_allowlist(text: str) -> dict:
     and quote-level entries, as ``class2_lexicon.load_allowlist`` reads the file."""
     import tomllib
 
-    raw = tomllib.loads(text)
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise AuditInputInvalid(f"the allowlist is not TOML: {exc}") from exc
+    if not all(isinstance(raw.get(k, []), list) for k in ("collocation", "allow")):
+        raise AuditInputInvalid("the allowlist's collocation and allow are not lists")
     return {"collocation": list(raw.get("collocation", ())), "allow": list(raw.get("allow", ()))}
 
 
@@ -1191,7 +1220,7 @@ def read_previous_triage(path: Path | None, worlds: list[str]) -> str | None:
     its full identity (``finding_identity``: id, question, class) with its path, once."""
     if path is None or not Path(path).exists():
         return None
-    text = Path(path).read_text()
+    text = read_input(path, "the triage file")
     header = triage_header(text)
     first = text.splitlines()[0] if text else ""
     world = first.removeprefix("# Class 2 audit triage: ").strip()
@@ -1474,7 +1503,13 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
     every canary and control names a leaf of it.
     """
     path = Path(path)
-    key = json.loads(path.read_text())
+    try:
+        key = json.loads(read_input(path, "the key"))
+    except json.JSONDecodeError as exc:
+        raise AuditInputInvalid(f"the key {path} is not JSON (line {exc.lineno}, column "
+                                f"{exc.colno}: {exc.msg})") from exc
+    if not isinstance(key, dict):
+        raise AuditInputInvalid(f"the key {path} is not a JSON object")
     required = {"schema": int, "worlds": list, "range": str, "range_shas": list,
                 "release_commit": str, "corpus_sha": str, "prompt_sha": str,
                 "provenance_prompt_sha": str,
@@ -1631,7 +1666,7 @@ def calibration_problems(key_path: Path, key: dict, repo: Path,
 def beside_text(path: Path) -> str:
     """A prompt beside the key, as text, or empty when there is none (so it differs from
     any recomputation)."""
-    return path.read_bytes().decode() if path.exists() else ""
+    return read_input(path, "the prompt") if path.exists() else ""
 
 
 def load_calibrated_key(key_path: Path, repo: Path,
@@ -2471,7 +2506,7 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
         raise AuditInputInvalid("the gate needs the reviewed triage file's sha256")
     repo = repo or ROOT
     key, records = load_calibrated_key(key_path, repo, essay)
-    text = triage.read_text()
+    text = read_input(triage, "the triage file")
     header = triage_header(text)
     problems = []
     if sha256_file(triage) != triage_sha256:

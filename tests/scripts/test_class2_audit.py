@@ -2629,3 +2629,69 @@ def test_an_allowlist_entry_names_its_question_with_its_class():
     assert class2_lexicon.allowlist_problems({"collocation": [], "allow": [entry]}) == []
     half = entry | {"question": "Q4"}
     assert class2_lexicon.allowlist_problems({"collocation": [], "allow": [half]})
+
+
+#: Broken forms of an operator-supplied file: missing, not UTF-8, truncated JSON, and a
+#: JSON value that is not an object.
+BROKEN_FILES = {"missing": None, "binary": b"\xff\xfe\x00\x01", "truncated": b'{"a": ',
+                "not-an-object": b"[1, 2]"}
+
+
+#: The readers of every file the CLI takes, and the broken forms each must refuse. A
+#: triage file is markdown, so only its read errors apply; a missing previous triage is
+#: a first release (None), not an error.
+READERS = {
+    "key": (tool.load_key, sorted(BROKEN_FILES)),
+    "sample": (tool.read_output, sorted(BROKEN_FILES)),
+    "previous corpus": (tool.read_corpus, sorted(BROKEN_FILES)),
+    "previous triage": (lambda p: tool.read_previous_triage(p, [WORLD]),
+                        ["binary", "truncated", "not-an-object"]),
+    "triage file": (lambda p: tool.read_input(p, "the triage file"), ["missing", "binary"]),
+}
+
+
+@pytest.mark.parametrize("reader,form", [(r, f) for r, (_fn, forms) in READERS.items()
+                                         for f in forms])
+def test_a_broken_cli_input_file_is_refused_never_raised(tmp_path, reader, form):
+    """Codex on 0f40a8d: every file the CLI reads (the key, a corpus or provenance
+    sample, the previous corpus and triage, the triage file gated) that is missing,
+    unreadable, not UTF-8, truncated or not an object is refused as AuditInputInvalid
+    naming it, never raised as OSError, UnicodeDecodeError or JSONDecodeError."""
+    path = tmp_path / "input.jsonl"
+    if BROKEN_FILES[form] is not None:
+        path.write_bytes(BROKEN_FILES[form])
+    with pytest.raises(tool.AuditInputInvalid):
+        READERS[reader][0](path)
+
+
+@pytest.mark.parametrize("text", ['{"canaries": [', "[1]", '{"canaries": [1, 2]}',
+                                  '{"canaries": "x"}'])
+def test_a_broken_committed_canaries_file_is_refused(text):
+    with pytest.raises(tool.AuditInputInvalid, match="canaries"):
+        tool.load_canaries(text)
+
+
+@pytest.mark.parametrize("text", ['{"finding_id": ', "[1]", "not json"])
+def test_a_broken_committed_rejected_file_is_refused(text):
+    with pytest.raises(tool.AuditInputInvalid, match="rejected.jsonl"):
+        tool.read_rejected(text)
+
+
+@pytest.mark.parametrize("text", ["allow = [", "allow = 3", "[[allow]\nx"])
+def test_a_broken_committed_allowlist_is_refused(text):
+    with pytest.raises(tool.AuditInputInvalid, match="allowlist"):
+        tool.read_allowlist(text)
+
+
+@pytest.mark.parametrize("form", sorted(BROKEN_FILES))
+def test_the_cli_refuses_a_broken_key_with_exit_2(tmp_path, capsys, form):
+    key = tmp_path / "canary_key.json"
+    if BROKEN_FILES[form] is not None:
+        key.write_bytes(BROKEN_FILES[form])
+    sample = tmp_path / "s.jsonl"
+    sample.write_text("{}\n")
+    argv = ["validate", str(sample), str(sample), "--provenance-samples", str(sample),
+            str(sample), "--key", str(key)]
+    assert tool.main(argv) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and "key" in err
