@@ -419,8 +419,9 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
     """
     schema: Any = None
     marker = "OUTCOME SCHEMA\n"
-    if marker in text:
-        line = text.split(marker, 1)[1].split("\n", 1)[0]
+    tail = _kernel_tail(text)
+    if marker in tail:
+        line = tail.split(marker, 1)[1].split("\n", 1)[0]
         try:
             schema = json.loads(line)
         except (ValueError, json.JSONDecodeError):
@@ -429,27 +430,96 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
         schema = req.response_schema
     if not isinstance(schema, dict):
         return frozenset()
+    return frozenset().union(*_shape_required(schema))
+
+
+def _shape_required(schema: dict) -> list[frozenset[str]]:
+    """Each admitted answer shape's required fields (``anyOf`` / ``oneOf`` shapes)."""
     shapes = schema.get("anyOf") or schema.get("oneOf") or (schema,)
-    return frozenset(field for shape in shapes if isinstance(shape, dict)
-                     for field in shape.get("required", ()) if isinstance(field, str))
+    return [frozenset(f for f in shape.get("required", ()) if isinstance(f, str))
+            for shape in shapes if isinstance(shape, dict)] or [frozenset()]
+
+
+def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
+    """The fields EVERY admitted answer shape requires: what the contract obliges any
+    answer to carry, from the same trusted sources as ``outcome_required``. A mixed
+    contract (a producer's return or a verdict) obliges neither."""
+    schema: Any = None
+    marker = "OUTCOME SCHEMA\n"
+    tail = _kernel_tail(text)
+    if marker in tail:
+        try:
+            schema = json.loads(tail.split(marker, 1)[1].split("\n", 1)[0])
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+    if not isinstance(schema, dict) and req is not None:
+        schema = req.response_schema
+    if not isinstance(schema, dict):
+        return frozenset()
+    shapes = _shape_required(schema)
+    return frozenset.intersection(*shapes)
+
+
+#: The kernel-written preamble of a request's SCORING section (``Request.sections``).
+_SCORING_MARK = ("\nSCORING\nHow the answer to this request settles, as world.scoring "
+                 "publishes it.\n")
+
+
+def _kernel_tail(text: str) -> str:
+    """The part of a prompt after its INPUTS line: only the kernel writes there.
+
+    The description (``REQUEST``) is an author's for a commission and may hold any
+    text, headers included; the inputs are one JSON line, which holds no raw newline.
+    Everything after that line (the propensity, SCORING, OUTCOME SCHEMA, the outcome
+    contract, the completion criterion) is rendered by ``Request.sections``. Read from
+    the last INPUTS header, so a header an author wrote earlier never counts."""
+    head = text.rfind("\n\nINPUTS\n")
+    if head < 0:
+        return text
+    start = head + len("\n\nINPUTS\n")
+    newline = text.find("\n", start)
+    return "" if newline < 0 else text[newline:]
+
+
+def _scoring_keys(text: str) -> frozenset[str]:
+    """The keys of the request's SCORING section: how its answer settles, as the
+    kernel's judging steps state it (``_settlement_facts``: ``evaluator_return`` for a
+    Verdict, ``meta_return`` for a MetaVerdict, ``counter_return`` for a
+    CounterVerdict). Empty for a request that carries none."""
+    tail = _kernel_tail(text)
+    if _SCORING_MARK not in tail:
+        return frozenset()
+    line = tail.split(_SCORING_MARK, 1)[1].split("\n", 1)[0]
+    try:
+        facts = json.loads(line)
+    except (ValueError, json.JSONDecodeError):
+        return frozenset()
+    return frozenset(facts) if isinstance(facts, dict) else frozenset()
 
 
 def request_form(req: ModelRequest | None, text: str, inputs: dict[str, Any]) -> str:
-    """Which of ``REQUEST_FORMS`` a request is, from its structure alone.
+    """Which of ``REQUEST_FORMS`` a request is, from trusted request metadata alone.
 
-    Guarantees the form is a function of the outcome contract's required fields
-    and the shape of the inputs, never of the request's description, so rewording
-    a commission cannot turn a judge into a producer (Chapter II §I.b: the request
-    is self-describing; the scripted seat reads the description only where the
-    population wrote it). A verdict requested about a verdict the inputs carry is a
-    counter-verdict; one without is a first-tier judgement. A wake (inputs carrying
-    the accepted event's ``kind`` and ``payload``) is always ``produce``, whatever
-    kinds its contract may emit: a seat registered to emit a Verdict is still woken
-    on an event.
+    Guarantees the form is a function of what the kernel wrote about the request: the
+    settlement a judging step attaches (its SCORING section, which names the judging
+    kind) and the outcome contract's required fields, never of the request's
+    description or of any input value, so neither rewording a commission nor an
+    author's ``kind``/``payload`` inputs can turn a judgement into a producer's wake
+    (Chapter II §I.b: the request is self-describing; Codex on 4a0f61c). ``inputs`` is
+    kept for the callers' signature and not read. A request whose contract obliges a
+    verdict (every admitted shape requires one) is answered with one, whoever asked
+    for it; a mixed contract (a seat woken on an event that may answer a producer's
+    return or a verdict) is a producer's wake.
     """
-    if isinstance(inputs.get("kind"), str) and "payload" in inputs:
-        return "produce"
-    required = outcome_required(req, text)
+    del inputs  # author-controlled: never a classifier
+    scoring = _scoring_keys(text)
+    if "counter_return" in scoring:
+        return "counter"
+    if "meta_return" in scoring:
+        return "meta"
+    if "evaluator_return" in scoring:
+        return "judge"
+    required = contract_requires(req, text)
     if "conformity" in required:
         return "meta"
     if "vote" in required:
@@ -457,7 +527,7 @@ def request_form(req: ModelRequest | None, text: str, inputs: dict[str, Any]) ->
     if "assessment" in required:
         return "testify"
     if "verdict" in required:
-        return "counter" if isinstance(inputs.get("verdict"), dict) else "judge"
+        return "judge"
     return "produce"
 
 
