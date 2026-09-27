@@ -109,14 +109,10 @@ def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
     assert result.ok, result.evidence
 
 
-# R16b-2: the Tick router's loop now counts its cutoffs and credited rounds (open to
-# learned, ``router.learned``): 5 windows, so its gain may step every 15 and its bound
-# (1 + 9 x 15 windows) lies beyond a 300-event world. SF-1e reads it unsupported, and
-# the reading has no ``router:Tick`` entry (KeyError). Not the runaway: a longer run.
-@pytest.mark.xfail(strict=True, raises=(AssertionError, KeyError),
-                   reason="the Tick router's gain bound lies beyond a 300-event world once "
-                   "its loop counts cutoffs (R16b-2); a run long enough to reach it is "
-                   "needed")
+# The Tick router's loop counts every round it learned, from its opening to its first
+# terminal tick (R16b-2; Astra on #157): a scored round deferred to its window's close
+# is sampled at score ready, no longer lost at the close, so the loop is short enough
+# that its gain bound lies within a 300-event world.
 def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
     """No router unwound while flagged or missed a bound the run covered, and the Tick
     router, whose own loop is the organ's, reached gamma_max. The judges' routers step on
