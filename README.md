@@ -36,8 +36,10 @@ governance boundary. When enough seats are eligible, a committee testifies first
 below quorum, the edition applies and the absence of testimony is ledgered.
 
 Dark is not secret. What the population writes is the product, and a living world's
-public wake publishes it as it lands: every return, the verdicts about it, the
-world block every seat reads, balances and account statements. What stays sealed
+public wake publishes it as it lands: every return, the verdicts about it, and at
+each window's close a projection of the world block every seat reads (roster
+counts, catalogues, the charter and its prices, the pots, the account as equity and
+realised P&L). No position, entry price or assembly id is published. What stays sealed
 until death is the machinery: learner state, router weights, the propensities the
 kernel records for its routers, private memory, prompts, per-decision scores. A
 propensity a seat declares in its own return is part of that return, and so it is
@@ -117,8 +119,9 @@ every model call it makes is metered and paid at the vendor's price. Thinking is
 cost like any other.
 
 One turn. An event arrives. A router, a bandit over the assemblies that accept it,
-samples one, logs the exact distribution it drew from and wakes it. The assembly
-returns an action, perhaps orders, tool calls, proposals, and its own propensity.
+samples one, logs the exact distribution it drew from and wakes it; or it draws
+`NOOP`, wakes nobody, and the abstention is priced like any other choice. A woken
+assembly returns an action, perhaps orders, tool calls, proposals, and its own propensity.
 Its return goes to judges on foundation families other than its author's; it
 settles on the mean of their verdicts. A verdict is also a forecast: when the world
 measures the return, the verdict is Brier-scored against the outcome, and the judge
@@ -203,12 +206,13 @@ return's outcome is fixed once, at `world_repricing / min_ratio` of the venue's 
 clock, so what a judge is graded on does not depend on how fast the factory runs.
 
 **The registry.** Contracts are immutable and versioned, carry their provenance
-(the decision that proposed them), and price their units in nonnegative integer
+(the decision that proposed them, or `seed` for what genesis registered), and price their units in nonnegative integer
 micro-USD. A built-in return kind keeps its meaning and its reward shape.
 
 **The jail.** Population code runs only inside an OS jail: bubblewrap namespaces and
-seccomp on Linux, with no sockets, no child processes and no host tree beyond the
-Python runtime and the tool directory, under bounded resources and output. The
+seccomp on Linux, with no sockets, no child processes, and a read-only view of the
+host limited to the system trees (`/usr`, `/lib`, `/lib64`), the Python runtime and
+the tool directory, under bounded resources and output. The
 world is reached only through registered rails, and through credential-free,
 bounded HTTPS connectors the runtime fetches on the population's behalf.
 
@@ -303,8 +307,7 @@ Tests come in three tiers, assigned in `tests/conftest.py`:
 
 ```bash
 uv run pytest                                             # check: no world runs, about 40 s
-uv run pytest -m gate -n 2                                # gate: every test that runs a world, about 10 min
-uv run pytest -m gate -n 2 tests/gauntlet/test_learning_death.py
+uv run pytest -m gate -n 2 tests/gauntlet/test_learning_death.py  # gate: tests that run a world; name the files your change touches
 uv run pytest -m slow tests/audit/test_a1_composition.py  # slow: the tier that kills and resumes real processes
 ```
 
