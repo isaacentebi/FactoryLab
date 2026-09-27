@@ -192,21 +192,40 @@ CHECK_WALL_CEILING_S = 10.0
 GATE_FILE_BUDGET_ENV = "FACTORYLAB_GATE_FILE_BUDGET_S"
 GATE_FILE_BUDGET_DEFAULT_S = 60.0
 GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
-    "tests/runtime/test_retained_state_crash.py": (
-        "crash anywhere resumes to the uninterrupted run (a storage contract): each of the "
-        "eleven crash-point rows runs a world to its crash and resumes it to the end, over "
-        "the 30-tick horizon, the shortest that reaches every crash point; the rows share "
-        "one reference run (87 s serial CPU at 0bd468f5+lane P)"),
-    "tests/runtime/test_bounded_memory.py": (
-        "the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at 2.2 "
-        "against the 2.3 bound) and pruning changes nothing a reader sees (a 120-tick world "
-        "with and without pruning: at 60 ticks only 45% of returns are slim, under the "
-        "test's own non-vacuity bound); every other test reads these shared worlds (76 s)"),
+    # Serial CPU on the integrated tree (lanes E, M, P and #149, #154, #155 merged).
+    "tests/gauntlet/test_thrash.py": (
+        "98 s: the pathology instrument's thrash criteria. th1 (TH-1e reads the release "
+        "after its 50 steady windows) and th3 (two charter boundaries) fail at two thirds "
+        "of 300 events, and each has negative controls that run the same world with the "
+        "mechanism disabled (design G2); th2-reversion and its negative control are strict "
+        "xfails wave 16b turns green, kept at full size; th2 is halved, th4 shared"),
     "tests/runtime/test_settled_release.py": (
-        "wave 17b: release changes nothing a reader sees, over a pair of 150-event worlds, "
-        "the smallest whose decisions pass the release horizon and the charter's ten margin "
-        "windows (its module docstring), plus one crash probe resumed to the end (105 s); "
-        "not yet ledgered by the test audit"),
+        "89 s: wave 17b. Release changes nothing a reader sees, over a released and a kept "
+        "150-event world (at 120 and 100 events the release share, the venue-confirmed "
+        "released orders and the invariant's candidate pool are absent), the tally checked "
+        "against the full scan after every event, and one crash probe resumed to the end"),
+    "tests/runtime/test_retained_state_crash.py": (
+        "83 s: crash anywhere resumes to the uninterrupted run (a storage contract). Each "
+        "of the thirteen crash-point rows runs a world to its crash and resumes it to the "
+        "end over 30 ticks, the shortest that reaches every crash point; the rows share one "
+        "reference run, the two eviction rows another"),
+    "tests/runtime/test_evaluation_layer.py": (
+        "78 s: tier recursion on two seeds and a fourth tier (CUTOVER, lane E), the "
+        "multi-judge, adversarial, two-router and heavy-chaos worlds at their lane E "
+        "sizes; family-disjoint judging reads the shared 100-event scripted run"),
+    "tests/scripts/test_class2_audit.py": (
+        "74 s: the Class 2 release audit's CLI, run on real git histories (about 2,500 git "
+        "calls, the tool's own provenance and calibration reads) and the seat-text scan; "
+        "gate as a whole (GATE_MODULE), on one worker"),
+    "tests/runtime/test_bounded_memory.py": (
+        "68 s: the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at "
+        "2.2 against the 2.3 bound) and pruning changes nothing a reader sees (a 120-tick "
+        "world with and without pruning: at 60 ticks only 45% of returns are slim, under "
+        "the test's own non-vacuity bound); every other test reads these shared worlds"),
+    "tests/gauntlet/test_stable_failure.py": (
+        "65 s: SF-1 (sf1c reads the integral frozen at the cap, which a two-thirds run "
+        "does not reach) with its two negative controls, and the transient world and its "
+        "control, strict xfails wave 16b turns green, all at 300 events; sf2 is halved"),
 }
 
 
