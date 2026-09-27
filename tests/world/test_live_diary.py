@@ -234,6 +234,25 @@ def test_settled_tape_emits_zero_cash_corrections_and_prelaunch_evidence(tmp_pat
     assert venue.funding_payments(0) == []
 
 
+def test_settled_history_uses_effective_order_and_upserts_corrections(tmp_path):
+    tape = _settled_tape(tmp_path)
+    h = NS_PER_HOUR
+    tape.data["ticks"] = [h - 10, 2 * h + 30]
+    template = tape.data["settled_funding"]["BTC"][0]
+    tape.data["settled_funding"]["BTC"] = [
+        dict(template, funding_ns=2 * h, published_at_ns=2 * h + 10),
+        dict(template, funding_ns=h, published_at_ns=2 * h + 20),
+        dict(template, funding_ns=h, published_at_ns=2 * h + 30, rate="0.02"),
+    ]
+    venue = TapeVenue(tape, coins=("BTC",), start_cash_usd=Decimal(1000))
+    venue.advance(2 * h + 20)
+    assert [r.ts_ns for r in venue.funding_history("BTC", 1)] == [2 * h]
+    venue.advance(2 * h + 30)
+    rows = venue.funding_history("BTC", 10)
+    assert [(r.ts_ns, r.rate) for r in rows] == [(h, Decimal("0.02")),
+                                               (2 * h, Decimal("0.01"))]
+
+
 def test_settled_tape_rejects_mixed_legacy_market_semantics(tmp_path):
     tape = _settled_tape(tmp_path)
     tape.data["mids"]["ETH"] = tape.data["mids"]["BTC"]

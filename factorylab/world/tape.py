@@ -956,7 +956,12 @@ class TapeVenue(FakeExchange):
                     self._funding_payments.append(FundingPayment(
                         f"{boundary}:{coin}:{index}", coin, paid, rate, boundary))
                 premium = None if row["premium"] is None else Decimal(row["premium"])
+                # Chapter II §III.b: publication controls visibility, not effective order.
+                self._funding_history = [
+                    event for event in self._funding_history
+                    if (event.coin, event.ts_ns) != (coin, boundary)]
                 self._funding_history.append(FundingEvent(coin, rate, premium, boundary, mark))
+                self._funding_history.sort(key=lambda event: event.ts_ns)
                 events.append(WorldEvent(WorldEventKind.FUNDING, row["published_at_ns"],
                                          self.name, {"coin": coin, "rate": str(rate),
                                          "paid_usd": str(paid), "funding_ns": boundary,
