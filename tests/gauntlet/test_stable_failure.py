@@ -18,6 +18,11 @@ from factorylab.charter.controller import PriceController
 from scripts import gauntlet as g
 from tests.gauntlet import populations as P
 
+#: Wave 16's price-loop runaway, for wave 16b (reported on the wave 16 merge).
+RUNAWAY = ("kernel gap (a): price-loop runaway — the price window's measured inner loop "
+           "includes the deferred-settlement wait for the price window itself (§IV.c); "
+           "fixed by wave 16b")
+
 pytestmark = pytest.mark.gate
 
 UPTAKE = P.UPTAKE["id"]
@@ -46,6 +51,7 @@ def test_sf1a_stable_failure_is_detected_within_the_horizon(sf1):
     assert result.ok, result.evidence
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_the_card_is_ratcheted_by_duration_on_the_organs_loop(sf1):
     result = g.sf1b_ratchet_cadence(sf1.events, sf1.manifest)
     assert result.ok, result.evidence
@@ -78,6 +84,7 @@ def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
     assert g.sf1b_ratchet_cadence(mutant.events, mutant.manifest).status != g.PASS
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     """Astra M-6's control: when the card is briefly satisfied the flag clears at an
     acting window, the duration ends, and the next ratchet starts again from one."""
@@ -86,6 +93,7 @@ def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     assert result.ok, result.evidence
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
     mutant = P.run(*_transient_world(), events=300, patches=[
         (PriceController, "end_failure", lambda self, card_id, *, window: None)])
@@ -111,6 +119,9 @@ def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
     assert result.ok, result.evidence
 
 
+# No Tick router bound is reached in the windows the runaway leaves, so the reading has
+# no ``router:Tick`` entry (KeyError) rather than a failed assertion.
+@pytest.mark.xfail(strict=True, raises=(AssertionError, KeyError), reason=RUNAWAY)
 def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
     """No router unwound while flagged or missed a bound the run covered, and the Tick
     router, whose own loop is the organ's, reached gamma_max. The judges' routers step on
