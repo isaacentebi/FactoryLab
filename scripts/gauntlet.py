@@ -3244,7 +3244,9 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     router's mean: a scored round at the moment its router learned it (the kernel's
     ``record_round``, on the learning router), never at its ``price.penalty`` (a round
     deferred to its window's close is settled there and learned at the next delivery,
-    after a credit priced at that close). Its scored rows are read instead.
+    after a credit priced at that close). Its scored rows are read instead, and each
+    must trace to an earlier ``decision.open`` of its handle by its ``router``: one that
+    does not (never opened, or opened by another actor) fails (Sol on #157).
     """
     learned_rows = any(row.get("kind") == "router.learned" for row in events)
     seats = decision_seats(events)
@@ -3256,7 +3258,7 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     drawn: set[str] = set()
     ever_opened = {need(row, "handle") for row in rows_of(events, "decision.open")}
     raws: dict[str, list[float]] = defaultdict(list)
-    bad, checked, untraced, early = [], 0, 0, []
+    bad, checked, untraced, early, ghosts = [], 0, 0, [], []
     # A decision that timed out was learned once, neutrally, at its cutoff: a late
     # settlement after it (the queue's late-settlement right) is never learned again
     # (feedback.py ``_learn_router_return``: "learned once already, neutrally, at its
@@ -3311,6 +3313,13 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
             raws[new] = list(raws.get(old, ()))
             hand_over(old, new)
             continue
+        if kind == "router.learned" and actors.get(need(row, "handle")) != need(row, "router"):
+            # Sol on #157: a learned round traces to its decision's open by the router
+            # that drew it; a never-opened handle ("ghost") or another actor's is no
+            # round of any router's mean, and fails.
+            ghosts.append({"handle": need(row, "handle"), "router": need(row, "router"),
+                           "opened_by": actors.get(need(row, "handle"))})
+            continue
         if learned_rows and kind == "router.learned":
             if (need(row, "scored") and need(row, "action") != "NOOP"
                     and need(row, "raw") is not None):
@@ -3354,6 +3363,10 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
         return _result("S5b", False, untraced=untraced, checked=checked,
                        mismatched=len(bad), example=bad[:3],
                        why="a settled score traces to no decision.open with an actor")
+    if ghosts:
+        return _result("S5b", False, untraced_learned=ghosts[:5], checked=checked,
+                       mismatched=len(bad), example=bad[:3],
+                       why="a learned round traces to no decision.open by its router")
     if not checked:
         return _unsupported("S5b", "no abstention was priced after a settled round")
     return _result("S5b", not bad, checked=checked, mismatched=len(bad), example=bad[:3],

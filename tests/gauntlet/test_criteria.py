@@ -2824,3 +2824,27 @@ def test_s5b_a_penalty_ledgered_before_its_decision_opened_fails():
     result = g.s5b_observed_neutral(reversed_, M)
     assert result.status == g.FAIL
     assert result.evidence["before_open"] == [{"kind": "price.penalty", "handle": "s0"}]
+
+
+def _learned_row(handle, raw, router="router:Tick"):
+    return {"kind": "router.learned", "handle": handle, "router": router, "learner": router,
+            "action": "seat", "path": "direct", "scored": True, "raw": raw}
+
+
+def test_s5b_a_learned_round_traces_to_its_routers_open():
+    """Sol on #157: a ``router.learned`` row for a handle nobody opened ("ghost") seeded
+    the router's mean and passed. A learned round must trace to an earlier
+    ``decision.open`` of its handle by its router: a ghost fails, and so does a round
+    opened by another actor."""
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.9, "penalty": 0.0, "reward": 0.9}
+    traced = [_open("s0", "seat"), _learned_row("s0", 0.9), credit]
+    assert g.s5b_observed_neutral(traced, M).ok
+    ghost = g.s5b_observed_neutral([_learned_row("ghost", 0.9), credit], M)
+    assert ghost.status == g.FAIL, ghost.evidence
+    assert ghost.evidence["untraced_learned"] == [
+        {"handle": "ghost", "router": "router:Tick", "opened_by": None}]
+    other = g.s5b_observed_neutral(
+        [_open("s0", "seat", actor="router:Other"), _learned_row("s0", 0.9), credit], M)
+    assert other.status == g.FAIL and other.evidence["untraced_learned"][0]["opened_by"] == (
+        "router:Other")
