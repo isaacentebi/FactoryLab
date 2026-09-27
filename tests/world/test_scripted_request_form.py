@@ -12,7 +12,12 @@ import json
 
 from factorylab.cortex.request import Request
 from factorylab.world.models import ModelRequest
-from factorylab.world.scripted import ScriptedProvider, _inputs_from_prompt, request_form
+from factorylab.world.scripted import (
+    ScriptedProvider,
+    _inputs_from_prompt,
+    _shape_required,
+    request_form,
+)
 
 VERDICT_SCHEMA = {"type": "object", "required": ["verdict"],
                   "properties": {"verdict": {"type": "number"}}}
@@ -80,3 +85,28 @@ def test_a_nested_union_is_flattened_with_each_levels_requirements():
                                                     {"required": ["action"]}]}]}
     model_req, text = _model_request("Do it.", {"kind": "Tick", "payload": {}}, loose)
     assert request_form(model_req, text, _inputs_from_prompt(text)) == "produce"
+
+
+def test_a_verdict_required_below_forty_nested_unions_is_read():
+    """Codex on 3309478: admission (``_schema_definition``) bounds no depth, so neither
+    does the reading. A verdict every shape requires only below 40 nested anyOf levels
+    classifies the request as a verdict; a depth cut once read it as a producer's."""
+    schema = {"type": "object", "required": ["verdict"],
+              "properties": {"verdict": {"type": "number"}}}
+    for _ in range(40):
+        schema = {"type": "object", "anyOf": [schema]}
+    model_req, text = _model_request("Rate it.", {"kind": "Tick", "payload": {}}, schema)
+    assert request_form(model_req, text, _inputs_from_prompt(text)) == "judge"
+
+
+def test_a_recursive_union_terminates_at_its_least_fixed_point():
+    """A local ``$ref`` binds beside its siblings (``validate_schema``); a union that
+    refers to itself is walked once per node and settles."""
+    recursive = {"$defs": {"u": {"anyOf": [{"required": ["verdict"]},
+                                           {"required": ["tier"], "$ref": "#/$defs/u"}]}},
+                 "$ref": "#/$defs/u"}
+    assert set(_shape_required(recursive)) == {frozenset({"verdict"}),
+                                               frozenset({"tier", "verdict"})}
+    only_itself = {"$defs": {"u": {"anyOf": [{"$ref": "#/$defs/u"}]}}, "required": ["a"],
+                   "$ref": "#/$defs/u"}
+    assert _shape_required(only_itself) == [frozenset({"a"})]

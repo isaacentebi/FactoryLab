@@ -433,20 +433,62 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
     return frozenset().union(*_shape_required(schema))
 
 
-def _shape_required(schema: dict, inherited: frozenset[str] = frozenset(),
-                    depth: int = 0) -> list[frozenset[str]]:
-    """Each admitted answer shape's required fields, with nested ``anyOf`` / ``oneOf``
-    alternatives flattened recursively (as ``_schema_definition`` recurses into them) and
-    each level's own ``required`` merged into every alternative beneath it: an
-    alternative is admitted only beside every enclosing level's constraints (Codex on
-    b1c8590 and b56e793). Nesting deeper than 32 levels reads as its own level alone."""
-    own = inherited | frozenset(f for f in schema.get("required", ()) if isinstance(f, str))
-    alternatives = schema.get("anyOf") or schema.get("oneOf")
-    if not alternatives or depth >= 32:
-        return [own]
-    shapes = [shape for alternative in alternatives if isinstance(alternative, dict)
-              for shape in _shape_required(alternative, own, depth + 1)]
-    return shapes or [own]
+def _shape_required(schema: dict) -> list[frozenset[str]]:
+    """Each admitted answer shape's required fields, read from the complete schema.
+
+    Guarantees every level is read, however deep: nested ``anyOf`` / ``oneOf``
+    alternatives are flattened (as ``_schema_definition`` recurses into them, with no
+    depth bound of its own), and each level's own ``required`` is merged into every
+    alternative beneath it, since an alternative is admitted only beside every
+    enclosing level's constraints (Codex on b1c8590 and b56e793).
+
+    A local ``$ref`` (``#/$defs/<name>``) binds together with its siblings, as the
+    kernel's ``validate_schema`` reads it. The walk is iterative, with an explicit
+    stack and a visited set, so a recursive union terminates; its shapes are the least
+    fixed point, and a union that only recurses admits no shape of its own (Codex on
+    3309478: a cut at depth 32 read a deeper ``verdict`` as absent)."""
+    defs = schema.get("$defs") if isinstance(schema.get("$defs"), dict) else {}
+
+    def target(node: dict) -> dict | None:
+        ref = node.get("$ref")
+        prefix = "#/$defs/"
+        if isinstance(ref, str) and ref.startswith(prefix):
+            found = defs.get(ref[len(prefix):])
+            return found if isinstance(found, dict) else None
+        return None
+
+    def alternatives(node: dict) -> list[dict]:
+        alts = node.get("anyOf") or node.get("oneOf")
+        return [a for a in alts if isinstance(a, dict)] if isinstance(alts, list) else []
+
+    nodes: dict[int, dict] = {}
+    stack = [schema]
+    while stack:
+        node = stack.pop()
+        if id(node) in nodes:
+            continue
+        nodes[id(node)] = node
+        stack.extend(alternatives(node))
+        if (ref := target(node)) is not None:
+            stack.append(ref)
+    shapes: dict[int, set[frozenset[str]]] = {key: set() for key in nodes}
+    changed = True
+    while changed:  # monotone over a finite lattice of field-name sets: it settles
+        changed = False
+        for key, node in nodes.items():
+            own = frozenset(f for f in node.get("required", ()) if isinstance(f, str))
+            alts = alternatives(node)
+            below = (set().union(*(shapes[id(a)] for a in alts)) if alts
+                     else {frozenset()})
+            ref = target(node)
+            through = shapes[id(ref)] if ref is not None else {frozenset()}
+            found = {own | a | t for a in below for t in through}
+            if not found <= shapes[key]:
+                shapes[key] |= found
+                changed = True
+    root = shapes[id(schema)]
+    own = frozenset(f for f in schema.get("required", ()) if isinstance(f, str))
+    return sorted(root, key=sorted) or [own]
 
 
 def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
