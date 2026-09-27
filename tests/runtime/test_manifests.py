@@ -123,6 +123,29 @@ def test_prices_section_defaults_and_validation() -> None:
             manifest_from_dict(d)
 
 
+@pytest.mark.parametrize("eta", [float("nan"), float("inf"), "0.05", -1],
+                         ids=["nan", "inf", "string", "negative"])
+def test_an_eta_outside_its_domain_is_refused_as_it_was(eta) -> None:
+    """Codex on 646e3c7: the price field rules live in ``validate_price_fields``, which
+    ``validate`` calls, and eta takes kp's finite-number rule. Which manifests the kernel
+    accepts is unchanged: a NaN, an infinite, a string or a negative eta was refused
+    before (by the SF-0 relation, a TypeError or the eta > 0 rule) and still is, now by
+    the field rule itself."""
+    import dataclasses
+
+    m = manifest_from_dict(_base())
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, eta=eta))
+    with pytest.raises(ValueError, match="prices.eta must be finite and > 0"):
+        bad.validate_price_fields()
+    with pytest.raises(ValueError, match="prices.eta must be finite and > 0"):
+        bad.validate()
+    if not isinstance(eta, str):  # the loader reads a stated eta as float(...)
+        d = _base()
+        d["prices"] = {"eta": eta}
+        with pytest.raises(ValueError, match="prices.eta"):
+            manifest_from_dict(d)
+
+
 def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
     of the scripted world moved when the shims went, again when the standing committee

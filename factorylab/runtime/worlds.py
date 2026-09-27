@@ -713,6 +713,30 @@ class WorldManifest:
             return None
         return repricing // self.timing.min_ratio
 
+    def validate_price_fields(self) -> None:
+        """Guarantees each ``[prices]`` field is in its own domain: the price law's
+        field rules, one by one. The relation between them (SF-0, ``gain_headroom``) is
+        ``validate``'s, checked after every field rule; this is the one home of the field
+        rules, which ``validate`` calls, so a reader that must hold a world to them
+        without that relation holds it to these same rules."""
+        p = self.prices
+        if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
+                or not 0 < p.penalty_cap < 1):
+            raise ValueError("prices.penalty_cap must be finite and in (0, 1)")
+        if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
+                or not 0 <= p.min_blame_share <= 1):
+            raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
+        # eta takes kp's finite-number rule: a NaN or an infinite eta is otherwise refused
+        # only by the SF-0 relation (``gain_headroom``), never by a rule of its own.
+        if type(p.eta) not in (int, float) or not isfinite(p.eta) or p.eta <= 0:
+            raise ValueError("prices.eta must be finite and > 0")
+        if min(p.eta, p.decay) <= 0 or p.min_window_events < 1:
+            raise ValueError("prices: eta, decay > 0 and min_window_events >= 1")
+        for name in ("kp", "kd"):
+            value = getattr(p, name)
+            if type(value) not in (int, float) or not isfinite(value) or value < 0:
+                raise ValueError(f"prices.{name} must be finite and nonnegative")
+
     def gain_headroom(self) -> dict[str, int | float | bool]:
         """Whether the duration price of stable failure has room to exist in this world.
 
@@ -1492,19 +1516,8 @@ class WorldManifest:
                 raise ValueError(f"card {card_id} lambda: unknown card id")
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
                 raise ValueError(f"card {card_id} lambda: must be a finite number >= 0")
+        self.validate_price_fields()
         p = self.prices
-        if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
-                or not 0 < p.penalty_cap < 1):
-            raise ValueError("prices.penalty_cap must be finite and in (0, 1)")
-        if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
-                or not 0 <= p.min_blame_share <= 1):
-            raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
-        if min(p.eta, p.decay) <= 0 or p.min_window_events < 1:
-            raise ValueError("prices: eta, decay > 0 and min_window_events >= 1")
-        for name in ("kp", "kd"):
-            value = getattr(p, name)
-            if type(value) not in (int, float) or not isfinite(value) or value < 0:
-                raise ValueError(f"prices.{name} must be finite and nonnegative")
         self._validate_evaluator_population()
         # Essay II.II.b: stable failure is priced by its duration, which exists only
         # while the price law has not pressed a violation onto the cap before the organ

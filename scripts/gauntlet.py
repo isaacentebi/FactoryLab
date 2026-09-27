@@ -340,8 +340,9 @@ def kernel_problem(launched: Mapping) -> str | None:
     what the gauntlet's SF-0 criterion reads from the diary and reports: refusing the
     diary for it at binding would hide that reading. So, for validation alone, the
     relation's two inputs are set where it holds (kp 0, the kernel's own
-    ``derived_eta``); every other rule applies in full, and every criterion still reads
-    the physics the diary launched."""
+    ``derived_eta``) once the launched kp and eta have passed the kernel's own field
+    rules (``validate_price_fields``); every other rule applies in full, and every
+    criterion still reads the physics the diary launched."""
     from factorylab.runtime.worlds import WorldManifest, derived_eta
 
     candidate = json.loads(json.dumps(launched, default=str))
@@ -350,13 +351,17 @@ def kernel_problem(launched: Mapping) -> str | None:
         section = candidate.get(block)
         if isinstance(section, dict) and name in section:
             del section[name]
-    if legacy:
-        prices, timing, immune = (candidate.get(b) or {} for b in ("prices", "timing",
-                                                                     "immune"))
-        prices["kp"] = 0.0
-        prices["eta"] = derived_eta(prices.get("penalty_cap"), 0.0, timing.get("min_ratio"),
-                                    immune.get("k"))
     try:
+        if legacy:
+            # The launched kp and eta are held to the kernel's own field rules
+            # (``WorldManifest.validate_price_fields``, which ``validate`` calls): only
+            # the SF-0 relation between them is set aside (Codex on 646e3c7).
+            _rebuild(WorldManifest, candidate).validate_price_fields()
+            prices, timing, immune = (candidate.get(b) or {}
+                                      for b in ("prices", "timing", "immune"))
+            prices["kp"] = 0.0
+            prices["eta"] = derived_eta(prices.get("penalty_cap"), 0.0,
+                                        timing.get("min_ratio"), immune.get("k"))
         rebuilt = _rebuild(WorldManifest, candidate)
         rebuilt.validate()
         # The rebuild reads each field the kernel has and nothing else: a launched key
