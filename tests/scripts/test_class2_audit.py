@@ -1634,7 +1634,8 @@ DISCLOSURE = "FEE = 'every fill pays the venue fee'\n"
 def test_a_deletion_only_commit_fails_reverted_until_the_line_is_restored(tmp_path):
     """Codex P1 (class2_audit.py:1974): a flagged commit that deletes seat-visible text
     (a disclosure) adds nothing, yet its effect stands while the deletion does. REVERTED
-    holds only once the deleted line is back somewhere in the seat-visible scope."""
+    holds only once the deleted line is back on the surface it was taken from (Codex on
+    2ad8e46: a copy in another file does not restore it)."""
     repo, (_root, flagged, restored) = _schematics_repo(
         tmp_path, "HOLD = 'hold'\n" + DISCLOSURE, "HOLD = 'hold'\n",
         "HOLD = 'hold'\n" + DISCLOSURE)
@@ -1642,12 +1643,15 @@ def test_a_deletion_only_commit_fails_reverted_until_the_line_is_restored(tmp_pa
     assert problems and "every fill pays the venue fee" in problems[0]
     assert "not back" in problems[0]
     assert tool.reverted_problems(repo, flagged, restored) == []
-    # Back in another seat-visible file counts; back outside the scope does not.
+    # Back in another file restores nothing, seat-visible or not.
     _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "drop it again")
     docs = _commit(repo, "docs/fees.md", DISCLOSURE, "fees in the docs")
     assert tool.reverted_problems(repo, flagged, docs)
     world = _commit(repo, "worlds/fees.toml", "  " + DISCLOSURE, "fees in a world")
-    assert tool.reverted_problems(repo, flagged, world) == []
+    assert tool.reverted_problems(repo, flagged, world)
+    home = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n  " + DISCLOSURE,
+                   "the disclosure back where it was")
+    assert tool.reverted_problems(repo, flagged, home) == []
 
 
 def test_a_replacement_passes_reverted_only_with_the_old_line_back_and_the_new_gone(
@@ -1672,10 +1676,35 @@ def test_a_deleted_line_with_a_copy_elsewhere_fails_until_its_occurrence_is_back
     flagged = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n",
                       BEHAVIOUR_MIX)
     problems = tool.reverted_problems(repo, flagged, flagged)
-    assert problems and "not back" in problems[0] and "(1 copies, 2 before it)" in problems[0]
+    assert problems and "not back" in problems[0]
+    assert "(0 copies in factorylab/cortex/schematics.py, 1 before it)" in problems[0]
     restored = _commit(repo, "factorylab/cortex/schematics.py",
                        "HOLD = 'hold'\n" + DISCLOSURE, "restore the disclosure")
     assert tool.reverted_problems(repo, flagged, restored) == []
+
+
+def test_a_pure_move_is_not_reverted_until_the_line_is_back_where_it_was(tmp_path):
+    """Codex on 2ad8e46: a flagged commit that moves a disclosure from one seat-visible
+    file to another leaves the global counts equal. By direction: its deleted line must
+    stand again at its own path, and its added line must be gone from the scope."""
+    repo, (_root,) = _schematics_repo(tmp_path, "HOLD = 'hold'\n" + DISCLOSURE)
+    target = repo / "worlds/fees.toml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(DISCLOSURE)
+    (repo / "factorylab/cortex/schematics.py").write_text("HOLD = 'hold'\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", BEHAVIOUR_MIX)
+    moved = _git(repo, "rev-parse", "HEAD")
+    problems = tool.reverted_problems(repo, moved, moved)
+    assert problems and any("not back there" in p for p in problems)
+    # Restored at A but still at B: the added half stands.
+    both = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n" + DISCLOSURE,
+                   "back at A")
+    assert any("still in" in p for p in tool.reverted_problems(repo, moved, both))
+    _git(repo, "rm", "-q", "worlds/fees.toml")
+    _git(repo, "commit", "-q", "-m", "gone from B")
+    undone = _git(repo, "rev-parse", "HEAD")
+    assert tool.reverted_problems(repo, moved, undone) == []
 
 
 def test_an_added_line_that_already_stood_once_passes_when_back_to_one_copy(tmp_path):

@@ -2226,15 +2226,17 @@ def _changed_lines(repo: Path, commit: str
 
 
 def _seat_visible_lines(repo: Path, commit: str | None
-                        ) -> tuple[Counter[str], dict[str, str]]:
+                        ) -> tuple[Counter[str], dict[str, str], Counter[tuple[str, str]]]:
     """How many times each whitespace-normalised line stands in the seat-visible scope
     at ``commit`` (``PROVENANCE_PATHS``: the corpus's own scope and the essay's digest),
-    counting every copy in every file, and the first file each stands in. One ``git
-    grep`` over the tree, text files only; nothing for no commit (a root's parent)."""
+    counting every copy in every file; the first file each stands in; and how many
+    times each stands in each file, by ``(path, line)``. One ``git grep`` over the tree,
+    text files only; nothing for no commit (a root's parent)."""
     counts: Counter[str] = Counter()
     where: dict[str, str] = {}
+    by_path: Counter[tuple[str, str]] = Counter()
     if commit is None:
-        return counts, where
+        return counts, where, by_path
     run = subprocess.run(["git", "-C", str(repo), "grep", "-I", "--no-color", "-e", "",
                           commit, "--", *PROVENANCE_PATHS], capture_output=True, text=True)
     if run.returncode not in (0, 1):  # 1: no text file at all
@@ -2245,23 +2247,25 @@ def _seat_visible_lines(repo: Path, commit: str | None
         path, _, text = raw.removeprefix(prefix).partition(":")
         line = " ".join(text.split())
         counts[line] += 1
+        by_path[(path, line)] += 1
         where.setdefault(line, path)
-    return counts, where
+    return counts, where, by_path
 
 
 def reverted_problems(repo: Path, commit: str, release: str) -> list[str]:
     """Why ``commit``'s net effect on seat-visible text is not undone at ``release``
-    (none when it is), by occurrence counts over the whole seat-visible scope
-    (``_seat_visible_lines``), whitespace-normalised, independent of paths and of
-    copies: for every line the commit added (``_changed_lines``), no more copies at
-    the release than at the commit's first parent (moving the text to another module
-    is not reverting it); for every line it deleted, no fewer (a deleted disclosure, or
-    the old half of a replacement, still standing is not reverted, and a copy that was
-    already elsewhere does not stand in for it). Recomputed from the repository, never
-    read from a triage row."""
+    (none when it is), by whitespace-normalised occurrence counts (``_seat_visible_lines``),
+    each by its direction: for every line the commit added (``_changed_lines``), no
+    more copies anywhere in the seat-visible scope at the release than at the commit's
+    first parent (relocating the text to another module is not removing it); for every
+    line it deleted, no fewer copies at its own path at the release than at that path
+    at the parent (a deleted disclosure is restored on the surface it was taken from; a
+    copy elsewhere does not stand in for it, and a file that is gone restores nothing).
+    So a pure move, deleted from one path and added to another, is not reverted.
+    Recomputed from the repository, never read from a triage row."""
     parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
-    at_release, where = _seat_visible_lines(repo, release)
-    before, _ = _seat_visible_lines(repo, parents[0] if parents else None)
+    at_release, where, release_paths = _seat_visible_lines(repo, release)
+    before, _, parent_paths = _seat_visible_lines(repo, parents[0] if parents else None)
     added, deleted = _changed_lines(repo, commit)
     problems = []
     for path, lines in added.items():
@@ -2272,12 +2276,14 @@ def reverted_problems(repo: Path, commit: str, release: str) -> list[str]:
                             f"at the release ({at_release[line]} copies, {before[line]} "
                             f"before it): {line[:80]!r}")
     for path, lines in deleted.items():
-        gone = [line for line in dict.fromkeys(lines) if at_release[line] < before[line]]
+        gone = [line for line in dict.fromkeys(lines)
+                if release_paths[(path, line)] < parent_paths[(path, line)]]
         if gone:
             line = gone[0]
-            problems.append(f"{commit[:12]} deleted text from {path} that is not back at "
-                            f"the release ({at_release[line]} copies, {before[line]} before "
-                            f"it): {line[:80]!r}")
+            problems.append(f"{commit[:12]} deleted text from {path} that is not back "
+                            f"there at the release ({release_paths[(path, line)]} copies "
+                            f"in {path}, {parent_paths[(path, line)]} before it): "
+                            f"{line[:80]!r}")
     return problems
 
 

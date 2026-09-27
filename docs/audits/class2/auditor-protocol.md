@@ -204,8 +204,10 @@ the skeleton):
   seat-visible file (the corpus's own scope, whatever the path), every line it added
   stands no more often at the release commit than at the commit's parent (moving the
   text is not reverting it), and every line it deleted (a removed disclosure, the old
-  half of a replacement) stands no less often (a copy that was already elsewhere does
-  not stand in for it). The gate recomputes this from the repository and never trusts
+  half of a replacement) stands no less often at its own path than it did there (it is
+  restored on the surface it was taken from: a copy elsewhere does not stand in for
+  it, and a file that is gone restores nothing). So a pure move, deleted from one file
+  and added to another, is not reverted. The gate recomputes this from the repository and never trusts
   the triage row.
   REJECT stays for a flagged commit that is not a behaviour mix, with its reason.
 - **AUTHORITY.** A change of design authority (and only such a finding): a commit in
