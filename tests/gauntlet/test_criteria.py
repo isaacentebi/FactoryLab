@@ -1406,6 +1406,26 @@ def test_s8_a_gain_row_that_moves_no_gamma_is_malformed():
     assert g.s8_gain_rows_uniform([raised, at_seed], M).status == g.FAIL
 
 
+def test_s8_a_base_pinned_at_its_bound_steps_zero_beside_one_that_moves():
+    """Codex on 0042094: ``_gain`` clamps each base at its own bound (immune.py:219-223)
+    and skips only a row where no base moved (:224). A base at gamma_max beside one that
+    steps passes; a row where every base holds fails; a wrong step on either fails."""
+    top = 0.5  # M's gamma_max
+    pinned = _gain2(1, [0.1, top], [0.1 + 0.05, top])
+    assert g.s8_gain_rows_uniform([pinned], M).ok
+    held = _gain2(1, [top, top], [top, top])
+    assert g.s8_gain_rows_uniform([held], M).evidence["noop"]
+    assert g.s8_gain_rows_uniform([_gain2(1, [0.1, top], [0.1 + 0.05, top - 0.05])],
+                                  M).status == g.FAIL
+    # Down: a base already at its seed (0.1) holds while the other steps toward its own.
+    raised = _gain2(1, [0.1, 0.2], [0.1 + 0.05, 0.2 + 0.05])  # the seeds, from the raise
+    b1 = 0.2 + 0.05
+    lowered = _gain2(2, [0.1, b1], [0.1, min(top, b1, max(0.2, b1 - 0.05))], "cleared")
+    assert g.s8_gain_rows_uniform([raised, lowered], M).ok
+    at_floor = _gain2(2, [0.1, 0.2], [0.1, 0.2], "cleared")
+    assert g.s8_gain_rows_uniform([raised, at_floor], M).evidence["noop"]
+
+
 def test_s8_instrumented_a_gamma_step_is_arm_symmetric_and_a_weight_change_is_not():
     """Astra C-2: the gain act redistributes uniformly; a policy-weight change on one arm
     (which the organ never makes, S7) is exactly what S8 must refuse."""

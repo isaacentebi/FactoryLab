@@ -3168,9 +3168,10 @@ def s7_gain_targets(events: list[Mapping], manifest: Mapping | None = None) -> R
 
 @criterion("S8")
 def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
-    """S8 (ledger half): each gain act moves every exploration row of a router by one
-    common step, within ``[seed, gamma_max]``: γ is a scalar over all arms, so the act
-    redistributes uniformly and cannot favour an arm (Astra C-2). The instrumented half
+    """S8 (ledger half): each gain act moves every exploration row of a router by the
+    kernel's one step, each clamped at its own bound in ``[seed, gamma_max]``, and moves
+    at least one (``immune._gain``, immune.py:219-225): γ is a scalar over all arms, so
+    the act redistributes uniformly and cannot favour an arm (Astra C-2). The instrumented half
     (weights untouched; per-arm change symmetric) is ``gain_neutral``."""
     ph = physics(manifest)
     gains = rows_of(events, "immune.gain")
@@ -3205,19 +3206,23 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
             uneven.append({"router": need(row, "router"), "window": need(row, "window"),
                            "seed": len(seed), "gamma_after": len(pairs)})
             continue
-        # ``immune._gain``'s own step, exactly (immune.py:145-148): up is
-        # max(old, min(gamma_max, old + gain_step)); down is
-        # min(old, max(seed_gamma, old − gain_step)), a partial step only onto the seed.
+        # ``immune._gain``'s own step, per base, exactly (immune.py:219-223): up is
+        # min(gamma_max, old + gain_step); down is
+        # min(gamma_max, old, max(seed_gamma, old − gain_step)). Each base is clamped at
+        # its own bound, so a base already at gamma_max (up) or at the seed (down) steps
+        # 0 beside bases that move; the row as a whole moved (``noop`` above).
         if need(row, "pathology") == "stable_failure":
-            wrong = [b for a, b in pairs if b != max(a, min(ph.gamma_max, a + ph.gain_step))]
+            wrong = [b for a, b in pairs if b != min(ph.gamma_max, a + ph.gain_step)]
         else:
             wrong = []
             for i, (a, b) in enumerate(pairs):
                 if seed:
-                    if b != min(a, max(seed[i], a - ph.gain_step)):
+                    if b != min(ph.gamma_max, a, max(seed[i], a - ph.gain_step)):
                         wrong.append(b)
-                elif b != a - ph.gain_step:
-                    if a - ph.gain_step < b < a:
+                elif b != min(ph.gamma_max, a - ph.gain_step):
+                    # With the seed out of the diary a partial step, or none, may be the
+                    # clamp onto it: not verified, never passed.
+                    if a - ph.gain_step < b <= min(ph.gamma_max, a):
                         unverified.append({"router": need(row, "router"),
                                            "window": need(row, "window")})
                     else:
@@ -3229,7 +3234,7 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
             # lower bound of this row is not verified.
             if need(row, "pathology") != "stable_failure":
                 unverified.append({"router": need(row, "router"), "window": need(row, "window")})
-        if len(steps) != 1 or wrong or below:
+        if wrong or below:
             bad.append({"router": need(row, "router"), "window": need(row, "window"),
                         "steps": sorted(steps), "wrong": wrong[:3]})
     if noop:
