@@ -481,8 +481,11 @@ class LiveVenue:
                 )
             )
         if getattr(self.exchange, "settled_funding", False):
-            # Keep polling previously traded coins: their named outcomes may still be open.
-            coins = {f.coin for f in funding if traded is None or f.coin in traded}
+            # Chapter II §III.b: a failed current-rate read cannot hide available
+            # settlement evidence for configured/registered perpetuals. Spot pairs
+            # have no periodic funding; durable cursors retain former markets.
+            coins = ({coin for coin in traded if "/" not in coin}
+                     if traded is not None else {f.coin for f in funding})
             coins.update(key.removeprefix("settled:") for key in self.through
                          if key.startswith("settled:"))
             out.extend(self._settled_rates(now_ns, coins))

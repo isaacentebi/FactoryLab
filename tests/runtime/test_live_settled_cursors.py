@@ -2,6 +2,8 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from factorylab.runtime.live import LiveVenue
 from factorylab.world.exchange import NS_PER_HOUR, FundingEvent
 
@@ -47,3 +49,23 @@ def test_first_history_poll_long_after_launch_still_reads_required_boundaries():
     events = venue._settled_rates(3 * H, {"BTC"})
     assert [event.payload["funding_ns"] for event in events] == [H, 2 * H]
     assert calls[0][1] <= H
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_configured_perpetuals_poll_history_despite_missing_current_rates(failed):
+    venue, rows, calls = venue_with_history()
+    venue.markets = lambda: ("BTC", "ETH", "BTC/USDC")
+    venue.through["settled:SOL"] = H
+
+    def funding():
+        if failed:
+            raise RuntimeError("current funding unavailable")
+        return [FundingEvent("ETH", Decimal("0.001"), None, H)]
+
+    venue.exchange.funding = funding
+    rows.append(FundingEvent("BTC", Decimal("0.001"), None, H))
+    events = [event for event in venue.on_tick(H) if event.payload.get("settled")]
+    assert {coin for coin, _, _ in calls} == {"BTC", "ETH", "SOL"}
+    assert [event.payload["coin"] for event in events] == ["BTC"]
+    assert events[0].payload["mark"] is None
+    assert "settled:BTC" in venue.through
