@@ -2383,52 +2383,62 @@ def test_an_allow_or_reject_justification_is_reviewed_in_the_provenance_pass(tmp
     assert tool.identity_problem("P2", "UNSOUND-JUSTIFICATION") is None
 
 
-def test_a_change_of_design_authority_is_never_quiet(tmp_path):
-    """Codex on 6f22238: a commit changing the essay's committed digest under an
-    innocuous message is an AUTHORITY-CHANGE: a HIGH finding in every world's triage,
-    carrying the old and new digests, releasable only as AUTHORITY with a reason. The
-    commit that first writes the digest establishes the authority and changes none."""
+@pytest.mark.parametrize("path,old,new", [
+    (tool.ESSAY_DIGEST_REL, "a" * 64 + "\n", "b" * 64 + "\n"),
+    (tool.CANARIES_REL, '{"about": "one"}\n', '{"about": "two"}\n'),
+    (tool.PROTOCOL_REL, "# Protocol\n", "# Protocol, softened\n"),
+    (tool.LEXICON_REL, "RULES = 1\n", "RULES = 0\n"),
+], ids=["essay-digest", "canaries", "protocol", "lexicon"])
+def test_a_change_of_audit_policy_is_never_quiet(tmp_path, path, old, new):
+    """Codex on 6f22238 and a80a5b2: a commit changing an audit-policy file (the essay's
+    digest, the canaries, the protocol, the lexicon) under an innocuous message is a
+    POLICY-CHANGE: a HIGH finding in every world's triage, carrying the file, the commit
+    and its diff summary, releasable only as POLICY with a reason. The commit that first
+    writes a file (a root) establishes the policy and changes none."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
-    root = _commit(repo, tool.ESSAY_DIGEST_REL, "a" * 64 + "\n", "root")
+    root = _commit(repo, path, old, "root")
     base = _commit(repo, "README.md", "x\n", "readme")
-    swapped = _commit(repo, tool.ESSAY_DIGEST_REL, "b" * 64 + "\n", "tidy the docs")
+    swapped = _commit(repo, path, new, "tidy the docs")
     head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
-    commits = tool.provenance_commits(repo, f"{base}..{head}")
-    (change,) = tool.authority_changes(repo, commits)
-    assert (change["sha"], change["old"], change["new"]) == (swapped, "a" * 64, "b" * 64)
-    assert tool.authority_changes(repo, tool.provenance_commits(
-        repo, f"{root}..{base}", from_root=True)) == []
-    key = {"canaries": [], "authority_changes": [change]}
+    (change,) = tool.policy_changes(repo, f"{base}..{head}")
+    assert (change["sha"], change["path"]) == (swapped, path)
+    if path == tool.ESSAY_DIGEST_REL:
+        assert (change["old"], change["new"]) == ("a" * 64, "b" * 64)
+        assert change["summary"] == f"essay digest {'a' * 64} -> {'b' * 64}"
+    else:
+        assert "1 insertion" in change["summary"] and "1 deletion" in change["summary"]
+    assert tool.policy_changes(repo, f"{root}..{base}", from_root=True) == []
+    key = {"canaries": [], "policy_changes": [change]}
     (finding,) = tool.world_findings([], [], key, WORLD)
     assert (finding["question"], finding["class"], finding["severity"]) == (
-        "A1", "AUTHORITY-CHANGE", "HIGH")
-    assert "a" * 64 in finding["quote"] and "b" * 64 in finding["quote"]
-    assert tool.allowed_dispositions(finding) == {"AUTHORITY"}
+        "A1", "POLICY-CHANGE", "HIGH")
+    assert path in finding["quote"] and finding["file"] == path
+    assert tool.allowed_dispositions(finding) == {"POLICY"}
     head_rows = ("| id | path | question | class | severity | confidence | quote | "
                  "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
 
     def triage(disposition, reason):
         return head_rows + (f"| {finding['finding_id']} | `{finding['path']}` | A1 | "
-                            f"AUTHORITY-CHANGE | HIGH | both samples | x | {disposition} | "
+                            f"POLICY-CHANGE | HIGH | both samples | x | {disposition} | "
                             f"{reason} |\n")
     assert any("has no row" in p for p in tool.release_gate(head_rows, expected=[finding]))
     assert any("untriaged" in p for p in tool.release_gate(triage("", ""),
                                                             expected=[finding]))
     assert any("without a reason" in p for p in tool.release_gate(
-        triage("AUTHORITY", ""), expected=[finding]))
+        triage("POLICY", ""), expected=[finding]))
     for other in ("REJECT", "ALLOW", "REVERTED"):
         assert any("not a disposition the rubric allows" in p
                    for p in tool.disposition_problems(triage(other, "r"), [finding],
                                                       allowlist={"allow": []}, rejected=[]))
-    released = triage("AUTHORITY", "the essay's second edition, reviewed")
+    released = triage("POLICY", "the calibration's second edition, reviewed")
     assert tool.release_gate(released, expected=[finding]) == []
     assert tool.disposition_problems(released, [finding], allowlist={"allow": []},
                                      rejected=[]) == []
-    # AUTHORITY releases nothing else.
-    other = {**finding, "authority_change": False, "question": "Q4", "class": "C1"}
-    assert "AUTHORITY" not in tool.allowed_dispositions(other)
+    # POLICY releases nothing else.
+    other = {**finding, "policy_change": False, "question": "Q4", "class": "C1"}
+    assert "POLICY" not in tool.allowed_dispositions(other)
 
 
 def test_a_commit_mixing_an_authority_change_with_other_files_is_refused(tmp_path):
@@ -2443,9 +2453,65 @@ def test_a_commit_mixing_an_authority_change_with_other_files_is_refused(tmp_pat
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "small cleanup")
     head = _git(repo, "rev-parse", "HEAD")
-    commits = tool.provenance_commits(repo, f"{base}..{head}")
     with pytest.raises(tool.AuditInputInvalid, match="an authority change is a commit"):
-        tool.authority_changes(repo, commits)
+        tool.policy_changes(repo, f"{base}..{head}")
+
+
+@pytest.mark.gate  # end to end: renders, triages and gates a repository
+def test_a_canaries_change_needs_a_policy_row_at_the_gate(tmp_path, monkeypatch, capsys):
+    """Codex on a80a5b2: a release that rewrites canaries.json (easier canaries, softer
+    controls) cannot pass the gate quietly: the triage carries the POLICY-CHANGE row, the
+    gate fails until it is disposed POLICY with a reason, then passes and prints it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _seed_policy(repo)
+    world = repo / "worlds" / f"{WORLD}.toml"
+    world.parent.mkdir(parents=True, exist_ok=True)
+    world.write_text((ROOT / "worlds" / f"{WORLD}.toml").read_text())
+    _git(repo, "add", f"worlds/{WORLD}.toml")
+    base = _commit(repo, "README.md", "x\n", "base")
+    spec = json.loads((repo / tool.CANARIES_REL).read_text())
+    spec["about"] += " Reworded."
+    changed = _commit(repo, tool.CANARIES_REL, json.dumps(spec, indent=1) + "\n",
+                      "tidy the canaries")
+    head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
+    monkeypatch.setattr(tool, "ROOT", repo)
+    (tmp_path / "triage").mkdir()
+    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path / "triage")
+    out = tmp_path / "out"
+    out.mkdir()
+    key = tool.render([WORLD], out, seed=7, rendered=False, essay=ESSAY,
+                      release_range=f"{base}..{head}", repo=repo)
+    (change,) = key["policy_changes"]
+    assert (change["sha"], change["path"]) == (changed, tool.CANARIES_REL)
+    samples, prov = _paths(tmp_path, out, key)
+    assert tool.main(["triage", *map(str, samples), "--provenance-samples", *map(str, prov),
+                      "--key", str(out / "canary_key.json"), "--world", WORLD,
+                      "--family", "fam-x"]) == 0
+    path = tmp_path / "triage" / f"{WORLD}.md"
+    text = path.read_text()
+    assert f"AUDIT POLICY CHANGED in {changed}: {tool.CANARIES_REL}" in text
+    row = next(line for line in text.splitlines() if "| POLICY-CHANGE |" in line)
+
+    def gate():
+        return tool.gate(WORLD, path, out / "canary_key.json", samples, prov,
+                         release=key["release_commit"], repo=repo,
+                         triage_sha256=tool.sha256_file(path))
+    assert any("untriaged HIGH" in p for p in gate())
+    path.write_text(text.replace(row, row[:-len("|  |  |")] + "| REJECT | not ours |"))
+    assert any("not a disposition the rubric allows" in p for p in gate())
+    path.write_text(text.replace(row, row[:-len("|  |  |")]
+                                 + "| POLICY | the calibration's wording, reviewed |"))
+    assert gate() == []
+    capsys.readouterr()
+    assert tool.main(["gate", "--world", WORLD, "--triage", str(path), "--key",
+                      str(out / "canary_key.json"), "--samples", *map(str, samples),
+                      "--provenance-samples", *map(str, prov), "--release",
+                      key["release_commit"], "--triage-sha256", tool.sha256_file(path),
+                      "--essay", str(ESSAY)]) == 0
+    assert f"AUDIT POLICY CHANGED in {changed[:12]}: {tool.CANARIES_REL}" in \
+        capsys.readouterr().err
 
 
 def _documented_commands(text):

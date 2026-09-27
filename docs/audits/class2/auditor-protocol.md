@@ -210,15 +210,21 @@ the skeleton):
   and added to another, is not reverted. The gate recomputes this from the repository and never trusts
   the triage row.
   REJECT stays for a flagged commit that is not a behaviour mix, with its reason.
-- **AUTHORITY.** A change of design authority (and only such a finding): a commit in
-  the range that changed `docs/audits/class2/essay.sha256` from one digest to another.
-  Every world's triage carries it as a mandatory HIGH finding (A1, AUTHORITY-CHANGE)
-  with the old and new digests and the commit, whatever its message says; AUTHORITY,
-  with the architect's reason, is its only releasable disposition, and releases no
-  other finding. Such a commit changes that file alone: a commit changing the digest
-  and anything else is refused at render and at the gate. The commit that first writes
-  the digest establishes the authority and changes none. `triage` writes the change
-  into the triage file's header, and `gate` prints the old and new digests first.
+- **POLICY.** A change of audit policy (and only such a finding): a commit in the
+  range that modifies one of the audit-policy files: `docs/audits/class2/canaries.json`
+  (the calibration set), this protocol (its rubric and calibration),
+  `tests/audit/class2_lexicon.py` (the lexicon) and `docs/audits/class2/essay.sha256`
+  (the design authority). The release audited carries them, so it could otherwise swap
+  in easy canaries, a softer rubric or another authority. Every world's triage carries
+  each change as a mandatory HIGH finding (A1, POLICY-CHANGE) with the file, the commit
+  and a diff summary (for the essay, its old and new digest), whatever the message
+  says; POLICY, with the architect's reason, is its only releasable disposition, and
+  releases no other finding. A commit changing the essay's digest changes that file
+  alone: one that changes it and anything else is refused at render and at the gate.
+  A commit that first writes a policy file establishes it and changes none. `triage`
+  writes each change into the triage file's header, and `gate` prints them first. The
+  allowlist and `rejected.jsonl` are reviewed apart, in the provenance pass's
+  Justifications.
 
 ## The release gate
 
@@ -290,7 +296,7 @@ release, its release corpus's digest and the gated triage file's digest to
 copied into the worktree and never committed) and refuses to render without it, when
 it lacks a heading that bounds the text, or when it does not hash to the digest
 `docs/audits/class2/essay.sha256` holds at the release commit (a commit changing that
-digest is a change of design authority: see the AUTHORITY disposition). No prompt is ever edited after rendering: both
+digest is a change of audit policy: see the POLICY disposition). No prompt is ever edited after rendering: both
 prompts are bound to the key by hash.
 
 `canary_key.json` and `release_corpus.jsonl` are never part of the auditor's input: the
@@ -316,9 +322,11 @@ against inconsistency, stale artifacts, operator error and artifacts rewritten t
   `docs/audits/class2/essay.sha256`. At render and at every later step the supplied
   essay must hash to the digest committed at the release, and a changed essay needs a
   commit changing that file, which the provenance pass shows. A repository writer is
-  outside the threat model, but a change of design authority is never quiet: that
-  commit must change the digest alone, and it is a mandatory AUTHORITY-CHANGE finding
-  in every world's triage, released only as AUTHORITY with a reason, so a digest
+  outside the threat model, but a change of audit policy is never quiet: the canaries,
+  this protocol, the lexicon and the essay's digest are read from the release audited,
+  so every commit in the range that modifies one is a mandatory POLICY-CHANGE finding
+  in every world's triage, released only as POLICY with a reason (the essay's digest
+  changed by a commit of its own), and easier canaries, a softer rubric or a digest
   swapped under an innocuous message cannot pass unseen. The
   code that rendered the corpus is the release's too: after rendering, every module of
   the repository that ran (read from the process's loaded modules, never a list) must
