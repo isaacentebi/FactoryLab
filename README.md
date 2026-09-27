@@ -171,9 +171,9 @@ reserves its ceiling, runs, commits its actual cost, and only then returns. An
 action the wallet cannot cover is infeasible. Every reservation names a handle and
 a reason, and an external settlement comes from one of four named sources: venue
 P&L, funding, income, financing. A resource that costs nothing at the margin is a
-limit or a price on reward, never a money debit. Death at
-or below the balance floor, judged on settled money, is final; a later credit does
-not revive it. Per-seat entitlements divide the one wallet and never create money.
+limit or a price on reward, never a money debit. Death at or below the balance
+floor, judged on settled money, is final; a later credit does not revive it.
+Per-seat entitlements divide the one wallet and never create money.
 
 **Custody.** Where the money is, and when it was last seen, is typed: a seat's
 learning score, its entitlement and the assets held at a venue or a provider are
@@ -183,11 +183,11 @@ they are sent, and an uncertain outcome is quarantined until it resolves.
 
 **The sealed diary.** Every state change is a ledger item first: encrypted,
 SHA-256 hash-chained, fsynced, append-only, behind an exclusive writer lock. The
-genesis hash is the manifest's. While the world lives, the ledger answers a live
-reader with five fixed aggregate views, never items; its public seal is released
-only by final termination.
-Checkpoints are sealed under the same key beside the diary, and resume refuses one
-that is missing, stale, foreign or altered. It never falls back to an older one. A
+genesis hash is the manifest's. While the world lives, the ledger's public
+interface answers five fixed aggregate views and never an item; its seal is
+released only by final termination. Checkpoints are sealed under the same key
+beside the diary, and resume refuses one that is missing, stale, foreign or
+altered. It never falls back to an older one. A
 world refuses to resume under a different release digest of `factorylab/` and
 `uv.lock`: new physics is a new world. A kill is also written outside the diary, so
 a copy of the diary cannot bring a killed world back.
