@@ -375,8 +375,10 @@ def pytest_collection_modifyitems(items):
 
     A module's ``pytestmark = gate`` does not make every test in it gate: it is removed
     and each test is read on its own, so the unit tests beside a world test stay in the
-    inner loop. The static read can miss a world; the check-tier CPU limit below
-    catches what it misses.
+    inner loop. A module whose every test shares a setup over the check limit (an
+    autouse module fixture) says so with ``GATE_MODULE = "<why>"``: all its tests are
+    gate. The static read can miss a world; the check-tier CPU limit below catches
+    what it misses.
     """
     facts: dict[Path, set[str]] = {}
 
@@ -398,7 +400,8 @@ def pytest_collection_modifyitems(items):
         if any(item.get_closest_marker(m) for m in ("network", "slow")):
             continue
         world_fixtures = _world_fixtures(item, world_functions_of)
-        if any(item.get_closest_marker(m) for m in _GATE_MARKS):
+        if (any(item.get_closest_marker(m) for m in _GATE_MARKS)
+                or getattr(getattr(item, "module", None), "GATE_MODULE", None)):
             gate = True
         elif item.get_closest_marker("check"):
             gate = False
