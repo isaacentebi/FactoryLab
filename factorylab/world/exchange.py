@@ -210,6 +210,10 @@ class Exchange(Protocol):
 # --------------------------------------------------------------------------- fake
 
 
+#: The most fills Hyperliquid's ``userFillsByTime`` answers in one read.
+FILLS_PAGE = 2000
+
+
 @dataclass
 class FakeExchange:
     """A deterministic venue for the ``scripted`` world.
@@ -1570,15 +1574,42 @@ class HyperliquidExchange:
 
         Runtime polling may defer a failed read, while terminal reconciliation
         reports that failure explicitly. Neither advances the inclusive cursor.
+        Guarantees every fill at or after ``since_ns`` the venue holds: the venue
+        answers at most ``FILLS_PAGE`` rows per read, so a full page is followed by the
+        next from its latest millisecond (reread, and deduplicated by trade id), until
+        a short page proves the rest delivered (Codex on #152: a caller's watermark
+        may pass only what was read). A full page that does not advance fails closed.
         """
         if not self._address:
             raise RuntimeError("fills() needs an address or a private key")
-        raw = self._guarded(
-            "user_fills_by_time",
-            lambda: self._info.user_fills_by_time(self._address, since_ns // NS_PER_MS),
-        )
-        if not isinstance(raw, list):
-            raise VenueUnavailable("invalid fill response")
+        start = since_ns // NS_PER_MS
+        rows: dict = {}
+        while True:
+            page = self._guarded(
+                "user_fills_by_time",
+                lambda start=start: self._info.user_fills_by_time(self._address, start),
+            )
+            if not isinstance(page, list):
+                raise VenueUnavailable("invalid fill response")
+            stamps = []
+            for f in page:
+                if not isinstance(f, dict):
+                    rows[("row", len(rows))] = f  # refused below, as before
+                    continue
+                key = (("tid", str(f["tid"])) if f.get("tid") is not None else
+                       tuple(sorted((k, str(v)) for k, v in f.items())))
+                rows[key] = f
+                try:
+                    stamps.append(int(f["time"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if len(page) < FILLS_PAGE:
+                break
+            latest = max(stamps, default=start)
+            if latest <= start:
+                raise VenueUnavailable("fill pagination stalled at a full timestamp")
+            start = latest
+        raw = list(rows.values())
         out: list[Fill] = []
         for f in raw:
             try:
