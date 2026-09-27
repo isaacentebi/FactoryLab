@@ -7,6 +7,7 @@ budget fails the run unless it is excepted by name. These pin all three.
 """
 
 import ast
+from pathlib import Path
 
 from tests.conftest import (
     CHECK_WALL_CEILING_S,
@@ -14,6 +15,8 @@ from tests.conftest import (
     _files_over_budget,
     _world_functions,
 )
+
+_TESTS = Path(__file__).resolve().parent
 
 SOURCE = '''
 from factorylab.runtime.loop import Runtime, run_world
@@ -54,6 +57,34 @@ def test_only_a_running_loop_is_a_world_however_the_runtime_is_built():
     assert _world_functions(ast.parse(SOURCE)) == {
         "runs_its_loop", "runs_a_built_runtime", "via_run_world", "via_the_cli",
         "via_a_helper"}
+
+
+def test_a_world_run_by_a_helper_of_another_test_module_is_a_world():
+    """``from tests.gauntlet import populations as P`` then ``P.run(...)``, or a helper
+    imported by name: the helper's own module decides; a helper that runs nothing, or a
+    module outside ``tests/``, does not make a world."""
+    helpers = _TESTS / "gauntlet" / "populations.py"
+    assert "run" in _world_functions(ast.parse(helpers.read_text()))
+    source = ast.parse('''
+from scripts import gauntlet as g
+from tests.gauntlet import populations as P
+from tests.helpers import keep_every_checkpoint
+
+def via_module_alias():
+    P.run(P.sf1())
+
+def via_a_world_free_helper():
+    keep_every_checkpoint(monkeypatch)
+    P.sf1()
+
+def via_a_script():
+    g.replay(events)
+''')
+
+    def world_functions_of(path):
+        return _world_functions(ast.parse(path.read_text()))
+
+    assert _world_functions(source, world_functions_of) == {"via_module_alias"}
 
 
 def test_the_check_limit_is_cpu_with_a_separate_wall_ceiling():

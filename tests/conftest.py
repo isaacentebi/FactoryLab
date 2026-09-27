@@ -173,7 +173,7 @@ def scripted_runtime_run(_scripted_run_cache):
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
-_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run"})
+_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
 _GATE_MARKS = ("gate", "world")
 _TESTS_ROOT = Path(__file__).resolve().parent
@@ -244,17 +244,63 @@ def _runs_world_here(call: ast.Call, builders=frozenset({"Runtime"})) -> bool:
     return False
 
 
-def _world_functions(tree: ast.Module) -> set[str]:
-    """Names of this module's functions that run a world, directly or through a helper."""
+def _test_module_path(module: str | None) -> Path | None:
+    """The file of a module under ``tests/``, or None for any other module."""
+    if not module or not (module == "tests" or module.startswith("tests.")):
+        return None
+    base = _TESTS_ROOT.parent.joinpath(*module.split("."))
+    for path in (base.with_suffix(".py"), base / "__init__.py"):
+        if path.is_file():
+            return path
+    return None
+
+
+def _imported_world_calls(tree: ast.Module, world_functions_of) -> frozenset[str]:
+    """The call spellings (``fn`` or ``alias.fn``) that reach a world function of another
+    module under ``tests/``, as this module imports it."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            source = _test_module_path(node.module)
+            for alias in node.names:
+                submodule = _test_module_path(f"{node.module}.{alias.name}")
+                if submodule is not None:  # ``from tests.gauntlet import populations as P``
+                    found |= {f"{alias.asname or alias.name}.{name}"
+                              for name in world_functions_of(submodule)}
+                elif source is not None and alias.name in world_functions_of(source):
+                    found.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                source = _test_module_path(alias.name)
+                if source is not None and alias.asname:
+                    found |= {f"{alias.asname}.{name}" for name in world_functions_of(source)}
+    return frozenset(found)
+
+
+def _spelling(call: ast.Call) -> str | None:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return f"{func.value.id}.{func.attr}"
+    return None
+
+
+def _world_functions(tree: ast.Module, world_functions_of=None) -> set[str]:
+    """Names of this module's functions that run a world, directly, through a helper of
+    this module, or through a helper imported from another module under ``tests/``."""
     functions = {node.name: node for node in ast.walk(tree)
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     calls = {name: [n for n in ast.walk(node) if isinstance(n, ast.Call)]
              for name, node in functions.items()}
+    imported = (_imported_world_calls(tree, world_functions_of)
+                if world_functions_of is not None else frozenset())
     # A helper that builds a Runtime: ``_runtime(path).run()`` runs its loop.
     builders = frozenset({"Runtime"} | {name for name, found in calls.items()
                                         if any(_call_name(c) == "Runtime" for c in found)})
     world = {name for name, found in calls.items()
-             if any(_runs_world_here(c, builders) for c in found)}
+             if any(_runs_world_here(c, builders) or _spelling(c) in imported
+                    for c in found)}
     changed = True
     while changed:
         changed = False
@@ -317,8 +363,10 @@ def pytest_collection_modifyitems(items):
     facts: dict[Path, set[str]] = {}
 
     def world_functions_of(path: Path) -> set[str]:
+        path = path.resolve()
         if path not in facts:
-            facts[path] = _world_functions(ast.parse(path.read_text()))
+            facts[path] = set()  # an import cycle reads this module as world-free
+            facts[path] = _world_functions(ast.parse(path.read_text()), world_functions_of)
         return facts[path]
 
     stripped = set()

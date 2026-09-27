@@ -239,6 +239,7 @@ def test_th4_iid_behaviour_in_a_world_is_flagged_no_more_than_the_synthetic_null
     assert result.ok, result.evidence
 
 
+@pytest.mark.gate  # the sweep runs a th4 world through the gauntlet CLI
 def test_sweep_th4_reports_its_defining_criterion(capsys):
     """Codex on b7ae050: ``sweep --population th4`` reports TH-4, the population's own
     (population-only) criterion, beside the generic replay, with the synthetic null
