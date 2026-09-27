@@ -265,7 +265,13 @@ _RETIRED_PENDING = frozenset({"verdict.norm", "verdict.subject"})
 # ``relief_window``: the halved-price relief (charter audit U2), replaced by the ratchet.
 # ``upward_releases``: the unread UpwardBuffer (time audit T9).
 _RETIRED_FIELDS = {
-    "_CardState": frozenset({"relief_window"}),
+    # ``windows_at_max``: windows at the deleted lambda_max (wave 16, R-E: a price has
+    # no bound of its own); ``windows_at_bound`` counts a different fact, the card's
+    # own bound, and starts from zero.
+    "_CardState": frozenset({"relief_window", "windows_at_max"}),
+    # ``fill_id``: the live venue's retired fill path keyed by it (Codex and Sol on
+    # #152); the fill cursor never read it.
+    "Fill": frozenset({"fill_id"}),
     # A cascade window measured in wall nanoseconds (time audit T3, T10): the gate
     # restores as a tick window due at its next completed arrival.
     "CascadeGate": frozenset({"window_ns", "opened_ns"}),
