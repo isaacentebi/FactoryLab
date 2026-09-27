@@ -1064,6 +1064,9 @@ def runtime_state(rt) -> Checkpoint:
                               for aid, learner in rt.assembly_learners.items()},
         "retired_routers": [st.state() for st in rt.retired_routers.values()],
         "venue": encode({"last_funding_ns": rt.venue.last_funding_ns,
+                         "settled_launch_ns": rt.venue.settled_launch_ns,
+                         "settled_emitted": rt.venue.settled_emitted,
+                         "settled_gaps": rt.venue.settled_gaps,
                          "seen_funding": rt.venue.seen_funding,
                          "funding_oracles": rt.venue.funding_oracles,
                          "through": rt.venue.through}) if rt.venue else None,
@@ -1365,7 +1368,13 @@ def restore_runtime(rt, state: dict) -> None:
         router = RouterState.restore(saved)
         rt.retired_routers[router.learner.id] = router
     if rt.venue and state["venue"] is not None:
-        for name, value in decode(state["venue"]).items():
+        saved_venue_state = decode(state["venue"])
+        # Chapter II §III.b: legacy continuation starts from its durable launch,
+        # never the destination process's first successful funding poll.
+        saved_venue_state.setdefault("settled_launch_ns", rt.consequence_fills.launch_ns)
+        saved_venue_state.setdefault("settled_emitted", {})
+        saved_venue_state.setdefault("settled_gaps", {})
+        for name, value in saved_venue_state.items():
             if name in _RETIRED_VENUE_FIELDS:
                 continue  # an older checkpoint's retired fill path: read and ignored
             setattr(rt.venue, name, value)

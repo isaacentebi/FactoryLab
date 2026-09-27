@@ -76,6 +76,7 @@ def test_live_named_outcome_waits_for_backdated_settled_rate(missing):
     state["cursor"] = 3 * H
     assert rt._reference_outcome(frozen) == ("open", None)
     published = [{"time": H // 1_000_000, "fundingRate": "0.001"}]
+    calls.clear()
     deliver(venue.on_tick(4 * H))
     status, rates = rt._reference_outcome(frozen)
     assert status == "measured"
@@ -83,7 +84,9 @@ def test_live_named_outcome_waits_for_backdated_settled_rate(missing):
     priced = opportunity_cost([("BTC", "100")], [("BTC", "100")], "0", "0",
                               {"coin": "BTC", "side": "buy"}, rates)
     assert priced["net_bps"] == "-10.0000"
-    assert calls[-1][1] <= H // 1_000_000
+    # Chapter II §III.b: old evidence is still requested, independently of
+    # forward reads and other exact-boundary gap retries.
+    assert any(start <= H // 1_000_000 <= end for _, start, end in calls)
 
 
 def test_exact_funding_keeps_interpolation_without_live_settlement_requirement():

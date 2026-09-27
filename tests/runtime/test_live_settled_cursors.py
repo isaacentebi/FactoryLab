@@ -69,3 +69,46 @@ def test_configured_perpetuals_poll_history_despite_missing_current_rates(failed
     assert [event.payload["coin"] for event in events] == ["BTC"]
     assert events[0].payload["mark"] is None
     assert "settled:BTC" in venue.through
+
+
+def test_inclusive_history_emits_once_then_only_genuine_correction():
+    venue, rows, calls = venue_with_history()
+    venue.funding_needed = lambda coin, stamp: stamp == H
+    rows.append(FundingEvent("BTC", Decimal("0.002"), None, 2 * H))
+    assert len(venue._settled_rates(2 * H, {"BTC"})) == 1
+    rows.insert(0, FundingEvent("BTC", Decimal("0.001"), None, H))
+    events = venue._settled_rates(3 * H, {"BTC"})
+    assert [event.payload["funding_ns"] for event in events] == [H]
+    assert venue._settled_rates(3 * H, {"BTC"}) == []
+    rows[0] = FundingEvent("BTC", Decimal("0.003"), None, H)
+    events = venue._settled_rates(3 * H, {"BTC"})
+    assert [event.payload["rate"] for event in events] == ["0.003"]
+
+
+def test_missing_boundary_does_not_pin_forward_reads_and_expires_without_consumer():
+    venue, rows, calls = venue_with_history()
+    needed = {H}
+    venue.funding_needed = lambda coin, stamp: stamp in needed
+    rows.append(FundingEvent("BTC", Decimal("0.002"), None, 2 * H))
+    venue._settled_rates(2 * H, {"BTC"})
+    assert venue.through["settled:BTC"] == 2 * H
+    assert venue.settled_gaps["BTC"] == {H}
+    calls.clear()
+    venue._settled_rates(3 * H, {"BTC"})
+    assert ("BTC", H, H) in calls
+    assert ("BTC", 2 * H, 3 * H) in calls
+    needed.clear()
+    calls.clear()
+    venue._settled_rates(4 * H, {"BTC"})
+    assert all(start >= 3 * H for _, start, _ in calls)
+    assert venue.settled_gaps["BTC"] == set()
+
+
+def test_missing_oracle_emits_only_genuine_oracle_correction():
+    venue, rows, calls = venue_with_history()
+    rows.append(FundingEvent("BTC", Decimal("0.001"), None, H))
+    assert venue._settled_rates(H, {"BTC"})[0].payload["mark"] is None
+    venue.funding_oracles["BTC"][H] = ("123.456789", H + 1)
+    events = venue._settled_rates(H + 2, {"BTC"})
+    assert [event.payload["mark"] for event in events] == ["123.456789"]
+    assert venue._settled_rates(H + 3, {"BTC"}) == []

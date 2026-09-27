@@ -334,6 +334,14 @@ class LiveVenue:
 
     # Chapter II §III.b: rate evidence starts at launch, not its first answered poll.
     settled_launch_ns: int | None = None
+    settled_emitted: dict[str, dict[int, tuple[str, str | None, int | None]]] = field(
+        default_factory=dict)
+    settled_gaps: dict[str, set[int]] = field(default_factory=dict)
+    funding_needed: Callable[[str, int], bool] | None = None
+
+    def _funding_needed(self, coin: str, boundary: int) -> bool:
+        """Keep unknown consumers retryable; stop only when their absence is established."""
+        return self.funding_needed is None or self.funding_needed(coin, boundary)
 
     def __post_init__(self) -> None:
         """Keep the initial funding bound independent of the moving payment cursor."""
@@ -378,11 +386,10 @@ class LiveVenue:
         return frozenset(self.markets())
 
     def _settled_rates(self, now_ns: int, coins: set[str]) -> list[WorldEvent]:
-        """Each published boundary is delivered; missing boundaries remain retryable.
+        """Deliver first observations and corrections without pinning forward reads.
 
-        The per-coin contiguous cursor lives in the already checkpointed stream state.
-        A successful empty read is not evidence that a settlement does not exist
-        (Chapter II §III.b). Re-reading its boundary permits late rate corrections.
+        Chapter II §III.b/§IV.c: unresolved evidence remains retryable only while
+        an open outcome can consume it, independently of newer venue facts.
         """
         interval = int(self.exchange.funding_interval_ns)
         out = []
@@ -392,33 +399,54 @@ class LiveVenue:
             key = f"settled:{coin}"
             cursor = self.through.setdefault(
                 key, self.settled_launch_ns - self.settled_launch_ns % interval)
-            try:
-                rows = self.exchange.settled_funding_history(coin, cursor, now_ns)
-            except (RuntimeError, OSError, ValueError, ArithmeticError):
-                continue
-            stamps = set()
-            for row in rows:
-                if not cursor <= row.ts_ns <= now_ns or row.ts_ns % interval:
+            emitted = self.settled_emitted.setdefault(coin, {})
+            gaps = self.settled_gaps.setdefault(coin, set())
+            gaps.intersection_update(stamp for stamp in tuple(gaps)
+                                     if self._funding_needed(coin, stamp))
+            # Each retry is an exact boundary, never an ever-growing old range.
+            # Observed boundaries remain correction-readable for their consumers.
+            retry = gaps | {stamp for stamp in emitted if stamp < cursor
+                            and self._funding_needed(coin, stamp)}
+            reads = [(cursor, now_ns), *((stamp, stamp) for stamp in sorted(retry))]
+            for start, end in reads:
+                try:
+                    rows = self.exchange.settled_funding_history(coin, start, end)
+                except (RuntimeError, OSError, ValueError, ArithmeticError):
                     continue
-                stamps.add(row.ts_ns)
-                oracle = self.funding_oracles.get(coin, {}).get(row.ts_ns)
-                out.append(WorldEvent(WorldEventKind.FUNDING, now_ns, self.exchange.name,
-                                      {"coin": coin, "rate": str(row.rate), "paid_usd": "0",
-                                       "funding_ns": row.ts_ns, "settled": True,
-                                       "mark": oracle[0] if oracle else None,
-                                       "oracle_observed_at_ns": oracle[1] if oracle else None,
-                                       # Chapter II §III.b: preserve the signed observation lag
-                                       # as exact evidence, rather than a rounded duration.
-                                       "oracle_offset_seconds": (
-                                           str(Decimal(oracle[1] - row.ts_ns)
-                                               / Decimal(NS_PER_SECOND))
-                                           if oracle else None)}))
-            while cursor in stamps and cursor + interval in stamps:
-                cursor += interval
-            self.through[key] = cursor
+                stamps = set()
+                for row in rows:
+                    if not start <= row.ts_ns <= end or row.ts_ns % interval:
+                        continue
+                    stamps.add(row.ts_ns)
+                    oracle = self.funding_oracles.get(coin, {}).get(row.ts_ns)
+                    fingerprint = (str(row.rate), oracle[0] if oracle else None,
+                                   oracle[1] if oracle else None)
+                    if emitted.get(row.ts_ns) == fingerprint:
+                        continue
+                    emitted[row.ts_ns] = fingerprint
+                    out.append(WorldEvent(
+                        WorldEventKind.FUNDING, now_ns, self.exchange.name,
+                        {"coin": coin, "rate": str(row.rate), "paid_usd": "0",
+                         "funding_ns": row.ts_ns, "settled": True,
+                         "mark": fingerprint[1], "oracle_observed_at_ns": fingerprint[2],
+                         "oracle_offset_seconds": (
+                             str(Decimal(oracle[1] - row.ts_ns) / Decimal(NS_PER_SECOND))
+                             if oracle else None)}))
+                gaps.difference_update(stamps)
+                if start == cursor and end == now_ns:
+                    forward = now_ns - now_ns % interval
+                    gaps.update(stamp for stamp in range(cursor, forward + 1, interval)
+                                if stamp not in emitted and self._funding_needed(coin, stamp))
+                    self.through[key] = forward
+            self.settled_emitted[coin] = {
+                stamp: fingerprint for stamp, fingerprint in emitted.items()
+                if stamp >= self.through[key] or self._funding_needed(coin, stamp)}
+            # Chapter II §III.b: do not discard a gap's original boundary oracle
+            # merely because a newer boundary arrived first.
             self.funding_oracles[coin] = {
                 stamp: oracle for stamp, oracle in self.funding_oracles.get(coin, {}).items()
-                if stamp >= cursor}
+                if stamp >= self.through[key] or stamp in gaps
+                or self._funding_needed(coin, stamp)}
         return out
 
     def on_tick(self, now_ns: int) -> list[WorldEvent]:

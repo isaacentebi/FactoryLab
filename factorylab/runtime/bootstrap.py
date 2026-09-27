@@ -426,7 +426,15 @@ class BootstrapMixin:
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
             LiveVenue(self.exchange, ledger=self.ledger,
-                      last_funding_ns=self.clock.now_ns, markets=self._trading_markets)
+                      last_funding_ns=self.clock.now_ns, markets=self._trading_markets,
+                      funding_needed=lambda coin, boundary: any(
+                          frozen.get("coin") == coin
+                          and (frozen.get("funding") or {}).get("strict")
+                          and frozen.get("open_ns") is not None
+                          and frozen["open_ns"] < boundary
+                          and (frozen.get("due_ns") is None or boundary <= frozen["due_ns"])
+                          and not self._funding_patience_over(frozen)
+                          for frozen in self.reference_mids.values()))
             if self.live
             else None
         )
