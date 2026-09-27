@@ -962,13 +962,17 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     acting = [need(w, "window") for w in closes if need(w, "acts")]
     thrash = set(flagged(events, "thrash"))
     # One prefix removed, as the organ does (CARD_PREFIXED; immune.py:359).
-    holding = {need(w, "window"): {c.removeprefix("card:") for c in need(w, "violated_cards")}
-               for w in closes if need(w, "flags.stable_failure")
-               and need(w, "window") not in thrash}
+    holding = unique_map(
+        (w for w in closes if need(w, "flags.stable_failure")
+         and need(w, "window") not in thrash),
+        lambda w: need(w, "window"),
+        lambda w: {c.removeprefix("card:") for c in need(w, "violated_cards")})
     ratchets = rows_of(events, "immune.price_ratchet")
-    at: dict[tuple[str, int], int] = {
-        (need(row, "card_id"), need(row, "window")): need(row, "duration")
-                                      for row in ratchets}
+    # One ratchet per card per window (immune.py ``_ratchet_failing``): a duplicate is
+    # malformed, never a second duration that overwrites the first (Codex on d3dc486).
+    at: dict[tuple[str, int], int] = unique_map(
+        ratchets, lambda row: (need(row, "card_id"), need(row, "window")),
+        lambda row: need(row, "duration"))
     problems = [{"unflagged_ratchet": need(row, "window"), "card": need(row, "card_id")}
                 for row in ratchets
                 if need(row, "card_id") not in holding.get(need(row, "window"), ())]
@@ -1434,8 +1438,8 @@ def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
     closes = windows(events)
     # The profile is always written; an ``access:`` key absent from it is the organ's own
     # "unknown" (versions.py ``ACCESS``: "absent unknown"), read as unmeasured.
-    readings = {need(w, "window"): need(w, "profile").get("access:registration_route")
-                for w in closes}
+    readings = unique_map(closes, lambda w: need(w, "window"),
+                          lambda w: need(w, "profile").get("access:registration_route"))
     measured = {w: v for w, v in readings.items() if v is not None}
     shut = [w for w, v in measured.items() if v != 1.0]
     # Two components, one rule (``aggregate``): a shut route or a wrong accrual fails
@@ -1965,8 +1969,8 @@ def thrash_attributed(events: list[Mapping], manifest: Mapping) -> dict[str, boo
     from factorylab.cortex.registration import measured_role
 
     ph = physics(manifest)
-    emits = {str(a.get("id")): a.get("emits") for a in manifest.get("assemblies") or ()
-             if isinstance(a, Mapping)}
+    emits = unique_map((a for a in manifest.get("assemblies") or () if isinstance(a, Mapping)),
+                       lambda a: str(a.get("id")), lambda a: a.get("emits"))
     roles: list[str] = []
     menus: dict[str, set[str]] = defaultdict(set)
     out: dict[str, bool] = {}
@@ -2508,8 +2512,8 @@ def consequence_y(fact: Mapping, outcome: str, manifest: Mapping) -> float | str
             return float(int(not censored and net + earned > cost))
         attempted = outcome in ("attempted-trade-v1", "attempted-trade-net-v1")
         trade = need(fact, "attempted" if attempted else "declined")
-        moves = {need(m, "coin"): Decimal(str(need(m, "move_bps")))
-                 for m in need(fact, "moves")}
+        moves = unique_map(need(fact, "moves"), lambda m: need(m, "coin"),
+                           lambda m: Decimal(str(need(m, "move_bps"))))
         move = moves.get(need(trade, "coin"))
         side = need(trade, "side")
         recorded = float(fact.get("scale_bps") or 0.0)

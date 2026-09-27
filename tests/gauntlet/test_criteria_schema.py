@@ -799,8 +799,18 @@ def test_every_evidence_map_keyed_by_a_row_is_unique_or_explicitly_accumulating(
                     assigned.add((owner(node), ast.unparse(target.value)))
         if isinstance(node, ast.DictComp):
             source = ast.unparse(node.generators[0].iter)
-            if any(word in source for word in ("rows_of", "card_windows", "windows(",
-                                               "events")):
+            # Keyed by a field of the row it iterates (``need(row, …)``,
+            # ``row.get(…)``), or iterating ledger rows at all (Codex on d3dc486).
+            targets = {t.id for gen in node.generators for t in ast.walk(gen.target)
+                       if isinstance(t, ast.Name)}
+            reads_row = any(
+                isinstance(call, ast.Call)
+                and (ast.unparse(call.func) == "need"
+                     or ast.unparse(call.func).endswith(".get"))
+                and targets & {n.id for n in ast.walk(call) if isinstance(n, ast.Name)}
+                for call in ast.walk(node.key))
+            if reads_row or any(word in source for word in ("rows_of", "card_windows",
+                                                            "windows(", "events")):
                 comprehended.add(owner(node))
     assert sorted(assigned - set(KEYED_ASSIGN_ALLOWED)) == [], "a keyed assignment"
     assert sorted(comprehended - set(ROW_COMPREHENSION_ALLOWED)) == [], "a row comprehension"
@@ -822,3 +832,20 @@ def test_a_duplicate_world_fact_is_malformed_not_overwritten():
     with pytest.raises(g.Malformed):
         g.decision_seats([{"kind": "decision.open", "handle": "d", "propensity": {"chosen": "a"}},
                           {"kind": "decision.open", "handle": "d", "propensity": {"chosen": "b"}}])
+
+
+def test_a_duplicate_ratchet_row_is_malformed_not_overwritten():
+    """Codex on d3dc486: one ratchet per card per window; a second row for it fails
+    SF-1b as malformed, never overwrites the first's duration."""
+    ratchet = {"kind": "immune.price_ratchet", "card_id": "c", "window": 4, "duration": 1}
+    rows = [unit._w(4, acts=True, sf=True), ratchet, ratchet | {"duration": 9}]
+    result = g.sf1b_ratchet_cadence(rows, unit.M)
+    assert result.status == g.FAIL and "single row" in result.evidence["malformed"]["field"]
+
+
+def test_the_row_map_guard_catches_a_comprehension_keyed_by_a_row_field(monkeypatch):
+    source = Path(g.__file__).read_text() + (
+        "\n\ndef _planted(rows):\n    return {need(r, 'handle'): r for r in rows}\n")
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: source)
+    with pytest.raises(AssertionError, match="a row comprehension"):
+        test_every_evidence_map_keyed_by_a_row_is_unique_or_explicitly_accumulating()
