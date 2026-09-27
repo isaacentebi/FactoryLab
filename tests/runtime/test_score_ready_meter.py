@@ -97,3 +97,24 @@ def test_the_price_loop_does_not_run_away_when_every_producer_decision_defers():
     steady = loops[1]["period_ticks"]
     assert loops[-1]["period_ticks"] <= steady * (1 + timing.jitter_fraction)
     assert max(row["inner_ticks"] for row in loops) == loops[0]["inner_ticks"]
+
+
+def test_a_subject_awaiting_only_its_price_share_is_finished_evidence(monkeypatch):
+    """R16b-3: a verdict's evidence is its subject's fixed score. A subject whose score is
+    in and whose settlement waits only for its window's price share (D5) is finished
+    evidence, though its kernel status is still PENDING, so the cascade never waits on
+    the price close; a subject with no score yet is still an open question."""
+    from factorylab.kernel.events import Event, EventKind
+
+    rt = _runtime(monkeypatch)
+    fixed = _deferred_at(rt, opened=10, ready=13)
+    open_question = _producer(rt, "seed-decider", "hold")
+
+    def verdict(about):
+        return Event(f"v-{about}", EventKind.VERDICT, 0, {"about_handle": about}, "runtime")
+
+    assert rt.queue.get(fixed).status is SettleStatus.PENDING
+    assert rt._cascade_evidence_complete(verdict(fixed))
+    assert not rt._cascade_evidence_complete(verdict(open_question))
+    rt._close_price_window()  # the share lands; the evidence was already complete
+    assert rt._cascade_evidence_complete(verdict(fixed))

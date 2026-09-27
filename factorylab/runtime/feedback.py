@@ -332,9 +332,14 @@ class FeedbackMixin:
         question. It belongs to the window — it is named in the report — but it
         is not evidence yet, and the upward report is made of evidence (§6.C). A
         subject this runtime cannot address at all (a judgement of an event rather
-        than a decision) is not held open by a fact that will never arrive.
+        than a decision) is not held open by a fact that will never arrive. A subject
+        whose score is fixed and whose settlement waits only for its window's price
+        share (D5, ``deferred_settlements``) is finished evidence (R16b-1, R16b-3):
+        the fixed score is the evidence, the price share the outer loop's business.
         """
         about = ev.payload.get("about_handle") or ev.payload.get("about")
+        if about in self.deferred_settlements:
+            return True
         try:
             return self.queue.get(about).status is not SettleStatus.PENDING
         except (KeyError, TypeError):
