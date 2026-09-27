@@ -49,9 +49,6 @@ addopts = "-m check -n 2 --dist loadgroup"
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-# A reviewer's package is preserved byte-for-byte as the record of what it sent; it is
-# evidence, not source, and it is never imported. Our conversion of it is linted.
-extend-exclude = ["docs/audits/**/review/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
