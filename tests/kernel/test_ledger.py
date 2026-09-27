@@ -231,3 +231,18 @@ def test_default_mode_catches_tail_tampers_immediately_and_earlier_edits_at_ever
     assert not ledger2.healthy()
     with pytest.raises(LedgerIntegrityError):
         ledger2.append({"kind": "b"})
+
+
+def test_a_lone_surrogate_is_replaced_once_and_every_text_then_encodes():
+    """A reply cut mid-emoji (a lone UTF-16 surrogate) cannot be encoded, so a diary
+    that wrote it verbatim could never be read back or replayed."""
+    from factorylab.kernel.ledger import canonical, utf8_text
+
+    cut = "cut mid-emoji \ud83d"
+    fixed = utf8_text(cut)
+    assert fixed == "cut mid-emoji �"
+    fixed.encode("utf-8")
+    assert utf8_text(fixed) == fixed  # idempotent: a replayed item equals the recorded one
+    for whole in ("plain", "café \U0001f600"):
+        assert utf8_text(whole) == whole
+    assert canonical({"rationale": cut}) == canonical({"rationale": fixed})

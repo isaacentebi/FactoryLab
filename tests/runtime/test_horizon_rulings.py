@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from factorylab.runtime.grounded import OPPORTUNITY_DEFINITION
 from factorylab.world.exchange import NS_PER_HOUR
 from tests.runtime.test_consequence_horizon import S, _walk, _world
@@ -785,6 +787,7 @@ def test_a_funding_boundary_past_h_changes_neither_road_however_late_the_mark():
     assert on_time_lot.net_micro == 100 - 20 - on_time_lot.exit_fee_micro
 
 
+@pytest.mark.gate  # steps a world event through the runtime
 def test_a_tape_advance_past_an_hour_boundary_grades_both_roads_at_that_boundary_s_rate():
     """A tape reports a crossed hour boundary's payment at its advance time, with the
     boundary itself as ``funding_ns`` (Codex on #152, c92a7b8). The rate changes at

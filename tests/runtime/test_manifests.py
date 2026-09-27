@@ -123,6 +123,71 @@ def test_prices_section_defaults_and_validation() -> None:
             manifest_from_dict(d)
 
 
+@pytest.mark.parametrize("eta", [float("nan"), float("inf"), "0.05", -1],
+                         ids=["nan", "inf", "string", "negative"])
+def test_an_eta_outside_its_domain_is_refused_as_it_was(eta) -> None:
+    """Codex on 646e3c7: the price field rules live in ``validate_price_fields``, which
+    ``validate`` calls, and eta takes kp's finite-number rule. Which manifests the kernel
+    accepts is unchanged: a NaN, an infinite, a string or a negative eta was refused
+    before (by the SF-0 relation, a TypeError or the eta > 0 rule) and still is, now by
+    the field rule itself."""
+    import dataclasses
+
+    m = manifest_from_dict(_base())
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, eta=eta))
+    with pytest.raises(ValueError, match="prices.eta must be finite and > 0"):
+        bad.validate_price_fields()
+    with pytest.raises(ValueError, match="prices.eta must be finite and > 0"):
+        bad.validate()
+    if not isinstance(eta, str):  # the loader reads a stated eta as float(...)
+        d = _base()
+        d["prices"] = {"eta": eta}
+        with pytest.raises(ValueError, match="prices.eta"):
+            manifest_from_dict(d)
+
+
+@pytest.mark.parametrize("decay", [float("nan"), float("inf"), -1.0],
+                         ids=["nan", "inf", "negative"])
+def test_a_decay_outside_its_domain_is_refused_by_validate(decay) -> None:
+    """Codex on 3309478: decay takes the finite-number rule the price controller holds
+    every rate to (``charter.controller._number``)."""
+    import dataclasses
+
+    m = manifest_from_dict(_base())
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, decay=decay))
+    for check in (bad.validate_price_fields, bad.validate):
+        with pytest.raises(ValueError, match="prices.decay must be finite and > 0"):
+            check()
+
+
+@pytest.mark.parametrize("decay", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_a_non_finite_decay_never_launched_before_the_rule(decay, tmp_path) -> None:
+    """The control for the rule above: the set of worlds that can launch is unchanged.
+    A manifest with a non-finite decay, never validated, still cannot be launched. The
+    ledger binds its manifest in the kernel's canonical JSON, which has no NaN or
+    infinity (``kernel.ledger.canonical``), so genesis refuses it before the ledger
+    writes a row. The price controller refuses the rate too."""
+    import dataclasses
+    import json
+
+    from factorylab.charter.controller import PriceController
+    from factorylab.kernel.ledger import canonical
+    from factorylab.runtime.loop import Runtime
+
+    m = load_manifest("scripted")
+    bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, decay=decay))
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        canonical(json.loads(bad.canonical_json()))
+    path = tmp_path / "ledger.jsonl"
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        Runtime(bad, events=1, seed=1, initial_balance_micro=None, ledger_path=str(path),
+                router_gamma=0.1)
+    assert not path.exists()  # no row was written
+    with pytest.raises(ValueError, match="decay must be a finite number"):
+        PriceController(None, eta=m.prices.eta, decay=decay, penalty_cap=0.5,
+                        min_window_events=1)
+
+
 def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
     of the scripted world moved when the shims went, again when the standing committee

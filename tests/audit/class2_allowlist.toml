@@ -1,0 +1,55 @@
+# The Class 2 static audit's allowlist (phase-2 design B1; tests/audit/class2_lexicon.py).
+#
+# An entry excuses one lexicon hit that is not an instruction, advice, an evaluation or
+# announced physics. Every entry carries a reason and a Chapter II passage from the closed
+# set the test checks; "readability" is not a passage. An entry that matches no current
+# finding fails the test, so the list cannot silently cover text that has changed.
+#
+# [[allow]] entries are quote-level: a path (a glob only over its <world> segment), a quote
+# substring, the rule, and `context_words` (Astra M-4): words that must stand within two
+# sentences of the quote in the leaf. When the context drifts, the entry stops excusing
+# the hit, which comes back as REVIEW and fails the audit until it is triaged again.
+#
+# Findings that are real hits await the architect's triage in class2_findings.json; they
+# are not excused here. The allowlist only carries the lexicon's misreadings.
+
+[[collocation]]
+text = "best bid"
+reason = "venue terminology: the highest resting bid, a world fact"
+passage = "§I.b(1) (schematics public)"
+
+[[collocation]]
+text = "best ask"
+reason = "venue terminology: the lowest resting ask, a world fact"
+passage = "§I.b(1) (schematics public)"
+
+[[collocation]]
+text = "best price first"
+reason = "an order book's price priority: the order the venue lists its levels in"
+passage = "§I.b(1) (schematics public)"
+
+[[collocation]]
+text = "best-first"
+reason = "an order book's price priority (venue.order_book: best-first bid and ask levels)"
+passage = "§I.b(1) (schematics public)"
+
+[[collocation]]
+text = "good-until-cancelled"
+reason = "a venue's order time-in-force, a world fact"
+passage = "§I.b(1) (schematics public)"
+
+[[allow]]
+path = "*/institutions/work/predicate_registration.code"
+quote = "return facts['fills'] > 0"
+rule = "IMP"
+reason = "Python source in a proposal shape: `return` is the predicate's statement, not a verb addressed to the seat. Whether the example anchors a choice is B2's Q8, not the lexicon's"
+passage = "§I (contract / I/O)"
+context_words = ["def resolve(facts)"]
+
+[[allow]]
+path = "*/institutions/work/reward_shapes.exposure"
+quote = "how much worse the judges' verdicts on the return scored"
+rule = "EVAL"
+reason = "the published settlement formula of an exposure: `worse` compares two measured scores, it ranks no action"
+passage = "§I.b(1) (schematics public)"
+context_words = ["settles on", "measured outcome"]

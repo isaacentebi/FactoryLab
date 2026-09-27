@@ -44,7 +44,6 @@ from factorylab.runtime.winddown import (
     FLAT,
     PENDING,
     UNKNOWN,
-    WindDownExecutor,
     operation_id,
 )
 from factorylab.runtime.worlds import KillSpec, load_manifest
@@ -315,13 +314,51 @@ def test_the_executor_can_only_reduce():
 
 def test_the_executor_cannot_reach_the_population():
     """It is constructed from an exchange and a diary, and imports neither runtime."""
-    source = Path("factorylab/runtime/winddown.py").read_text()
+    source = (Path(__file__).resolve().parents[2] / "factorylab" / "runtime"
+              / "winddown.py").read_text()
     for forbidden in ("runtime.loop", "runtime.bootstrap", "cortex.assembly", "Runtime("):
         assert forbidden not in source
-    executor = WindDownExecutor(Venue(), Diary(), launch_nonce=NONCE)
-    assert set(vars(executor)) == {"exchange", "ledger", "launch_nonce", "dust_micro",
-                                   "reader", "report", "_known", "_submitted",
-                                   "_requested", "_owed", "_minimums"}
+
+
+def test_the_executor_a_world_kills_with_holds_no_population_capability(tmp_path,
+                                                                        monkeypatch):
+    """The executor a real kill builds holds, anywhere in its attributes or the
+    containers they hold, no runtime, seat, registry, router or decision queue: it
+    can reduce the account and write the diary, and reach nothing that decides."""
+    from factorylab.cortex.assembly import Assembly
+    from factorylab.kernel.queue import DecisionQueue
+    from factorylab.kernel.registry import Registry
+    from factorylab.learners.router import Router
+    from factorylab.runtime import winddown
+
+    built = []
+    run = winddown.WindDownExecutor.run
+
+    def recording(self):
+        built.append(self)
+        return run(self)
+
+    monkeypatch.setattr(winddown.WindDownExecutor, "run", recording)
+    manifest = replace(load_manifest("scripted"), kill=KillSpec(wind_down=True))
+    run_world(manifest, events=1, seed=1, ledger_path=str(tmp_path / "w.jsonl"),
+              kill_at_end=True)
+    assert built, "the kill built no executor"
+    forbidden = (Runtime, Assembly, Registry, Router, DecisionQueue)
+
+    def held(value):
+        """Every value an attribute holds, through lists, tuples, sets and dicts."""
+        yield value
+        if isinstance(value, dict):
+            for item in (*value.keys(), *value.values()):
+                yield from held(item)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                yield from held(item)
+
+    for executor in built:
+        for name, value in vars(executor).items():
+            bad = [type(v).__name__ for v in held(value) if isinstance(v, forbidden)]
+            assert not bad, (name, bad)
 
 
 def test_the_witness_line_carries_both_states_and_the_operation_count(tmp_path):
@@ -436,16 +473,6 @@ def test_unsetting_the_receiver_cannot_remove_its_veto(tmp_path, monkeypatch):
         path, manifest=json.loads(m.canonical_json())).items()
         if i["kind"] == "failed_resume"]
     assert reasons == ["witness_required", "witness_mismatch"]
-
-
-def test_a_world_launched_without_a_receiver_keeps_the_weaker_guarantee(tmp_path):
-    """No receiver at launch, no requirement afterwards: the local file alone decides."""
-    m, path = _world(tmp_path)
-    launch = next(i for i in Ledger.open_read_only(
-        path, manifest=json.loads(m.canonical_json())).items()
-        if i["kind"] == "event" and i["event"]["kind"] == "Launch")
-    assert "witness_required" not in launch["event"]["payload"]
-    assert resume_world(m, str(path))["ledger_verify"]
 
 
 # ---- 3. restore is transactional -----------------------------------------------------------

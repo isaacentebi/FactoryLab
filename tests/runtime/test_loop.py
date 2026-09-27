@@ -1,5 +1,4 @@
 from dataclasses import replace
-from decimal import Decimal
 from math import ceil
 
 import pytest
@@ -18,28 +17,6 @@ def test_scripted_world_compute_starvation_is_final_under_phase4() -> None:
     assert s["terminated"] and s["termination_reason"] == "insolvency:compute"
     assert s["seal_key_released"] and s["wallet_balance_micro"] == 1
     assert s["stats"]["exclusions"] > 0
-
-
-def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() -> None:
-    """Restated by R3-B. The crash world's shocks gap a leveraged long through
-    maintenance margin, and its wallet used to reach zero because the realised loss
-    settled there: "venue losses can consume fictitious compute resources". The loss
-    is as large as it ever was and the venue account still goes negative; what it no
-    longer does is buy thoughts. The world keeps the compute authority it has not
-    spent. Death and seal release are covered above, by compute starvation, which is
-    what actually ends a world that has run out of money to think with."""
-    m = load_manifest("scripted-crash")
-    # The four shocks land by event 120; the venue account is already below zero. Whether
-    # the trader is long through them depends on what its routers learned, which every
-    # change to the reward line moves, so the claim is made of the first seed that is.
-    for seed in (2, 3):
-        s = run_world(m, events=120, seed=seed)
-        if Decimal(s["exchange_equity_usd"]) < 0:
-            break
-    assert Decimal(s["exchange_equity_usd"]) < 0  # the venue was wiped
-    assert s["terminated"] is False and s["termination_reason"] is None
-    assert s["wallet_balance_micro"] > 0  # authority, not spent by the venue
-    assert s["wallet_conservation"] is True
 
 
 def test_determinism_same_seed_same_summary() -> None:

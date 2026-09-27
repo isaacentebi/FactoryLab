@@ -111,8 +111,12 @@ def test_the_edition6_world_reads_event_markets_and_settles_forecasts_on_them_of
 
 @pytest.mark.gate
 def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkeypatch):
+    """The write path through the reward chain, which the surface tests (check tier)
+    own piece by piece: intents, fills, the pot, a late resolution with a receipt to
+    every holder, and a learning signal. 92 ticks is the fewest that reach the seeded
+    market's resolution (900 s) and the refusal after it closes."""
     monkeypatch.setattr(fastloop, "PolicyProvider", EventMarketPolicy)
-    card = fastloop.run("scripted", 120, WORLD, tmp_path, cap_usd="2", seed=1)
+    card = fastloop.run("scripted", 92, WORLD, tmp_path, cap_usd="2", seed=1)
     assert card["status"] == "completed", card.get("error")
     events = json.loads(Path(card["out"], "events.json").read_text())
     kinds = [e.get("kind") for e in events]
@@ -130,6 +134,29 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     # Each decision that held the token is told what the resolution realised for it.
     assert {r["receipt"]["handle"] for r in receipts} == {
         e["handle"] for e in events if e.get("kind") == "polymarket.intent"}
+    # Each holder is credited what the resolution realised for it, exactly: the payout
+    # on every share its orders bought, less what it paid for them and their fees, in
+    # integer micro-USD, as its claim on the pot.
+    from decimal import Decimal
+
+    owner = {e["order_id"]: e["handle"] for e in events if e.get("kind") == "consequence.order"}
+    (resolution,) = [e for e in events if e.get("kind") == "polymarket.resolution"]
+    payout = Decimal(resolution["payout"])
+    fills = [e for e in events if e.get("kind") == "polymarket.fill"]
+    assert fills and all(f["is_buy"] for f in fills)  # this population only buys
+    expected = {}
+    for fill in fills:
+        handle = owner[fill["order_id"]]
+        usd = (payout - Decimal(fill["px"])) * Decimal(fill["size"]) - Decimal(fill["fee_usd"])
+        expected[handle] = expected.get(handle, 0) + int(usd * 1_000_000)
+    credited = {}
+    for claim in (e for e in events if e.get("kind") == "polymarket.claim"
+                  and e.get("reason") == "late_consequence"):
+        credited[claim["handle"]] = credited.get(claim["handle"], 0) + claim["amount"]
+    assert credited == expected and all(type(v) is int for v in credited.values()), (
+        credited, expected)
+    assert {r["receipt"]["handle"]: r["receipt"]["facts"]["realized_micro"]
+            for r in receipts} == expected
     # The market's price marked the positions first; the resolution then booked late.
     assert "consequence.late" in kinds and "polymarket.drift" not in kinds
     assert card["learning_signal_rate"] > 0

@@ -14,7 +14,8 @@ import pytest
 from factorylab.runtime.worlds import WORLDS_DIR, manifest_from_dict
 from tests.runtime.test_manifests import _base
 
-RATIFIED = Path(__file__).resolve().parents[2] / "docs/charter/edition1-short-ratified.toml"
+RATIFIED = (Path(__file__).resolve().parents[1]
+            / "fixtures/charter/edition1-short-ratified.toml")
 ROSTER = "testnet-10m-roster"
 
 

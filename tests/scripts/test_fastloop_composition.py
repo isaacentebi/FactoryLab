@@ -12,31 +12,25 @@ WORLD = Path(__file__).parents[2] / "worlds" / "edition6-testnet-rehearsal.toml"
 
 @pytest.mark.gate
 def test_the_scripted_population_reaches_requests_tools_and_both_credits(tmp_path):
-    """The free tier's plumbing covers the composition path end to end, on every seed.
+    """The free tier's plumbing covers the composition path end to end: the scorecard
+    reads the kinds the runtime really ledgers, and a full edition-6 roster reaches
+    child requests with forwarded propensity, paid executor credits, cross-lineage
+    population tool calls and builder credits.
 
-    Requests and forwarded propensities are reached on every seed. Executor credits,
-    cross-lineage tool calls and builder credits depend on scripted verdicts that vary
-    with the seated model ids, so on any one 80-tick seed each can be zero (edition 6
-    since #135, seeds 1-8: 0 to 1, 0 to 4 and 0 to 2 a seed). The path is asserted over
-    four seeds, never a chosen one: each reaches requests and forwarded propensities,
-    and between them executors and builders are credited and tools are called across
-    lineages.
+    One seed suffices since the wave 5a roster: at ecc718d every seed 1-4 reaches
+    every signal in 80 ticks, and seed 1 reaches each by tick 7. Its 30-tick card
+    holds 3 child requests, 2 executor credits, 4 cross-lineage calls and 2 builder
+    credits. If a roster or prompt change zeroes one, the failure names it.
     """
-    executor_credits = cross_lineage_calls = builder_credits = 0
-    for seed in (1, 2, 3, 4):
-        card = fastloop.run("scripted", 80, WORLD, tmp_path / f"s{seed}", cap_usd="2",
-                            seed=seed)
-        assert card["status"] == "completed", card.get("error")
-        composed = card["composition"]
-        assert composed["child_requests_by_kind"].get("ProducerReturn", 0) >= 1, seed
-        assert composed["child_requests_forwarding_propensity"] >= 1, seed
-        executor_credits += composed["executor_credits_paid"]
-        cross_lineage_calls += composed["population_tool_calls_by_non_builder"]
-        builder_credits += composed["tool_builder_credits"]
-    assert executor_credits >= 1
+    card = fastloop.run("scripted", 30, WORLD, tmp_path, cap_usd="2", seed=1)
+    assert card["status"] == "completed", card.get("error")
+    composed = card["composition"]
+    assert composed["child_requests_by_kind"].get("ProducerReturn", 0) >= 1, composed
+    assert composed["child_requests_forwarding_propensity"] >= 1, composed
+    assert composed["executor_credits_paid"] >= 1, composed
     if jail_available():
-        assert cross_lineage_calls >= 1
-        assert builder_credits >= 1
+        assert composed["population_tool_calls_by_non_builder"] >= 1, composed
+        assert composed["tool_builder_credits"] >= 1, composed
 
 
 def test_the_composition_card_counts_requests_credits_and_cross_lineage_tool_calls():

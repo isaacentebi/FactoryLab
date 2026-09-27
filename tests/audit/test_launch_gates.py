@@ -26,6 +26,7 @@ from factorylab.world.scripted import (
     ScriptedProvider,
     _description_from_prompt,
     _inputs_from_prompt,
+    request_form,
 )
 from tests.helpers import place
 from tests.runtime.test_connectors import ledger_items
@@ -185,13 +186,6 @@ class TestGateTwoContinuityAndInformationBoundaries:
     """"no judge or wake gets private state"."""
 
 
-    def test_the_run_actually_planted_a_private_state_in_every_seat(self, leaky_world):
-        """A scan that found nothing because nothing was there proves nothing."""
-        sink, path = leaky_world
-        assert len(sink) > 100
-        own = [text for _, _, text in sink if PRIVATE_MARKER in text]
-        assert own, "no seat was ever shown its own working state"
-
     def test_no_evaluator_request_carries_any_seats_working_state_or_ack_through(
             self, leaky_world):
         """"no judge ... gets private state", scanned over every request of a whole run.
@@ -205,8 +199,14 @@ class TestGateTwoContinuityAndInformationBoundaries:
         commissioned on -- which is where a forwarded producer return arrives.
         """
         sink, _ = leaky_world
+        # A scan that found nothing because nothing was there proves nothing: the run
+        # planted private state, and some seat was shown its own.
+        assert len(sink) > 100
+        assert any(PRIVATE_MARKER in text for _, _, text in sink), (
+            "no seat was ever shown its own working state")
         commissions = [(desc, system, text) for desc, system, text in sink
-                       if desc.startswith(("Give verdict", "Assess"))]
+                       if request_form(None, text, _inputs_from_prompt(text))
+                       in ("judge", "meta")]
         assert len(commissions) > 20, "the run commissioned no evaluation to scan"
         scanned = 0
         for desc, system, text in commissions:

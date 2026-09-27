@@ -354,6 +354,7 @@ def test_every_treasury_direction_is_refused_before_prepare():
             rail.preflight(direction, 1, {})
 
 
+@pytest.mark.check  # its Runtime is a fake: no world runs
 def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeypatch, tmp_path):
     manifest_seen = {}
     market_seen = {}
@@ -413,7 +414,8 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
         cap_micro=10_000,
         max_calls=2,
         provider=provider,
-        source_root="/Users/isaacentebi/Desktop/FactoryLab",
+        # The tree this test imports, wherever it is checked out: a worktree imports its own.
+        source_root=Path(rehearsal.__file__).resolve().parents[1],
         now_ns=lambda: 1_000_000_000,
         minimum_ticks=60,
     )
@@ -495,6 +497,7 @@ def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch,
     assert json.loads(capsys.readouterr().out)["behavioral_screen"]["status"] == "inconclusive"
 
 
+@pytest.mark.check  # run_rehearsal refuses before any world is built
 def test_tick_target_requires_a_positive_count(tmp_path):
     with pytest.raises(ValueError, match="target_ticks must be a positive integer"):
         rehearsal.run_rehearsal(WORLD, out=tmp_path / "zero", target_ticks=0)

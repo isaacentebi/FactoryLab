@@ -219,7 +219,10 @@ def test_the_eligibility_tally_equals_the_scan_on_every_event(runs):
 def test_an_older_checkpoint_rebuilds_the_tally_from_the_scan(runs):
     twin = _twin(runs["kept"])
     expected = twin._committee_eligible_scan()
-    twin.eligibility_tally, twin.eligibility_evidence = {"stale": 99}, set()
+    # A stale count on a live seat the scan does not qualify: kept, it would seat it.
+    stale = next(a for a in sorted(twin.assemblies)
+                 if a not in expected and a not in twin.retired_assemblies)
+    twin.eligibility_tally, twin.eligibility_evidence = {stale: 10**6}, set()
     twin._rebuild_eligibility_tally()
     assert twin._committee_eligible() == expected
 

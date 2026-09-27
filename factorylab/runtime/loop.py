@@ -697,11 +697,22 @@ class Runtime(
         self._prune_retained()
         try:
             state = runtime_state(self)
-            # Router states contain ordinary JSON floats as well as tagged codec values.
-            from factorylab.cortex.assembly import _finite_json
+            try:
+                # ``canonical`` refuses every non-finite number with ValueError
+                # (allow_nan=False) and walks every dict and list at least as deep as
+                # ``_finite_json``, so the state it encodes is one ``_finite_json``
+                # accepts, and one it refuses is refused here as before.
+                data = canonical(state)
+            except (ValueError, OverflowError, RecursionError):
+                raise
+            except Exception:
+                # Router states contain ordinary JSON floats as well as tagged codec
+                # values. A non-finite number or an over-deep nesting is refused
+                # before any other encoding error surfaces, as it always was.
+                from factorylab.cortex.assembly import _finite_json
 
-            _finite_json(state)
-            data = canonical(state)
+                _finite_json(state)
+                raise
         except (ValueError, OverflowError, RecursionError):
             self.ledger.append({"kind": "snapshot.refused", "boundary": boundary, "n": self.n,
                                 "reason": "invalid checkpoint number or nesting"})

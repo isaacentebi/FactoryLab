@@ -47,7 +47,10 @@ class ScriptedProvider:
     def complete(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
+        # The only descriptions read are the ones this population wrote itself (its
+        # child requests). The world's own requests are told apart by structure.
         desc = _description_from_prompt(text)
+        form = request_form(req, text, inputs)
         if desc == "A1 helper":
             reply = ({"emits": "Finding", "answer": 1} if "tool_results" in inputs else {
                 "emits": "Finding", "requests": [{
@@ -58,18 +61,18 @@ class ScriptedProvider:
             reply = ({"action": "hold"} if "tool_results" in inputs else {
                 "tool_calls": [{"tool": "catalogue.search",
                                 "args": {"substring": "fake", "limit": 1}}]})
-        elif desc.startswith(("Give verdict", "Evaluate")):
+        elif form == "judge":
             reply = self._evaluate(req, inputs)
-        elif desc.startswith("Give your own verdict"):
+        elif form == "counter":
             # An adversarial judge's counter-verdict: the other side of what it read.
             read = (inputs.get("verdict") or {}).get("verdict")
             q = 1 - read if isinstance(read, int | float) else 0.5
             reply = {"verdict": q, "rationale": "scripted counter"}
-        elif desc.startswith("Assess"):
+        elif form == "meta":
             reply = self._meta(inputs)
-        elif desc.startswith("Vote"):
+        elif form == "vote":
             reply = {"vote": True, "reason": "scripted yes"}
-        elif desc.startswith("Testify"):
+        elif form == "testify":
             reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
@@ -105,7 +108,7 @@ class ScriptedProvider:
     def _produce(self, desc: str, inputs: dict[str, Any]) -> dict[str, Any]:
         self._producer_calls += 1
         reply: dict[str, Any] = {"action": "hold", "payoff": 0.1}
-        if "event Tick" in desc:
+        if inputs.get("kind") == "Tick":
             try:
                 payload = inputs["payload"]
                 # Edition 3 (C4) removed the root-wallet-only impression: what a
@@ -400,6 +403,183 @@ def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any
     if coin is None:
         return reply
     return {**reply, "counterfactual": {"coin": coin, "side": "buy" if n % 2 else "sell"}}
+
+
+#: The forms of request a scripted seat answers differently, read from structure.
+REQUEST_FORMS = ("judge", "counter", "meta", "vote", "testify", "produce")
+
+
+def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
+    """Every field some admitted answer shape requires, read from the request's contract.
+
+    Guarantees the fields come from the rendered ``OUTCOME SCHEMA`` section (a JSON
+    schema, possibly ``anyOf`` shapes), falling back to the request's wire
+    ``response_schema``; never from the request's prose. A request with neither
+    reads as requiring nothing.
+    """
+    schema: Any = None
+    marker = "OUTCOME SCHEMA\n"
+    tail = _kernel_tail(text)
+    if marker in tail:
+        line = tail.split(marker, 1)[1].split("\n", 1)[0]
+        try:
+            schema = json.loads(line)
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+    if not isinstance(schema, dict) and req is not None:
+        schema = req.response_schema
+    if not isinstance(schema, dict):
+        return frozenset()
+    return frozenset().union(*_shape_required(schema))
+
+
+def _shape_required(schema: dict) -> list[frozenset[str]]:
+    """Each admitted answer shape's required fields, read from the complete schema.
+
+    Guarantees every level is read, however deep: nested ``anyOf`` / ``oneOf``
+    alternatives are flattened (as ``_schema_definition`` recurses into them, with no
+    depth bound of its own), and each level's own ``required`` is merged into every
+    alternative beneath it, since an alternative is admitted only beside every
+    enclosing level's constraints (Codex on b1c8590 and b56e793).
+
+    A local ``$ref`` (``#/$defs/<name>``) binds together with its siblings, as the
+    kernel's ``validate_schema`` reads it. The walk is iterative, with an explicit
+    stack and a visited set, so a recursive union terminates; its shapes are the least
+    fixed point, and a union that only recurses admits no shape of its own (Codex on
+    3309478: a cut at depth 32 read a deeper ``verdict`` as absent)."""
+    defs = schema.get("$defs") if isinstance(schema.get("$defs"), dict) else {}
+
+    def target(node: dict) -> dict | None:
+        ref = node.get("$ref")
+        prefix = "#/$defs/"
+        if isinstance(ref, str) and ref.startswith(prefix):
+            found = defs.get(ref[len(prefix):])
+            return found if isinstance(found, dict) else None
+        return None
+
+    def alternatives(node: dict) -> list[dict]:
+        alts = node.get("anyOf") or node.get("oneOf")
+        return [a for a in alts if isinstance(a, dict)] if isinstance(alts, list) else []
+
+    nodes: dict[int, dict] = {}
+    stack = [schema]
+    while stack:
+        node = stack.pop()
+        if id(node) in nodes:
+            continue
+        nodes[id(node)] = node
+        stack.extend(alternatives(node))
+        if (ref := target(node)) is not None:
+            stack.append(ref)
+    shapes: dict[int, set[frozenset[str]]] = {key: set() for key in nodes}
+    changed = True
+    while changed:  # monotone over a finite lattice of field-name sets: it settles
+        changed = False
+        for key, node in nodes.items():
+            own = frozenset(f for f in node.get("required", ()) if isinstance(f, str))
+            alts = alternatives(node)
+            below = (set().union(*(shapes[id(a)] for a in alts)) if alts
+                     else {frozenset()})
+            ref = target(node)
+            through = shapes[id(ref)] if ref is not None else {frozenset()}
+            found = {own | a | t for a in below for t in through}
+            if not found <= shapes[key]:
+                shapes[key] |= found
+                changed = True
+    root = shapes[id(schema)]
+    own = frozenset(f for f in schema.get("required", ()) if isinstance(f, str))
+    return sorted(root, key=sorted) or [own]
+
+
+def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
+    """The fields EVERY admitted answer shape requires: what the contract obliges any
+    answer to carry, from the same trusted sources as ``outcome_required``. A mixed
+    contract (a producer's return or a verdict) obliges neither."""
+    schema: Any = None
+    marker = "OUTCOME SCHEMA\n"
+    tail = _kernel_tail(text)
+    if marker in tail:
+        try:
+            schema = json.loads(tail.split(marker, 1)[1].split("\n", 1)[0])
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+    if not isinstance(schema, dict) and req is not None:
+        schema = req.response_schema
+    if not isinstance(schema, dict):
+        return frozenset()
+    shapes = _shape_required(schema)
+    return frozenset.intersection(*shapes)
+
+
+#: The kernel-written preamble of a request's SCORING section (``Request.sections``).
+_SCORING_MARK = ("\nSCORING\nHow the answer to this request settles, as world.scoring "
+                 "publishes it.\n")
+
+
+def _kernel_tail(text: str) -> str:
+    """The part of a prompt after its INPUTS line: only the kernel writes there.
+
+    The description (``REQUEST``) is an author's for a commission and may hold any
+    text, headers included; the inputs are one JSON line, which holds no raw newline.
+    Everything after that line (the propensity, SCORING, OUTCOME SCHEMA, the outcome
+    contract, the completion criterion) is rendered by ``Request.sections``. Read from
+    the last INPUTS header, so a header an author wrote earlier never counts."""
+    head = text.rfind("\n\nINPUTS\n")
+    if head < 0:
+        return text
+    start = head + len("\n\nINPUTS\n")
+    newline = text.find("\n", start)
+    return "" if newline < 0 else text[newline:]
+
+
+def _scoring_keys(text: str) -> frozenset[str]:
+    """The keys of the request's SCORING section: how its answer settles, as the
+    kernel's judging steps state it (``_settlement_facts``: ``evaluator_return`` for a
+    Verdict, ``meta_return`` for a MetaVerdict, ``counter_return`` for a
+    CounterVerdict). Empty for a request that carries none."""
+    tail = _kernel_tail(text)
+    if _SCORING_MARK not in tail:
+        return frozenset()
+    line = tail.split(_SCORING_MARK, 1)[1].split("\n", 1)[0]
+    try:
+        facts = json.loads(line)
+    except (ValueError, json.JSONDecodeError):
+        return frozenset()
+    return frozenset(facts) if isinstance(facts, dict) else frozenset()
+
+
+def request_form(req: ModelRequest | None, text: str, inputs: dict[str, Any]) -> str:
+    """Which of ``REQUEST_FORMS`` a request is, from trusted request metadata alone.
+
+    Guarantees the form is a function of what the kernel wrote about the request: the
+    settlement a judging step attaches (its SCORING section, which names the judging
+    kind) and the outcome contract's required fields, never of the request's
+    description or of any input value, so neither rewording a commission nor an
+    author's ``kind``/``payload`` inputs can turn a judgement into a producer's wake
+    (Chapter II §I.b: the request is self-describing; Codex on 4a0f61c). ``inputs`` is
+    kept for the callers' signature and not read. A request whose contract obliges a
+    verdict (every admitted shape requires one) is answered with one, whoever asked
+    for it; a mixed contract (a seat woken on an event that may answer a producer's
+    return or a verdict) is a producer's wake.
+    """
+    del inputs  # author-controlled: never a classifier
+    scoring = _scoring_keys(text)
+    if "counter_return" in scoring:
+        return "counter"
+    if "meta_return" in scoring:
+        return "meta"
+    if "evaluator_return" in scoring:
+        return "judge"
+    required = contract_requires(req, text)
+    if "conformity" in required:
+        return "meta"
+    if "vote" in required:
+        return "vote"
+    if "assessment" in required:
+        return "testify"
+    if "verdict" in required:
+        return "judge"
+    return "produce"
 
 
 def _description_from_prompt(text: str) -> str:
