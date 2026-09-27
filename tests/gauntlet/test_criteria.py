@@ -1241,6 +1241,35 @@ def test_a_self_child_is_no_router_draw():
     assert g.s5b_observed_neutral(s5, M).ok
 
 
+def test_s5b_a_replaced_routers_rounds_are_its_successors():
+    """Codex on b7ae050: rounds a replaced router drew are learned by its successor
+    (``_successor_state``), and the abstention a replaced router drew is priced at the
+    successor's neutral. An epoch's fresh identity (``<old>@1``) keeps the old one's
+    rounds; a ``router.created`` replacement starts its own."""
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.5, "penalty": 0.0, "reward": 0.5}
+    epoch = {"kind": "epoch", "event_kind": "Tick", "universe": ["seat", "NOOP"],
+             "carried": False, "router": "router:Tick@1"}
+    new = "router:Tick@1"
+    rows = [_open("s0", "seat"), _penalty("s0", 0.0) | {"raw": 0.2},
+            epoch,
+            _open("s1", "seat", actor=new), _penalty("s1", 0.0) | {"raw": 0.8},
+            # A round the old identity drew, settling after the epoch: the successor's.
+            _open("s2", "seat"), _penalty("s2", 0.0) | {"raw": 0.5}]
+    # The successor's mean is over 0.2 (inherited), 0.8 and 0.5 = 0.5.
+    assert g.s5b_observed_neutral([*rows, credit], M).ok
+    assert g.s5b_observed_neutral([*rows, credit | {"router": new}], M).ok
+    # Credited to the drawer alone (0.2, 0.5 -> 0.35), 0.35 would have been required.
+    assert g.s5b_observed_neutral([*rows, credit | {"neutral": 0.35}], M).status == g.FAIL
+    # A router.created replacement starts afresh: only the rounds after it count.
+    created = {"kind": "router.created", "learner_id": "router:Tick#2", "event_kind": "Tick",
+               "replaces": ["router:Tick"]}
+    fresh = [_open("s0", "seat"), _penalty("s0", 0.0) | {"raw": 0.2}, created,
+             _open("s1", "seat"), _penalty("s1", 0.0) | {"raw": 0.6},
+             credit | {"neutral": 0.6}]
+    assert g.s5b_observed_neutral(fresh, M).ok
+
+
 def test_s5b_a_late_score_after_a_timeout_is_not_in_the_routers_mean():
     """Codex on 37f568a: a decision that timed out was learned neutrally at its cutoff;
     its late settlement is never learned again (``_learn_router_return``), so the raw

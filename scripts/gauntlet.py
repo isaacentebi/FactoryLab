@@ -2812,10 +2812,42 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     # (feedback.py ``_learn_router_return``: "learned once already, neutrally, at its
     # cutoff", 2160-2165), so its raw score is no round of the router's mean.
     timed_out: set[str] = set()
+    # Rounds a replaced router drew are learned by its successor (routing.py
+    # ``_successor_state``: ``target.observed.record`` in ``_learn_router_return``), and
+    # a priced abstention or decline reads the successor's neutral. The succession is
+    # rebuilt from the ledger as ``_hand_over`` makes it: ``router.created`` names the
+    # routers it ``replaces`` (a fresh identity, its own observed rounds), and an
+    # ``epoch`` that is not carried names the fresh identity (``_fresh_router_id``:
+    # ``<old>@<n>``) that keeps the old one's observed rounds (routing.py 1513).
+    successor: dict[str, str] = {}
+
+    def learner_of(router: str) -> str:
+        seen = set()
+        while router in successor and router not in seen:
+            seen.add(router)
+            router = successor[router]
+        return router
+
+    def hand_over(old: str, new: str) -> None:
+        for held, to in list(successor.items()):
+            if to == old:
+                successor[held] = new
+        successor[old] = new
+
     for row in events:
         kind = row.get("kind")
         if kind == "decision.timeout":
             timed_out.add(need(row, "return.handle"))
+            continue
+        if kind == "router.created":
+            for old in row.get("replaces") or ():
+                hand_over(old, need(row, "learner_id"))
+            continue
+        new = row.get("router") if kind == "epoch" else None
+        if row.get("carried") is False and isinstance(new, str) and "@" in new:
+            old = new.rsplit("@", 1)[0]
+            raws[new] = list(raws.get(old, ()))
+            hand_over(old, new)
             continue
         if kind == "price.penalty" and row.get("handle") in timed_out:
             continue
@@ -2834,10 +2866,11 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
                     untraced += 1
                     continue
                 if handle in drawn:
-                    raws[actor].append(float(need(row, "raw")))
+                    raws[learner_of(actor)].append(float(need(row, "raw")))
         elif kind in ("router.abstention_priced", "router.decline_priced"):
             router = need(row, "router")  # feedback.py: every priced abstention names it
-            observed = raws.get(router) if isinstance(router, str) else None
+            # The neutral is the learning router's (``_successor_state(drawer)``).
+            observed = raws.get(learner_of(router)) if isinstance(router, str) else None
             if observed:
                 checked += 1
                 mean = math.fsum(observed) / len(observed)
