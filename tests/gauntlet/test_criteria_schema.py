@@ -870,6 +870,51 @@ def test_a_launched_manifest_the_kernel_refuses_is_diary_invalid(block, field, v
         g.bind_diary(_launched(bad))
 
 
+@pytest.mark.parametrize("block,field,value", [
+    ("immune", "decay_step", 0.1), ("immune", "unheard_of", 1), ("prices", "rake", 0.0),
+    (None, "extra_block", {"x": 1})])
+def test_a_launched_field_the_kernel_does_not_have_is_diary_invalid(block, field, value):
+    """Codex on e74c48d (gauntlet.py:273): the rebuild reads only the kernel's fields,
+    so an unknown or removed one (``immune.decay_step``) dropped out unread and the
+    kernel's refusal of it was never reached. The launch, its hash recomputed, is now
+    refused: the kernel's canonical form of the rebuild must be the launch itself."""
+    from factorylab.runtime.worlds import load_manifest
+
+    good = json.loads(load_manifest("scripted").canonical_json())
+    bad = json.loads(json.dumps(good))
+    (bad[block] if block else bad)[field] = value
+    with pytest.raises(g.DiaryInvalid, match="no field of the kernel's manifest"):
+        g.bind_diary(_launched(bad))
+    assert "no field" in g.kernel_problem(bad)
+
+
+def test_a_launched_manifest_missing_a_field_is_diary_invalid():
+    """A wave-16 launch that leaves out a field the kernel has is refused, never
+    defaulted; only a pre-wave-16 launch may lack the fields ``ADDED_FIELDS`` names."""
+    from factorylab.runtime.worlds import load_manifest
+
+    good = json.loads(load_manifest("scripted").canonical_json())
+    for path in g.ADDED_FIELDS:
+        bad = json.loads(json.dumps(good))
+        block, _, name = path.partition(".")
+        for part in (bad[block] if isinstance(bad[block], list) else [bad[block]]):
+            part.pop(name.removeprefix("*."))
+        assert "missing" in g.kernel_problem(bad), path
+    assert g.kernel_problem(_longrun1_manifest()) is None  # it lacks both
+    legacy = json.loads(json.dumps(_longrun1_manifest()))
+    legacy["immune"]["decay_step"] = 0.1
+    assert "immune.decay_step is no field" in g.kernel_problem(legacy)
+
+
+def test_a_propensity_with_a_field_the_kernel_record_lacks_is_malformed():
+    """Codex on e74c48d, the same class: the propensity is built as the kernel's
+    ``PropensityRecord`` from the whole row, never filtered to its fields."""
+    real = REAL["rows"]["decision.open"]
+    prop, actor = real["propensity"], real["actor"]
+    assert g.propensity_problem(prop, actor) is None
+    assert "unexpected keyword" in g.propensity_problem({**prop, "steer": "a"}, actor)
+
+
 def _longrun1_manifest():
     events = g.load_events(ROOT / "tests/fixtures/longrun1_gauntlet_slice.json")
     return g.diary_identity(events)["manifest"]

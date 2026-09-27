@@ -296,6 +296,20 @@ def _rebuild(tp: Any, value: Any) -> Any:
 RETIRED_FIELDS: dict[tuple[str, str], str] = {
     ("prices", "lambda_max"): "wave 16 R-E: the one bound is prices.penalty_cap, on the "
                               "penalty",
+    ("evaluation", "consequence_horizon_ticks"): "wave 16 D2 (4d33d2f): a judged return's "
+                                                 "outcome is fixed at world_repricing / "
+                                                 "min_ratio",
+    ("evaluation", "opportunity_scale_bps"): "wave 16 D1 (6b80e43): the road not taken is "
+                                             "a binary money fact, net of the venue's fee",
+}
+#: The launched-manifest fields the kernel added before wave 16 that a world launched
+#: earlier does not state, each with the commit that added it: in a pre-wave-16 world
+#: (and only there) such a field may be absent, and the kernel's default stands in, as
+#: it did for that world when the field arrived. Every other field is exactly the
+#: kernel's (``kernel_problem``). A ``*`` is every element of a list.
+ADDED_FIELDS: dict[str, str] = {
+    "exchange.tape": "9fa7fb4, wave 1: a tape from a diary",
+    "models.*.training_cutoff": "28f4874, wave 4: the look-ahead guard",
 }
 
 
@@ -314,8 +328,13 @@ def kernel_problem(launched: Mapping) -> str | None:
     (novelty share, prices, immune steps and bounds, timing ratios, ...), the original
     error kept.
 
+    The launch's shape is the kernel's too: the kernel's canonical form of the rebuilt
+    manifest must equal the launched one, so an unknown or removed field (one the
+    rebuild could not read) or a missing one is refused, never dropped or defaulted.
+
     A diary launched before wave 16 states fields wave 16 retired (``RETIRED_FIELDS``);
-    they are removed, and nothing else is. Its price law also predates the SF-0 load
+    they are removed, and nothing else is, and it may lack the fields ``ADDED_FIELDS``
+    names. Its price law also predates the SF-0 load
     relation wave 16 added (Q-G1: edition 6 launched kp = 0.5 and eta = 0.5, which
     press a unit violation onto the cap in one window), and that relation is exactly
     what the gauntlet's SF-0 criterion reads from the diary and reports: refusing the
@@ -338,10 +357,48 @@ def kernel_problem(launched: Mapping) -> str | None:
         prices["eta"] = derived_eta(prices.get("penalty_cap"), 0.0, timing.get("min_ratio"),
                                     immune.get("k"))
     try:
-        _rebuild(WorldManifest, candidate).validate()
+        rebuilt = _rebuild(WorldManifest, candidate)
+        rebuilt.validate()
+        # The rebuild reads each field the kernel has and nothing else: a launched key
+        # the kernel lacks (an unknown or removed field) would drop out unread, and a
+        # missing one would take its default. The kernel's own canonical form of what
+        # was rebuilt must therefore be exactly what was launched (Codex on e74c48d).
+        shape = _shape_problem(json.loads(rebuilt.canonical_json()), candidate, "",
+                               ADDED_FIELDS if legacy else {})
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
         return str(exc) or type(exc).__name__
-    return None
+    return shape
+
+
+def _shape_problem(kernel: Any, launched: Any, path: str, added: Mapping[str, str]
+                   ) -> str | None:
+    """Where ``launched`` differs from the kernel's canonical form of it, or None:
+    a key the kernel does not have, a key it has that the launch left out (unless
+    ``added`` names it), or a value it reads otherwise."""
+    if isinstance(kernel, dict) and isinstance(launched, dict):
+        for key in sorted(set(kernel) | set(launched)):
+            at = f"{path}.{key}" if path else key
+            if key not in kernel:
+                return f"{at} is no field of the kernel's manifest"
+            if key not in launched:
+                if at in added or _wildcard(at) in added:
+                    continue
+                return f"{at} is missing from the launched manifest"
+            problem = _shape_problem(kernel[key], launched[key], at, added)
+            if problem:
+                return problem
+        return None
+    if isinstance(kernel, list) and isinstance(launched, list) and len(kernel) == len(launched):
+        for i, (k, v) in enumerate(zip(kernel, launched, strict=True)):
+            problem = _shape_problem(k, v, f"{path}.{i}", added)
+            if problem:
+                return problem
+        return None
+    return None if kernel == launched else f"{path} reads {kernel!r}, launched {launched!r}"
+
+
+def _wildcard(path: str) -> str:
+    return ".".join("*" if part.isdigit() else part for part in path.split("."))
 
 
 def w_sat(ph: Physics, v: float) -> int | None:
@@ -2731,15 +2788,14 @@ def propensity_problem(prop: Any, actor: Any = None) -> str | None:
     seed, the learner identity and state hash, and a sampled choice's seeded replay),
     and ``actor`` must be its ``learner_id`` (``DecisionQueue.open``: "actor must match
     an active sampling learner")."""
-    from dataclasses import fields as dataclass_fields
-
     from factorylab.kernel.queue import PropensityRecord
 
     if not isinstance(prop, Mapping):
         return "no propensity"
-    names = {f.name for f in dataclass_fields(PropensityRecord)}
+    # The whole row, never filtered to the record's fields: a key the kernel's record
+    # does not have is refused by its constructor, not dropped (Codex on e74c48d).
     try:
-        PropensityRecord(**{k: v for k, v in prop.items() if k in names})
+        PropensityRecord(**prop)
     except (TypeError, ValueError) as exc:
         return str(exc) or type(exc).__name__
     if actor is not None and actor != prop.get("learner_id"):
