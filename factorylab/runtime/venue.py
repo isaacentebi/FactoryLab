@@ -9,7 +9,7 @@ from decimal import Decimal
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.shared import _to_plain
-from factorylab.settlement.lots import VENUE_FEE_MARKETS, LotTable
+from factorylab.settlement.lots import VENUE_FEE_MARKETS, WIND_DOWN, LotTable
 from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.exchange import (
     AccountState,
@@ -120,8 +120,11 @@ def settle_terminal(rt) -> None:
     path a due close takes (``_close_price_window``), so every share freezes exactly
     as at a normal close and every settlement deferred to it (wave 16, D5) settles;
     no next window opens; (6) returns are delivered; then, in ``kill``, the
-    production mark, the wind-down (its fills are late money), every item still
-    open censored by termination (``censor_terminal``), ``Terminated`` and the seal.
+    production mark, the wind-down (its closing orders bound to the kernel's
+    wind-down account, ``bind_wind_down_orders``), the seal of a recorded venue (the
+    wind-down's fills booked), that late money booked to its owners
+    (``settle_wind_down``), every item still open censored by termination
+    (``censor_terminal``) and ``Terminated``.
     """
     try:
         through = getattr(rt, "advance_through_ns", None)
@@ -137,6 +140,44 @@ def settle_terminal(rt) -> None:
         rt._deliver_returns()
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         print(f"factorylab kill: the final consequences were not settled "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
+def bind_wind_down_orders(rt, report: dict) -> None:
+    """Guarantees every closing order the wind-down placed is bound to the kernel's
+    wind-down account (``settlement.lots.WIND_DOWN``) before its fills are booked.
+
+    Its fills then close the lots the venue flattened through the one fill path, FIFO
+    per instrument across owners, never as a closer and never opening a lot; each
+    owner's realised P&L is late money (``settle_wind_down``). Custody is unchanged.
+    Never raises into a kill.
+    """
+    try:
+        for order in report.get("closing_orders") or ():
+            sizes = [abs(Decimal(str(s))) for s in (order.get("size"), order.get("filled_size"))
+                     if s is not None]
+            size = max(sizes, default=Decimal(0))
+            if size > 0:
+                rt.consequences.bind_wind_down(order["order_id"], str(size),
+                                               str(order.get("coin")), rt.n)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the wind-down's orders were not bound "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
+def settle_wind_down(rt) -> None:
+    """Guarantees the money the wind-down's closes realised on a return whose outcome
+    was already fixed is booked to that return's owner, once, before the seal.
+
+    Sol on #152: the wind-down's fills, drained at the seal (``seal_recorded_market``),
+    arrive after ``settle_terminal``; each owner's part is late money
+    (``_settle_late``), a claim moved to its seat, never a score. Custody is
+    unchanged: the venue already holds it. Never raises into a kill.
+    """
+    try:
+        rt._settle_late()
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the wind-down's late money was not booked "
               f"({type(exc).__name__})", file=sys.stderr)
 
 
@@ -308,6 +349,9 @@ class VenueMixin:
                 report["error"] = "world has no exchange"
             if owed and getattr(getattr(self, "polymarket", None), "writes", False):
                 self._wind_down_polymarket(report)
+            # Its closing orders are the kernel's wind-down account's, so their fills
+            # close the lots the venue flattened (Sol on #152).
+            bind_wind_down_orders(self, report)
             # A recorded venue: book the wind-down's closes, then refuse every order.
             seal_recorded_market(self)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
@@ -320,6 +364,7 @@ class VenueMixin:
             report["production_state"] = winddown.KILLED
             self.wind_down_report = report
             self.exposure_state = report["exposure_state"]
+            settle_wind_down(self)  # the wind-down's P&L, to its owners, before the seal
             censor_terminal(self)  # the last step before the seal
             try:
                 witness.note_wind_down(
@@ -1254,6 +1299,12 @@ class VenueMixin:
         px = Decimal(str(payload["px"]))
         held, entry = self.spot_inventory.get(coin, (Decimal(0), Decimal(0)))
         buy = payload["is_buy"]
+        if not buy and quantity > held and self.consequences.table.order_owner(
+                str(payload["order_id"])) == WIND_DOWN:
+            # A kill wind-down sells what the venue holds, accounted or not: only the
+            # accounted part is accounted here; the rest was never any return's and
+            # the consequence book ledgers it unattributed (Sol on #152).
+            quantity = held
         if not buy and quantity > held:
             raise ValueError("spot fill exceeds accounted inventory")
         realized = Decimal(0) if buy else (px - entry) * quantity
