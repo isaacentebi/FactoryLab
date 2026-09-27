@@ -65,3 +65,18 @@ def test_a_root_requirement_holds_beside_every_alternative():
                         {"properties": {"verdict": {"minimum": 0.5}}}]}
     model_req, text = _model_request("Rate it.", {"kind": "Tick", "payload": {}}, schema)
     assert request_form(model_req, text, _inputs_from_prompt(text)) == "judge"
+
+
+def test_a_nested_union_is_flattened_with_each_levels_requirements():
+    """Codex on b56e793: nested anyOf alternatives are flattened, each level's required
+    merged in, before the intersection: a verdict every nested shape requires is read."""
+    schema = {"type": "object", "anyOf": [
+        {"required": ["verdict"], "anyOf": [{"required": ["rationale"]},
+                                            {"properties": {"verdict": {"maximum": 1}}}]},
+        {"anyOf": [{"required": ["verdict", "tier"]}, {"required": ["verdict"]}]}]}
+    model_req, text = _model_request("Rate it.", {"kind": "Tick", "payload": {}}, schema)
+    assert request_form(model_req, text, _inputs_from_prompt(text)) == "judge"
+    loose = {"type": "object", "anyOf": [{"anyOf": [{"required": ["verdict"]},
+                                                    {"required": ["action"]}]}]}
+    model_req, text = _model_request("Do it.", {"kind": "Tick", "payload": {}}, loose)
+    assert request_form(model_req, text, _inputs_from_prompt(text)) == "produce"

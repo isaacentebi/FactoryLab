@@ -433,16 +433,20 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
     return frozenset().union(*_shape_required(schema))
 
 
-def _shape_required(schema: dict) -> list[frozenset[str]]:
-    """Each admitted answer shape's required fields (``anyOf`` / ``oneOf`` shapes), the
-    schema's root ``required`` merged into every one: an alternative is admitted only
-    beside the root's own constraints (Codex on b1c8590)."""
-    root = frozenset(f for f in schema.get("required", ()) if isinstance(f, str))
+def _shape_required(schema: dict, inherited: frozenset[str] = frozenset(),
+                    depth: int = 0) -> list[frozenset[str]]:
+    """Each admitted answer shape's required fields, with nested ``anyOf`` / ``oneOf``
+    alternatives flattened recursively (as ``_schema_definition`` recurses into them) and
+    each level's own ``required`` merged into every alternative beneath it: an
+    alternative is admitted only beside every enclosing level's constraints (Codex on
+    b1c8590 and b56e793). Nesting deeper than 32 levels reads as its own level alone."""
+    own = inherited | frozenset(f for f in schema.get("required", ()) if isinstance(f, str))
     alternatives = schema.get("anyOf") or schema.get("oneOf")
-    if not alternatives:
-        return [root]
-    return [root | frozenset(f for f in shape.get("required", ()) if isinstance(f, str))
-            for shape in alternatives if isinstance(shape, dict)] or [root]
+    if not alternatives or depth >= 32:
+        return [own]
+    shapes = [shape for alternative in alternatives if isinstance(alternative, dict)
+              for shape in _shape_required(alternative, own, depth + 1)]
+    return shapes or [own]
 
 
 def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
