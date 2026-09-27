@@ -154,8 +154,16 @@ class Assembly:
     # the assembly runs outside a world that sets one).
     max_children: int | None = None
 
-    def build_model_request(self, req: Request) -> ModelRequest:
+    def stamp(self, req: Request) -> Request:
+        """``req`` with this assembly's own id as its ``you`` input, and nothing else changed."""
+        return replace(req, inputs={**req.inputs, "you": self.spec.id})
+
+    def build_model_request(self, req: Request, *, stamped: Request | None = None) -> ModelRequest:
         """Render the exact prompt this assembly will be billed for.
+
+        ``stamped``, when given, is ``self.stamp(req)`` as the caller already built
+        it, with nothing run on it since but pure reads: the render is the same, and
+        the request is not stamped (nor its inputs checked) a second time.
 
         The executor's own id is stamped here, where the prompt is rendered, and
         nowhere else: an identity added after a caller has priced the request
@@ -184,7 +192,8 @@ class Assembly:
         sent. Handle-scoped memory, when a world registers it, is the one thing
         that precedes the block and costs that assembly the hit.
         """
-        req = replace(req, inputs={**req.inputs, "you": self.spec.id})
+        req = (stamped if stamped is not None
+               else replace(req, inputs={**req.inputs, "you": self.spec.id}))
         messages: list[dict[str, Any]] = []
         if self.spec.memory_policy == "handle-scoped" and req.parent_handle:
             messages.extend(self.memory.get(req.parent_handle, []))

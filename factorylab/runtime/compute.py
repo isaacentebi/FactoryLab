@@ -66,9 +66,10 @@ def _prompt_cache_identity(assembly: Assembly, req: Request) -> dict[str, str]:
     invocations can therefore distinguish local prefix drift from an upstream
     cache miss without putting prompt bodies on the ledger.
     """
-    stamped = replace(req, inputs={**req.inputs, "you": assembly.spec.id})
+    stamped = assembly.stamp(req)
     stable = stamped.stable_prefix()
-    model_request = assembly.build_model_request(req)
+    # ``stable_prefix`` only reads, so this is the request the render would stamp.
+    model_request = assembly.build_model_request(req, stamped=stamped)
     leading = [{"role": "system", "content": model_request.system},
                *[dict(message) for message in model_request.messages[:-1]]]
     if stable and model_request.messages:
