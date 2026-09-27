@@ -898,7 +898,9 @@ class Runtime(
         now_ns = max(now_ns, self.clock.now_ns)
         self.ledger.append({"kind": "resume.begin", "now_ns": now_ns, "n": self.n})
         self.clock.now_ns = now_ns
-        self._reconcile_orders()
+        # The outage's uncertain intents are reconciled here; the terminal read-back of
+        # filled orders waits for the next tick, where the uninterrupted world makes it.
+        self._reconcile_orders(confirm=False)
         available = self.tool_runner.available
         if self.ledger.recovering:
             saved = self.ledger.peek()

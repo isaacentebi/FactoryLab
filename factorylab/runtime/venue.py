@@ -1375,7 +1375,7 @@ class VenueMixin:
         before = self.consequences.table
         self._replay_deferred(self.consequences.release_unresolved(client_id, self.n), before)
 
-    def _reconcile_orders(self, *, final: bool = False) -> None:
+    def _reconcile_orders(self, *, final: bool = False, confirm: bool = True) -> None:
         """Pending identities are reconciled before consuming newly observed venue fills.
 
         An uncertain intent is polled on a bounded schedule: at most
@@ -1383,6 +1383,9 @@ class VenueMixin:
         ``order.unresolved`` and no further polling. The terminal reconciliation
         of a kill wind-down (``final``) still reads the venue for it: the last
         read of a dying runtime is owed to the order whatever the schedule spent.
+        ``confirm`` also reads back the orders that may be terminal
+        (``_confirm_terminal_orders``); a resume passes False, so that read-back is
+        made at the same tick a world never interrupted makes it.
         """
         for client_id, intent in list(self.order_intents.items()):
             if intent["result"]["status"] != "uncertain":
@@ -1391,7 +1394,11 @@ class VenueMixin:
                 self._give_up_on_order(client_id)
                 continue
             self._recover_order(client_id)
-        self._confirm_terminal_orders()
+        if confirm:
+            # ``confirm=False`` at a resume (Codex on #152): the terminal read-back runs
+            # on the tick schedule only, so a resumed world makes it exactly where the
+            # uninterrupted one does, never earlier.
+            self._confirm_terminal_orders()
         if getattr(self, "vault_intents", None):
             self._reconcile_vault_intents(final=final)
 
