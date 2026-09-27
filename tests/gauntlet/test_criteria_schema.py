@@ -727,15 +727,27 @@ def test_a_launched_manifest_the_kernel_refuses_is_diary_invalid(block, field, v
         g.bind_diary(_launched(bad))
 
 
-def test_a_pre_wave_16_launch_is_validated_by_the_controller_that_priced_it():
-    """A manifest stating prices.lambda_max predates wave 16's rules; its prices are read
-    by ``PriceController``'s own constructor: a decay of 0 is refused."""
-    old = {"prices": {"eta": 0.5, "decay": 0.1, "lambda_max": 1.0, "penalty_cap": 0.5,
-                      "min_window_events": 1}}
-    assert g.bind_diary(_launched(old))
-    old["prices"]["decay"] = 0.0
-    with pytest.raises(g.DiaryInvalid, match="decay"):
-        g.bind_diary(_launched(old))
+def _longrun1_manifest():
+    events = g.load_events(ROOT / "tests/fixtures/longrun1_gauntlet_slice.json")
+    return g.diary_identity(events)["manifest"]
+
+
+@pytest.mark.parametrize("block,field,value,why", [
+    ("novelty", "share", -0.1, "novelty share"), ("prices", "decay", 0.0, "decay"),
+    ("immune", "gain_step", 0.0, "gain_step"), ("timing", "min_ratio", 2, "min_ratio")])
+def test_a_pre_wave_16_launch_takes_the_full_kernel_validation(block, field, value, why):
+    """Codex on d3dc486: a pre-wave-16 diary loses only the fields wave 16 retired
+    (``RETIRED_FIELDS``: prices.lambda_max); the full kernel validation then runs, and a
+    rule it breaks refuses it with the kernel's own error (longrun1 with a novelty share
+    of -0.1 is refused). Longrun1 as launched binds."""
+    launched = _longrun1_manifest()
+    assert "lambda_max" in launched["prices"]
+    assert g.kernel_problem(launched) is None
+    bad = json.loads(json.dumps(launched))
+    bad[block][field] = value
+    assert why in (g.kernel_problem(bad) or "")
+    with pytest.raises(g.DiaryInvalid, match="the kernel would not have launched"):
+        g.bind_diary(_launched(bad))
 
 
 def test_the_iterative_readings_are_bounded_and_kernel_exact():

@@ -291,35 +291,48 @@ def _rebuild(tp: Any, value: Any) -> Any:
     return value
 
 
+#: The launched-manifest fields wave 16 retired, each with the rule that replaced it: a
+#: pre-wave-16 diary states them, and they are removed before the kernel validates it.
+RETIRED_FIELDS: dict[tuple[str, str], str] = {
+    ("prices", "lambda_max"): "wave 16 R-E: the one bound is prices.penalty_cap, on the "
+                              "penalty",
+}
+
+
 def kernel_problem(launched: Mapping) -> str | None:
     """Why the kernel would not have launched this manifest, or None, by the kernel's
-    own load validation, never restated (Codex on b56e793): the launched manifest is
-    rebuilt as the kernel's ``WorldManifest`` and ``validate`` runs on it (novelty
-    share, the prices, the immune steps and bounds, the timing ratios, ...). A diary
-    launched before wave 16 (its prices state ``lambda_max``, which wave 16's kernel
-    refuses as removed) predates this kernel's rules; its prices are validated by the
-    controller that priced it (``PriceController``'s own constructor), and its other
-    physics by the gauntlet's bounded readings (``Malformed`` past their bound)."""
-    from factorylab.runtime.worlds import WorldManifest
+    own load validation, never restated (Codex on b56e793 and d3dc486): the launched
+    manifest is rebuilt as the kernel's ``WorldManifest`` and its FULL ``validate`` runs
+    (novelty share, prices, immune steps and bounds, timing ratios, ...), the original
+    error kept.
 
+    A diary launched before wave 16 states fields wave 16 retired (``RETIRED_FIELDS``);
+    they are removed, and nothing else is. Its price law also predates the SF-0 load
+    relation wave 16 added (Q-G1: edition 6 launched kp = 0.5 and eta = 0.5, which
+    press a unit violation onto the cap in one window), and that relation is exactly
+    what the gauntlet's SF-0 criterion reads from the diary and reports: refusing the
+    diary for it at binding would hide that reading. So, for validation alone, the
+    relation's two inputs are set where it holds (kp 0, the kernel's own
+    ``derived_eta``); every other rule applies in full, and every criterion still reads
+    the physics the diary launched."""
+    from factorylab.runtime.worlds import WorldManifest, derived_eta
+
+    candidate = json.loads(json.dumps(launched, default=str))
+    legacy = False
+    for (block, name) in RETIRED_FIELDS:
+        section = candidate.get(block)
+        if isinstance(section, dict) and name in section:
+            del section[name]
+            legacy = True
+    if legacy:
+        prices, timing, immune = (candidate.get(b) or {} for b in ("prices", "timing",
+                                                                     "immune"))
+        prices["kp"] = 0.0
+        prices["eta"] = derived_eta(prices.get("penalty_cap"), 0.0, timing.get("min_ratio"),
+                                    immune.get("k"))
     try:
-        world = _rebuild(WorldManifest, launched)
-        world.validate()
-        return None
+        _rebuild(WorldManifest, candidate).validate()
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
-        current = str(exc) or type(exc).__name__
-    prices = _section(launched, "prices")
-    if "lambda_max" not in prices:
-        return current
-    from factorylab.charter.controller import PriceController
-    from factorylab.kernel.ledger import Ledger
-
-    try:
-        PriceController(Ledger(None), eta=prices.get("eta"), decay=prices.get("decay"),
-                        penalty_cap=prices.get("penalty_cap"),
-                        min_window_events=prices.get("min_window_events", 1),
-                        kp=prices.get("kp", 0.0), kd=prices.get("kd", 0.0))
-    except (TypeError, ValueError) as exc:
         return str(exc) or type(exc).__name__
     return None
 

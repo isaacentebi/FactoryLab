@@ -14,11 +14,26 @@ import pytest
 
 from scripts import gauntlet as g
 
-M = {"prices": {"eta": 0.5, "decay": 0.1, "lambda_max": 1.0, "penalty_cap": 0.5, "kp": 0.0},
-     "immune": {"k": 3, "gain_step": 0.05, "gamma_max": 0.5, "price_step": 0.05,
-                "tv_threshold": 0.2},
-     "timing": {"min_ratio": 3}, "novelty": {"share": 0.1},
-     "evaluation": {"no_swap_regret_kinds": ["Tick"]}}
+
+def _full(physics_blocks):
+    """A complete launched manifest (the scripted world's) with ``physics_blocks`` over
+    it: a diary binds only a manifest the kernel would have launched (``bind_diary``)."""
+    from factorylab.runtime.worlds import load_manifest
+
+    full = json.loads(load_manifest("scripted").canonical_json())
+    for block, values in physics_blocks.items():
+        full[block] = {**full.get(block, {}), **values}
+    return full
+
+
+#: The unit physics: a pre-wave-16 price law (it states lambda_max) on the scripted
+#: world's manifest; its other physics are the scripted world's, the Physics defaults.
+M = _full({"prices": {"eta": 0.5, "decay": 0.1, "lambda_max": 1.0, "penalty_cap": 0.5,
+                      "kp": 0.0},
+           "immune": {"k": 3, "gain_step": 0.05, "gamma_max": 0.5, "price_step": 0.05,
+                      "tv_threshold": 0.2},
+           "timing": {"min_ratio": 3}, "novelty": {"share": 0.1},
+           "evaluation": {"no_swap_regret_kinds": ["Tick"]}})
 
 
 def _w(index, *, acts=False, sf=False, thrash=False, ld=False, lam=0.0, pen=0.0,
