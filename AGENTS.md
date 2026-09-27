@@ -13,7 +13,7 @@ Anything we write that hands the factory a plan or an objective it should own ma
 it Class 1 or Class 2, however clever the rest is.
 
 **Order of authority:** Chapter II, then the code, then every other document
-(`docs/build-spec-*`, `docs/manifest.md`, audits, plans). Where the code disagrees
+(`docs/manifest.md`, `README.md`, `deploy/README.md`, `docs/architecture/`). Where the code disagrees
 with Chapter II, the code is wrong. Where a spec disagrees with Chapter II, the spec
 is wrong. `README.md` says what the kernel enforces today. `docs/manifest.md`
 documents every manifest key, its default, and whether it is fixed for the world's

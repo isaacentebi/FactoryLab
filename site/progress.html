@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Progress · FactoryLab</title>
+<meta name="description" content="Follow the factory itself: its worlds and behavioural versions, the objectives it sets itself, the four pathologies, the charter and λ, evaluation, and realized consequences. Aggregates only.">
+<meta name="theme-color" content="#060606">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060606'/%3E%3Crect x='7' y='7' width='18' height='18' fill='none' stroke='%23ecebe4' stroke-width='2'/%3E%3Crect x='19' y='19' width='6' height='6' fill='%23ff5a1f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..500&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="FactoryLab home">
+      <span class="word">Factory<i>Lab</i></span>
+      <span class="k">A Class 3 factory, under construction</span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="ideas.html">Ideas</a>
+      <a href="factory.html">Factory</a>
+      <a href="progress.html" aria-current="page">Progress</a>
+      <a class="ext" href="https://superdark.ai/" rel="noopener">Essay</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="wrap" style="padding-top: clamp(48px, 8vw, 110px); padding-bottom: clamp(16px, 3vw, 32px);">
+    <div class="load">
+      <p class="k"><span class="live-dot" data-dot></span><span data-live>Not live</span> <span class="sig">/</span> <span data-updated></span></p>
+      <h1 class="display" data-headline>No world is live yet.</h1>
+      <p class="lede quiet" style="margin-top: 28px;" data-line>The factory is being built.</p>
+      <p class="quiet small" style="max-width: 44em;">This page follows the factory itself, not our work on it: the worlds it lives in, the regimes its behaviour settles into, the objectives it sets itself, the failures it shows, the prices it posts. Every panel below is the structure a running world's public outputs will fill.</p>
+      <div class="row" style="margin-top: 20px;">
+        <button type="button" class="btn" data-example aria-pressed="false">Show a fabricated example <span class="arrow" aria-hidden="true">→</span></button>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap" aria-label="Observatory">
+    <div class="world-tabs" data-worlds></div>
+    <div class="obs" data-obs>
+      <div class="example-banner" role="note"><span>Example · invented data · not a real world</span><span>Nothing here happened</span></div>
+      <div class="obs-grid" data-grid>
+        <section class="w6"><p class="empty">Loading…</p></section>
+      </div>
+    </div>
+    <noscript><p class="quiet" style="padding: 24px 0;">This page reads <code>data/progress.json</code> with JavaScript. No world is live yet.</p></noscript>
+  </section>
+
+  <section class="section" style="margin-top: clamp(48px, 8vw, 110px);">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="k">Why these panels</p>
+        <div>
+          <h2>What a Class 3 factory <em>shows the world</em></h2>
+          <p class="lede quiet">Its schematics are public; each seat's local state is private. So the factory can be followed only through aggregates and public facts: the regime it is in, the goals it has set, the failures an instrument can detect, the charter it co-writes and the prices it posts, and what actually happened to the money.</p>
+          <div class="row" style="margin-top: 20px;">
+            <a class="btn" href="ideas.html#versions">Versions are behaviours <span class="arrow">→</span></a>
+            <a class="btn" href="factory.html#gauntlet">The pathology gauntlet <span class="arrow">→</span></a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div>
+      <span class="brand"><span class="word">Factory<i>Lab</i></span></span>
+      <p>An independent implementation of ideas from <a href="https://superdark.ai/" rel="noopener"><em>The Superdark Factory</em></a> by Marek Poliks, Roberto Alonso-Trillo, Tyler Dunn, Hugh Scott-Douglas and Jay Springett. Not affiliated with or endorsed by its authors.</p>
+    </div>
+    <div>
+      <p class="k">Site</p>
+      <ul><li><a href="index.html">Home</a></li><li><a href="ideas.html">Ideas</a></li><li><a href="factory.html">Factory</a></li></ul>
+    </div>
+    <div>
+      <p class="k">Source</p>
+      <ul><li><a href="https://superdark.ai/" rel="noopener">superdark.ai ↗</a></li><li><a href="https://superdark.antikythera.org/" rel="noopener">The paper at Antikythera ↗</a></li></ul>
+    </div>
+  </div>
+</footer>
+
+<div class="bar" role="status" aria-label="Factory status">
+  <span data-head>Status</span>
+  <span class="rail" aria-hidden="true"></span>
+  <a href="progress.html" data-state>Loading…</a>
+</div>
+
+<script src="assets/site.js" defer></script>
+<script src="assets/progress.js" defer></script>
+</body>
+</html>
