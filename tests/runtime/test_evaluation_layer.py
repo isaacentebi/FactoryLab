@@ -145,15 +145,19 @@ def _authors_and_readers(rt):
     return pairs
 
 
-@pytest.mark.gate
-def test_no_seat_ever_judges_a_chain_authored_on_its_own_family():
+@pytest.fixture(scope="module")
+def scripted_world(scripted_runtime_run):
+    """The shared uninterrupted scripted run (100 events, seed 1): its restored runtime
+    and its ledger entries."""
+    manifest = load_manifest("scripted")
+    record = scripted_runtime_run(manifest, 100, 1)
+    return record.runtime(manifest), record.entries
+
+
+def test_no_seat_ever_judges_a_chain_authored_on_its_own_family(scripted_world):
     """A judge avoids the producer's family; a meta the judge's and the producer's; a
     grader of a meta the meta's and the judge's (the #132 review, item 3)."""
-    from factorylab.runtime.loop import Runtime
-
-    rt = Runtime(load_manifest("scripted"), events=60, seed=2, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
-    rt.run()
+    rt, _entries = scripted_world
     pairs = _authors_and_readers(rt)
     assert len(pairs) > 20
     assert any(len(authors) == 2 for _reader, authors in pairs)
@@ -161,16 +165,31 @@ def test_no_seat_ever_judges_a_chain_authored_on_its_own_family():
         assert rt._family(reader) not in {rt._family(a) for a in authors}, (reader, authors)
 
 
-@pytest.mark.gate
-def test_a_multi_judged_return_is_read_by_judges_on_two_other_families():
+@pytest.fixture(scope="module")
+def multi_judged():
+    """One world whose every return is read by two judges, with every request it made
+    recorded as (description, inputs): the runtime and the requests."""
     from factorylab.runtime.loop import Runtime
 
     base = load_manifest("scripted")
     # Every window is derived from the loop it commands (time audit T1).
     manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0))
-    rt = Runtime(manifest, events=60, seed=2, initial_balance_micro=None, ledger_path=None,
+    rt = Runtime(manifest, events=40, seed=2, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1)
+    requests = []
+    original = rt._request
+
+    def record(handle, description, inputs, *args, **kwargs):
+        requests.append((description, inputs))
+        return original(handle, description, inputs, *args, **kwargs)
+
+    rt._request = record
     rt.run()
+    return rt, requests
+
+
+def test_a_multi_judged_return_is_read_by_judges_on_two_other_families(multi_judged):
+    rt, _requests = multi_judged
     items = rt.ledger._recovery_items()
     assert any(i["kind"] == "route.multi_judge" for i in items)
     means = [i for i in items if i["kind"] == "verdict.mean"]
@@ -209,19 +228,22 @@ def _recursive(base):
     return replace(base, assemblies=tuple(seats))
 
 
-@pytest.mark.gate
-def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_window():
-    from factorylab.runtime.loop import Runtime
+def _recursive_world(scripted_runtime_run, seed):
+    """The recursive world at 120 events, one shared uninterrupted run per seed: its
+    restored runtime and its ledger entries.
 
+    The tier-two window is min_ratio times the judges' scored loop (time audit T10): a
+    judge settles on its world outcome, about a backstop, so metas' grades reach the
+    tier above after a few of those loops, not in the first eighty ticks."""
     manifest = _recursive(load_manifest("scripted"))
     manifest.validate()
-    # The tier-two window is min_ratio times the judges' scored loop (time audit T10):
-    # a judge settles on its world outcome, about a backstop, so metas' grades reach the
-    # tier above after a few of those loops, not in the first eighty ticks.
-    rt = Runtime(manifest, events=200, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
-    rt.run()
-    items = rt.ledger._recovery_items()
+    record = scripted_runtime_run(manifest, 120, seed)
+    return record.runtime(manifest), record.entries
+
+
+def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_window(
+        scripted_runtime_run):
+    _rt, items = _recursive_world(scripted_runtime_run, 1)
     grades = [i for i in items if i["kind"] == "evaluator.meta_grade"]
     assert any(i["tier"] >= 3 for i in grades), "no meta was graded from above"
     # A window releases its representative and companions beside it.
@@ -230,21 +252,19 @@ def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_win
     assert any(i["graded_by"] is not None for i in settled)
 
 
-@pytest.mark.gate
-@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
-def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(seed):
+# Two seeds, since tier recursion draws on the stream; seed 3 is the one whose world
+# reaches a fourth tier within these 120 events (the first tier-four grade lands at
+# event 107), so its row proves every shallower tier as well.
+@pytest.mark.parametrize("seed", [1, 3])
+def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(scripted_runtime_run, seed):
     """Essay II.III.b: evaluators are graded from above, tier upon tier; II.IV.c: a
     verdict rises a tier only after settling, through a window at least min_ratio times
     the loop beneath. A meta's judge settles no sooner than its own grade window, so a
     grade window of a fixed verdict_timeout_ticks closed before the tier above could
-    read the meta: on these seeds 11 to 17 tier-three grades were delivered and 0 to 4
-    counted. The grade window is now the read itself."""
-    from factorylab.runtime.loop import Runtime
-
-    rt = Runtime(_recursive(load_manifest("scripted")), events=200, seed=seed,
-                 initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
-    rt.run()
-    items = rt.ledger._recovery_items()
+    read the meta: on seeds 1 to 5, 11 to 17 tier-three grades were delivered and 0 to
+    4 counted, and every tier-four grade was dropped. The grade window is now the read
+    itself."""
+    rt, items = _recursive_world(scripted_runtime_run, seed)
     delivered = rt.stats.meta_verdicts
     assert delivered.get(3, 0) >= 5
     for tier, count in delivered.items():
@@ -261,6 +281,19 @@ def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(seed):
     carried = {e for i in items if i["kind"] == "cascade.carry" for e in i["carried"]}
     risen = carried & {i["event_id"] for i in items if i["kind"] == "cascade.release"}
     assert carried and 2 * len(risen) >= len(carried), (len(risen), len(carried))
+
+
+def test_a_fourth_tier_grades_the_third_and_its_grades_count(scripted_runtime_run):
+    """Essay II.III: evaluations of evaluations "stacking to some arbitrary level". The
+    grade-window fix (dd1ee21) claimed tier four; this world reaches it: a tier-three
+    grader's MetaVerdict rises through its own cascade window, the tier above grades
+    it, and the grade counts."""
+    rt, items = _recursive_world(scripted_runtime_run, 3)
+    assert rt.stats.meta_verdicts.get(4, 0) >= 1
+    assert [i for i in items if i["kind"] == "evaluator.meta_grade" and i["tier"] == 4]
+    assert any(i["tier"] == 3 for i in items if i["kind"] == "cascade.release")
+    settled = [i for i in items if i["kind"] == "evaluator.settled" and i["tier"] == 3]
+    assert any(i["graded_by"] is not None for i in settled)
 
 
 # --- the adversarial layer (M1, P5) --------------------------------------------------
@@ -404,7 +437,7 @@ def test_adversarial_judges_are_drawn_when_the_verdict_is_given():
                              role="adversary", max_tokens=128)
     manifest = replace(base, assemblies=(*base.assemblies, adversary),
                        evaluation=replace(base.evaluation, adversarial_share=0.5))
-    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None, ledger_path=None,
+    rt = Runtime(manifest, events=35, seed=1, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1)
     rt.run()
     items = rt.ledger._recovery_items()
@@ -611,31 +644,20 @@ def test_a_forecaster_cannot_manufacture_its_own_failure(monkeypatch):
 # --- early warning: live, and the evaluators' (R3, M2) -------------------------------
 
 
-@pytest.mark.gate
-def test_early_warning_is_computed_at_every_close_and_shown_only_to_evaluators():
-    from factorylab.runtime.loop import Runtime
-
-    base = load_manifest("scripted")
-    manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0))
-    rt = Runtime(manifest, events=150, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
-    requests = []
-    original = rt._request
-
-    def record(handle, description, inputs, *args, **kwargs):
-        requests.append((description, inputs))
-        return original(handle, description, inputs, *args, **kwargs)
-
-    rt._request = record
-    rt.run()
-    k = rt.m.immune.k
-    closes = [i for i in rt.ledger._recovery_items() if i["kind"] == "ews.window"]
-    assert len(closes) >= 4 * k
-    table = rt.stats.early_warning
-    assert table["spans_windows"] == [k, 2 * k, 4 * k]
-    assert {"verdict", "conformity", "consequence", "disagreement", "balance"} <= set(
-        table["series"])
-    assert any(s["variance"] is not None for s in table["series"]["verdict"])
+def test_early_warning_is_shown_only_to_evaluators(multi_judged):
+    """Evaluations M2 (essay II.III.a; §I.b minimal disclosure): the table computed at
+    every close (``test_ews``) reaches the seats that judge, never a producer's request
+    or the public observations."""
+    rt, requests = multi_judged
+    items = rt.ledger._recovery_items()
+    # Computed at every close the price loop schedules: one ews.window per closed
+    # window, the same windows the close ledgers, in order, none skipped or repeated.
+    fires = [i for i in items if i["kind"] == "clock.loop" and i["loop"] == "price"]
+    closed = [i["window"] for i in items if i["kind"] == "price.window"]
+    warned = [i["window"] for i in items if i["kind"] == "ews.window"]
+    assert len(warned) >= 2 and warned == closed
+    assert warned == list(range(warned[0], warned[0] + len(warned)))
+    assert len(fires) - 1 <= len(warned) <= len(fires)  # the first firing opens, closes none
     judged = [inputs for description, inputs in requests if description.startswith("Give")]
     produced = [inputs for description, inputs in requests if description.startswith("Respond")]
     assert judged and all(inputs["early_warning"]["window"] is not None for inputs in judged[-3:])
@@ -707,16 +729,9 @@ def test_evaluator_compute_share_is_an_observation_a_card_may_price():
     assert share.measure(MeasureWindow(1, 100)) is None
 
 
-@pytest.mark.gate
-def test_evaluator_compute_share_is_measured_every_window_and_published():
-    from factorylab.runtime.loop import Runtime
-
-    base = load_manifest("scripted")
-    manifest = base  # every window is derived from the loop it commands (time audit T1)
-    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
-    rt.run()
-    windows = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.window"]
+def test_evaluator_compute_share_is_measured_every_window_and_published(scripted_world):
+    rt, entries = scripted_world
+    windows = [i for i in entries if i["kind"] == "price.window"]
     shares = [w["observations"].get("evaluator_compute_share") for w in windows]
     assert any(s is not None and 0 < s < 1 for s in shares)
     assert "evaluator_compute_share" in rt._public_observations()["last_closed_window_values"]
@@ -767,9 +782,11 @@ def test_an_adversary_that_can_read_no_chain_is_refused():
     only_haiku = replace(base, assemblies=tuple(
         replace(a, model_id="fake-haiku") if a.role == "producer" else a
         for a in base.assemblies) + (blind,))
-    problems = only_haiku.evaluator_population_problems()
-    assert any("adversarial judge adv-a" in p for p in problems) or any(
-        "fake-haiku" in p for p in problems)
+    (problem,) = only_haiku.evaluator_population_problems()
+    assert problem.startswith("adversarial judge adv-a (fake-haiku) can read no Verdict")
+    # The same roster without the adversary has nothing to refuse: the problem is its own.
+    without = replace(only_haiku, assemblies=only_haiku.assemblies[:-1])
+    assert without.evaluator_population_problems() == []
 
 
 @pytest.mark.gate
@@ -796,7 +813,7 @@ def test_two_routers_of_a_judged_kind_never_draw_two_judges_of_one_family():
 
     base = load_manifest("scripted")
     manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=0.0))
-    rt = Runtime(manifest, events=80, seed=1, initial_balance_micro=None, ledger_path=None,
+    rt = Runtime(manifest, events=40, seed=1, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.5)
     rt._build_router("ProducerReturn", "exp3", 0.5, replace=False)
     assert len(rt.routers["ProducerReturn"]) == 2

@@ -246,6 +246,11 @@ def test_a_remote_kill_is_final_and_a_configured_remote_without_a_verdict_refuse
 def test_without_a_receiver_the_local_file_alone_decides(tmp_path, monkeypatch):
     """The weaker guarantee, stated in deploy/README.md: no receiver, no remote verdict."""
     m, path = _world(tmp_path)
+    # Launched without a receiver, the world never requires one afterwards.
+    launch = next(i for i in Ledger.open_read_only(
+        path, manifest=json.loads(m.canonical_json())).items()
+        if i["kind"] == "event" and i["event"]["kind"] == "Launch")
+    assert "witness_required" not in launch["event"]["payload"]
     shutil.copytree(path.parent, tmp_path / "earlier")
     earlier = tmp_path / "earlier" / path.name
     _kill_from_outside(m, path)

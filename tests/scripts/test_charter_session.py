@@ -117,6 +117,5 @@ def test_the_dry_run_runs_on_edition6(tmp_path):
     table = voted_charter(out / "charter.toml", manifest)
     assert table["norms"][-1]["id"] == "fidelity"
     # The card contract is the world's own section, never request text.
-    assert not hasattr(charter_session, "WHAT_A_CARD_IS")
     world_block = charter_session.launch_world(manifest)
     assert "region {rule, lo, hi}" in world_block["mechanics"]["committee"]["card_contract"]

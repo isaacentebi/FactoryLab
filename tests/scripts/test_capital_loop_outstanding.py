@@ -27,6 +27,11 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.evm import BASE, event_topic
 from factorylab.world.x402 import HTTPResponse
 
+# Every run_rehearsal call here is refused, or runs no world, before a runtime is built:
+# these money-path guards stay in the inner loop (the check tier's CPU limit holds them
+# to it).
+pytestmark = pytest.mark.check
+
 RESERVE = "0x1228e5620944a79D268Afc7522E00891526EdEBb"
 LIVE_NONCE = "0x" + "11" * 32
 OLD_NONCE = "0x" + "22" * 32

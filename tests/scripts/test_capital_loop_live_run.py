@@ -186,6 +186,7 @@ def relaunch(w, out, tmp_path):
         rehearsal._wall_ns = wall
 
 
+@pytest.mark.gate  # run_rehearsal runs a real world
 @pytest.mark.parametrize("fate", ["settled", "dead"])
 def test_a_run_ends_with_its_top_up_submitted_and_the_next_waits_for_the_chain(
         tmp_path, monkeypatch, capsys, fate):
@@ -241,6 +242,7 @@ def test_a_run_ends_with_its_top_up_submitted_and_the_next_waits_for_the_chain(
     assert admitted["refusal"]["reason"] == "source_root_mismatch"  # every check passed
 
 
+@pytest.mark.gate  # run_rehearsal runs a real world
 def test_the_rail_stamps_validbefore_with_the_clock_the_bound_measured(
         tmp_path, monkeypatch):
     # Codex on PR #144: the bound sampled the injected clock while the rail stamped
@@ -263,6 +265,7 @@ def test_the_rail_stamps_validbefore_with_the_clock_the_bound_measured(
     assert int(top_up["state"]["reference"]["authorization"]["validBefore"]) == created + 300
 
 
+@pytest.mark.gate  # run_rehearsal runs a real world
 def test_a_capital_loop_run_s_safety_path_reads_wall_time_mid_event(tmp_path, monkeypatch):
     """The run's LiveClock sits behind the rehearsal's ``AdmissionClock``. Every model
     call here takes a delivered tick of wall time, so before the next call of the same
@@ -294,6 +297,7 @@ def test_a_capital_loop_run_s_safety_path_reads_wall_time_mid_event(tmp_path, mo
     assert {p["ts"] for p in passes} <= set(reads)
 
 
+@pytest.mark.gate  # run_rehearsal runs a real world
 def test_one_run_reads_base_through_the_operator_s_rpc_only(tmp_path, monkeypatch):
     # --rpc-base fed only the launch checks: the rail's balance reads and authorization
     # polling went to the public RPC, so one run read Base through two nodes.
@@ -326,6 +330,7 @@ def test_one_run_reads_base_through_the_operator_s_rpc_only(tmp_path, monkeypatc
     assert len(w["venice"].paid) == 1 and "eth_call" in operator
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 @pytest.mark.parametrize("name", ["SIGINT", "SIGTERM", "SIGHUP"])
 def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
         tmp_path, monkeypatch, capsys, name):
@@ -375,6 +380,7 @@ def operator_main(w, monkeypatch, out):
                            "--duration", "60m", "--source-root", str(repo_root())])
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 def test_a_signal_as_the_finally_begins_or_during_the_report_cannot_skip_it(
         tmp_path, monkeypatch, capsys):
     from scripts import edition4_rehearsal as rehearsal
@@ -409,6 +415,7 @@ def test_a_signal_as_the_finally_begins_or_during_the_report_cannot_skip_it(
     assert not handled & signal.pthread_sigmask(signal.SIG_BLOCK, [])  # and released
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 def test_nohup_keeps_sighup_ignored_and_the_run_goes_on(tmp_path, monkeypatch, capsys):
     w = wired(tmp_path, monkeypatch)
     settle = w["venice"].settle
@@ -444,6 +451,7 @@ def test_restore_puts_back_a_handler_installed_from_c_as_the_default():
         signal.signal(signal.SIGHUP, previous)
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 def test_rehearse_without_stops_arms_nothing(tmp_path, monkeypatch):
     from scripts import edition4_rehearsal as rehearsal
 
@@ -511,6 +519,7 @@ def test_the_world_binds_its_rail_a_guard_for_every_reserve_key_signer(tmp_path,
     assert signers and all(chain.transaction_guard is guard for chain in signers)
 
 
+@pytest.mark.check  # run_rehearsal refuses before any world is built
 def test_a_capital_loop_run_refuses_a_supplied_clock(tmp_path, monkeypatch):
     # Codex P2 on 98fa627: a harness clock that emits every tick at once would run the
     # funded loop faster than the settlement bound it was admitted on.

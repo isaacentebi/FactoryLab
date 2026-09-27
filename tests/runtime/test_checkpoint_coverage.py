@@ -9,8 +9,13 @@ declared in ``factorylab.runtime.resume`` as derived (rebuilt on demand from
 checkpointed state), transient (belongs to this process, not the world) or
 unordered (a mapping whose order carries no meaning). A new field that is none of
 these fails here, naming its class and attribute.
+
+The same 100-tick world is the uninterrupted reference of a late crash: a world
+killed near its end resumes to the same diary and summary (the early crash points
+are test_retained_state_crash's, over 30 ticks).
 """
 
+import json
 from collections import deque
 from dataclasses import fields, is_dataclass
 from decimal import Decimal
@@ -20,9 +25,10 @@ from types import MappingProxyType
 
 import pytest
 
+from factorylab.kernel.ledger import Ledger
 from factorylab.runtime import resume
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.resume import restore_runtime, runtime_state
+from factorylab.runtime.resume import restore_runtime, resume_world, runtime_state
 from factorylab.runtime.worlds import load_manifest
 from tests.conftest import make_runtime
 
@@ -94,10 +100,31 @@ def restored_twin(rt):
     return twin
 
 
-@pytest.mark.gate
-def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
-    rt = Runtime(load_manifest("scripted"), events=100, seed=1, initial_balance_micro=None,
-                 ledger_path=str(tmp_path / "world.jsonl"), router_gamma=.1)
+EVENTS = 100
+
+
+def _runtime(path):
+    return Runtime(load_manifest("scripted"), events=EVENTS, seed=1,
+                   initial_balance_micro=None, ledger_path=str(path), router_gamma=.1)
+
+
+def _items(path):
+    manifest = json.loads(load_manifest("scripted").canonical_json())
+    return Ledger.reopen(str(path), manifest=manifest)._recovery_items()
+
+
+def _summary(summary):
+    summary = json.loads(json.dumps(summary, default=str))
+    summary["stats"]["resumes"] = 0
+    return {k: v for k, v in summary.items() if k not in ("ledger_path", "ledger")}
+
+
+@pytest.fixture(scope="module")
+def world(tmp_path_factory):
+    """One 100-tick scripted world, walked against a restored twin at every 150th event
+    (the walk reads; it writes nothing the world or its diary sees)."""
+    path = tmp_path_factory.mktemp("coverage") / "world.jsonl"
+    rt = _runtime(path)
     original = rt._process_event
     differences: dict[str, tuple] = {}
     seen: set[str] = set()
@@ -120,7 +147,13 @@ def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
         return result
 
     rt._process_event = compare
-    rt.run()
+    summary = rt.run()
+    return {"differences": differences, "seen": seen, "stops": stops, "n": rt.n,
+            "summary": _summary(summary), "items": _items(path)}
+
+
+def test_every_attribute_a_world_carries_is_checkpointed_or_declared(world):
+    differences, seen, stops = world["differences"], world["seen"], world["stops"]
     assert len(stops) >= 8, stops
     assert not differences, (
         "state that is neither checkpointed nor declared derived/transient/unordered "
@@ -128,6 +161,46 @@ def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
     declared = (resume._DERIVED_STATE.keys() | resume._TRANSIENT_STATE.keys()
                 | resume._UNORDERED_STATE.keys())
     assert not declared - seen, f"declared state no runtime carries: {declared - seen}"
+
+
+class Crash(BaseException):
+    """The process dies here: nothing after it runs, nothing catches it."""
+
+
+def test_a_late_crash_resumes_to_the_uninterrupted_run(world, tmp_path):
+    """Killed between events at nine tenths of the world, long after every early
+    crash point and after its reserve windows have closed many times, the world
+    resumes to the uninterrupted one's diary and summary."""
+    path = tmp_path / "world.jsonl"
+    rt = _runtime(path)
+    late = world["n"] * 9 // 10
+    process = rt._process_event
+
+    def die_late(event):
+        result = process(event)
+        if rt.n == late:
+            raise Crash
+        return result
+
+    rt._process_event = die_late
+    with pytest.raises(Crash):
+        rt.run()
+    before = _items(path)
+    summary = resume_world(load_manifest("scripted"), str(path))
+    after = _items(path)
+    assert after[:len(before)] == before
+    assert _summary(summary) == world["summary"]
+    # Past the resume's own block (resume.begin, its reconciling read, and the items up
+    # to the closing ``resume``), the diary is the uninterrupted one's, item kind by
+    # item kind. Contents are not compared: an item may point at a sequence number,
+    # which the resume's own items shift.
+    kinds = [i["kind"] for i in after if i["kind"] != "snapshot"]
+    begin = kinds.index("resume.begin")
+    end = kinds.index("resume", begin)
+    assert set(kinds[begin:end + 1]) <= {"resume.begin", "io.call", "io.result",
+                                         "resume.reconcile", "resume.timeouts", "resume"}
+    assert kinds[:begin] + kinds[end + 1:] == [
+        i["kind"] for i in world["items"] if i["kind"] != "snapshot"]
 
 
 def test_declarations_say_why():

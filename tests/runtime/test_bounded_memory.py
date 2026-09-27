@@ -15,6 +15,7 @@ square of its age and each checkpoint cost more than the one before. Here:
 """
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -47,10 +48,54 @@ def _items(path, manifest=None):
     return list(Ledger.open_read_only(path, manifest=manifest).items())
 
 
+def _runtime(path, events, **kwargs):
+    return Runtime(load_manifest("scripted"), events=events, seed=1,
+                   initial_balance_micro=None, ledger_path=str(path), router_gamma=.1,
+                   **kwargs)
+
+
 def _run(path, events, **kwargs):
-    rt = Runtime(load_manifest("scripted"), events=events, seed=1, initial_balance_micro=None,
-                 ledger_path=str(path), router_gamma=.1, **kwargs)
-    return rt.run()
+    return _runtime(path, events, **kwargs).run()
+
+
+def _keeping_every_checkpoint(directory, events, **kwargs):
+    """A finished world that kept every checkpoint file, so a test can cut its diary
+    back to an older one; returns the runtime, its diary path and its summary."""
+    path = directory / "w.jsonl"
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        keep_every_checkpoint(monkeypatch)
+        rt = _runtime(path, events, **kwargs)
+        summary = rt.run()
+    return rt, path, summary
+
+
+@pytest.fixture(scope="module")
+def w30(tmp_path_factory):
+    """A 30-tick scripted world with every checkpoint it wrote. Shared: copy it first."""
+    return _keeping_every_checkpoint(tmp_path_factory.mktemp("w30"), 30)[1]
+
+
+@pytest.fixture(scope="module")
+def w60(tmp_path_factory):
+    """A 60-tick world whose answers are padded past the inline cutoff and recorded, with
+    every checkpoint it wrote: the runtime, its diary and its summary. Shared: copy the
+    diary first."""
+    return _keeping_every_checkpoint(tmp_path_factory.mktemp("w60"), 60,
+                                     provider=RecordedWriter())
+
+
+@pytest.fixture(scope="module")
+def w120(tmp_path_factory):
+    """``w60``'s world run twice as long, keeping only its rolling checkpoint: the
+    runtime, its diary and its summary. Shared: copy the diary first."""
+    path = tmp_path_factory.mktemp("w120") / "w.jsonl"
+    rt = _runtime(path, 120, provider=RecordedWriter())
+    return rt, path, rt.run()
+
+
+def _copy(path, directory):
+    shutil.copytree(path.parent, directory)
+    return directory / path.name
 
 
 def _evidence(path):
@@ -67,11 +112,8 @@ def _latest_file(path):
 
 
 @pytest.mark.parametrize("damage", ["missing", "stale", "tampered", "foreign"])
-def test_resume_refuses_a_bad_checkpoint_and_writes_nothing(tmp_path, monkeypatch, damage):
-    path = tmp_path / "w.jsonl"
-    keep_every_checkpoint(monkeypatch)  # older checkpoints to put back, for "stale"
-    _run(path, 30)
-    monkeypatch.undo()
+def test_resume_refuses_a_bad_checkpoint_and_writes_nothing(w30, tmp_path, damage):
+    path = _copy(w30, tmp_path / "w")  # it kept older checkpoints to put back, for "stale"
     latest, named = _latest_file(path)
     others = sorted(p for p in checkpoint_root(path).iterdir() if p != named)
     assert named.exists() and others
@@ -102,13 +144,9 @@ def test_resume_refuses_a_bad_checkpoint_and_writes_nothing(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("damage", ["missing", "tampered"])
-def test_resume_refuses_a_bad_recorded_answer_and_writes_nothing(tmp_path, monkeypatch,
-                                                                   damage):
+def test_resume_refuses_a_bad_recorded_answer_and_writes_nothing(w60, tmp_path, damage):
     """An answer named by hash in the replayed tail must be the one recorded."""
-    path = tmp_path / "w.jsonl"
-    keep_every_checkpoint(monkeypatch)  # the diary is cut back below its last checkpoint
-    _run(path, 60, provider=RecordedWriter())
-    monkeypatch.undo()
+    path = _copy(w60[1], tmp_path / "w")  # cut back below its last checkpoint
     diary = _items(path)
     first = next(i["seq"] for i in diary if i["kind"] == "snapshot" and i["n"] > 0)
     named = next(i for i in diary if i["kind"] == "io.result" and "result_sha" in i
@@ -133,9 +171,8 @@ def test_resume_refuses_a_bad_recorded_answer_and_writes_nothing(tmp_path, monke
     assert _evidence(path) == before
 
 
-def test_a_large_answer_is_named_by_hash_and_stored_once(tmp_path):
-    path = tmp_path / "w.jsonl"
-    _run(path, 40, provider=Writer())
+def test_a_large_answer_is_named_by_hash_and_stored_once(w60):
+    path = w60[1]
     diary = _items(path)
     named = [i for i in diary if i["kind"] == "io.result" and "result_sha" in i]
     assert named and all("result" not in i for i in named)
@@ -146,22 +183,18 @@ def test_a_large_answer_is_named_by_hash_and_stored_once(tmp_path):
     assert len(files) == len({i["result_sha"] for i in named})
 
 
-def test_pruning_changes_nothing_any_reader_sees(tmp_path, monkeypatch):
+def test_pruning_changes_nothing_any_reader_sees(w120, tmp_path, monkeypatch):
     """The retained state dropped at each boundary is unreachable: with and without the
     pruning, one manifest and seed write the same diary, snapshot references aside."""
-    pruned, kept = tmp_path / "pruned" / "w.jsonl", tmp_path / "kept" / "w.jsonl"
-    pruned.parent.mkdir()
-    kept.parent.mkdir()
-    rt = Runtime(load_manifest("scripted"), events=120, seed=1, initial_balance_micro=None,
-                 ledger_path=str(pruned), router_gamma=.1, provider=Writer())
-    expected = rt.run()
+    rt, pruned, expected = w120
     # The pruning did prune: history before the oldest open forecast, and the payloads
     # of returns no judgement can accept any more.
     assert rt.event_log_base > 0 and len(rt.events_log) < rt.n / 2
     slim = [e for e in rt.return_events.values() if "propensity" not in e.payload]
     assert len(slim) > len(rt.return_events) / 2
     monkeypatch.setattr(Runtime, "_prune_retained", lambda self: None)
-    summary = _run(kept, 120, provider=Writer())
+    kept = tmp_path / "w.jsonl"
+    summary = _run(kept, 120, provider=RecordedWriter())
 
     def comparable(items):
         return [{k: v for k, v in i.items() if k not in ("ts", "hash", "prev_hash")}
@@ -225,39 +258,25 @@ def test_a_launch_checkpoint_has_no_period_to_serve():
     assert not [i for i in items if i["kind"] == "checkpoint.slow"]
 
 
-def test_every_diary_item_is_under_the_cap_and_the_diary_grows_linearly(tmp_path):
-    short, long = tmp_path / "short" / "w.jsonl", tmp_path / "long" / "w.jsonl"
-    short.parent.mkdir()
-    long.parent.mkdir()
-    _run(short, 60, provider=Writer())
-    _run(long, 120, provider=Writer())
+def test_every_diary_item_is_under_the_cap_and_the_diary_grows_linearly(w60, w120):
+    short, long = w60[1], w120[1]
     for path in (short, long):
         sizes = {i["kind"]: len(canonical(i)) for i in _items(path)}
         assert max(sizes.values()) <= ITEM_CAP_BYTES, max(sizes.items(), key=lambda kv: kv[1])
     # Twice the events, about twice the diary: never the square.
     assert long.stat().st_size <= 2.3 * short.stat().st_size
-    assert len(list(checkpoint_root(long).iterdir())) == 1
-
-
-def test_a_replaced_checkpoint_file_leaves_one_file(tmp_path):
-    path = tmp_path / "w.jsonl"
-    _run(path, 30)
-    files = list(checkpoint_root(path).iterdir())
-    assert len(files) == 1
-    latest, named = _latest_file(path)
-    assert files == [named]
+    # Each checkpoint replaced the one before: one file, the one the diary names last,
+    # and the diary carries its reference, never the state.
+    latest, named = _latest_file(long)
+    assert list(checkpoint_root(long).iterdir()) == [named]
     assert latest["bytes"] > 0 and "state" not in latest
 
 
-def test_a_backup_copy_is_proven_restorable_or_refused(tmp_path):
+def test_a_backup_copy_is_proven_restorable_or_refused(w30, tmp_path):
     """What ``deploy/backup.sh`` runs on its staged copy before it uploads it."""
-    import shutil
-
     from factorylab.runtime.sidecar import verify_restorable
 
-    path = tmp_path / "live" / "w.jsonl"
-    path.parent.mkdir()
-    _run(path, 30)
+    path = w30
     manifest = Path(__file__).resolve().parents[2] / "worlds" / "scripted.toml"
     stage = tmp_path / "stage"
     shutil.copytree(path.parent, stage)
@@ -275,18 +294,14 @@ def test_a_backup_copy_is_proven_restorable_or_refused(tmp_path):
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
-def test_a_backup_copy_missing_a_replayed_answer_is_refused_by_name(tmp_path, monkeypatch,
-                                                                     damage):
+def test_a_backup_copy_missing_a_replayed_answer_is_refused_by_name(w60, tmp_path, damage):
     """Every answer the replay tail names by hash must be beside the copy and hash-true.
 
     ``Writer`` pads every answer's working state past the 1 KiB inline cutoff, so the
     tail after the checkpoint names answers that live only in ``<world>.io/``."""
     from factorylab.runtime.sidecar import verify_restorable
 
-    path = tmp_path / "w.jsonl"
-    keep_every_checkpoint(monkeypatch)  # the copy is cut back below its last checkpoint
-    _run(path, 60, provider=Writer())
-    monkeypatch.undo()
+    path = _copy(w60[1], tmp_path / "w")  # cut back below its last checkpoint
     diary = _items(path)
     first = next(i["seq"] for i in diary if i["kind"] == "snapshot" and i["n"] > 0)
     tail = [i for i in diary if i["kind"] == "io.result" and "result_sha" in i

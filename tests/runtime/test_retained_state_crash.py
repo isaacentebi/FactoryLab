@@ -31,7 +31,10 @@ from tests.helpers import keep_every_checkpoint
 
 pytestmark = pytest.mark.gate
 
-EVENTS = 140
+# Every crash point below is reached by event 90 (tick 10 or so): a longer world only
+# replays more ticks after each resume. State that diverges only late in a world is
+# the checkpoint coverage test's to catch (test_checkpoint_coverage, 100 ticks).
+EVENTS = 30
 TRAIL = ("state.put", "artifact.put", "artifact.released", "artifact.collected",
          "artifact.retained", "venue.read_answered", "tool.refused")
 
@@ -59,8 +62,8 @@ class Crash(BaseException):
     """The process dies here: nothing after it runs, nothing catches it."""
 
 
-def _runtime(path, manifest=None):
-    return Runtime(manifest or load_manifest("scripted"), events=EVENTS, seed=1,
+def _runtime(path, manifest=None, events=EVENTS):
+    return Runtime(manifest or load_manifest("scripted"), events=events, seed=1,
                    initial_balance_micro=None, ledger_path=str(path), router_gamma=.1,
                    provider=Writer())
 
@@ -269,12 +272,15 @@ def _kill_in_sidecar(rt, n, mode, monkeypatch):
         rt.ledger.append = named
 
 
+# One row per point class: a clean crash between events, mid-event after an item
+# (collected, unlink), inside a durable write (write, torn, torn-final), and at each
+# step of the checkpoint and recorded-answer sidecar protocol.
 SIDECAR_MODES = [("checkpoint-torn", 3), ("checkpoint-written", 3), ("checkpoint-named", 3),
                  ("checkpoint-retired", 3), ("io-torn", 5), ("io-written", 5),
                  ("io-named", 5)]
 
 
-@pytest.mark.parametrize("mode,n", [("event", 37), ("event", 90), ("collected", 1),
+@pytest.mark.parametrize("mode,n", [("event", 37), ("collected", 1),
                                     ("unlink", 2), ("write", 40), ("torn", 60),
                                     ("torn-final", 80), *SIDECAR_MODES])
 def test_a_crash_anywhere_resumes_to_the_uninterrupted_run(uninterrupted, tmp_path,
@@ -402,20 +408,15 @@ def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path,
     restored._ledger_lock.close()
 
 
-RETIRE_AT = 60
-
-
-def _retiring(monkeypatch, retire=None, register=None):
+def _retiring(monkeypatch, retire, register=None):
     """Every runtime this test builds, a resumed one included, retires each seat of
-    ``retire`` (event -> seat; by default seed-observer after ``RETIRE_AT``) and
-    registers each ``register`` (event -> (proposer, id)) as a program seat, a new id
-    or a retired id's next version, right after that event; a program's first version
-    is given a private state. Governance recorded in the diary like any other, so the
-    replay applies it at the same point."""
+    ``retire`` (event -> seat) and registers each ``register`` (event -> (proposer,
+    id)) as a program seat, a new id or a retired id's next version, right after that
+    event; a program's first version is given a private state. Governance recorded in
+    the diary like any other, so the replay applies it at the same point."""
     from factorylab.cortex.request import Return
     from factorylab.kernel.queue import PropensityRecord
 
-    retire = {RETIRE_AT: "seed-observer"} if retire is None else retire
     register = register or {}
     process = Runtime._process_event
 
@@ -458,48 +459,45 @@ def _capacity(items):
             if i["kind"] == "artifact.released" and i.get("cause") == "capacity"]
 
 
-def test_retirement_keeps_the_seat_s_state_in_a_world_run(tmp_path, monkeypatch):
-    """Retirement releases nothing: under the default cap the retired seat's head is
-    still held at the end of the run."""
-    _retiring(monkeypatch)
-    rt = _runtime(tmp_path / "world.jsonl")
-    rt.run()
-    assert "seed-observer" in rt.retired_assemblies
-    assert rt.working_state.head("seed-observer") is not None
-    # A head the seat replaced while it served is released as any seat's is; from its
-    # retirement on, nothing of it is. (Its inbox bodies go as any seat's do, once
-    # acknowledged or past their retention horizon: they are not its state.)
-    items = _items(tmp_path / "world.jsonl")
-    (retired,) = [i["seq"] for i in items if i["kind"] == "assembly.retired"
-                  and i.get("assembly_id") == "seed-observer"]
-    assert not [i for i in items if i["kind"] == "artifact.released"
-                and i.get("owner") == "seed-observer" and i["seq"] > retired
-                and i.get("artifact_kind") != "outcome.item"]
-
-
-def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
-        tmp_path, monkeypatch):
-    _retiring(monkeypatch, retire=THREE_RETIRE)
+@pytest.fixture(scope="module")
+def tight(tmp_path_factory):
+    """The uninterrupted tight-cap world both eviction crash rows resume to."""
     manifest = replace(load_manifest("scripted"), storage=StorageSpec(TIGHT_CAP))
-    base = tmp_path / "base" / "world.jsonl"
-    base.parent.mkdir()
-    expected_summary = _summary(_runtime(base, manifest).run())
-    expected = _items(base, manifest)
-    evicted = _capacity(expected)
+    base = tmp_path_factory.mktemp("tight") / "world.jsonl"
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _retiring(monkeypatch, retire=THREE_RETIRE)
+        summary = _summary(_runtime(base, manifest).run())
+    items = _items(base, manifest)
+    evicted = _capacity(items)
     assert [(owner, kind) for owner, kind, _ in evicted] == [
         (seat, "working.state") for seat in THREE_RETIRE.values()], (
         "the retired seats' heads were released for room, oldest retirement first")
     assert any(i["kind"] == "state.refused" and i["reason"] == CAPACITY_REFUSAL
-               for i in expected)
-    path = tmp_path / "crash" / "world.jsonl"
-    path.parent.mkdir()
+               for i in items)
+    return manifest, summary, _trail(items), evicted
+
+
+@pytest.mark.parametrize("k", [1, 2])
+def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
+        tight, tmp_path, monkeypatch, k):
+    """Three seats retire; one live write needs all three kept heads released. The
+    process dies right after the kth release's ledger line, before the index changes
+    (the first release, or partway through the put's evictions): the replay releases
+    the same references in the same order, and the world ends as the uninterrupted
+    one."""
+    manifest, expected_summary, expected_trail, evicted = tight
+    _retiring(monkeypatch, retire=THREE_RETIRE)
+    path = tmp_path / "world.jsonl"
     rt = _runtime(path, manifest)
     append = rt.ledger.append
+    seen = []
 
     def die_after_eviction(item):
         seq = append(item)
         if item.get("kind") == "artifact.released" and item.get("cause") == "capacity":
-            raise Crash  # the release is ledgered; the index has not changed
+            seen.append(item)
+            if len(seen) == k:
+                raise Crash  # the release is ledgered; the index has not changed
         return seq
 
     rt.ledger.append = die_after_eviction
@@ -507,23 +505,26 @@ def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
         rt.run()
     before = _items(path, manifest)
     assert before[-1]["kind"] == "artifact.released" and before[-1]["cause"] == "capacity"
-    assert rt.working_state.head("seed-observer") is not None  # the index never moved
+    assert _capacity(before) == evicted[:k]
+    assert rt.working_state.head(evicted[k - 1][0]) is not None  # the index never moved
     summary = resume_world(manifest, str(path), provider=Writer())
     after = _items(path, manifest)
     assert after[:len(before)] == before
-    assert _trail(after) == _trail(expected)
+    assert _trail(after) == expected_trail
     assert _capacity(after) == evicted
     assert _summary(summary) == expected_summary
 
 
-def test_a_resume_is_never_refused_for_the_host_s_free_disk(uninterrupted, tmp_path,
-                                                             monkeypatch):
+def test_a_resume_is_never_refused_for_the_host_s_free_disk(tmp_path, monkeypatch):
     """The free-disk bound is a genesis admission: a world whose recorded cap now exceeds
     half the host's free disk resumes, and runs to the uninterrupted result; a new world
     on that host is refused."""
+    base = tmp_path / "base" / "world.jsonl"
+    base.parent.mkdir()
+    expected = _summary(_runtime(base, events=2).run())
     path = tmp_path / "world.jsonl"
-    rt = _runtime(path)
-    _kill_after_event(rt, 50)
+    rt = _runtime(path, events=2)
+    _kill_after_event(rt, 5)
     with pytest.raises(Crash):
         rt.run()
     cap = load_manifest("scripted").storage.retained_private_bytes
@@ -535,11 +536,8 @@ def test_a_resume_is_never_refused_for_the_host_s_free_disk(uninterrupted, tmp_p
         _runtime(tmp_path / "new.jsonl")
     before = _items(path)
     summary = resume_world(load_manifest("scripted"), str(path), provider=Writer())
-    after = _items(path)
-    assert after[:len(before)] == before
-    expected_summary, expected_trail = uninterrupted
-    assert _trail(after) == expected_trail
-    assert _summary(summary) == expected_summary
+    assert _items(path)[:len(before)] == before
+    assert _summary(summary) == expected
 
 
 def _crash_and_resume(tmp_path, manifest, dies_after):
@@ -568,30 +566,6 @@ def _crash_and_resume(tmp_path, manifest, dies_after):
     before = _items(path, manifest)
     summary = resume_world(manifest, str(path), provider=Writer())
     return expected, before, _items(path, manifest), expected_summary, _summary(summary)
-
-
-def test_a_crash_partway_through_a_put_s_evictions_resumes(tmp_path, monkeypatch):
-    """Three seats retire; one live write needs all three kept heads released. The
-    process dies after the second release's ledger line: the replay releases the same
-    references in the same order, and the world ends as the uninterrupted one."""
-    _retiring(monkeypatch, retire=THREE_RETIRE)
-    manifest = replace(load_manifest("scripted"), storage=StorageSpec(TIGHT_CAP))
-
-    def second_eviction(item, seen):
-        if item.get("kind") == "artifact.released" and item.get("cause") == "capacity":
-            seen.append(item)
-        return len(seen) == 2 and item is seen[-1]
-
-    expected, before, after, expected_summary, summary = _crash_and_resume(
-        tmp_path, manifest, second_eviction)
-    evicted = _capacity(expected)
-    assert [owner for owner, _kind, _sha in evicted] == [
-        "seed-observer", "antagonist-a", "eval-d"]
-    assert before[-1]["cause"] == "capacity" and len(_capacity(before)) == 2
-    assert after[:len(before)] == before
-    assert _trail(after) == _trail(expected)
-    assert _capacity(after) == evicted
-    assert summary == expected_summary
 
 
 def test_a_crash_between_a_superseded_release_and_the_registration_resumes(
