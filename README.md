@@ -8,8 +8,8 @@ Software*, by Poliks, Trillo, Dunn, Scott-Douglas and Springett, published at
 [superdark.ai](https://superdark.ai/). The repository takes its name from the essay's
 second chapter, "The Dark Stack". It is an independent project, not affiliated with
 or endorsed by the essay's authors. Our reading of that chapter, compressed into
-design rules, is [AGENTS.md](AGENTS.md); where the code and that reading disagree,
-the code is wrong.
+design rules, is [AGENTS.md](AGENTS.md). Where the code and Chapter II disagree, the
+code is wrong.
 
 ## Three classes
 
@@ -30,9 +30,9 @@ What it pursues is whatever holds up against that world.
 
 Dark as in lights-out: nobody on the floor. The architect makes one move, the
 genesis manifest, and withdraws. The manifest's hash is the diary's first item.
-After launch the architect keeps a single control, `kill`. Governance reaches a
-living world by one door, the charter: a signed norm edition, read at a governance
-boundary and testified to by a committee of seats.
+After launch the architect keeps a single control, `kill`. Outside governance
+reaches a living world by one door, the charter: a signed norm edition, read at a
+governance boundary after a committee of seats has testified.
 
 Dark is not secret. What the population writes is the product, and a living world's
 public wake publishes it as it lands: every return, the verdicts about it, the
@@ -42,10 +42,10 @@ memory, prompts, per-decision scores. The diary that holds all of it is encrypte
 hash-chained and append-only, and its seal is released only by the world's
 termination. Then it is read by behaviour, not by configuration.
 
-There is no father here. The architect does not author the orchestration, does not
-choose what is good, does not tell a seat how cautious to be. It sets physics and
-leaves. Structure the factory needs, it grows; structure it does not need, it can
-retire, the seed seats included.
+There is no father here. The architect seeds a roster and authors no orchestration
+the factory cannot tear down. It does not choose what is good or tell a seat how
+cautious to be. It sets physics and leaves. Structure the factory needs, it grows;
+structure it does not need, it retires, the seed seats included.
 
 ## Design rules
 
@@ -79,10 +79,14 @@ builders, not an instruction to the factory.
   that grades an evaluator sits outside the loop it judges.
 - **Online, recursive evaluation.** No offline gates, no fixed rubrics. Evaluations
   of evaluations. Producers are the minority of the population, evaluators span at
-  least three foundation-model families, and nothing judges its own output.
+  least three foundation-model families, and nothing judges its own output. Early
+  warning is variance, autocorrelation and ensemble disagreement, read live. The
+  adversarial layer is inside the population, and a chaos actuator injects real,
+  bounded faults into what seats are shown.
 - **Learners.** Mean-based no-regret learners at the frontier, no-swap-regret
   learners (Blum–Mansour) at the core. Learning death is prevented as a fact about
   the world: a share of compute and write access usable only by unhistoried actions.
+  The kernel never chooses a seat's action for it.
 - **Behavioural versioning.** A version is a metastable input–output distribution,
   read through a transfer operator and its spectral gap. Not a hash, not a config.
   The factory never rewinds, and a change to the kernel is a new world.
@@ -96,7 +100,9 @@ builders, not an instruction to the factory.
   factory as a shadow price, and motions carry conditional forecasts.
 - **Time as ratios.** Loop periods are ratios, never absolute constants. An inner
   loop settles at least three times faster than the loop that commands it. Verdicts
-  rise a tier only after their evidence settles, on jittered windows.
+  rise a tier only after their evidence settles, on jittered windows. An explorer is
+  paid sooner than the lifetime of what it found. Speed is cash burn, and neither the
+  factory nor its controls may be slower than the world.
 
 ## The machine
 
