@@ -215,7 +215,10 @@ def physics(manifest: Mapping | None) -> Physics:
         r=int(get(timing, "min_ratio", base.r)), k=int(get(immune, "k", base.k)),
         eta=float(get(prices, "eta", base.eta)), kp=float(get(prices, "kp", base.kp)),
         kd=float(get(prices, "kd", base.kd)), decay=float(get(prices, "decay", base.decay)),
-        lambda_max=float(get(prices, "lambda_max", base.lambda_max)),
+        # Wave 16 (R-E) removed prices.lambda_max: the one bound is penalty_cap, on the
+        # penalty (a card's price is held once its penalty takes the whole cap), so the
+        # price itself has no bound of its own. A pre-wave-16 manifest states one.
+        lambda_max=float(get(prices, "lambda_max", math.inf)),
         cap=float(get(prices, "penalty_cap", base.cap)),
         min_blame_share=float(get(prices, "min_blame_share", base.min_blame_share)),
         price_step=float(get(immune, "price_step", base.price_step)),
@@ -576,6 +579,8 @@ CARD_SOURCES: dict[str, tuple[str, ...]] = {
     "price.region": ("card_id",),
     "price.region_cleared": ("card_id",),
     "price.update": ("card_id",),
+    # Wave 16, M-5: a card whose metric was redefined restarts its duration price.
+    "price.redefined": ("card_id",),
     "price.skipped": ("card_id",),
     "price.unparsed": ("card_id",),
     "price.unattributed": ("card_id",),
@@ -2615,7 +2620,9 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
     "router.decline_priced": ("neutral", "reward"),
     "router.carried": ("reward",),
     "router.step_rescaled": ("reward", "stepped_as"),
-    "thrash.charged": ("reward", "reward_before", "charge"),
+    # Wave 16 (R10-l): the round's raw score and its learned value on the one map; a
+    # pre-wave-16 row carried the reward before the charge instead.
+    "thrash.charged": ("reward", "reward_before", "raw", "charge"),
     "propensity.learned": ("reward",),
     "evaluator.settled": ("consequence", "grade", "reward"),
     "evaluator.meta_grade": ("grade",),
@@ -2624,6 +2631,10 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
     "verdict.consequence": ("q", "y", "score"),
     "verdict.consequence_late": ("q", "y"),
     "consequence.marked": ("y",),
+    # Wave 16: a verdict's consequence the base rate cannot grade (feedback.py
+    # ``_uninformative``) carries the verdict's q and its y; the settlement-side rows
+    # name only the reason.
+    "consequence.uninformative": ("q", "y"),
     # The final realized outcome (settlement/consequence.py ``asdict(after.payoff)``:
     # ``Payoff.y``, 0 or 1).
     "consequence.outcome": ("y",),
@@ -2684,8 +2695,15 @@ NULLABLE: dict[tuple[str, str], Any] = {
 #: it does: only ``counter.settled``'s censored emitter, which writes ``score: None`` and
 #: no ``q``, ``judge_q`` or ``y``. Every other field is present in every row of its kind.
 OMITTED: dict[tuple[str, str], Any] = {
-    ("counter.settled", name): (lambda row: "score" in row and row["score"] is None)
-    for name in ("q", "judge_q", "y")
+    **{("counter.settled", name): (lambda row: "score" in row and row["score"] is None)
+       for name in ("q", "judge_q", "y")},
+    # Wave 16 writes the raw score, not the reward before the charge
+    # (feedback.py ``_learning_value``).
+    ("thrash.charged", "reward_before"): lambda row: "raw" in row,
+    # The settlement-side uninformative rows (consequence.py, feedback.py) name the
+    # reason and no verdict.
+    **{("consequence.uninformative", name): (lambda row: "reason" in row)
+       for name in ("q", "y")},
 }
 #: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
 CAPPED_FIELDS: dict[str, tuple[str, ...]] = {

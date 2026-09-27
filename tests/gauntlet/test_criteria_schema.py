@@ -177,6 +177,9 @@ NOT_SCORES = {
 }
 #: Reward-bearing kinds no run captured here, each with its reason.
 UNCAPTURED = {
+    "consequence.uninformative": "emitted by feedback.py _uninformative (with q and y) and by "
+                                 "the settlement-side fee/mark/funding paths; no captured "
+                                 "gauntlet run reached it",
     "consequence.outcome": "emitted by settlement/consequence.py as asdict(Payoff) when "
                            "an outcome is fixed; the captured set holds none",
     "uptake.anticipated": "emitted by runtime/uptake.py when a judge forecasts a "

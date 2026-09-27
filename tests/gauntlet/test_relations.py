@@ -33,15 +33,12 @@ def _scripted_raw():
 # --- SF-0 ------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="P-1 (Q-G1): no world has integrator headroom at the "
-                   "detection horizon, and no load-time relation refuses or publishes it")
 @pytest.mark.parametrize("name", _worlds())
 def test_sf0_every_loadable_world_has_gain_headroom_at_the_detection_horizon(name):
     """W_sat(v_ref) >= H for every priced card, conditioned on its region and window kind
     (Astra C-1). Longrun1: "118 of 123 ratchets were no-ops … λ was already at
-    lambda_max". Fails today on every world: eta = 0.5 and penalty_cap = 0.5 saturate a
-    unit violation in one window, while the organ needs H = min_ratio × k = 9."""
+    lambda_max". Wave 16 (Q-G1) derives eta from the relation, so every world holds it:
+    a unit violation takes H = min_ratio × k = 9 windows to saturate the cap."""
     manifest = json.loads(load_manifest(name).canonical_json())
     assert g.sf0_relation(manifest).ok
 
@@ -54,9 +51,6 @@ def test_sf0_the_relation_discriminates_between_a_saturating_and_a_patient_integ
     assert g.sf0_relation(patient).ok
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
-                   reason="P-1 (Q-G1): the load-time refusal (or the published "
-                   "gain_headroom_windows fact) is proposed physics awaiting the architect")
 def test_sf0_negative_control_a_saturating_world_is_refused_or_publishes_its_headroom():
     raw = _scripted_raw()
     raw["prices"] = {**raw["prices"], "eta": 0.5, "penalty_cap": 0.5}
@@ -75,7 +69,7 @@ def _release_lag(saturated_windows):
 
     prices = load_manifest("scripted").prices
     controller = PriceController(Ledger(None), eta=prices.eta, decay=prices.decay,
-                                 lambda_max=prices.lambda_max, min_window_events=1,
+                                 penalty_cap=prices.penalty_cap, min_window_events=1,
                                  kp=prices.kp, kd=prices.kd)
     controller.register(CardRegion("c", "min", 0.5, None, 0.5))
     event = 0
@@ -90,15 +84,11 @@ def _release_lag(saturated_windows):
     return lag
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="needs wave 16 R-E (amended): anti-windup at the cap. "
-                   "Today the integral keeps winding to lambda_max while the penalty is "
-                   "already capped, so release lags grow with saturation's duration")
 def test_i1a_release_after_saturation_is_independent_of_how_long_it_lasted():
     """I-1a (design §4): the release lag after an exit is at most T_rel(λ at first
     saturation) + 1 and within one window of itself whether saturation lasted D or 3D
-    windows. The negative control is today's controller: without anti-windup at the
-    cap the lag after 3D exceeds the lag after D."""
+    windows. Wave 16 (R-E, amended) freezes the integral at the cap, so it holds; before
+    it, without anti-windup, the lag after 3D exceeded the lag after D."""
     lags = {d: _release_lag(d) for d in (1, 3)}
     assert abs(lags[3] - lags[1]) <= 1, lags
 
@@ -116,11 +106,14 @@ def _launched(raw, *, run_ticks):
     return rt, period, items
 
 
-@pytest.mark.parametrize("repricing", ["30s", "59s"])
+@pytest.mark.parametrize("repricing", ["5s", "8s"])
 def test_ld3_an_overstable_world_is_refused_at_load(repricing):
-    """``min_ratio`` × the consequence backstop (3 × 20 ticks at 1 s) exceeds the world's
-    repricing period: the existing ``max_tick_ns`` invariant refuses the world, since its
-    tick no longer fits the loops the horizon commands (time audit T2)."""
+    """A world whose tick does not fit the loops its consequence horizon commands is
+    refused (time audit T2, the ``max_tick_ns`` invariant). Wave 16 (D2) derives the
+    horizon from the venue, ``world_repricing / min_ratio``, so the tick must be at most
+    ``world_repricing / min_ratio²``: 1 s ticks need a repricing of at least 9 s. (Before
+    wave 16 the horizon was the consequence backstop in ticks, and 30 s or 59 s of
+    repricing were too short for it.)"""
     raw = _scripted_raw()
     raw["timing"] = {**raw["timing"], "world_repricing": repricing}
     with pytest.raises(ValueError, match="max_tick"):
