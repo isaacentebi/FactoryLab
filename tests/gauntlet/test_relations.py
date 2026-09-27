@@ -3,9 +3,10 @@
 SF-0 (design §3.1): the duration price exists only if the integrator still has
 headroom when the organ can first see an attractor. LD-3 (§3.4): a loop "whose period
 exceeds the duration of opportunity" is refused or ledgered nonviable, and the kernel
-never accelerates a loop by itself. LD-2c (§3.4, Astra M-3): an explorer whose
-discovery outlives the grading horizon must be compensated sooner than that lifetime
-(Chapter II §IV.b: "anticipatory settlement … or … guaranteed patience").
+never accelerates a loop by itself. LD-2c (§3.4, Astra M-3; R16b-4): an explorer is
+compensated sooner than the lifetime of what it found (Chapter II §IV.b: "anticipatory
+settlement … or … guaranteed patience"): patience is floored at the horizon H, so it
+covers ``world_repricing``.
 """
 
 import json
@@ -142,18 +143,49 @@ def test_ld3_counter_case_a_world_that_fits_its_repricing_is_viable():
 # --- LD-2c ------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=(
-    "kernel gap reported to the architect (wave 16 merge): D2 landed (H_f = "
-    "world_repricing / min_ratio) but no patience term did, so a world whose carry "
-    "breaks even after L = round_trip_fee / funding_rate > H_f still loads (essay "
-    "IV.b: an explorer is compensated sooner than the lifetime of what it found, by "
-    "anticipatory settlement or guaranteed patience). The marker's own sunset clause "
-    "applies: edition 7's world must be refused before it ships"))
-def test_ld2c_a_world_whose_discoveries_outlive_the_grading_horizon_needs_patience():
-    """Longrun1's measured carry: funding 5.4 bp/h, a 9 bp round trip, so a carry breaks
-    even after L = 9 / 5.4 ≈ 1.67 h, longer than H_f = 1 h / 3 = 20 min. With no
-    patience, the realized-consequence signal cannot see such a discovery before its
-    judge is scored, so the world must be refused at load (Astra M-3)."""
-    raw = tomllib.loads((P.ROOT / "worlds/edition6-capital-loop.toml").read_text())
-    with pytest.raises(ValueError, match="patience"):
-        manifest_from_dict(raw)
+def _horizon_relations(rt):
+    """Every period derived from the consequence loop, against H in delivered ticks
+    (floor division; a world that lists no venue grades at its backstop)."""
+    from factorylab.runtime.clockwork import tick_ns
+
+    horizon_ns = rt.m.consequence_horizon_ns
+    horizon = (rt.ev.consequence_backstop_ticks if horizon_ns is None
+               else max(1, horizon_ns // tick_ns(rt.tick_clock)))
+    return {"H_ticks": horizon, "period": rt._consequence_period(),
+            "patience": rt._patience(), "slowest": rt.cadence.slowest_period_events(),
+            "min_ratio": rt.m.timing.min_ratio}
+
+
+@pytest.mark.parametrize("name", _worlds())
+def test_ld2c_guaranteed_patience_covers_the_worlds_repricing_period(name):
+    """R16b-4 (essay IV.b: "anticipatory settlement … or … guaranteed patience"; IV.c:
+    governance relates to the slowest loop). The consequence loop is floored at the
+    horizon H in delivered ticks, so after launch a seat's protected trial lasts
+    ``min_ratio × H`` = ``world_repricing``, and the novelty accrual, the sampling
+    actuator and the governance floor all see H. A discovery that outlives
+    ``world_repricing`` is the world's declaration to correct, never a kernel refusal:
+    L is a venue fact the kernel cannot know at load (the refusal this test once
+    demanded is rejected: it is not a Chapter II remedy, and it is Class 2)."""
+    from tests.audit.class2_corpus import static_runtime
+
+    rt = static_runtime(name)  # its launch identity on the simulated venue, offline
+    rt.events_budget = 10_000
+    rt._manage_reserve_window()  # launch
+    got = _horizon_relations(rt)
+    assert got["period"] >= got["H_ticks"], got
+    assert got["patience"] >= got["min_ratio"] * got["H_ticks"], got
+    assert got["slowest"] >= got["H_ticks"], got
+
+
+def test_ld2c_a_backstop_shorter_than_the_horizon_no_longer_shortens_patience():
+    """The violating world: a consequence backstop of ``min_ratio`` ticks, far shorter
+    than H. Before R16b-4 the period (and patience) was the backstop; now it is H."""
+    raw = _scripted_raw()
+    raw["evaluation"] = {**raw.get("evaluation", {}), "consequence_backstop_events": 3}
+    rt, _period, _items = _launched(raw, run_ticks=10_000)
+    got = _horizon_relations(rt)
+    assert got["H_ticks"] > 3, got  # the backstop is shorter than the horizon
+    assert got["period"] == got["H_ticks"], got
+    assert got["patience"] == got["min_ratio"] * got["H_ticks"], got
+    floors = [i for i in rt.ledger._recovery_items() if i["kind"] == "cadence.floor"]
+    assert floors and floors[-1]["ticks"] == got["H_ticks"]

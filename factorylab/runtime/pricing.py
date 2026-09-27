@@ -340,6 +340,9 @@ class PricingMixin:
         # budget per measured consequence period, of which this window accrues the
         # part its drawn period covers. Locked backing is not spendable, and a venue
         # loss can carry the unlocked part below zero.
+        # R16b-4: the consequence loop is floored at H in the ticks delivered now,
+        # refreshed as each window opens (the delivered tick moves).
+        self.cadence.set_floor(self._horizon_ticks())
         period = self._consequence_period()
         self.reserve.open_window(
             self.clock.now_ns, max(0, self.wallet.unlocked),

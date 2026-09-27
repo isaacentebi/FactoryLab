@@ -368,6 +368,7 @@ sources = [
   "factorylab/runtime/cadence.py::GovernanceCadence.record_capital",
   "factorylab/runtime/cadence.py::GovernanceCadence.record_open",
   "factorylab/runtime/cadence.py::GovernanceCadence.record_settling",
+  "factorylab/runtime/cadence.py::GovernanceCadence.set_floor",
   "factorylab/runtime/cadence.py::GovernanceCadence.world_block",
   "factorylab/runtime/capital_loop.py::AuthorizationLog.permit",
   "factorylab/runtime/capital_loop.py::AuthorizationLog.record_transaction",

@@ -33,6 +33,9 @@ class GovernanceCadence:
         self._latencies: deque[int] = deque(maxlen=sample)
         self._min_ratio = min_ratio
         self._backstop = backstop
+        # R16b-4: the consequence loop's floor, the one consequence horizon H in
+        # delivered ticks (``set_floor``); the backstop until the runtime states it.
+        self._floor = backstop
         self._min_support = min_support
         self._outstanding: dict[str, int] = {}
         self._current_event = 0
@@ -108,13 +111,31 @@ class GovernanceCadence:
         self._outstanding.pop(handle, None)
         self._current_event = max(self._current_event, settled_event)
 
+    def set_floor(self, ticks: int) -> None:
+        """Floor the consequence loop at ``ticks``: H, the consequence horizon, in the
+        ticks delivered now (R16b-4; essay II.IV.b).
+
+        Guarantees every period derived from ``consequence_period_events`` (trial
+        patience, the novelty accrual, the sampling actuator, uptake and observation
+        trials, the governance floor) is never shorter than the loop that grades a
+        consequence, so patience is ``min_ratio × H``, the world's repricing period.
+        A change is ledgered ``cadence.floor``: the delivered tick moves.
+        """
+        if type(ticks) is not int or ticks < 1:
+            raise ValueError("the consequence floor is a positive number of ticks")
+        if ticks != self._floor:
+            self._ledger.append({"kind": "cadence.floor", "before": self._floor,
+                                 "ticks": ticks})
+            self._floor = ticks
+
     def consequence_period_events(self) -> int:
-        """The consequence loop in ticks: the backstop, or the p90 settlement above it.
+        """The consequence loop in ticks: its floor, or the p90 settlement above it.
 
         A pooled sample of quick completions cannot disprove an unfinished slow
-        loop. The backstop remains the conservative floor even after warm-up.
+        loop. The floor, the consequence horizon H in delivered ticks
+        (``set_floor``), remains even after warm-up.
         """
-        estimate = self._backstop
+        estimate = self._floor
         if len(self._latencies) >= self._min_support:
             ordered = sorted(self._latencies)
             estimate = max(estimate, ordered[(9 * len(ordered) + 9) // 10 - 1])
