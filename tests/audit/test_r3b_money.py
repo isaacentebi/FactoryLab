@@ -21,7 +21,7 @@ import pytest
 from factorylab.runtime.custody import custody_view
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
-from factorylab.world.exchange import Order, VenueUnavailable
+from factorylab.world.exchange import FakeExchange, Order, VenueUnavailable
 from factorylab.world.scripted import ScriptedProvider
 from tests.helpers import place, venue_runtime
 from tests.helpers import spot_producer as _producer
@@ -72,6 +72,36 @@ def test_a_venue_loss_leaves_compute_authority_and_provider_inventory_untouched(
     assert not [i for i in rt.ledger._recovery_items()
                 if i.get("kind") == "wallet.settle"
                 and i.get("reason") in ("exchange_pnl", "funding")]
+
+
+def test_a_gap_liquidation_wipes_the_venue_and_never_the_compute_authority():
+    """The same sentence through the venue's own liquidation, the crash world's path.
+
+    A 3x long is gapped 50% through maintenance margin and liquidated at the post-gap
+    mid, so the realised loss exceeds the equity behind it and the venue account goes
+    negative (``test_r3_f2_balance_floor::test_t30``). Before R3-B that loss settled on
+    the compute wallet and could end the world: "venue losses can consume fictitious
+    compute resources". Now it lands on the venue, and the world keeps thinking.
+    """
+    exchange = FakeExchange(coins=("BTC",), start_cash_usd=Decimal(20),
+                            start_prices={"BTC": Decimal(100)}, spread_bps=Decimal(0),
+                            fee_bps=Decimal(0), step_bps=Decimal(0),
+                            shocks={1: {"BTC": Decimal("0.5")}})
+    rt = _spot_runtime(exchange)
+    rt._manage_reserve_window()
+    authority_before = rt.wallet.balance
+    assert place(rt, "0.6")["status"] == "filled"
+    rt._settle_exchange_effects(rt._advance_venue(exchange._now_ns + 1))
+    liquidations = [i for i in ledger_items(rt, "fill.counted") if i["liquidation"]]
+    assert len(liquidations) == 1 and liquidations[0]["realized_micro"] == -30_000_000
+    (loss,) = [item for item in settled(rt) if item["amount"] < 0]
+    assert (loss["amount"], loss["custody"], loss["reason"]) == (
+        -30_000_000, "venue_perps", "exchange_pnl")
+    assert rt.treasury.pots()["venue"] == -10_000_000  # wiped, below zero
+    assert rt.wallet.balance == authority_before > 0  # authority, not spent by the venue
+    assert rt.wallet.check_conservation() is True
+    assert not [i for i in rt.ledger._recovery_items() if i.get("kind") == "wallet.settle"]
+    assert rt._check_termination() is False
 
 
 # --- 2. a duplicate receipt books once, a conflicting one refuses ------------------------
