@@ -99,6 +99,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import functools
 import hashlib
 import json
@@ -640,7 +641,8 @@ def _blob(repo: Path, rev: str, path: str) -> str | None:
 
 #: The audit's own policy: the calibration set, the protocol (its rubric and its
 #: calibration), AGENTS.md (the constitution, rendered into both prompts), the design
-#: authority's digest, and the audit tool's own code, which
+#: authority's digest, and the audit tool's own code (every non-product module a render
+#: executes; the class2_* glob is its floor), which
 #: defines what is audited: this script and every ``tests/audit/class2_*.py`` module
 #: (the seat-text scanner, the corpus, the lexicon, the audit helpers). The audited
 #: release carries them, so a release could swap in easy canaries, a softer rubric or a
@@ -652,7 +654,15 @@ def _blob(repo: Path, rev: str, path: str) -> str | None:
 #: (a glob matches with ``fnmatch``).
 LEXICON_REL = "tests/audit/class2_lexicon.py"
 POLICY_PATHS = (CANARIES_REL, PROTOCOL_REL, AGENTS_REL, ESSAY_DIGEST_REL,
-                "scripts/class2_audit.py", "tests/audit/class2_*.py")
+                "scripts/class2_audit.py", "tests/audit/class2_*.py",
+                # The rest of the audit machinery a render executes: every repository
+                # module outside the product (factorylab/, worlds/) that runs to render
+                # the corpus is policy (Codex on d3dc486). The renderer's providers and
+                # the rehearsal helpers it loads, and the tests package it imports from;
+                # a gate test renders and fails on an executed module not matched here.
+                "scripts/fastloop.py", "scripts/edition4_rehearsal.py", "tests/__init__.py")
+#: Where the product lives: an executed module outside these is audit machinery.
+PRODUCT_PATHS = ("factorylab/", "worlds/")
 #: AGENTS.md is the constitution: its rules are rendered into both auditor prompts, so a
 #: release that softened them would be audited against the softer ones.
 CONSTITUTION = AGENTS_REL
@@ -688,7 +698,6 @@ def policy_changes(repo: Path, release_range: str, *, from_root: bool = False
         names = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r",
                      *(["--cc"] if merge else []), sha).split()
         message = _git(repo, "log", "-1", "--format=%B", sha).strip()
-        import fnmatch
 
         for path in sorted({n for n in names
                             if any(fnmatch.fnmatchcase(n, p) for p in POLICY_PATHS)}):
@@ -1367,6 +1376,14 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     if ran:
         raise AuditInputInvalid("the code that rendered the corpus is not the release's: "
                                 + "; ".join(ran[:5]))
+    # Every non-product module the render executed is audit machinery, so policy
+    # (Codex on d3dc486): one POLICY_PATHS does not name would change what is audited
+    # without a POLICY-CHANGE.
+    unlisted = sorted(path for path in executed if not path.startswith(PRODUCT_PATHS)
+                      and not any(fnmatch.fnmatchcase(path, p) for p in POLICY_PATHS))
+    if unlisted:
+        raise AuditInputInvalid(f"the render executed audit machinery POLICY_PATHS does "
+                                f"not name: {unlisted[:5]}")
     diff = corpus_diff(prior, records)
     ordered, changed = changed_first(records, diff)
     planted, key = plant(ordered, seed=seed, world=worlds[0],

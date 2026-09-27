@@ -2820,3 +2820,26 @@ def test_the_cli_refuses_a_broken_key_with_exit_2(tmp_path, capsys, form):
     assert tool.main(argv) == 2
     err = capsys.readouterr().err
     assert err.startswith("refused:") and "key" in err
+
+
+@pytest.mark.gate  # renders a world in a fresh interpreter
+def test_every_non_product_module_a_render_executes_is_policy():
+    """Codex on d3dc486: every repository module a render executes that is not product
+    code (outside factorylab/ and worlds/) is audit machinery, so audit policy: a change
+    to it is a POLICY-CHANGE. Rendered in a fresh interpreter, so only what the render
+    loads is read (``executed_code``, from ``sys.modules``)."""
+    import fnmatch
+
+    code = (f"import json, sys; sys.path.insert(0, {str(ROOT)!r})\n"
+            "from scripts import class2_audit as t\n"
+            "t.corpus_records(['scripted'], rendered=True)\n"
+            "print(json.dumps(sorted(t.executed_code(t.ROOT))))\n")
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         cwd=ROOT, timeout=600)
+    assert run.returncode == 0, run.stderr[-2000:]
+    executed = json.loads(run.stdout.strip().splitlines()[-1])
+    machinery = [p for p in executed if not p.startswith(tool.PRODUCT_PATHS)]
+    assert "scripts/fastloop.py" in machinery
+    unmatched = [p for p in machinery
+                 if not any(fnmatch.fnmatchcase(p, pattern) for pattern in tool.POLICY_PATHS)]
+    assert unmatched == [], "an executed audit module that is not policy"
