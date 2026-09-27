@@ -163,18 +163,21 @@ def test_a_decay_outside_its_domain_is_refused_by_validate(decay) -> None:
 @pytest.mark.parametrize("decay", [float("nan"), float("inf")], ids=["nan", "inf"])
 def test_a_non_finite_decay_never_launched_before_the_rule(decay, tmp_path) -> None:
     """The control for the rule above: the set of worlds that can launch is unchanged.
-    A manifest with a non-finite decay, never validated, still cannot be launched. Its
-    canonical form cannot be hashed (JSON has no NaN or infinity), so genesis refuses
-    it before the ledger writes a row. The price controller refuses the rate too."""
+    A manifest with a non-finite decay, never validated, still cannot be launched. The
+    ledger binds its manifest in the kernel's canonical JSON, which has no NaN or
+    infinity (``kernel.ledger.canonical``), so genesis refuses it before the ledger
+    writes a row. The price controller refuses the rate too."""
     import dataclasses
+    import json
 
     from factorylab.charter.controller import PriceController
+    from factorylab.kernel.ledger import canonical
     from factorylab.runtime.loop import Runtime
 
     m = load_manifest("scripted")
     bad = dataclasses.replace(m, prices=dataclasses.replace(m.prices, decay=decay))
     with pytest.raises(ValueError, match="not JSON compliant"):
-        bad.canonical_json()
+        canonical(json.loads(bad.canonical_json()))
     path = tmp_path / "ledger.jsonl"
     with pytest.raises(ValueError, match="not JSON compliant"):
         Runtime(bad, events=1, seed=1, initial_balance_micro=None, ledger_path=str(path),

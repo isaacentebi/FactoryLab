@@ -728,8 +728,9 @@ class WorldManifest:
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
         # eta and decay take kp's finite-number rule, the one the price controller holds
         # every rate to (``charter.controller._number``). A NaN or an infinite one was
-        # already refused before anything was written (canonical_json cannot hash it,
-        # and the controller refuses it); this states the refusal as the field's own.
+        # already refused before anything was written (the ledger binds the manifest in
+        # ``kernel.ledger.canonical``, which has no NaN or infinity, and the controller
+        # refuses it); this states the refusal as the field's own.
         for name in ("eta", "decay"):
             value = getattr(p, name)
             if type(value) not in (int, float) or not isfinite(value) or value <= 0:
