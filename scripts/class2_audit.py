@@ -1416,7 +1416,8 @@ def finding_problems(f: dict, records: dict[str, dict]) -> list[str]:
     """Why a finding is invalid (none when it is valid): every field of the protocol's
     output format present and typed; its leaf in the corpus and its world, path and tags
     that leaf's; its id ``sha256(path|quote)[:12]``; its quote the leaf's own words (at
-    most 25); its class its question's and its severity one the rubric admits; a context
+    most 25); its class its question's and its severity one the rubric admits (a
+    cross-leaf set's: its widest-reaching member's, whatever its anchor); a context
     leaf flagged only under Q10-Q12 and Q12 only on a norm; a passage from the authority
     text; a rationale of at most 60 words and a rewrite; a confidence in [0, 1]."""
     problems = []
@@ -1456,13 +1457,20 @@ def finding_problems(f: dict, records: dict[str, dict]) -> list[str]:
     else:
         if f["class"] != CLASS_OF[question]:
             problems.append(f"class {f['class']!r} is not {question}'s {CLASS_OF[question]}")
-        wanted = required_severity(question, str(leaf.get("frequency", "")))
+        # A set takes the most demanding of its members (Codex on 3e82964): its reach is
+        # its widest-reaching leaf's, whatever leaf the auditor anchored it on, and a
+        # context leaf anywhere in it binds the questions it may be flagged under.
+        members = ([records[i] for i in f["leaf_ids"]] if cross else [leaf])
+        demands = [(required_severity(question, str(m.get("frequency", ""))), m)
+                   for m in members]
+        wanted, widest = min(demands, key=lambda d: SEVERITIES.index(d[0]))
         if f["severity"] != wanted:
             problems.append(f"severity {f['severity']!r} is not {wanted!r}, what {question} "
-                            f"on a leaf read {leaf.get('frequency')!r} is")
-        if leaf["provenance"] != "kernel" and question not in CONTEXT_QUESTIONS:
+                            f"on a leaf read {widest.get('frequency')!r} is")
+        if any(m["provenance"] != "kernel" for m in members) \
+                and question not in CONTEXT_QUESTIONS:
             problems.append(f"a context leaf flagged under {question}")
-        if question == "Q12" and "norm" not in leaf["provenance"]:
+        if question == "Q12" and any("norm" not in m["provenance"] for m in members):
             problems.append("Q12 on a leaf that is not a norm")
     if not PASSAGE.match(f["passage"]):
         problems.append(f"passage {f['passage']!r} names no authority section or rule")

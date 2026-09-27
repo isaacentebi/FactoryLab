@@ -515,6 +515,28 @@ def test_a_wholly_planted_finding_is_dropped_and_a_real_set_is_triaged(rendered)
     assert [f["finding_id"] for f in kept] == [genuine["finding_id"]]
 
 
+def test_a_q11_sets_severity_is_its_widest_reaching_members():
+    """Codex on 3e82964: anchoring a set on a leaf that reaches nothing cannot lower it.
+    A Q11 set holding an every-wake lens takes that lens's severity, whatever its
+    anchor, and escapes no disposition."""
+    def leaf(path, text, frequency):
+        return {"leaf_id": tool.leaf_id(path, text), "world": WORLD, "path": path,
+                "text": text, "provenance": "kernel", "surface_kind": "system",
+                "audience": ["every role"], "frequency": frequency}
+    quiet = leaf(f"{WORLD}/system/quiet", "Your prior is that holding is safe.", "none")
+    loud = leaf(f"{WORLD}/system/loud", "Your prior is that idle capital is safe.",
+                "every call")
+    records = {r["leaf_id"]: r for r in (quiet, loud)}
+    assert tool.required_severity("Q11", "every call") == "MED"
+    assert tool.required_severity("Q11", "none") == "LOW"
+    finding = _set_finding(records, [quiet["leaf_id"], loud["leaf_id"]]) | {
+        "path": quiet["path"], "surface_kind": "system", "audience": ["every role"],
+        "frequency": "none", "quote": "Your prior is that holding is safe."}
+    low = finding | {"severity": "LOW"}
+    assert any("is not 'MED'" in p for p in tool.finding_problems(low, records))
+    assert tool.finding_problems(finding | {"severity": "MED"}, records) == []
+
+
 def test_q11_is_answered_of_a_set_of_leaves(rendered):
     """Astra A-1: Q11 (a role's lenses taken together) is a cross-leaf question. Its
     finding names the set (``leaf_ids``, identity the sorted set with question and
