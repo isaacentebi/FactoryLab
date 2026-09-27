@@ -414,7 +414,8 @@ def _open(handle, chosen, actor="router:Tick", probs=None, ids=None, seed=None):
                     if Random(s).choices(ids, weights=probs, k=1)[0] == chosen)
     return {"kind": "decision.open", "handle": handle, "actor": actor,
             "propensity": {"action_ids": ids, "probs": probs, "chosen": chosen,
-                           "rng_seed": seed, "source": "sampled"}}
+                           "rng_seed": seed, "source": "sampled", "learner_id": actor,
+                           "learner_state_hash": "h"}}
 
 
 def _penalty(handle, share, window=1, violation=1.0, obs="revision_rate", owner=None):
@@ -2280,25 +2281,32 @@ def test_a_card_whose_id_starts_with_card_keeps_its_id_through_replay():
 
 
 @pytest.mark.parametrize("change, why", [
-    ({"probs": [-0.1, 1.1]}, "finite number in [0, 1]"),
-    ({"probs": [float("nan"), 0.5]}, "finite number in [0, 1]"),
-    ({"probs": [True, False]}, "finite number in [0, 1]"),
-    ({"action_ids": ["a", "a"]}, "repeats"),
-    ({"probs": [1.0]}, "differ in length"),
-    ({"chosen": "z"}, "outside the support"),
-    ({"probs": [0.5, 0.5 + 1e-9]}, "sum to 1"),
-    ({"rng_seed": 1.5}, "not an integer"),
-    ({"rng_seed": True}, "not an integer"),
-    ({"action_ids": []}, "no action support"),
+    ({"probs": [-0.1, 1.1]}, "finite and in [0, 1]"),
+    ({"probs": [float("nan"), 0.5]}, "finite and in [0, 1]"),
+    ({"probs": [True, False]}, "finite and in [0, 1]"),
+    ({"action_ids": ["a", "a"]}, "unique"),
+    ({"probs": [1.0]}, "matching nonzero lengths"),
+    ({"chosen": "z"}, "does not match the logged seeded distribution"),
+    ({"probs": [0.5, 0.5 + 1e-9]}, "sum to one"),
+    ({"rng_seed": 1.5}, "must be an integer"),
+    ({"rng_seed": True}, "must be an integer"),
+    ({"action_ids": []}, "matching nonzero lengths"),
+    # Codex on b56e793: the learner identity and the actor rule, the kernel's own.
+    ({"learner_state_hash": None}, "learner_state_hash"),
+    ({"learner_state_hash": ""}, "learner identity and state hash are required"),
+    ({"learner_id": "router:Other"}, "not the sampling learner"),
 ])
 def test_s1_a_propensity_breaking_its_contract_fails_as_malformed(change, why):
-    """Codex P2 (gauntlet.py:2011): the whole ``PropensityRecord`` contract is checked
-    before a draw is replayed (queue.py ``validate``, sum within ``abs_tol=1e-12``); a
-    row that breaks it fails as malformed, never raises and never passes."""
+    """Codex P2 (gauntlet.py:2011), and on b56e793: the row's propensity is checked by
+    the kernel's own ``PropensityRecord`` (queue.py ``validate``, the seeded replay
+    included) and the actor by ``DecisionQueue.open``'s rule, never restated; a row
+    that breaks either fails as malformed, never raises and never passes."""
     good = _open("d1", "a")
     assert g.s1_draw_sovereignty([good]).ok
     row = json.loads(json.dumps(good))
     row["propensity"].update(change)
+    if change.get("learner_state_hash", "") is None:
+        del row["propensity"]["learner_state_hash"]
     result = g.s1_draw_sovereignty([row])
     assert result.status == g.FAIL, result.evidence
     assert why in result.evidence["malformed_propensities"][0]["why"]

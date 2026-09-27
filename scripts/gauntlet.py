@@ -43,7 +43,6 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
-from random import Random
 from typing import Any
 
 PASS, FAIL, UNSUPPORTED = "pass", "fail", "unsupported"
@@ -2650,45 +2649,27 @@ ACT_KINDS: dict[str, str] = {
 }
 
 
-#: The kernel's tolerance on a propensity's sum (queue.py ``PropensityRecord.validate``:
-#: ``math.isclose(math.fsum(probs), 1.0, rel_tol=0, abs_tol=1e-12)``).
-PROPENSITY_SUM_TOLERANCE = 1e-12
+def propensity_problem(prop: Any, actor: Any = None) -> str | None:
+    """Why ``prop`` is not a propensity the kernel would have opened a decision with, or
+    None, by the kernel's own rules, never restated here (Codex on b56e793): the row's
+    record is built as a ``PropensityRecord`` (kernel/queue.py; its ``__post_init__``
+    runs ``validate``: the source, the support, the probabilities and their sum, the
+    seed, the learner identity and state hash, and a sampled choice's seeded replay),
+    and ``actor`` must be its ``learner_id`` (``DecisionQueue.open``: "actor must match
+    an active sampling learner")."""
+    from dataclasses import fields as dataclass_fields
 
+    from factorylab.kernel.queue import PropensityRecord
 
-def propensity_problem(prop: Any) -> str | None:
-    """Why ``prop`` breaks the ``PropensityRecord`` contract the kernel validates at
-    open (queue.py ``PropensityRecord.validate``), or None. Guarantees every clause is
-    read before any value is used: source sampled or declared (its default "sampled");
-    ``action_ids`` a non-empty list of unique non-empty strings; ``probs`` the same
-    length, each a finite real (never a bool) in [0, 1], summing to 1 within
-    ``PROPENSITY_SUM_TOLERANCE``; ``chosen`` in ``action_ids`` (a declared one with
-    positive mass); ``rng_seed`` an integer (never a bool)."""
     if not isinstance(prop, Mapping):
         return "no propensity"
-    if prop.get("source", "sampled") not in ("sampled", "declared"):
-        return "source is neither sampled nor declared"
-    ids, probs = prop.get("action_ids"), prop.get("probs")
-    if not isinstance(ids, list | tuple) or not ids:
-        return "no action support"
-    if any(not isinstance(a, str) or not a for a in ids):
-        return "an action id is not a non-empty string"
-    if len(set(ids)) != len(ids):
-        return "an action id repeats"
-    if not isinstance(probs, list | tuple) or len(probs) != len(ids):
-        return "probs and action_ids differ in length"
-    if any(type(p) not in (int, float) or not math.isfinite(p) or not 0 <= p <= 1
-           for p in probs):
-        return "a probability is not a finite number in [0, 1]"
-    if not math.isclose(math.fsum(probs), 1.0, rel_tol=0,
-                        abs_tol=PROPENSITY_SUM_TOLERANCE):
-        return "the probabilities do not sum to 1"
-    if type(prop.get("rng_seed")) is not int:
-        return "the seed is not an integer"
-    chosen = prop.get("chosen")
-    if chosen not in ids:
-        return "the chosen action is outside the support"
-    if prop.get("source", "sampled") == "declared" and probs[ids.index(chosen)] <= 0:
-        return "a declared choice has no mass"
+    names = {f.name for f in dataclass_fields(PropensityRecord)}
+    try:
+        PropensityRecord(**{k: v for k, v in prop.items() if k in names})
+    except (TypeError, ValueError) as exc:
+        return str(exc) or type(exc).__name__
+    if actor is not None and actor != prop.get("learner_id"):
+        return "the actor is not the sampling learner (DecisionQueue.open)"
     return None
 
 
@@ -2704,11 +2685,12 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
     """
     bad, checked, malformed = [], 0, []
     for row in rows_of(events, "decision.open"):
-        # ``Decision.propensity`` is a required ``PropensityRecord``: its whole contract
-        # is checked before the draw is replayed, and a row that breaks it is malformed
-        # (it fails, never raises, never passes).
+        # ``Decision.propensity`` is a required ``PropensityRecord``: the kernel's own
+        # record validates it, a sampled draw's seeded replay included, and the row's
+        # actor is its learner (``propensity_problem``). A row that breaks either is
+        # malformed: it fails, never raises, never passes.
         prop = row.get("propensity")
-        why = propensity_problem(prop)
+        why = propensity_problem(prop, row.get("actor"))
         if why is not None:
             bad.append(row.get("handle"))
             malformed.append({"handle": row.get("handle"), "why": why})
@@ -2717,11 +2699,7 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
             continue  # a declared field was drawn by the seat, not the kernel
         if str(row.get("actor", "")).startswith("router:") and not router_draw(row):
             continue  # a self child: its parent chose it, no router drew it
-        ids, probs = list(need(prop, "action_ids")), [float(p) for p in need(prop, "probs")]
-        checked += 1
-        drawn = Random(need(prop, "rng_seed")).choices(ids, weights=probs, k=1)[0]
-        if drawn != need(prop, "chosen"):
-            bad.append(need(row, "handle"))
+        checked += 1  # a router's sampled draw, its replay the kernel record's own
     traces = act_traces(events, ACT_KINDS)
     acts = [(need(t, "kind"), need(t, "handle")) for t in traces]
     unreturned = [{"kind": need(t, "kind"), "handle": need(t, "handle"),
