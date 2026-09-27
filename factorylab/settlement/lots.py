@@ -517,7 +517,8 @@ class LotTable:
             handle for handle, _total, _booked in self.released_late}
         transient = {h for h in transient if h not in accounts
                      and (h == owner or any(lot.handle == h for lot in self.lots))}
-        for handle in transient:
+        # Sorted (R16b-9): the order becomes ``released_late``'s, a checkpointed tuple.
+        for handle in sorted(transient):
             accounts[handle] = ReturnAccount(handle, 0)
         # A kill wind-down's close (``WIND_DOWN``): no closer, no new lot (Sol on #152).
         kernel = owner == WIND_DOWN
@@ -595,7 +596,8 @@ class LotTable:
             for o in self.orders
         )
         table = replace(self._accounts(accounts), lots=tuple(lots), orders=orders)
-        return table._credit_released({h: accounts[h].realized_micro for h in transient})
+        return table._credit_released({h: accounts[h].realized_micro
+                                       for h in sorted(transient)})
 
     def _credit_released(self, credits: Mapping[str, Fraction]) -> "LotTable":
         """Add released handles' realised credits to ``released_late``, exactly."""
