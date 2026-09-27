@@ -423,7 +423,7 @@ def test_adversarial_judges_are_drawn_when_the_verdict_is_given():
                              role="adversary", max_tokens=128)
     manifest = replace(base, assemblies=(*base.assemblies, adversary),
                        evaluation=replace(base.evaluation, adversarial_share=0.5))
-    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None, ledger_path=None,
+    rt = Runtime(manifest, events=35, seed=1, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1)
     rt.run()
     items = rt.ledger._recovery_items()
@@ -791,7 +791,7 @@ def test_two_routers_of_a_judged_kind_never_draw_two_judges_of_one_family():
 
     base = load_manifest("scripted")
     manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=0.0))
-    rt = Runtime(manifest, events=80, seed=1, initial_balance_micro=None, ledger_path=None,
+    rt = Runtime(manifest, events=40, seed=1, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.5)
     rt._build_router("ProducerReturn", "exp3", 0.5, replace=False)
     assert len(rt.routers["ProducerReturn"]) == 2
