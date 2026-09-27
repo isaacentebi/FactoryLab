@@ -24,6 +24,9 @@ from factorylab.cortex import sandbox
 from factorylab.kernel.ledger import Ledger, LedgerLock
 
 SLEEPER = "import time\nfor _ in range(50): time.sleep(0.1)\n"
+#: Outlives the one second the jailed-lock test waits before it takes the lock twice,
+#: and no longer: the test joins it before returning.
+SHORT_SLEEPER = "import time\nfor _ in range(20): time.sleep(0.1)\n"
 
 
 @pytest.fixture
@@ -89,7 +92,7 @@ def test_a_living_jailed_child_never_holds_the_lock(world):
 
     def run():
         try:
-            sandbox.run_python(SLEEPER, timeout_s=20, cpu_s=10)
+            sandbox.run_python(SHORT_SLEEPER, timeout_s=20, cpu_s=10)
         finally:
             finished.set()
 

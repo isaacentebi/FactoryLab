@@ -265,16 +265,24 @@ def test_an_unanswered_intent_is_polled_on_the_bounded_schedule_then_released():
     assert kinds(rt).count("polymarket.unresolved") == 1
 
 
-@pytest.mark.parametrize(("change", "reason"), [
-    ({"size": "20", "price": "0.45"}, "available USDC"),
-    ({"size": "10", "price": "0.45", "side": "sell"}, "tokens the polymarket pot holds"),
-    ({"size": "30", "price": "0.45"}, "max_order_usd"),
-    ({"size": "10", "price": "1.2"}, "strictly between 0 and 1"),
-    ({"size": "10", "price": "0.455"}, "tick"),
-    ({"size": "4", "price": "0.45"}, "minimum order"),
+@pytest.mark.parametrize(("change", "reason", "resolved_ns"), [
+    ({"size": "20", "price": "0.45"}, "available USDC", None),
+    ({"size": "10", "price": "0.45", "side": "sell"}, "tokens the polymarket pot holds", None),
+    ({"size": "30", "price": "0.45"}, "max_order_usd", None),
+    ({"size": "10", "price": "1.2"}, "strictly between 0 and 1", None),
+    ({"size": "10", "price": "0.455"}, "tick", None),
+    ({"size": "4", "price": "0.45"}, "minimum order", None),
+    # A write that would otherwise fit, on a market that has resolved and closed.
+    ({"size": "10", "price": "0.45"}, "market is not accepting orders", 10**12),
 ])
-def test_writes_the_pot_or_the_caps_cannot_carry_are_refused_before_any_intent(change, reason):
-    rt = world(max_order_micro=10_000_000, fake=still_fake(start_usdc=Decimal(8)))
+def test_writes_the_pot_or_the_caps_cannot_carry_are_refused_before_any_intent(
+        change, reason, resolved_ns):
+    resolutions = {} if resolved_ns is None else {"resolutions": {"fake-1": (resolved_ns, 0)}}
+    rt = world(max_order_micro=10_000_000,
+               fake=still_fake(start_usdc=Decimal(8), **resolutions))
+    if resolved_ns is not None:
+        rt.clock.now_ns = resolved_ns
+        advance(rt, 1)
     handle = collateral_decision(rt)
     result = buy(rt, handle, **change)
     assert result["status"] == "rejected" and reason in result["error"]

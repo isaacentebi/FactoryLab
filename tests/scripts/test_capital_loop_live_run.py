@@ -263,6 +263,7 @@ def test_the_rail_stamps_validbefore_with_the_clock_the_bound_measured(
     assert int(top_up["state"]["reference"]["authorization"]["validBefore"]) == created + 300
 
 
+@pytest.mark.gate  # run_rehearsal runs a real world
 def test_a_capital_loop_run_s_safety_path_reads_wall_time_mid_event(tmp_path, monkeypatch):
     """The run's LiveClock sits behind the rehearsal's ``AdmissionClock``. Every model
     call here takes a delivered tick of wall time, so before the next call of the same
