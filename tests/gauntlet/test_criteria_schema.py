@@ -177,6 +177,8 @@ NOT_SCORES = {
 }
 #: Reward-bearing kinds no run captured here, each with its reason.
 UNCAPTURED = {
+    "consequence.outcome": "emitted by settlement/consequence.py as asdict(Payoff) when "
+                           "an outcome is fixed; the captured set holds none",
     "uptake.anticipated": "emitted by runtime/uptake.py when a judge forecasts a "
                           "registration's uptake; no captured run reached it",
     "uptake.forecast": "emitted by runtime/uptake.py with a judge's uptake forecast; no "
@@ -187,20 +189,74 @@ REWARD_KEYS = frozenset({"reward", "score", "grade", "reward_before", "stepped_a
                          "verdict", "judge_q"})
 
 
-def _emitted_reward_kinds():
-    """Every constant-``kind`` dict literal in factorylab/ carrying a reward-like key."""
+#: The dataclass each ``**asdict(x)`` / ``**vars(x)`` / ``**x.__dict__`` spread in a ledger
+#: row expands to, by the spread's source (``module:Class``): its fields are the row's
+#: keys (Codex on f127c7b: ``consequence.outcome``'s ``y`` came only through a spread).
+SPREADS = {
+    "asdict(amendment)": "factorylab.charter.amendment:Amendment",
+    "asdict(ballot)": "factorylab.charter.committee:Ballot",
+    "vars(decision)": "factorylab.kernel.queue:Decision",
+    "asdict(motion)": "factorylab.runtime.governance:Retirement",
+    "asdict(after.payoff)": "factorylab.settlement.lots:Payoff",
+}
+
+
+def _spread_fields(value, unresolved):
+    """The field names a ``**`` spread of a dataclass contributes (``dataclasses.fields``
+    of its class, imported), or none for another spread; an unregistered dataclass
+    spread is recorded in ``unresolved``."""
+    import dataclasses
+    import importlib
+
+    source = ast.unparse(value)
+    dataclass_spread = (isinstance(value, ast.Call)
+                        and ast.unparse(value.func) in ("asdict", "dataclasses.asdict",
+                                                        "vars")) or (
+        isinstance(value, ast.Attribute) and value.attr == "__dict__")
+    if not dataclass_spread:
+        return set()
+    if source not in SPREADS:
+        unresolved.append(source)
+        return set()
+    module, _, name = SPREADS[source].partition(":")
+    return {f.name for f in dataclasses.fields(getattr(importlib.import_module(module), name))}
+
+
+def _emitted_reward_kinds(unresolved=None):
+    """Every constant-``kind`` dict literal in factorylab/ carrying a reward-like key,
+    its ``**`` dataclass spreads resolved to their fields (``SPREADS``)."""
     found = {}
+    unresolved = [] if unresolved is None else unresolved
     for path in sorted((ROOT / "factorylab").rglob("*.py")):
         for node in ast.walk(ast.parse(path.read_text())):
             if not isinstance(node, ast.Dict):
                 continue
-            keys = {k.value for k in node.keys if isinstance(k, ast.Constant)}
             kind = next((v.value for k, v in zip(node.keys, node.values, strict=True)
                          if isinstance(k, ast.Constant) and k.value == "kind"
                          and isinstance(v, ast.Constant)), None)
-            if isinstance(kind, str) and keys & REWARD_KEYS:
+            if not isinstance(kind, str):
+                continue
+            keys = {k.value for k in node.keys if isinstance(k, ast.Constant)}
+            for k, v in zip(node.keys, node.values, strict=True):
+                if k is None:
+                    keys |= _spread_fields(v, unresolved)
+            if keys & REWARD_KEYS:
                 found.setdefault(kind, set()).update(keys & REWARD_KEYS)
     return found
+
+
+def test_every_dataclass_spread_in_a_ledger_row_is_resolved():
+    """A ``**asdict(x)`` / ``**vars(x)`` spread brings the dataclass's fields into the
+    row; each one is resolved to its class, so a score it carries is enumerated."""
+    unresolved = []
+    found = _emitted_reward_kinds(unresolved)
+    assert unresolved == [], "register the spread's dataclass in SPREADS"
+    assert found["consequence.outcome"] == {"y"}
+    manifest = {"prices": {"penalty_cap": 0.5, "lambda_max": 1.0}}
+    outcome = {"kind": "consequence.outcome", "handle": "h", "y": 1, "net_micro": 900,
+               "cost_micro": 500, "earned_micro": 0, "censored": None}
+    assert g.s4_boundedness([outcome], manifest).ok
+    assert g.s4_boundedness([outcome | {"y": 7}], manifest).status == g.FAIL
 
 
 def test_s4_enumerates_every_reward_bearing_kind_the_kernel_emits():
@@ -281,9 +337,12 @@ def _literally_nullable(*, omitted):
             kind = fields.get("kind")
             if not (isinstance(kind, ast.Constant) and kind.value in g.UNIT_FIELDS):
                 continue
+            # A field a dataclass spread brings is written (its class's field, always).
+            spread = set().union(*(_spread_fields(v, []) for k, v in
+                                   zip(node.keys, node.values, strict=True) if k is None))
             for name in g.UNIT_FIELDS[kind.value]:
                 value = fields.get(name.split(".")[0])
-                if omitted and value is None and "." not in name:
+                if omitted and value is None and "." not in name and name not in spread:
                     found.add((kind.value, name))
                 elif not omitted and value is not None and any(
                         isinstance(n, ast.Constant) and n.value is None

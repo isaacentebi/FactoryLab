@@ -2618,6 +2618,9 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
     "verdict.consequence": ("q", "y", "score"),
     "verdict.consequence_late": ("q", "y"),
     "consequence.marked": ("y",),
+    # The final realized outcome (settlement/consequence.py ``asdict(after.payoff)``:
+    # ``Payoff.y``, 0 or 1).
+    "consequence.outcome": ("y",),
     "counter.opened": ("q", "judge_q"),
     "counter.settled": ("q", "judge_q", "y", "score"),
     "exposure.settled": ("score",),
