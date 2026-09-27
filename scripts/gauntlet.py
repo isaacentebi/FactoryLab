@@ -1062,7 +1062,7 @@ def capped_runs(events: list[Mapping], card: str, ph: Physics) -> list[list[Mapp
     runs: list[list[Mapping]] = []
     current: list[Mapping] = []
     for row in rows_of(events, "price.update"):
-        if row.get("card_id") != card:
+        if need(row, "card_id") != card:
             continue
         v = need(row, "violation")
         if v > 0 and need(row, "lambda_after") * v >= ph.cap:
@@ -1132,7 +1132,7 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     sustained = [run for run in capped_runs(events, card, ph) if len(run) >= ph.r]
     longest = max((len(run) for run in capped_runs(events, card, ph)), default=0)
     rows = [row for row in events if str(row.get("kind", "")).endswith("saturated")
-            and row.get("card_id") == card]
+            and need(row, "card_id") == card]
     episodes: list[list[Mapping]] = []
     malformed = []
     current: list[Mapping] | None = None
@@ -1205,7 +1205,7 @@ def router_draw(row: Mapping) -> bool:
     neither learns from it nor is charged for it."""
     from factorylab.runtime.shared import is_request_router
 
-    actor, prop = row.get("actor"), row.get("propensity")
+    actor, prop = need(row, "actor"), need(row, "propensity")
     if not isinstance(actor, str) or not actor.startswith("router:") \
             or not isinstance(prop, Mapping):
         return False
@@ -1257,7 +1257,7 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     rows it bounds."""
     opened = _decision_windows(events)
     actor = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
-                       lambda row: need(row, "handle"), lambda row: row.get("actor"))
+                       lambda row: need(row, "handle"), lambda row: need(row, "actor"))
     window, closures = 1, defaultdict(list)
     for row in events:
         if row.get("kind") == "price.window":
@@ -1486,8 +1486,7 @@ def split_members(events: list[Mapping]) -> dict[int, dict[str, str | None]]:
     generic split counts (pricing.py:1021-1025). A niche decision is in no split (wave
     16 R-E: ``PricingMixin._in_split``, 57aefe7 on wave16-reward-physics)."""
     opened = _decision_windows(events)
-    roles = {need(row, "handle"): row.get("role") for row in rows_of(events, "invocation")
-             if isinstance(row.get("handle"), str)}
+    roles = {need(row, "handle"): need(row, "role") for row in rows_of(events, "invocation")}
     niche = niche_handles(events)
     out: dict[int, dict[str, str | None]] = defaultdict(dict)
     for row in rows_of(events, "decision.open"):
@@ -1532,7 +1531,7 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
     """
     seats = decision_seats(events)
     actors = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
-                        lambda row: need(row, "handle"), lambda row: row.get("actor"))
+                        lambda row: need(row, "handle"), lambda row: need(row, "actor"))
     opened_in = _decision_windows(events)
     members = split_members(events)
     violated = {w for w, v in card_violations(events, card).items() if v > 0}
@@ -1638,7 +1637,7 @@ def decision_seats(events: Iterable[Mapping]) -> dict[str, str]:
 
 def returned_handles(events: Iterable[Mapping]) -> set[str]:
     """Handles on which some seat returned (an ``invocation`` row of any status)."""
-    return {need(row, "handle") for row in rows_of(events, "invocation") if row.get("handle")}
+    return {handle for row in rows_of(events, "invocation") if (handle := need(row, "handle"))}
 
 
 #: The write tools whose call ledgers each act kind, from the kernel's dispatch: the
@@ -1688,7 +1687,7 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
         if kind == "decision.open":
             opened.setdefault(handle, i)
         elif kind == "invocation":
-            invoked.setdefault(handle, (i, row.get("status")))
+            invoked.setdefault(handle, (i, need(row, "status")))
         elif kind == "tool.call":
             tool_calls[handle].append((i, row.get("tool")))
     last_step = max((i for i, row in enumerate(events)
@@ -1777,7 +1776,7 @@ def thrash_integrals(events: list[Mapping]) -> dict[int, float]:
     current: float | None = None
     for row in events:
         kind = row.get("kind")
-        if kind == "price.update" and row.get("card_id") == "pathology:thrash":
+        if kind == "price.update" and need(row, "card_id") == "pathology:thrash":
             current = float(need(row, "i"))
         elif kind == "immune.window" and current is not None:
             unique_put(out, need(row, "window"), current, row)
@@ -1895,7 +1894,9 @@ def delivered_rounds(events: list[Mapping]) -> set[str]:
     (a keyed router's spent frozen round: "nothing trains, nothing is booked"), so
     delivery is not a learning attempt. (The i10 world holds three judge rounds,
     decision-71, -86 and -109, settled and delivered with no learning row.)"""
-    touched = {row.get("handle") for row in events if row.get("kind") in LEARNING_ROWS}
+    # Every learning row names its round (feedback.py writes ``handle`` on each): a row
+    # without one is malformed, never a None that matches nothing (Codex on c78f2bc).
+    touched = {need(row, "handle") for row in events if row.get("kind") in LEARNING_ROWS}
     return {need(row, "return.handle") for row in rows_of(events, "decision.settle")
             if need(row, "return.handle") in touched}
 
@@ -2025,7 +2026,7 @@ def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
     for row in rows_of(events, "thrash.charged"):
         handle = need(row, "handle")
         if not attributed.get(handle, False) or handle in niche:
-            bad.append({"handle": handle, "router": row.get("router")})
+            bad.append({"handle": handle, "router": need(row, "router")})
     charged = len(rows_of(events, "thrash.charged"))
     if not charged:
         return _unsupported("TH-1d", "no round was charged")
@@ -2582,7 +2583,7 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     for row in events:
         kind = row.get("kind")
         if kind in wanted:
-            unique_put(facts, (kind, str(row.get("handle"))), row, row)
+            unique_put(facts, (kind, str(need(row, "handle"))), row, row)
             continue
         if kind != "verdict.consequence":
             continue
@@ -2633,7 +2634,7 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     return no producer made before it was published), never drops out of the count."""
     made: dict[str, list[int]] = defaultdict(list)
     for row in rows_of(events, "invocation"):
-        handle = row.get("handle")
+        handle = need(row, "handle")
         if isinstance(handle, str) and handle and need(row, "status") == "ok":
             made[handle].append(need(row, "seq"))
     # loop.py emits every ProducerReturn with its ``about_handle``.
@@ -2692,7 +2693,7 @@ def of2c_holdout_bites(events: list[Mapping], manifest: Mapping, *, card: str,
 
 def _child_of_seat(events: list[Mapping], handle: str, seats: set[str]) -> bool:
     for row in rows_of(events, "invocation"):
-        if row.get("handle") == handle and row.get("assembly_id") in seats:
+        if need(row, "handle") == handle and need(row, "assembly_id") in seats:
             return True
     return False
 
@@ -2763,7 +2764,7 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
             continue
         if prop.get("source", "sampled") != "sampled":
             continue  # a declared field was drawn by the seat, not the kernel
-        if str(row.get("actor", "")).startswith("router:") and not router_draw(row):
+        if str(need(row, "actor")).startswith("router:") and not router_draw(row):
             continue  # a self child: its parent chose it, no router drew it
         checked += 1  # a router's sampled draw, its replay the kernel record's own
     traces = act_traces(events, ACT_KINDS)
@@ -3029,7 +3030,7 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     """
     seats = decision_seats(events)
     actors = unique_map(rows_of(events, "decision.open"), lambda row: need(row, "handle"),
-                        lambda row: row.get("actor"))
+                        lambda row: need(row, "actor"))
     # Only a round its router drew enters that router's mean (``router_draw``): a self
     # child's score is its parent's choice, never a round the router played.
     drawn = {need(row, "handle") for row in rows_of(events, "decision.open") if router_draw(row)}
@@ -3080,10 +3081,10 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
             raws[new] = list(raws.get(old, ()))
             hand_over(old, new)
             continue
-        if kind == "price.penalty" and row.get("handle") in timed_out:
+        if kind == "price.penalty" and need(row, "handle") in timed_out:
             continue
         if kind == "price.penalty":
-            handle = row.get("handle")
+            handle = need(row, "handle")
             # ``raw`` is always written, None when unresolved (pricing.py).
             if need(row, "raw") is not None and seats.get(handle) != "NOOP":
                 actor = actors.get(handle)
@@ -3124,7 +3125,7 @@ def s7_gain_targets(events: list[Mapping], manifest: Mapping | None = None) -> R
     gains = rows_of(events, "immune.gain")
     if not gains:
         return _unsupported("S7", "no gain row")
-    bad = [need(row, "router") for row in gains if not str(row.get("router")).startswith("router:")]
+    bad = [router for row in gains if not str(router := need(row, "router")).startswith("router:")]
     return _result("S7", not bad, gains=len(gains), bad=bad[:5])
 
 

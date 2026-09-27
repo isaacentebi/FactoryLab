@@ -574,6 +574,67 @@ def test_no_criterion_reads_a_row_field_by_direct_subscript():
     assert hits == []
 
 
+# Identity fields: each names the row's subject (its round, seat, card, router, window),
+# and every emitter of a kind the criteria read them from always writes it (Decision
+# and its ``vars`` spread, queue.py; the invocation row, compute.py; ``price.update``,
+# controller.py; ``thrash.charged``, feedback.py). A ``.get`` of one turns a malformed
+# row into None, a value that silently matches nothing (Codex on c78f2bc, TH-1c).
+IDENTITY_FIELDS = frozenset({"handle", "actor", "window", "card_id", "router",
+                             "assembly_id", "status", "role"})
+# (function, field): where a ``.get`` of an identity field is the honest read.
+IDENTITY_GET_ALLOWED: dict[tuple[str, str], str] = {
+    ("Malformed", "handle"): "evidence of a row already refused; any kind, any shape",
+    ("Malformed", "window"): "evidence of a row already refused; any kind, any shape",
+    ("sf0_relation", "window"): "a manifest card's optional block, not a ledger row",
+    ("sf1d_escalation", "window"): "read as nullable and reported as malformed evidence",
+    ("router_presence", "window"): "immune.* kinds differ; one without window is placed "
+                                   "by the price window it was written in",
+    ("ld1a_accrual", "window"): "evidence of a row the criterion already fails",
+    ("act_traces", "handle"): "walks every kind, most of which name no handle",
+    ("s1_draw_sovereignty", "actor"): "propensity_problem fails a missing actor itself",
+    ("s1_draw_sovereignty", "handle"): "evidence of a row propensity_problem refused",
+    ("s4_boundedness", "handle"): "evidence over every reward kind; some name no handle",
+    ("s4_boundedness", "card_id"): "evidence over every reward kind; some name no card",
+    ("s5b_observed_neutral", "router"): "epoch writes router only when carried "
+                                        "(RoutingMixin._open_epoch, routing.py)",
+}
+
+
+def _identity_gets():
+    tree = ast.parse(Path(g.__file__).read_text())
+    hits = set()
+    for top in [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))]:
+        if top.name in ("load_events", "diary_identity", "bind_diary"):
+            continue  # the diary validators refuse a malformed diary before any criterion
+        for node in ast.walk(top):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "get" and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value in IDENTITY_FIELDS):
+                hits.add((top.name, node.args[0].value))
+    return hits
+
+
+def test_no_criterion_reads_an_identity_field_as_nullable():
+    """Codex on c78f2bc: an identity field every emitter writes is read with ``need``,
+    so its absence fails the criterion; ``.get`` only where the allowlist says why."""
+    hits = _identity_gets()
+    assert sorted(hits - set(IDENTITY_GET_ALLOWED)) == [], "a nullable identity read"
+    assert sorted(set(IDENTITY_GET_ALLOWED) - hits) == [], "a stale allowance"
+    assert all(reason.strip() for reason in IDENTITY_GET_ALLOWED.values())
+
+
+def test_the_identity_guard_catches_a_nullable_handle(monkeypatch, tmp_path):
+    """The guard would have caught TH-1c's ``row.get("handle")`` (c78f2bc)."""
+    src = Path(g.__file__).read_text() + (
+        "\n\ndef _planted(events):\n"
+        "    return {row.get('handle') for row in events}\n")
+    planted = tmp_path / "gauntlet.py"
+    planted.write_text(src)
+    monkeypatch.setattr(g, "__file__", str(planted))
+    assert ("_planted", "handle") in _identity_gets()
+
+
 # --- Codex pass on 7c714a2: the loader drops nothing a criterion reads ---------------------
 
 

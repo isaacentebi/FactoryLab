@@ -1779,10 +1779,14 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
     stray = [{"kind": "event", "seq": 12, "event": {"id": "ev1", "kind": "ProducerReturn",
                                                     "payload": {}}},
              {"kind": "decision.open", "handle": "j2", "event_id": "ev1", "seq": 13},
-             {"kind": "invocation", "seq": 15}]
+             {"kind": "invocation", "handle": "p9", "status": "error", "seq": 15}]
     result = g.of3a_sampling_behind_return(ok + stray, M)
     assert result.status == g.FAIL, result.evidence
     assert result.evidence["malformed"]["field"] == "event.payload.about_handle"
+    # Codex on c78f2bc: compute.py always ledgers an invocation's ``handle``, so one
+    # without it is malformed and fails, never a return on no handle.
+    headless = g.of3a_sampling_behind_return([*ok, {"kind": "invocation", "seq": 15}], M)
+    assert headless.status == g.FAIL and headless.evidence["malformed"]["field"] == "handle"
     named = [{**stray[0], "event": {**stray[0]["event"], "payload": {"about_handle": "zz"}}},
              *stray[1:]]
     # Codex on 3b5bb6a: a return no producer made (no ok invocation) is a failure,
@@ -1869,6 +1873,9 @@ def test_l1_s5b_an_untraceable_round_is_no_routers_mean():
             {"kind": "router.abstention_priced", "handle": "h_abs", "router": None,
              "neutral": 0.5, "penalty": 0.0, "reward": 0.5}]
     result = g.s5b_observed_neutral(rows, M)
+    # Codex on c78f2bc: an open without its actor is a malformed row (need, not .get).
+    assert result.status == g.FAIL and result.evidence["malformed"]["field"] == "actor"
+    result = g.s5b_observed_neutral(rows[1:], M)  # a settled score with no open at all
     assert result.status == g.FAIL and result.evidence["untraced"] == 1
 
 
