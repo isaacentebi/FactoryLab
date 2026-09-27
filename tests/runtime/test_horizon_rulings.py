@@ -78,6 +78,69 @@ def test_the_margin_horizon_counts_the_verdict_window_once():
                                        -(-rt._patience_ticks() // window))
 
 
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("publication", [None, -1, 0, 1])
+def test_settled_funding_patience_censors_through_queue_at_venue_deadline(resume, publication):
+    """Missing funding censors exactly at ratio patience, including after restoration."""
+    from factorylab.kernel.queue import SettleStatus
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+    from tests.runtime.test_consequence_horizon import _named_hold
+    from tests.runtime.test_reward_chain import _rows
+
+    rt = _world(1)
+    rt.exchange.target.settled_funding = True
+    rt.exchange.target.funding_interval_ns = 60 * S
+    start = 3 * NS_PER_HOUR
+    producer, judge = _named_hold(rt, start)
+    rt.pending[judge].grade_closed = True
+    frozen = rt.reference_mids[producer]
+    assert frozen["funding"]["strict"]
+    deadline = start + 270 * S
+    assert rt._patience_ns() < 270 * S
+    rt._observe_mid("BTC", start + 90 * S, "90")
+    # A stalled funding watermark must not prevent the venue-time patience closing.
+    rt._stream_watermark = lambda stream: start
+    rt.clock.now_ns = deadline - 1
+    rt.tick_through_ns = deadline - 1
+    rt._settle_evaluations()
+    assert rt.queue.get(judge).status is SettleStatus.PENDING
+    assert not rt.pending[judge].consequence_closed
+    if resume:
+        state = runtime_state(rt)
+        restored = _world(1)
+        restored.exchange.target.settled_funding = True
+        restored.exchange.target.funding_interval_ns = 60 * S
+        restore_runtime(restored, state)
+        rt = restored
+    print_before = publication == -1
+    if print_before:
+        rt._stream_watermark = lambda stream: deadline - 1
+        rt._observe_funding("BTC", start + 60 * S, "0.001", "100", settled=True)
+        rt._settle_evaluations()
+        assert rt.queue.get(judge).status is SettleStatus.SETTLED
+    rt.clock.now_ns = deadline
+    # Funding is dispatched before the tick updates its delivered-through watermark.
+    if publication == 0:
+        rt._observe_funding("BTC", start + 60 * S, "0.001", "100", settled=True)
+    rt._settle_evaluations()
+    rt.clock.now_ns = deadline + 1
+    rt.tick_through_ns = deadline + 1
+    if publication == 1:
+        rt._observe_funding("BTC", start + 60 * S, "0.001", "100", settled=True)
+    rt._settle_evaluations()
+    history = rt.queue.history(judge)
+    assert len(history) == 1
+    assert history[0].status is (SettleStatus.SETTLED if print_before else SettleStatus.CENSORED)
+    censored = _rows(rt, "evaluation.consequence_censored")
+    assert len(censored) == (0 if print_before else 1)
+    if not print_before:
+        assert censored[0]["handle"] == judge
+        assert censored[0]["about_handle"] == producer
+        assert censored[0]["reason"] == "funding evidence absent"
+        assert censored[0]["ts"] == deadline
+    assert rt.queue.history(producer)[0].status is SettleStatus.SETTLED
+
+
 # --- world truth at an instant (Codex on #152) -----------------------------------------
 
 

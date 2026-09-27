@@ -56,6 +56,7 @@ def test_live_named_outcome_waits_for_backdated_settled_rate(missing):
     rt.tick_through_ns = 4 * H
     rt._stream_watermark = lambda stream: 4 * H
     rt._patience_ns = lambda: H
+    rt.m = SimpleNamespace(timing=SimpleNamespace(world_repricing_ns=6 * H))
 
     def deliver(events):
         for event in events:
