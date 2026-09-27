@@ -1117,6 +1117,9 @@ class FillCursor:
         for fill in sorted(fills, key=lambda f: f.ts_ns):
             if fill.ts_ns < read_start:
                 continue
+            if (self.legacy_boundary_ns is not None
+                    and fill.ts_ns <= self.legacy_boundary_ns):
+                continue  # Ambiguous legacy identity is UNKNOWN, never a second booking.
             payload = {
                 "order_id": fill.order_id,
                 "coin": fill.coin,

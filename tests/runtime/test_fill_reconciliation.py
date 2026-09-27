@@ -283,6 +283,33 @@ def test_retry_baseline_keeps_pre_anchor_execution_delivery():
     assert c.poll(venue, now_ns=220) == []
 
 
+def test_legacy_stable_ids_without_order_registry_remain_unknown():
+    from factorylab.runtime.resume import _migrate_fill_cursor
+
+    venue = Venue()
+    c = cursor(venue)
+    saved = {k: v for k, v in vars(c).items() if k not in ('ledger', 'orders')}
+    saved['seen'] = {(100, 'venue', '100'): 1}
+    saved['since_ns'] = 100
+    vars(c).update(_migrate_fill_cursor(saved, c))
+    assert c.poll(venue, now_ns=200) == []
+    assert c.through_ns is None
+
+
+def test_legacy_payload_boundary_never_rebooks_upgraded_venue_id():
+    from factorylab.runtime.resume import _migrate_fill_cursor
+
+    venue = Venue()
+    c = cursor(venue)
+    f = fill(100)
+    old = (100, '100', 'BTC', True, '1', '10', '0.01', '0', False, 'perp', '1')
+    saved = {'since_ns': 100, 'seen': {old: 1}, 'through_ns': 100}
+    vars(c).update(_migrate_fill_cursor(saved, c))
+    venue.shown = venue.executed = [f]
+    assert c.poll(venue, now_ns=200) == []
+    assert c.through_ns is None
+
+
 def test_backward_poll_replays_identity_append_before_propagation():
     from copy import deepcopy
 

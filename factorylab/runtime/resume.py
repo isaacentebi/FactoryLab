@@ -1175,6 +1175,11 @@ def _migrate_fill_cursor(saved, running) -> dict:
         for key, count in seen.items()
     ):
         raise ResumeError("invalid fill cursor seen")
+    if migrated["measured"] and ("orders" not in saved or any(
+            len(key) != 3 or key[1] != "venue" for key in seen)):
+        migrated["legacy_boundary_ns"] = max((key[0] for key in seen),
+                                               default=migrated["since_ns"])
+        migrated["through_ns"] = None
     for field in ("baseline_ns", "legacy_boundary_ns"):
         value = migrated[field]
         if value is not None and (type(value) is not int or value < 0):
