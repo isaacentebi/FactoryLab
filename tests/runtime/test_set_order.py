@@ -94,6 +94,11 @@ def _walks(path: Path, attrs: set[str]) -> list[tuple[int, str]]:
         for node in ast.walk(fn):
             if isinstance(node, ast.Assign) and setish(node.value):
                 local.update(t.id for t in node.targets if isinstance(t, ast.Name))
+            elif (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+                  and (ast.unparse(node.annotation).split("[")[0] in ("set", "frozenset")
+                       or (node.value is not None and setish(node.value)))):
+                # ``handles: set[str] = {...}`` is a set local too (Sol on #157).
+                local.add(node.target.id)
         for node in ast.walk(fn):
             walked = None
             if isinstance(node, (ast.For, ast.AsyncFor)):
@@ -124,3 +129,17 @@ def test_no_set_is_walked_in_hash_order_where_the_order_can_be_read():
             if not any(rel == file and snippet in text for file, snippet in REVIEWED):
                 unreviewed.append(f"{rel}:{line}: {text}")
     assert not unreviewed, "\n".join(unreviewed)
+
+
+def test_an_annotated_local_set_walked_into_a_sink_is_found(tmp_path):
+    """Sol on #157: the scan tracked ``handles = {...}`` but not ``handles: set[str] =
+    {...}``, so an annotated set walked into the ledger passed unseen."""
+    fixture = tmp_path / "fixture.py"
+    fixture.write_text(
+        "def write(ledger):\n"
+        "    handles: set[str] = {'a', 'b'}\n"
+        "    for handle in handles:\n"
+        "        ledger.append({'handle': handle})\n"
+        "    seen: frozenset[str] = frozenset(ledger.names())\n"
+        "    return list(seen)\n")
+    assert [line for line, _text in _walks(fixture, set())] == [3, 6]
