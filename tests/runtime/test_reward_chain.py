@@ -848,6 +848,10 @@ def test_a_kill_censors_every_item_still_open_once_and_pays_nothing():
                            deadline_ns=10**18, parent_handle=None, cost_ceiling=0)
     rt.pending_votes.append({"handle": ballot, "assembly": "seed-decider",
                              "amendment_id": "m-1", "vote": True,
+                             # graded at a post-activation window this world never
+                             # reaches (``_close_policy_window``)
+                             "prediction": SimpleNamespace(window=5),
+                             "card": rt.charter.cards[0],
                              "activation_window": 3, "baseline": None})
     rt.margin_windows[7] = {"due": 99, "decisions": {}, "cards": {}}
     rt.kill("test: open items")
@@ -858,9 +862,10 @@ def test_a_kill_censors_every_item_still_open_once_and_pays_nothing():
     (graded,) = rt.queue.history(producer)  # settled on its verdict, never censored
     assert graded.status is SettleStatus.SETTLED
     (voted,) = _rows(rt, "ballot.censored")
-    (margin,) = _rows(rt, "margin.censored")
-    assert voted["handle"] == ballot and margin["window"] == 7
-    assert voted["reason"] == margin["reason"] == TERMINATION
+    margins = _rows(rt, "margin.censored")  # ours, and the terminal close's own
+    assert voted["handle"] == ballot and 7 in [m["window"] for m in margins]
+    assert voted["reason"] == TERMINATION
+    assert all(m["reason"] == TERMINATION for m in margins)
     for handle in (judge, ballot):
         (settled,) = rt.queue.history(handle)
         assert settled.status is SettleStatus.CENSORED and settled.score == 0.0

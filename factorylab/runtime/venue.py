@@ -143,42 +143,80 @@ def settle_terminal(rt) -> None:
 #: Why a decision, ballot or margin still open at the seal closed without its signal.
 TERMINATION = "termination"
 
+#: Every live book (``settled.LIVE_BOOKS``) that holds work awaiting a later boundary:
+#: emptied at the seal, once the queue has censored every decision it names.
+CLEARED_AT_TERMINATION = (
+    "internal", "cascade", "pending", "arrived_verdicts", "pending_exposure",
+    "exposure_scores", "declined_exposures", "pending_counters", "forecast_returns",
+    "noop_credits", "assembly_rounds", "tool_uses", "tool_holds", "uptake",
+    "pending_votes", "lambda_posts", "retirement_proposals", "challenges",
+    "margin_windows", "measured_consequences", "reference_mids",
+    "deferred_settlements", "raw_scores", "round_penalties",
+)
+#: The live books that await nothing: provenance, the world's own marks, and the price
+#: loop's measurement record. They are kept as they are at the seal.
+KEPT_AT_TERMINATION = (
+    "population_tools", "tool_specs",           # a tool's provenance
+    "registered_observations", "registered_predicates",  # registrations' provenance
+    "price_windows", "price_origins", "window",  # the price loop's measurement record
+    "venue_marks", "funding_prints",            # the venue's own facts
+)
+
+
+def _censored_kind(rt, handle: str) -> str:
+    """The ledger kind a decision censored by termination is recorded under, by what
+    it was: a ballot, a forecast, an antagonist's exposure, a counter-verdict, or any
+    other decision."""
+    if any(vote["handle"] == handle for vote in rt.pending_votes):
+        return "ballot.censored"
+    if handle in {f.handle for f in rt.book.pending()}:
+        return "forecast.censored"
+    if handle in rt.pending_exposure:
+        return "exposure.censored"
+    if handle in rt.pending_counters:
+        return "counter.censored"
+    return "decision.censored"
+
 
 def censor_terminal(rt) -> None:
-    """Guarantees nothing is silently open at the seal: every item still waiting on a
-    later boundary is ledgered censored by termination, once, and pays no reward.
+    """Guarantees nothing is open at the seal: no decision in the kernel queue is left
+    pending or timed out, and no live book holds work awaiting a later boundary.
 
     The last step before ``Terminated``. After termination nothing learns, so the
-    record is what matters: a decision still pending (a producer awaiting verdicts, or
-    an evaluator awaiting the tier above's grade window) is settled censored in the
-    queue (``decision.censored``); a ballot awaiting a later post-activation window is
-    settled censored on the policy channel (``ballot.censored``); a lambda margin not
-    yet due is dropped (``margin.censored``). Anything available settled normally in
-    ``settle_terminal``, before the wind-down. Never raises into a kill.
+    record is what matters. The kernel queue is the one source of truth: every
+    decision it holds without a final outcome is settled censored (reason
+    termination, no reward), once, with a row of its kind (``_censored_kind``); a
+    forecast is also marked settled in its book. Every lambda margin not yet due is
+    ledgered ``margin.censored``. Then every book in ``CLEARED_AT_TERMINATION`` is
+    emptied. Anything available settled normally in ``settle_terminal``, before the
+    wind-down. Never raises into a kill.
     """
     from factorylab.kernel.queue import SettleStatus
 
     open_status = (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
     try:
-        for handle in sorted(rt.pending):
-            rec = rt.pending.pop(handle)
-            if rt.queue.get(handle).status in open_status:
-                rt.queue.settle(handle, channel=rec.channel, score=0.0,
-                                status=SettleStatus.CENSORED,
-                                definition_version="terminated-v1", sampling_ref=None)
-            rt.ledger.append({"kind": "decision.censored", "handle": handle,
-                              "reason": TERMINATION, "evaluation": rec.evaluation})
-        for vote in list(rt.pending_votes):
-            if rt.queue.get(vote["handle"]).status in open_status:
-                rt._settle_policy(vote["handle"], 0.0, SettleStatus.CENSORED,
-                                  definition="terminated-v1")
-            rt.ledger.append({"kind": "ballot.censored", "handle": vote["handle"],
-                              "amendment_id": vote["amendment_id"], "reason": TERMINATION})
-        rt.pending_votes[:] = []
+        forecasts = {f.handle for f in rt.book.pending()}
+        for handle in rt.queue.retained():
+            decision = rt.queue.get(handle)
+            if decision.status not in open_status:
+                continue
+            kind = _censored_kind(rt, handle)
+            rt.queue.settle(handle, channel=decision.channel, score=0.0,
+                            status=SettleStatus.CENSORED,
+                            definition_version="terminated-v1", sampling_ref=None)
+            if handle in forecasts:
+                rt.book.mark_settled(handle)
+            rec = rt.pending.get(handle)
+            rt.ledger.append({"kind": kind, "handle": handle, "reason": TERMINATION,
+                              **({"evaluation": rec.evaluation} if rec is not None else {})})
         for index in sorted(rt.margin_windows):
-            row = rt.margin_windows.pop(index)
             rt.ledger.append({"kind": "margin.censored", "window": index,
-                              "due": row["due"], "reason": TERMINATION})
+                              "due": rt.margin_windows[index]["due"],
+                              "reason": TERMINATION})
+        for name in CLEARED_AT_TERMINATION:
+            book = getattr(rt, name, None)
+            if book is not None:
+                book.clear()
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         print(f"factorylab kill: open items were not censored ({type(exc).__name__})",
               file=sys.stderr)
