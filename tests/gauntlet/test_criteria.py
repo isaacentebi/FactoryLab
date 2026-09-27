@@ -1432,6 +1432,36 @@ def test_a_truncated_or_invalid_json_line_is_diary_invalid(tmp_path, form, broke
         g.load_events(path)
 
 
+@pytest.mark.parametrize("form", ["json", "jsonl", "directory"])
+@pytest.mark.parametrize("fault", ["missing", "unreadable", "not-utf8"])
+def test_a_diary_file_that_cannot_be_read_is_diary_invalid(tmp_path, form, fault):
+    """Codex on f127c7b: a diary file that is missing, unreadable or not UTF-8, in every
+    input form, is refused as ``DiaryInvalid`` naming its path, never raised as OSError."""
+    good = json.dumps({"kind": "event", "seq": 1, "event": {"kind": "Launch"}}) + "\n"
+    if form == "directory":
+        root = tmp_path / "open"
+        root.mkdir()
+        target = path = root / "event_Launch.jsonl"
+        if fault == "missing":
+            # A per-kind file listed but gone by the time it is read: a dangling link.
+            target.symlink_to(tmp_path / "gone.jsonl")
+    else:
+        target = path = tmp_path / f"rows.{form}"
+        root = path
+    if fault != "missing" or form != "directory":
+        if fault == "not-utf8":
+            target.write_bytes(b"\xff\xfe\x00" + good.encode())
+        elif fault == "unreadable":
+            target.write_text(good if form != "json" else "[" + good + "]")
+            target.chmod(0)
+    try:
+        with pytest.raises(g.DiaryInvalid, match=re.escape(str(path.name))):
+            g.load_events(root)
+    finally:
+        if target.exists() and not target.is_symlink():
+            target.chmod(0o644)
+
+
 #: Every nested field the diary loader dereferences, as a path from the row.
 NESTED = [(), ("event",), ("event", "payload"), ("event", "payload", "manifest"),
           *[("event", "payload", "manifest", section)

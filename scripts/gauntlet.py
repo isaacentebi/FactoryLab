@@ -383,14 +383,18 @@ def _json_lines(path: Path) -> list[Any]:
     """The JSON value on each non-blank line of ``path``; a truncated or invalid line
     raises ``DiaryInvalid`` naming the file and the line, never ``JSONDecodeError``."""
     rows = []
-    with path.open() as handle:
-        for number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError as exc:
-                raise DiaryInvalid(f"{path.name} line {number}: not JSON ({exc.msg})") from exc
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for number, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise DiaryInvalid(f"{path.name} line {number}: not JSON "
+                                       f"({exc.msg})") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise DiaryInvalid(f"{path} cannot be read: {exc}") from exc
     return rows
 
 
@@ -425,7 +429,9 @@ def load_events(path: str | Path, *, kinds: Iterable[str] | None = None,
         rows = _json_lines(path)
     else:
         try:
-            rows = json.loads(path.read_text())
+            rows = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            raise DiaryInvalid(f"{path} cannot be read: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise DiaryInvalid(f"{path.name} line {exc.lineno}: not JSON ({exc.msg})") from exc
         if not isinstance(rows, list):
