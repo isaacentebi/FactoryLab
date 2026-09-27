@@ -1392,6 +1392,20 @@ def test_s7_s8_gain_names_routers_and_moves_gamma_by_one_common_step():
     assert g.s8_gain_rows_uniform([split], M).status == g.FAIL
 
 
+def test_s8_a_gain_row_that_moves_no_gamma_is_malformed():
+    """Codex on b075c08: ``immune._gain`` skips ``before == after`` (immune.py:224), so a
+    no-op gain row is one the kernel never writes. A raise at gamma_max or a lowering at
+    the seed that moves nothing fails S8, alone or beside a real step."""
+    top = _gain(1, 0.5, 0.5)  # M's gamma_max: min(gamma_max, 0.5 + 0.05) is 0.5
+    result = g.s8_gain_rows_uniform([top], M)
+    assert result.status == g.FAIL and result.evidence["noop"] == [
+        {"router": "router:Tick", "window": 1}]
+    raised = _gain(1, 0.1, 0.1 + 0.05)  # the kernel's own step, to the last bit
+    assert g.s8_gain_rows_uniform([raised], M).ok
+    at_seed = _gain(3, 0.1, 0.1, "cleared")
+    assert g.s8_gain_rows_uniform([raised, at_seed], M).status == g.FAIL
+
+
 def test_s8_instrumented_a_gamma_step_is_arm_symmetric_and_a_weight_change_is_not():
     """Astra C-2: the gain act redistributes uniformly; a policy-weight change on one arm
     (which the organ never makes, S7) is exactly what S8 must refuse."""

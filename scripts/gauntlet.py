@@ -3185,6 +3185,11 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
               for row in gains if len(need(row, "gamma_before")) != len(need(row, "gamma_after"))]
     gains = [row for row in gains
              if len(need(row, "gamma_before")) == len(need(row, "gamma_after"))]
+    # ``immune._gain`` ledgers a row only when γ moved (``if before == after: continue``,
+    # immune.py:224): a row with no nonzero step is one the kernel never writes, a
+    # malformed row, never a uniform step of 0 (Codex on b075c08).
+    noop = [{"router": need(row, "router"), "window": need(row, "window")}
+            for row in gains if list(need(row, "gamma_before")) == list(need(row, "gamma_after"))]
     # A router's seed γ, where the diary shows it: its first gain row raised γ from the
     # seed (a lowering needs an earlier raise, and γ never goes below the seed).
     seeds: dict[str, list[float]] = {}
@@ -3227,6 +3232,9 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
         if len(steps) != 1 or wrong or below:
             bad.append({"router": need(row, "router"), "window": need(row, "window"),
                         "steps": sorted(steps), "wrong": wrong[:3]})
+    if noop:
+        return _result("S8", False, noop=noop[:5], bad=bad[:5],
+                       why="a gain row moves no γ; the kernel ledgers only a moved γ")
     if uneven:
         return _result("S8", False, uneven=uneven[:5], bad=bad[:5],
                        why="a gain row's γ vectors differ in length from each other or "
