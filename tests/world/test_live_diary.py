@@ -10,7 +10,7 @@ from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.live import LiveVenue
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
 from factorylab.settlement.consequence import FillCursor
-from factorylab.world.exchange import HyperliquidExchange, Order, OrderKind
+from factorylab.world.exchange import NS_PER_HOUR, HyperliquidExchange, Order, OrderKind, Position
 from factorylab.world.tape import Tape, TapeVenue, cut
 
 S = 10**9
@@ -116,3 +116,92 @@ def test_live_unknown_crossed_never_invents_a_fee_side(tmp_path, flag):
                    if item.get("kind") == "event" and item["event"]["kind"] == "Fill")
     assert payload["crossed"] is None
     assert tape.fees("BTC", T) == (None, None)
+
+
+def _settled_tape(tmp_path, *, oracle="120.123456789", repeats=False):
+    h = NS_PER_HOUR
+    items = [{"kind": "event", "event": {"kind": "Launch", "ts_ns": h - 10,
+              "payload": {"manifest": {"exchange": {"kind": "hyperliquid",
+                                                       "coins": ["BTC"]}}}}}]
+    for ts in (h - 10, h, h + 5, h + 10, h + 20):
+        items.extend([{"kind": "event", "event": {"kind": "Tick", "ts_ns": ts}},
+                      {"kind": "event", "event": {"kind": "MarketMid", "ts_ns": ts,
+                       "payload": {"coin": "BTC", "mid": "100"}}}])
+    payload = {"coin": "BTC", "rate": "0.01", "premium": "0.002", "paid_usd": "0",
+               "funding_ns": h, "settled": True, "mark": oracle,
+               "oracle_observed_at_ns": h + 1}
+    for ts in ((h + 10, h + 20) if repeats else (h + 10,)):
+        items.append({"kind": "event", "event": {"kind": "Funding", "ts_ns": ts,
+                                                  "payload": payload}})
+    path = tmp_path / "settled.json"
+    path.write_text(json.dumps(items))
+    return Tape.from_data(cut(path))
+
+
+def test_settled_tape_does_not_publish_a_delayed_rate_at_its_boundary(tmp_path):
+    tape = _settled_tape(tmp_path)
+    h = NS_PER_HOUR
+    assert tape.funding_at("BTC", h) is None
+    assert tape.funding_at("BTC", h + 9) is None
+    assert tape.funding_at("BTC", h + 10) == (h + 10, Decimal("0.01"), Decimal("0.002"))
+    [row] = tape.data["settled_funding"]["BTC"]
+    assert row == {"published_at_ns": h + 10, "funding_ns": h, "settled": True,
+                   "rate": "0.01", "premium": "0.002", "mark": "120.123456789",
+                   "oracle_observed_at_ns": h + 1}
+
+
+def test_settled_tape_charges_boundary_position_at_retained_oracle_on_publication(tmp_path):
+    tape = _settled_tape(tmp_path, repeats=True)
+    h = NS_PER_HOUR
+    venue = TapeVenue(tape, coins=("BTC",), start_cash_usd=Decimal(1000))
+    venue._positions["BTC"] = Position("BTC", Decimal(2), Decimal(100))
+    assert not [e for e in venue.advance(h) if e.kind == "Funding"]
+    venue._positions.clear()  # Closing after H cannot erase the amount owed at H.
+    assert not [e for e in venue.advance(h + 5) if e.kind == "Funding"]
+    [event] = [e for e in venue.advance(h + 10) if e.kind == "Funding"]
+    assert event.ts_ns == h + 10
+    assert event.payload["funding_ns"] == h
+    assert event.payload["settled"] is True
+    assert event.payload["oracle_observed_at_ns"] == h + 1
+    assert event.payload["mark"] == "120.123456789"
+    assert Decimal(event.payload["paid_usd"]) == Decimal("2.40246913578")
+    assert venue._cash == Decimal("997.59753086422")
+    assert not [e for e in venue.advance(h + 20) if e.kind == "Funding"]
+
+
+def test_settled_tape_never_substitutes_mid_for_missing_oracle(tmp_path):
+    tape = _settled_tape(tmp_path, oracle=None)
+    venue = TapeVenue(tape, coins=("BTC",), start_cash_usd=Decimal(1000))
+    venue._positions["BTC"] = Position("BTC", Decimal(2), Decimal(100))
+    venue.advance(NS_PER_HOUR)
+    [event] = [e for e in venue.advance(NS_PER_HOUR + 10) if e.kind == "Funding"]
+    assert event.payload["mark"] is None
+    assert event.payload["settled"] is True
+    assert venue.settled_funding is True
+    assert venue._cash == Decimal(1000)
+    assert venue.funding_payments(0) == []
+    assert venue.funding()[0].mark == Decimal("120.123456789")
+
+
+def test_settled_tape_emits_zero_cash_corrections_and_prelaunch_evidence(tmp_path):
+    tape = _settled_tape(tmp_path, repeats=True)
+    rows = tape.data["settled_funding"]["BTC"]
+    rows[1]["rate"] = "0.02"
+    venue = TapeVenue(tape, coins=("BTC",), start_cash_usd=Decimal(1000))
+    first = [e for e in venue.advance(NS_PER_HOUR + 10) if e.kind == "Funding"]
+    second = [e for e in venue.advance(NS_PER_HOUR + 20) if e.kind == "Funding"]
+    assert first[0].payload["rate"] == "0.01"
+    assert second[0].payload["rate"] == "0.02"
+    assert venue._cash == Decimal(1000)
+    tape.data["ticks"] = [NS_PER_HOUR + 5, NS_PER_HOUR + 20]
+    venue = TapeVenue(tape, coins=("BTC",), start_cash_usd=Decimal(1000))
+    assert len([e for e in venue.advance(NS_PER_HOUR + 20) if e.kind == "Funding"]) == 2
+    assert venue.funding_payments(0) == []
+
+
+def test_settled_tape_rejects_mixed_legacy_market_semantics(tmp_path):
+    tape = _settled_tape(tmp_path)
+    tape.data["mids"]["ETH"] = tape.data["mids"]["BTC"]
+    tape.data["funding"]["ETH"] = [[NS_PER_HOUR, "0.01", None]]
+    with pytest.raises(ValueError, match="mixed legacy and settled"):
+        TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
