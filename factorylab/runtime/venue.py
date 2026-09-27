@@ -183,17 +183,21 @@ def _fills_booking_failed(rt, fills, exc: BaseException) -> None:
               file=sys.stderr)
 
 
-def read_wind_down_fills(rt) -> None:
-    """Guarantees a live venue's wind-down fills are read once more after the wind-down,
-    or that the failure to read them is on the record.
+def read_wind_down_fills(rt, report: dict | None = None) -> None:
+    """Guarantees a live venue's wind-down fills are read after the wind-down until
+    every closing order it placed is observed, or that what was not is on the record.
 
     A recorded venue's fills are drained at its seal (``seal_recorded_market``); any
-    other venue is read here: up to ``winddown.ROUNDS_PER_KILL`` attempts of the fills
-    read the ticks use (``consequence_fills.poll``), whose fills go through the one
-    fill path (the wind-down's closing orders already bound to the kernel's account)
-    and whose success advances the fills watermark. If every attempt fails,
-    ``wind_down.fills_unread`` is ledgered: the money stays in custody and its
-    attribution is unknown; the kill never waits on it. Never raises into a kill.
+    other venue is read here: up to ``winddown.ROUNDS_PER_KILL`` reads of the fills
+    the ticks use (``consequence_fills.poll``), each success advancing the fills
+    watermark and booking its fills through accounting only (the closing orders
+    already bound to the kernel's account; no window is touched). Reading stops once
+    every closing order in ``report["closing_orders"]`` has a fill observed (Codex on
+    #152: a close just submitted may not have propagated to the first read). If the
+    bound is spent first, ``wind_down.fills_unread`` names each unobserved closing
+    order: the money stays in custody and its attribution is unknown. A read whose
+    fills could not be booked is ledgered with them (``_fills_booking_failed``). The
+    kill never waits. Never raises into a kill.
     """
     from factorylab.runtime.winddown import ROUNDS_PER_KILL
 
@@ -201,25 +205,32 @@ def read_wind_down_fills(rt) -> None:
     if exchange is None or (not getattr(rt, "live", True)
                             and callable(getattr(exchange, "seal_recording", None))):
         return
-    errors = []
+    wanted = {str(o["order_id"]) for o in (report or {}).get("closing_orders") or ()}
+    observed: set[str] = set()
+    errors, reads = [], 0
     for _attempt in range(ROUNDS_PER_KILL):
         try:
             fills = rt.consequence_fills.poll(exchange, strict=True, now_ns=rt.clock.now_ns)
         except Exception as exc:  # noqa: BLE001 - an unanswered read is retried, then noted
             errors.append(type(exc).__name__)
             continue
+        reads += 1
+        observed |= {str(payload.get("order_id")) for _ts, payload in fills}
         try:
-            observed = [WorldEvent(WorldEventKind.FILL, max(rt.clock.now_ns, ts),
-                                   exchange.name, payload) for ts, payload in fills]
-            rt._settle_exchange_effects(observed, observe_positions=False)
+            events = [WorldEvent(WorldEventKind.FILL, max(rt.clock.now_ns, ts),
+                                 exchange.name, payload) for ts, payload in fills]
+            rt._settle_exchange_effects(events, observe_positions=False,
+                                        accounting_only=True)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
             # The read succeeded and its fills are consumed (the cursor has passed
             # them): their facts go on the record with the failure (Sol on #152).
             _fills_booking_failed(rt, fills, exc)
-        return
+        if wanted <= observed:
+            return
     try:
-        rt.ledger.append({"kind": "wind_down.fills_unread", "attempts": len(errors),
-                          "errors": errors, "ts": rt.clock.now_ns})
+        rt.ledger.append({"kind": "wind_down.fills_unread", "attempts": ROUNDS_PER_KILL,
+                          "reads": reads, "errors": errors,
+                          "unobserved": sorted(wanted - observed), "ts": rt.clock.now_ns})
     except Exception as exc:  # noqa: BLE001
         print(f"factorylab kill: the unread wind-down fills were not recorded "
               f"({type(exc).__name__})", file=sys.stderr)
@@ -344,7 +355,7 @@ def seal_recorded_market(rt) -> None:
     drained = []
     try:
         drained = exchange.drain_events()
-        rt._settle_exchange_effects(drained, observe_positions=False)
+        rt._settle_exchange_effects(drained, observe_positions=False, accounting_only=True)
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         # Drained, so consumed: their facts go on the record with the failure.
         _fills_booking_failed(rt, [(e.ts_ns, {"event_kind": str(e.kind), **e.payload})
@@ -432,7 +443,7 @@ class VenueMixin:
             self.wind_down_report = report
             self.exposure_state = report["exposure_state"]
             if owed:
-                read_wind_down_fills(self)  # a live venue's closes, read once more
+                read_wind_down_fills(self, report)  # a live venue's closes, read again
             settle_wind_down(self)  # the wind-down's P&L, to its owners, before the seal
             censor_terminal(self)  # the last step before the seal
             try:
@@ -898,7 +909,8 @@ class VenueMixin:
 
     def _settle_exchange_effects(self, evs: list[WorldEvent], *,
                                  observe_positions: bool = True,
-                                 broadcast_mids: bool = True) -> None:
+                                 broadcast_mids: bool = True,
+                                 accounting_only: bool = False) -> None:
         """Settle a batch of venue facts into money, consequence accounting and the world.
 
         Guarantees every fact of the batch reaches consequence accounting now: the
@@ -907,6 +919,9 @@ class VenueMixin:
         watermark never runs ahead of what accounting has seen (Codex on #152).
         ``broadcast_mids`` False keeps the batch's mids from the seats (a pass that
         delivers no mid of its own); they are accounted all the same.
+        ``accounting_only`` is a terminal batch (a kill's wind-down and seal, after the
+        last price window closed): the consequence book, custody and the running money
+        totals move, and no window counter does (the closed window stays as published).
         """
         if any(we.kind is not WorldEventKind.MARKET_MID for we in evs):
             # A fill, a funding payment or a liquidation is the venue's books moving.
@@ -985,13 +1000,14 @@ class VenueMixin:
                 continue
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
-                self.window.fills += 1
                 notional = usd_to_micro(
                     Decimal(str(we.payload["size"])) * Decimal(str(we.payload["px"]))
                 , rounding="nearest")
-                self.window.notional_micro += notional
                 realized = usd_to_micro(we.payload["realized_usd"], rounding="nearest")
-                self.window.realized_pnl_micro += realized
+                if not accounting_only:
+                    self.window.fills += 1
+                    self.window.notional_micro += notional
+                    self.window.realized_pnl_micro += realized
                 fee = usd_to_micro(we.payload["fee_usd"], rounding="nearest")
                 self.realized_to_date += realized
                 self.fees_to_date += fee
@@ -1006,7 +1022,8 @@ class VenueMixin:
                     "px": str(we.payload["px"]), "notional_micro": notional,
                     "realized_micro": realized, "fee_micro": fee,
                     "liquidation": we.payload.get("liquidation", False),
-                    "window": self.window.index, "event": self.n, "ts": we.ts_ns,
+                    "window": None if accounting_only else self.window.index,
+                    "event": self.n, "ts": we.ts_ns,
                 })
 
             elif we.kind is WorldEventKind.FUNDING:

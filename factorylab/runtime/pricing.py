@@ -33,6 +33,7 @@ from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
 from factorylab.runtime.observations import ObservationBook, normalise, trim_series
+from factorylab.settlement.lots import WIND_DOWN
 from factorylab.world.events import funding_instant
 
 
@@ -293,7 +294,8 @@ class PricingMixin:
         """One observed fill, priced on the same path whether it was deferred or not."""
         owners = {order.order_id: order.handle for order in self.consequences.table.orders}
         handle = owners.get(str(payload["order_id"]))
-        if handle is None:
+        if handle is None or handle == WIND_DOWN:
+            # The kernel's wind-down account is no decision: nothing to price.
             return
         notional = usd_to_micro(
             Decimal(str(payload["size"])) * Decimal(str(payload["px"])), rounding="nearest")

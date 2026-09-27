@@ -25,11 +25,19 @@ class LiveLikeExchange(FakeExchange):
     runtime only through a fills read, and that read can be made to fail."""
 
     unanswered = False
+    #: Successful reads that do not show yet what was placed after the opening (a close
+    #: just submitted that has not propagated to the venue's fills read).
+    withhold = 0
+    propagated: frozenset = frozenset()
 
     def fills(self, since_ns):
         if self.unanswered:
             raise RuntimeError("fills read unanswered")
-        return super().fills(since_ns)
+        fills = super().fills(since_ns)
+        if self.withhold > 0:
+            self.withhold -= 1
+            return [f for f in fills if f.order_id in self.propagated]
+        return fills
 
 
 def _world_with_an_open_long():
@@ -55,6 +63,7 @@ def _world_with_an_open_long():
                                  for ts, payload in fills], observe_positions=False)
     rt.consequences.finish(handle, 0)
     rt.exchange.drain_events()
+    rt.exchange.propagated = frozenset({placed.order_id})
     assert [lot.handle for lot in rt.consequences.table.lots] == [handle]
     assert rt.consequences.payoff(handle) is None
     return rt, handle
@@ -130,3 +139,52 @@ def test_wind_down_fills_read_but_not_booked_are_on_the_record():
     assert fill["coin"] == "BTC" and fill["is_buy"] is False and fill["size"] == "0.001"
     assert {"order_id", "px", "fee_usd", "fact_ns"} <= set(fill)
     assert report["production_state"] == "killed" and rt.termination.final
+
+
+def test_a_close_that_propagates_only_to_a_later_read_is_still_booked():
+    """Codex on #152: the first successful read may not show a close just submitted.
+    Reading goes on, within the bound, until every closing order is observed."""
+    rt, handle = _world_with_an_open_long()
+    rt.exchange.withhold = 1  # the first successful read after the wind-down is empty
+    report = rt.kill("explicit_kill:budget")
+    assert report["closing_orders"] and not rt.consequences.table.lots
+    assert not _rows(rt, "wind_down.fills_unread")
+    (booked,) = _rows(rt, "consequence.realized_at_termination")
+    assert booked["handle"] == handle
+
+
+def test_a_close_that_never_propagates_is_named_unread():
+    rt, handle = _world_with_an_open_long()
+    rt.exchange.withhold = ROUNDS_PER_KILL  # never shown within the bound
+    report = rt.kill("explicit_kill:budget")
+    (unread,) = _rows(rt, "wind_down.fills_unread")
+    assert unread["reads"] == ROUNDS_PER_KILL and not unread["errors"]
+    assert unread["unobserved"] == [o["order_id"] for o in report["closing_orders"]]
+    assert [lot.handle for lot in rt.consequences.table.lots] == [handle]
+
+
+def test_terminal_fills_touch_accounting_only_never_the_closed_window():
+    """Codex on #152: the last window is closed and published before the wind-down;
+    its fills move the consequence book and custody, never that window's counters, and
+    price no decision (the kernel's wind-down account is none)."""
+    from factorylab.settlement.lots import WIND_DOWN
+
+    rt, _handle = _world_with_an_open_long()
+    rt._manage_reserve_window()  # an open window, which the terminal sequence closes
+    closed = {}
+    close = rt._close_price_window
+
+    def remember():
+        close()
+        closed.update(fills=rt.window.fills, notional=rt.window.notional_micro,
+                      pnl=rt.window.realized_pnl_micro)
+
+    rt._close_price_window = remember
+    rt.kill("explicit_kill:budget")
+    assert closed and not rt.consequences.table.lots  # the wind-down's fill was booked
+    assert (rt.window.fills, rt.window.notional_micro, rt.window.realized_pnl_micro) == (
+        closed["fills"], closed["notional"], closed["pnl"])
+    assert WIND_DOWN not in rt.price_origins
+    assert not [i for i in _rows(rt, "price.contribution") if i["handle"] == WIND_DOWN]
+    terminal = [i for i in _rows(rt, "fill.counted") if i["window"] is None]
+    assert len(terminal) == 1 and terminal[0]["is_buy"] is False

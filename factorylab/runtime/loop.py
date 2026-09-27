@@ -247,10 +247,14 @@ class Runtime(
         return super()._settle_priced(handle, cards=cards, **kwargs)
 
     def _settle_exchange_effects(self, events, *, observe_positions=True,
-                                 broadcast_mids=True) -> None:
+                                 broadcast_mids=True, accounting_only=False) -> None:
         super()._settle_exchange_effects(events, observe_positions=observe_positions,
-                                         broadcast_mids=broadcast_mids)
-        self._record_pricing_fills(events)
+                                         broadcast_mids=broadcast_mids,
+                                         accounting_only=accounting_only)
+        if not accounting_only:
+            # A terminal fill (after the last window closed) is accounting only: it is
+            # priced on no window and credits no decision's contribution (Codex on #152).
+            self._record_pricing_fills(events)
 
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
         """An assembly that can judge never sits on the router for its own subject.
