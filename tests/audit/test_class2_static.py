@@ -243,6 +243,7 @@ def test_the_committee_requests_are_in_the_static_corpus(static):
         "factorylab/runtime/governance.py::_testify"}
 
 
+@pytest.mark.gate  # scans the package twice: about 1.3 s serially, at the check limit
 def test_an_unrendered_or_unregistered_builder_fails_the_check(monkeypatch):
     """The builder check bites: a builder the registry says no render reached fails, and
     so does a builder in the code the corpus does not name."""
