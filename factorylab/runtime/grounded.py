@@ -231,6 +231,9 @@ def funding_mark(state: dict | None, open_ns: int | None, due_ns: int | None, ts
 
 #: A named trade's funding times not yet all assigned a rate (``funding_due``).
 FUNDING_PENDING = "funding-pending"
+#: Why a named trade is uninformative when a funding time in its window had no venue
+#: rate print at or before it: an unread rate is never a number (Codex on #152).
+FUNDING_UNKNOWN = "funding_unknown"
 
 
 def funding_due(state: dict | None, open_ns: int, due_ns: int

@@ -17,6 +17,7 @@ from factorylab.runtime.clockwork import deadline_ticks, tick_ns, ticks_for
 from factorylab.runtime.grounded import (
     ATTEMPTED_DEFINITION,
     FUNDING_PENDING,
+    FUNDING_UNKNOWN,
     OPPORTUNITY_DEFINITION,
     advance_funding,
     attempted_cost,
@@ -1505,7 +1506,9 @@ class FeedbackMixin:
         Guarantees every open named trade on ``coin`` assigns the funding times this
         print passes (``grounded.advance_funding``), until its measuring mid's time is
         covered, with ``mark``, the price the venue states its payment at ``ts_ns`` used
-        (wave 16, D7), and that the latest print is kept for trades named later.
+        (wave 16, D7), and that every print a trade named later can still need is kept
+        with its fact time (``_funding_history``; Codex on #152): a trade opened at a
+        stale venue mark reads each funding time's own print, never the latest.
         """
         for frozen in self.reference_mids.values():
             funding = frozen.get("funding")
@@ -1515,8 +1518,28 @@ class FeedbackMixin:
             if res is not None and funding["cursor"] >= res[0]:
                 continue
             advance_funding(funding, int(ts_ns), str(rate), mark)
-        self.funding_prints[coin] = [int(ts_ns), str(rate)]
+        history = self._funding_history(coin)
+        history.append([int(ts_ns), str(rate), None if mark is None else str(mark)])
+        history.sort(key=lambda row: row[0])
+        # Need-based retention (wave 17b): the print in force at the earliest instant a
+        # trade on this coin can still open from (its venue mark, or an open trade's
+        # opening) and every print after it.
+        floors = [frozen["open_ns"] if frozen.get("open_ns") is not None else frozen["ns"]
+                  for frozen in self.reference_mids.values() if frozen.get("coin") == coin]
+        mark_at = self.venue_marks.get(coin)
+        floor = min([*floors, *([int(mark_at[0])] if mark_at else []), int(ts_ns)])
+        in_force = [i for i, row in enumerate(history) if row[0] <= floor]
+        self.funding_prints[coin] = history[in_force[-1] if in_force else 0:]
         self._saw_fact(int(ts_ns))
+
+    def _funding_history(self, coin: str) -> list[list]:
+        """The kept funding-rate prints of ``coin``, ``[ts_ns, rate, mark]`` in fact-time
+        order. A checkpoint that kept only the latest print, ``[ts_ns, rate]``, is read
+        as a history of that one print."""
+        kept = self.funding_prints.get(coin) or []
+        if kept and not isinstance(kept[0], list):
+            kept = [[int(kept[0]), str(kept[1]), None]]
+        return [list(row) for row in kept]
 
     def _fee_legs(self, frozen: dict) -> tuple[str | None, str | None]:
         """The taker rate of each leg of a frozen named trade: ``(entry, exit)``.
@@ -1561,8 +1584,9 @@ class FeedbackMixin:
         ``open`` until the venue broadcast a mid of the coin at or after the horizon
         and a rate print passed every funding time up to that mid; ``none`` once the
         world's clock is a patience past the trade's opening without both, or when a
-        funding time in the window had no rate read before it; ``measured`` with the
-        funding rates otherwise.
+        funding time in the window had no rate read before it (then with
+        ``FUNDING_UNKNOWN`` in place of the rates); ``measured`` with the funding rates
+        otherwise.
         """
         due, res = frozen.get("due_ns"), frozen.get("res")
         through = self._facts_through(frozen)
@@ -1577,7 +1601,7 @@ class FeedbackMixin:
         if rates == FUNDING_PENDING:
             return ("none" if lapsed else "open"), None
         if rates is None:
-            return "none", None
+            return "none", FUNDING_UNKNOWN
         return "measured", rates
 
     def _final_outcome(self, about: str) -> tuple[str, float | None, str | None]:
@@ -1646,6 +1670,11 @@ class FeedbackMixin:
         self.reference_mids.pop(about, None)
         self.window.non_acting_outcomes += 1  # wave 16, R-H: fixed now, either way
         if state == "none":
+            if rates == FUNDING_UNKNOWN:
+                # A funding time in its window had no venue print at or before it: fixed
+                # and uninformative, never a guessed payment (Codex on #152).
+                self.ledger.append({"kind": "consequence.uninformative", "handle": about,
+                                    "reason": FUNDING_UNKNOWN})
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)
         if None in self._fee_legs(frozen):
             # Ruling R10-i, per leg: the venue never stated the rate one leg pays by its
@@ -1850,7 +1879,10 @@ class FeedbackMixin:
         interval = (None if instrument_market(coin) != "perp" else
                     getattr(self.exchange, "funding_interval_ns", None)
                     or self.m.timing.world_repricing_ns)
-        latest = self.funding_prints.get(coin)
+        cursor = self.clock.now_ns if open_ns is None else open_ns
+        history = self._funding_history(coin)
+        before = [row for row in history if row[0] <= cursor]
+        latest = before[-1] if before else None
         self.reference_mids[handle] = {
             "declined": declined, "mids": [list(m) for m in mids], "coin": coin,
             "tick": self.ticks_consumed, "ns": self.clock.now_ns,
@@ -1862,12 +1894,19 @@ class FeedbackMixin:
             # the rate in force at each is read from the venue's own prints.
             "funding": (None if interval is None else
                         {"interval": int(interval),
-                         "cursor": self.clock.now_ns if open_ns is None else open_ns,
+                         "cursor": cursor,
+                         # The print in force at its opening, never a later one.
                          "rate": latest[1] if latest is not None else None, "rates": [],
                          # The price each funding time's payment is on (D7): bounded by
                          # the funding times of this trade's own window.
                          "marks": []}),
             **({"attempted": attempted} if attempted else {})}
+        funding = self.reference_mids[handle]["funding"]
+        if funding is not None:
+            # Opened at a stale venue mark: the prints since it pass their own funding
+            # times, each at the rate in force at it (Codex on #152).
+            for ts_ns, rate, mark in (row for row in history if row[0] > cursor):
+                advance_funding(funding, int(ts_ns), str(rate), mark)
 
     def _score_verdict(self, rec: PendingJudgement, y: float, kind: str) -> None:
         """Score one judge's verdict against its return's measured outcome (ruling R1).

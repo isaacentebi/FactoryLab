@@ -110,7 +110,10 @@ def test_a_funding_time_inside_the_window_is_charged_at_the_venues_rate():
 
 
 def test_a_funding_time_with_no_rate_read_before_it_prices_nothing():
-    """An unread rate is never a number: the world has no y for that trade."""
+    """An unread rate is never a number: the world has no y for that trade, and the
+    outcome is ledgered uninformative, ``funding_unknown`` (Codex on #152)."""
+    from factorylab.runtime.grounded import FUNDING_UNKNOWN
+
     rt = _world(10)
     boundary = 5 * NS_PER_HOUR
     start = boundary - 30 * S
@@ -119,7 +122,35 @@ def test_a_funding_time_with_no_rate_read_before_it_prices_nothing():
     _walk(rt, start, 10, 90, lambda s: "100.1")
     assert rt.world_outcomes[producer]["state"] == "none"
     assert not _rows(rt, "consequence.opportunity", handle=producer)
+    (row,) = _rows(rt, "consequence.uninformative", handle=producer)
+    assert row["reason"] == FUNDING_UNKNOWN
     assert rt.pending[judge].consequence_closed and rt.pending[judge].consequence is None
+
+
+def test_a_trade_opened_at_a_stale_mark_pays_each_funding_time_its_own_rate():
+    """Codex on #152: the BTC mark is two funding times stale when the hold is made, and
+    the rate changed at each. The trade opens at the stale mark, and each funding time in
+    its window pays the latest print at or before it (4, then 3, then 2 bp), never the
+    latest print backfilled over all of them (which paid 3, 3, 2)."""
+    rt = _world(10, 3 * 3 * 3600)  # H = 3 h: three hourly funding times in the window
+    b1 = 5 * NS_PER_HOUR
+    start = b1 - 30 * S
+    rt._observe_funding("BTC", start - 10 * S, "0.0004")  # in force at b1
+    rt.clock.now_ns = start
+    _mids(rt, BTC="100")  # the last BTC mark before the hold
+    rt._observe_funding("BTC", b1 + 5 * S, "0.0001")  # printed after b1: not b1's
+    rt._observe_funding("BTC", b1 + NS_PER_HOUR, "0.0003")  # b2's own
+    rt.clock.now_ns = b1 + NS_PER_HOUR + 60 * S  # no BTC mid since ``start``
+    producer, event = _consequence_produce(rt)
+    _judge(rt, event)
+    rt._settle_arrived_verdicts()
+    assert rt.reference_mids[producer]["open_ns"] == start  # opened at the stale mark
+    rt._observe_funding("BTC", b1 + 2 * NS_PER_HOUR, "0.0002")  # b3's own
+    walk_from = rt.clock.now_ns
+    _walk(rt, walk_from, 600, 2 * 3600, lambda s: "100")
+    (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
+    assert priced["funding_payments"] == 3
+    assert priced["funding_bps"] == "-9.0000"  # 4 + 3 + 2 bp, each at its own time
 
 
 def test_a_trade_the_venue_never_prices_is_none_after_its_patience():
