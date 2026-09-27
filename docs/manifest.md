@@ -1397,7 +1397,12 @@ uncharged): one affine map applied once, with no clip and one scale per router f
 world's life, so a charge never raises a reward and a card penalty and a thrash charge
 of equal size lower it equally (wave 16, rulings R10-c, R10-l; `thrash.charged`). The price is published in
 `world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
-(`thrash_controller`), and each open round's charge with `thrash_charges`.
+(`thrash_controller`), and each open round's charge with `thrash_charges`. Every round
+a router trains on writes one `router.learned` row (R16b-5; the diary only, never seen
+by a seat): the drawing and the learning router, the arm, its raw score, card
+penalty, thrash charge (`exempt: "niche"` when a stored charge was dropped for a
+round drawn in the niche) and reward, and the path (`direct`, `carried` to a
+successor, or `credit` at its window's close, a NOOP credit included).
 
 ## The clock (Chapter II §IV.b-c; time audit T1-T13)
 

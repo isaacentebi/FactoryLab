@@ -46,11 +46,18 @@ def test_a_policy_cutoff_is_no_roles_sample(monkeypatch):
 
 
 def _drawn_at(rt, chosen: str, at: int):
-    """One Tick-router decision that drew ``chosen``, opened at tick ``at``."""
+    """One Tick-router decision that drew ``chosen``, opened at tick ``at``; a keyed
+    router's round is frozen under its key, as the runtime's draw freezes it."""
     import random
+
+    from factorylab.runtime.routing import _KeyedLearner
 
     rt.ticks_consumed = at
     state = rt.routers["Tick"][0]
+    keyed = isinstance(state.learner, _KeyedLearner)
+    key = f"{state.learner.id}:{at}:{chosen}"
+    if keyed:
+        state.learner.current_key = key
     feasible = lambda a: (a == chosen, "")  # noqa: E731 - only this arm may be woken
     sample = next(s for s in (state.router.route("Tick", feasible, random.Random(i))
                               for i in range(200)) if s.chosen == chosen)
@@ -58,6 +65,8 @@ def _drawn_at(rt, chosen: str, at: int):
                            propensity=rt._propensity(sample), channel="verdict",
                            deadline_ns=10**18, deadline_tick=at + 1_000, parent_handle=None,
                            cost_ceiling=rt.wallet.available)
+    if keyed:
+        rt.snapshot_keys[handle] = key
     return state, handle
 
 

@@ -2702,6 +2702,8 @@ class FeedbackMixin:
         # Booked only for a round that trained the router: the seat's own baseline, the
         # delay abstentions wait for and the scales they are priced on all describe
         # rounds the router learned from, never one that trained nothing.
+        self._router_learned(state, target, lr.handle, prop.chosen,
+                             "direct" if target is state else "carried")
         self._record_router_round(state, target, lr.handle)
         if settled:
             target.observed.record(prop.chosen, charged)
@@ -2709,6 +2711,28 @@ class FeedbackMixin:
             # price evidence is pruned once both have (``_prune_price_evidence``).
             target.record_round(lr.definition_version,
                                 self.raw_scores.get(lr.handle, float(lr.score)))
+
+    def _router_learned(self, drawer: Any, target: Any, handle: str, action: str,
+                        path: str) -> None:
+        """Ledger the one ``router.learned`` row of a router round that trained (R16b-5).
+
+        Observability only, never physics (the ledger is not seat-visible): the round,
+        the router that drew it and the one that learned it, the drawn arm, its raw
+        score, card penalty, thrash charge (``exempt: "niche"`` when a stored charge
+        was dropped by the niche rule) and learned reward, and the path that trained
+        it (``direct``, ``carried`` to a successor, or ``credit`` at its window's
+        close). Guarantees "every round learned exactly once" (essay I.a,
+        Blum-Mansour) is a diary invariant: one row per trained round, NOOP included.
+        """
+        value = getattr(self, "_router_round_value", None) or {}
+        self._router_round_value = None
+        if value.get("handle") != handle:
+            value = {}
+        self.ledger.append({
+            "kind": "router.learned", "handle": handle, "router": drawer.learner.id,
+            "learner": target.learner.id, "action": action, "path": path,
+            **{k: v for k, v in value.items() if k != "handle"},
+            "ts": self.clock.now_ns})
 
     def _record_router_round(self, state: Any, target: Any, handle: str) -> None:
         """One learned seat round closes its router's loop, from its opening to now.
@@ -2806,6 +2830,9 @@ class FeedbackMixin:
             fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
             learned = self._apply_router_round(drawer, handle, credit["p"], credit["executed"],
                                                fb)
+            if learned:
+                self._router_learned(drawer, self._successor_state(drawer), handle, action,
+                                     "credit")
             if learned and action != NOOP:
                 self._record_router_round(drawer, self._successor_state(drawer), handle)
 
@@ -2892,8 +2919,15 @@ class FeedbackMixin:
         charge of equal size lower it equally. A thrash charge is ledgered
         (``thrash.charged``).
         """
+        stored = self.thrash_charges.get(handle, 0.0) if router is not None else 0.0
         charge = self._thrash_charge(handle) if router is not None else 0.0
         learned = self._learned(raw, penalty + charge, self._charge_bound(router is not None))
+        if router is not None:
+            # What ``router.learned`` states once the round trains (R16b-5).
+            self._router_round_value = {
+                "handle": handle, "raw": raw, "penalty": penalty, "charge": charge,
+                "reward": learned,
+                **({"exempt": "niche"} if stored > 0 and charge == 0 else {})}
         if charge > 0:
             self.ledger.append({"kind": "thrash.charged", "handle": handle,
                                 "router": router.learner.id, "charge": charge,
