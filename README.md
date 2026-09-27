@@ -32,15 +32,18 @@ Dark as in lights-out: nobody on the floor. The architect makes one move, the
 genesis manifest, and withdraws. The manifest's hash is the diary's first item.
 After launch the architect keeps a single control, `kill`. Outside governance
 reaches a living world by one door, the charter: a signed norm edition, read at a
-governance boundary after a committee of seats has testified.
+governance boundary. When enough seats are eligible, a committee testifies first;
+below quorum, the edition applies and the absence of testimony is ledgered.
 
 Dark is not secret. What the population writes is the product, and a living world's
 public wake publishes it as it lands: every return, the verdicts about it, the
 world block every seat reads, balances and account statements. What stays sealed
-until death is the machinery: learner state, router weights, propensities, private
-memory, prompts, per-decision scores. The diary that holds all of it is encrypted,
-hash-chained and append-only, and its seal is released only by the world's
-termination. Then it is read by behaviour, not by configuration.
+until death is the machinery: learner state, router weights, the propensities the
+kernel records for its routers, private memory, prompts, per-decision scores. A
+propensity a seat declares in its own return is part of that return, and so it is
+public. The diary that holds all of it is encrypted, hash-chained and append-only,
+and its seal is released only by the world's termination. Then it is read by
+behaviour, not by configuration.
 
 There is no father here. The architect seeds a roster and authors no orchestration
 the factory cannot tear down. It does not choose what is good or tell a seat how
