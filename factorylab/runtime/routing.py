@@ -173,6 +173,22 @@ class ContractQueue:
         clock = self.runtime.decision_ticks.get(handle)
         return None if clock is None else clock[1]
 
+    def terminal_tick(self, handle: str) -> int | None:
+        """The world tick a decision's round first closed at, or None while it is open.
+
+        Guarantees it is the first terminal event and never moves after: the cutoff for
+        a timeout, the tick the world fixed its outcome for a settlement (``ready_tick``,
+        R16b-1), so a later settlement, a deferral to its window's close or a credit
+        waiting on that close never lengthens it (Astra on #157; essay II.IV.c)."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None or len(clock) < 3 else clock[2]
+
+    def _close_round(self, handle: str, closed: int) -> None:
+        """Record ``handle``'s first terminal tick; a later one records nothing."""
+        clock = self.runtime.decision_ticks.get(handle)
+        if clock is not None and len(clock) < 3:
+            clock.append(closed)
+
     def expire_due(self) -> list[str]:
         """Time out every pending decision whose tick cutoff has passed (time audit T3).
 
@@ -214,10 +230,13 @@ class ContractQueue:
         rt = self.runtime
         for handle in expired:
             opened = self.opened_tick(handle)
-            if opened is None or self.queue.get(handle).channel == "policy":
+            if opened is None:
                 continue
             cutoff = self.deadline_tick(handle)
             closed = rt.ticks_consumed if cutoff is None else min(cutoff, rt.ticks_consumed)
+            self._close_round(handle, closed)
+            if self.queue.get(handle).channel == "policy":
+                continue
             rt.clockwork.record(f"settle:{rt._decision_role(handle)}", max(0, closed - opened))
         return expired
 
@@ -263,6 +282,9 @@ class ContractQueue:
         first = self.queue.get(handle).status is SettleStatus.PENDING
         result = self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
         opened = self.opened_tick(handle)
+        if first and opened is not None:
+            self._close_round(
+                handle, ready_tick if ready_tick is not None else self.runtime.ticks_consumed)
         if first and opened is not None and self.queue.get(handle).channel != "policy":
             # The settle loop of this decision's measured role (time audit T2): how long
             # a return waits for the signal its learners and its cards are fed from, a

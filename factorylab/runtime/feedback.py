@@ -2737,20 +2737,25 @@ class FeedbackMixin:
             "ts": self.clock.now_ns})
 
     def _record_router_round(self, state: Any, target: Any, handle: str) -> None:
-        """One learned seat round closes its router's loop, from its opening to now.
+        """One learned seat round closes its router's loop, from its opening to its
+        first terminal tick (``terminal_tick``).
 
         The router's own loop, in world ticks (time audit T3): the delay its
         abstentions wait and the period its epochs and gain steps respect (T6).
         Guarantees one closure per learned round, whichever path learned it (the
         direct return, or a decline, censoring or cutoff credited at its window's
         close, R16b-2): a meter fed only by the rounds that did not wait measured
-        the survivors (D5's selection bias). A NOOP is never a sample: its own due
-        is derived from this meter.
+        the survivors (D5's selection bias). The closure ends where the round did (its
+        cutoff, or the tick its outcome was fixed), never where an outer loop let it be
+        learned: a credit waiting on the price close, or a late score, is the outer
+        loop's delay, not this loop's (II.IV.c; Astra on #157). A NOOP is never a
+        sample: its own due is derived from this meter.
         """
         opened = self.queue.opened_tick(handle)
         if opened is None:
             return
-        ticks = max(0, self.ticks_consumed - opened)
+        closed = self.queue.terminal_tick(handle)
+        ticks = max(0, (self.ticks_consumed if closed is None else closed) - opened)
         target.latency[0] += ticks
         target.latency[1] += 1
         self.clockwork.record(f"router:{state.kind}", ticks)
