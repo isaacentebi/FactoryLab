@@ -87,6 +87,27 @@ while its world lives. Money is integer micro-USD. Times are ISO 8601 UTC.
 Any field may be missing; its panel then shows a dash. `data/example.json` is a complete
 instance of the schema with invented values.
 
+## Browser regression checks
+
+With the preview server on port 8792, start a separate headless Chrome profile (use
+an empty temporary directory for `/path/to/test-profile`):
+
+```bash
+python3 -m http.server 8792 --directory site
+# In another terminal:
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
+  --remote-debugging-port=8793 --user-data-dir=/path/to/test-profile \
+  --no-first-run --no-default-browser-check about:blank
+# In another terminal, with Node 22+ (no packages or build step):
+node site/tests/browser.mjs
+```
+
+The test uses Chrome's debugging protocol to substitute JSON responses without
+modifying the real data files. It checks all pages, missing fields, hostile strings,
+unknown spending, out-of-order source loads, and live reduced-motion changes.
+`SITE_ORIGIN` and `CHROME_DEBUGGER` can override the two local URLs. Stop both
+Chrome and the preview server after testing.
+
 ## Rules for editing
 
 - Content is our paraphrase. Quote the essay rarely, under 15 words, attributed and linked.
