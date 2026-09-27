@@ -411,3 +411,34 @@ def test_the_exit_fee_is_never_booked_as_money_and_the_real_close_is_booked_once
     table, late = table.late_realizations()
     assert late == {}
     assert table.account("opener").payoff.net_micro == -90_000  # the mark was the truth
+
+
+def _wind_down(table, oid, *, size, px, fee="0", coin="BTC", buy=False):
+    table = table.bind_wind_down(oid, size, coin=coin)
+    return table.fill(order_id=oid, coin=coin, is_buy=buy, size=size, px=px, fee_usd=fee)
+
+
+def test_a_wind_down_close_gives_each_opener_its_whole_pnl_and_opens_nothing():
+    """Sol on #152: the kill wind-down's account is no decision and never a closer. Its
+    sell closes both owners' longs FIFO; each opener keeps its whole P&L less its share
+    of the closing fee, what matched no lot opens nothing, and it holds no position."""
+    from factorylab.settlement.lots import WIND_DOWN
+
+    table = LotTable().start("a", 1).finish("a", 0).start("b", 2).finish("b", 0)
+    table = fill(table, "a", "oa", size="1", px="100")
+    table = fill(table, "b", "ob", size="1", px="120")
+    table = _wind_down(table, "wd-1", size="3", px="110", fee="0.3")  # 1 more than held
+    assert not table.lots  # flat: nothing left, nothing opened for the wind-down
+    assert table.account("a").realized_micro == Fraction(10_000_000 - 100_000)
+    assert table.account("b").realized_micro == Fraction(-10_000_000 - 100_000)
+    assert not any(r.handle == WIND_DOWN for r in table.returns)
+    with pytest.raises(ValueError, match="already attributed"):
+        table.bind_wind_down("wd-1", "1")
+
+
+def test_a_wind_down_close_of_unowned_inventory_credits_nobody():
+    """Inventory no return opened (seeded spot) closed by the wind-down: its P&L is
+    attributed to no owner, never invented."""
+    table = LotTable().seed_spot("PURR/USDC", "5", "4").start("a", 1).finish("a", 0)
+    table = _wind_down(table, "wd-2", size="5", px="5", coin="PURR/USDC")
+    assert not table.lots and table.account("a").realized_micro == 0

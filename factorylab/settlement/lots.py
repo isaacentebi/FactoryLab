@@ -152,6 +152,13 @@ FEE_UNKNOWN = "fee_unknown"
 NO_MARK = "no_mark"
 
 
+#: The kernel-owned consequence account every kill wind-down (and seal) closing order is
+#: bound to (``LotTable.bind_wind_down``): no decision, no grade, no reward. Its fills
+#: close the lots the venue flattened, FIFO per instrument across owners; it is never a
+#: closer (each opener keeps its whole P&L and pays the closing fee), never opens a lot
+#: and holds no position of its own. What it closes that no lot holds is unattributed.
+WIND_DOWN = "kill:wind-down"
+
 #: The markets whose exit a venue's taker schedule prices (an event token's is not).
 VENUE_FEE_MARKETS = ("perp", "spot")
 
@@ -381,6 +388,23 @@ class LotTable:
         return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity,
                                                             coin=coin)))
 
+    def bind_wind_down(self, order_id: str, size: str, *,
+                       coin: str | None = None) -> "LotTable":
+        """Bind a kill wind-down's closing order to the kernel's ``WIND_DOWN`` account.
+
+        Guarantees the same one-owner rule as ``order`` (an order already attributed
+        is refused), without a return account: the wind-down is no decision.
+        """
+        _require_id(order_id)
+        quantity = abs(exact(size))
+        if quantity <= 0:
+            raise ValueError("order size must be positive")
+        if any(o.order_id == order_id for o in self.orders) or any(
+                row[0] == order_id for row in self.released_orders):
+            raise ValueError("order already attributed")
+        return replace(self, orders=(*self.orders, LotOrder(order_id, WIND_DOWN, quantity,
+                                                            quantity, coin=coin)))
+
     def cancel(self, order_id: str) -> "LotTable":
         """Clear unfilled liability without deleting the order's historical ownership."""
         return replace(
@@ -434,7 +458,10 @@ class LotTable:
         is not an allocation key: FIFO P&L is computed from actual
         opening/closing prices. A fill whose order belongs to no open account
         is refused rather than pooled, and so is one that would execute more
-        against its order than the order's original quantity.
+        against its order than the order's original quantity. A fill of a kill
+        wind-down's order (``WIND_DOWN``) closes lots like any fill but is never a
+        closer: each opener keeps its whole P&L and pays the closing fee, as under a
+        liquidation, and what matches no lot opens nothing (it is unattributed).
         """
         _require_id(order_id)
         if "/" in coin:
@@ -470,9 +497,11 @@ class LotTable:
                      and (h == owner or any(lot.handle == h for lot in self.lots))}
         for handle in transient:
             accounts[handle] = ReturnAccount(handle, 0)
-        if not liquidation and owner not in accounts:
+        # A kill wind-down's close (``WIND_DOWN``): no closer, no new lot (Sol on #152).
+        kernel = owner == WIND_DOWN
+        if not liquidation and not kernel and owner not in accounts:
             raise ValueError("fill without an open consequence account")
-        if market in ("spot", "event") and not is_buy and quantity > sum(
+        if not kernel and market in ("spot", "event") and not is_buy and quantity > sum(
             (lot.size for lot in self.lots if lot.coin == coin and lot.market == market),
             Fraction(0),
         ):
@@ -502,9 +531,10 @@ class LotTable:
             # did. A self-close, or a liquidation (which has no closer, so its
             # fee is the liquidated opener's own cost), leaves it all with the opener.
             closer_pnl = (pnl * price / (lot.px + price)
-                          if owner != lot.handle and not liquidation else Fraction(0))
-            net = pnl - closer_pnl - lot.charges_micro * share - (closing_fee if liquidation
-                                                                  else 0)
+                          if owner != lot.handle and not liquidation and not kernel
+                          else Fraction(0))
+            net = pnl - closer_pnl - lot.charges_micro * share - (
+                closing_fee if liquidation or kernel else 0)
             closer_net += closer_pnl - closing_fee
             closes += 1
             if lot.handle in accounts:
@@ -528,7 +558,7 @@ class LotTable:
                 realized_micro=accounts[owner].realized_micro + closer_net,
                 closes=accounts[owner].closes + closes,
             )
-        if remainder and not liquidation:
+        if remainder and not liquidation and not kernel:
             lots.append(Lot(owner, coin, is_buy, remainder, price,
                             fee * remainder / quantity, market))
             if owner in accounts:
