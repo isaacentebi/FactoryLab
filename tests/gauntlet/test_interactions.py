@@ -14,7 +14,6 @@ from tests.gauntlet import populations as P
 
 pytestmark = pytest.mark.gate
 
-W16 = "needs wave 16"
 
 
 # --- I-10: evaluation-tier thrash must not manufacture producer-tier stable failure ------
@@ -136,8 +135,8 @@ def test_i5_an_unmeasured_card_is_never_a_failing_card(i5):
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} D5/R-E: saturation is published (SF-1d) before "
-                   "I-8 can check that publication never shortens the governance period")
+                   reason="blocked by SF-1d: the ld1 card never saturates for min_ratio "
+                   "updates, for the price-loop runaway reported with SF-1d (kernel gap)")
 def test_i8_saturation_informs_governance_but_never_shortens_its_period(ld1):
     assert g.sf1d_escalation(ld1.events, ld1.manifest, card="independent-uptake").ok
     assert g.th3_governance_gap(ld1.events, ld1.manifest).status != g.FAIL

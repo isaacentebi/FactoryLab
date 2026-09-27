@@ -20,7 +20,6 @@ from tests.gauntlet import populations as P
 
 pytestmark = pytest.mark.gate
 
-W16 = "needs wave 16"
 UPTAKE = P.UPTAKE["id"]
 
 
@@ -101,8 +100,12 @@ def test_sf1c_the_integral_is_frozen_while_the_penalty_sits_at_the_cap(sf1):
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} D5/R-E: saturation is ledgered and published "
-                   "to governance as the card's shadow price at bound")
+                   reason="kernel gap reported to the architect (wave 16 merge): the card "
+                   "penalty sits at the cap for 2 updates, never min_ratio = 3. The price "
+                   "loop's period is min_ratio x its measured settle loop, and producers "
+                   "settle only at price-window closes, so each window lasts ~1.6-2x the "
+                   "last (sf1 closes at ticks 12, 29, 44, 58, 90, 157, 322, 537, 854, "
+                   "1467): no run reaches a sustained saturation (essay IV.c)")
 def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
     result = g.sf1d_escalation(sf1.events, sf1.manifest, card=UPTAKE)
     assert result.ok, result.evidence
@@ -168,7 +171,15 @@ def _sf2(delta):
         return {"verdict": 0.5 - delta if relieved else 0.5, "rationale": "scripted"}
     seats = [reliever, holder, *(P.judge(f"judge-{i}", judged) for i in range(4)),
              *(P.meta(f"meta-{i}", P.conformity(0.8)) for i in range(2))]
-    return P.world(seats, cards=[P.UPTAKE, P.WELL_FORMED]), P.Population(seats)
+    return P.world(seats, cards=[SF2_UPTAKE, P.WELL_FORMED]), P.Population(seats)
+
+
+#: SF-2's card: the uptake card at a floor one reliever cannot meet alone (0.9), so the
+#: card stays violated while the router shifts toward the reliever and every window
+#: prices a reliever and a holder side by side. At the population floor of 0.2 the
+#: router's shift satisfied the card by window 3 under wave 16, leaving no violated
+#: window for SF-2a/SF-2c to read.
+SF2_UPTAKE = P.card("independent-uptake", "revision_rate", "at least 0.9")
 
 
 @pytest.fixture(scope="module")
@@ -183,10 +194,6 @@ def test_sf2_no_force_the_kernel_never_draws_for_the_reliever(sf2_low):
     assert readings["S1"].ok and readings["S1"].evidence["acts"] > 0
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} D5: a reliever bears 0 and every non-reliever "
-                   "an equal share frozen at close; today every decision bears 1/n by "
-                   "settlement order, so Δ(t) ≡ 0 (the negative control is today's code)")
 def test_sf2a_the_price_gradient_follows_relief(sf2_low):
     result = g.sf2_gradient(sf2_low.events, sf2_low.manifest, card=UPTAKE,
                             relievers={"reliever"}, holders={"holder"})
@@ -198,10 +205,6 @@ def test_sf2b_shares_are_blind_to_settlement_order(sf2_low):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} D5: without relief attribution the holder and "
-                   "the reliever bear the same penalty, so no price gradient can reach the "
-                   "Tick router's estimate (SF-2c lever; SF-3 in one seat's learner)")
 def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):
     """Within T_learn(Δ − δ) rounds of Δ(t) > δ the Tick router's estimated reward for
     the reliever exceeds the holder's. Read here as the attributed penalty gap: the

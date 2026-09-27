@@ -1465,6 +1465,8 @@ def sf2b_order_blind(events: list[Mapping], manifest: Mapping, *, card: str,
                 continue
             if term.get("owner") is not None or term.get("observation") in EXACT_SHARES:
                 continue  # an attributable or own-contribution share is not a generic split
+            if float(need(term, "share")) == 0.0:
+                continue  # wave 16 D5: a relieving decision bears 0; it is not a non-reliever
             key = (need(term, "window"), role)
             groups[key].add(round(float(need(term, "share")), 12))
             order[key].append(float(need(term, "share")))

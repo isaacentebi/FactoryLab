@@ -142,14 +142,13 @@ def test_ld3_counter_case_a_world_that_fits_its_repricing_is_viable():
 # --- LD-2c ------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
-                   reason=(
-    "needs wave 16 D2 and R-I Q3. The refusal needs the grading horizon H_f = "
-    "world_repricing / min_ratio in venue time (wave 16 D2, not on this branch) and a "
-    "patience term (R-I: 'Q3: patience later'). SUNSET: when D2 lands, a world that lists "
-    "a venue with funding and no patience covering L = round_trip_fee / funding_rate is "
-    "refused at load, and this marker is removed; if patience has not landed by the "
-    "edition-7 world file, that world is refused and this test must pass before it ships."))
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=(
+    "kernel gap reported to the architect (wave 16 merge): D2 landed (H_f = "
+    "world_repricing / min_ratio) but no patience term did, so a world whose carry "
+    "breaks even after L = round_trip_fee / funding_rate > H_f still loads (essay "
+    "IV.b: an explorer is compensated sooner than the lifetime of what it found, by "
+    "anticipatory settlement or guaranteed patience). The marker's own sunset clause "
+    "applies: edition 7's world must be refused before it ships"))
 def test_ld2c_a_world_whose_discoveries_outlive_the_grading_horizon_needs_patience():
     """Longrun1's measured carry: funding 5.4 bp/h, a 9 bp round trip, so a carry breaks
     even after L = 9 / 5.4 ≈ 1.67 h, longer than H_f = 1 h / 3 = 20 min. With no

@@ -23,7 +23,6 @@ from tests.gauntlet import populations as P
 
 pytestmark = pytest.mark.gate
 
-W16 = "needs wave 16"
 UNTIL = 50  # the window after which flip is steady
 
 
@@ -63,8 +62,11 @@ def test_th1b_negative_control_without_the_thrash_price_it_fails():
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason=f"{W16} R-E (amended): the thrash price's integral "
-                   "freezes at the cap, the same anti-windup rule as SF-1c")
+                   reason="population (c): th1's thrash episodes last two windows "
+                   "(flagged 11-12 and 31-32), so the thrash penalty peaks at 0.23 and "
+                   "never sits at penalty_cap 0.5; the anti-windup rule is unexercised. "
+                   "A population holding thrash for about 9 windows is needed (SF-0 "
+                   "derives eta so a unit violation saturates in r*k = 9)")
 def test_th1b_the_thrash_integral_is_frozen_at_the_cap(th1):
     result = g.th1b2_frozen(th1.events, th1.manifest)
     assert result.ok, result.evidence
