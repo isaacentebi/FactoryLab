@@ -828,6 +828,45 @@ def test_a_named_trade_opened_late_is_judgeable_until_its_own_horizon():
     assert "before its consequence horizon" in rt._hindsight_reason("probe", unread)
 
 
+def test_a_kill_censors_every_item_still_open_once_and_pays_nothing():
+    """Coordinator ruling on #152: after termination nothing learns, so every item a
+    later boundary would have settled is ledgered censored by termination: an evaluator
+    awaiting its grade window (``decision.censored``), a ballot awaiting a later
+    post-activation window (``ballot.censored``) and a lambda margin not yet due
+    (``margin.censored``). The producer its verdict already graded settles normally
+    first and is not censored again. Nothing is pending in the sealed state."""
+    from factorylab.runtime.venue import TERMINATION
+
+    rt = _runtime(verdicts=(0.7,))
+    _mids(rt, BTC="100")
+    producer, event = _unsettled_produce(rt)
+    judge = _judge(rt, event, "eval-a")
+    assert rt.pending[judge].evaluation and not rt.pending[judge].grade_closed
+    ballot = rt.queue.open(actor="committee", event_id="ballot", channel="policy",
+                           propensity=PropensityRecord(("seed-decider",), (1.0,),
+                                                       "seed-decider", 0, "committee", "s"),
+                           deadline_ns=10**18, parent_handle=None, cost_ceiling=0)
+    rt.pending_votes.append({"handle": ballot, "assembly": "seed-decider",
+                             "amendment_id": "m-1", "vote": True,
+                             "activation_window": 3, "baseline": None})
+    rt.margin_windows[7] = {"due": 99, "decisions": {}, "cards": {}}
+    rt.kill("test: open items")
+    assert not rt.pending and not rt.pending_votes and not rt.margin_windows
+    (decision,) = _rows(rt, "decision.censored")  # once
+    assert decision["handle"] == judge and decision["reason"] == TERMINATION
+    assert decision["evaluation"] is True
+    (graded,) = rt.queue.history(producer)  # settled on its verdict, never censored
+    assert graded.status is SettleStatus.SETTLED
+    (voted,) = _rows(rt, "ballot.censored")
+    (margin,) = _rows(rt, "margin.censored")
+    assert voted["handle"] == ballot and margin["window"] == 7
+    assert voted["reason"] == margin["reason"] == TERMINATION
+    for handle in (judge, ballot):
+        (settled,) = rt.queue.history(handle)
+        assert settled.status is SettleStatus.CENSORED and settled.score == 0.0
+    assert rt.termination.final
+
+
 # --- no judgement at any tier is scored on a consequence already known ------------------
 
 

@@ -120,8 +120,8 @@ def settle_terminal(rt) -> None:
     path a due close takes (``_close_price_window``), so every share freezes exactly
     as at a normal close and every settlement deferred to it (wave 16, D5) settles;
     no next window opens; (6) returns are delivered; then, in ``kill``, the
-    production mark, the wind-down (its fills are late money), ``Terminated`` and
-    the seal.
+    production mark, the wind-down (its fills are late money), every item still
+    open censored by termination (``censor_terminal``), ``Terminated`` and the seal.
     """
     try:
         through = getattr(rt, "advance_through_ns", None)
@@ -138,6 +138,50 @@ def settle_terminal(rt) -> None:
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         print(f"factorylab kill: the final consequences were not settled "
               f"({type(exc).__name__})", file=sys.stderr)
+
+
+#: Why a decision, ballot or margin still open at the seal closed without its signal.
+TERMINATION = "termination"
+
+
+def censor_terminal(rt) -> None:
+    """Guarantees nothing is silently open at the seal: every item still waiting on a
+    later boundary is ledgered censored by termination, once, and pays no reward.
+
+    The last step before ``Terminated``. After termination nothing learns, so the
+    record is what matters: a decision still pending (a producer awaiting verdicts, or
+    an evaluator awaiting the tier above's grade window) is settled censored in the
+    queue (``decision.censored``); a ballot awaiting a later post-activation window is
+    settled censored on the policy channel (``ballot.censored``); a lambda margin not
+    yet due is dropped (``margin.censored``). Anything available settled normally in
+    ``settle_terminal``, before the wind-down. Never raises into a kill.
+    """
+    from factorylab.kernel.queue import SettleStatus
+
+    open_status = (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
+    try:
+        for handle in sorted(rt.pending):
+            rec = rt.pending.pop(handle)
+            if rt.queue.get(handle).status in open_status:
+                rt.queue.settle(handle, channel=rec.channel, score=0.0,
+                                status=SettleStatus.CENSORED,
+                                definition_version="terminated-v1", sampling_ref=None)
+            rt.ledger.append({"kind": "decision.censored", "handle": handle,
+                              "reason": TERMINATION, "evaluation": rec.evaluation})
+        for vote in list(rt.pending_votes):
+            if rt.queue.get(vote["handle"]).status in open_status:
+                rt._settle_policy(vote["handle"], 0.0, SettleStatus.CENSORED,
+                                  definition="terminated-v1")
+            rt.ledger.append({"kind": "ballot.censored", "handle": vote["handle"],
+                              "amendment_id": vote["amendment_id"], "reason": TERMINATION})
+        rt.pending_votes[:] = []
+        for index in sorted(rt.margin_windows):
+            row = rt.margin_windows.pop(index)
+            rt.ledger.append({"kind": "margin.censored", "window": index,
+                              "due": row["due"], "reason": TERMINATION})
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: open items were not censored ({type(exc).__name__})",
+              file=sys.stderr)
 
 
 def seal_recorded_market(rt) -> None:
@@ -238,6 +282,7 @@ class VenueMixin:
             report["production_state"] = winddown.KILLED
             self.wind_down_report = report
             self.exposure_state = report["exposure_state"]
+            censor_terminal(self)  # the last step before the seal
             try:
                 witness.note_wind_down(
                     wind_down=owed, orders=report.get("orders", 0),
