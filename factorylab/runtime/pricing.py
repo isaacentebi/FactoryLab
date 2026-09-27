@@ -1395,7 +1395,10 @@ class PricingMixin:
             self._settle_priced(handle, channel=row["channel"], score=row["score"],
                                 definition_version=row["definition_version"],
                                 sampling_ref=row["sampling_ref"], cards=row["cards"],
-                                unresolved=tuple(row["unresolved"]))
+                                unresolved=tuple(row["unresolved"]),
+                                # A row checkpointed before R16b-1 has none: its meter
+                                # closes at this close, as it did.
+                                ready_tick=row.get("ready_tick"))
 
     def _settle_priced(
         self,
@@ -1407,6 +1410,7 @@ class PricingMixin:
         sampling_ref: str | None,
         cards: str,
         unresolved: tuple[str, ...] = (),
+        ready_tick: int | None = None,
     ) -> None:
         """Settle a judged score less the card penalty, clipped to [0, 1]; both are ledgered.
 
@@ -1429,7 +1433,10 @@ class PricingMixin:
             # decisions, frozen when the window closes, so it settles then.
             self.deferred_settlements[handle] = {
                 "channel": channel, "score": score, "definition_version": definition_version,
-                "sampling_ref": sampling_ref, "cards": cards, "unresolved": list(unresolved)}
+                "sampling_ref": sampling_ref, "cards": cards, "unresolved": list(unresolved),
+                # R16b-1: the world fixed this score now. Its settle loop closes here;
+                # the wait for the price close is the outer loop's own phase (II.IV.c).
+                "ready_tick": self.ticks_consumed}
             self.ledger.append({"kind": "price.deferred", "handle": handle,
                                 "window": self.price_origins[handle]["origin"],
                                 "ts": self.clock.now_ns})
@@ -1454,6 +1461,7 @@ class PricingMixin:
             status=status,
             definition_version=definition_version,
             sampling_ref=sampling_ref,
+            ready_tick=ready_tick,
         )
         self.window.outcomes += 1
         # Codex on #152: a settlement with no measured world outcome is censored, the

@@ -1408,9 +1408,11 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
 `novelty.max_lifetime_windows` and `treasury.forward_wait_windows` are refused.
 
 * **Measured loops** (`runtime/clockwork.py`, checkpointed): the settle loop of
-  each measured role (`settle:<role>`, a decision's open to its first outcome,
-  censorings included), its scored loop (`scored:<role>`, the same when a real
-  score closed it), each router kind's rounds (`router:<kind>`), settled forecasts
+  each measured role (`settle:<role>`, a decision's open to the tick the world
+  fixed its first outcome, censorings included: a score whose settlement waits for
+  its window's close counts at the tick it was fixed, never at the close, R16b-1;
+  a policy-channel decision, an outer loop on its own schedule, is no role's
+  sample), its scored loop (`scored:<role>`, the same when a real score closed it), each router kind's rounds (`router:<kind>`), settled forecasts
   (`forecast`) and conversions (`capital`). A meter reports its p90, never below
   one tick.
 * **Derived loops**: each outer loop's next period is drawn as

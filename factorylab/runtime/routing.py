@@ -224,22 +224,32 @@ class ContractQueue:
         Guarantees every settlement the runtime makes, whatever path made it (a
         verdict, a ballot, a censoring), is seen once by the runtime's settlement
         hook after the kernel retained it: what a decision composed is credited
-        from its one settlement (W4, ``CompositionMixin._settled``).
+        from its one settlement (W4, ``CompositionMixin._settled``). Its role's settle
+        meter closes when the world fixed the decision's outcome (``ready_tick``),
+        never at a wait an outer loop imposed on it (R16b-1); a policy decision is
+        never a role's sample.
         """
         if channel != self.get(handle).channel:
             raise ValueError("settlement must address the selected return channel")
+        ready_tick = kwargs.pop("ready_tick", None)
         first = self.queue.get(handle).status is SettleStatus.PENDING
         result = self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
         opened = self.opened_tick(handle)
-        if first and opened is not None:
+        if first and opened is not None and self.queue.get(handle).channel != "policy":
             # The settle loop of this decision's measured role (time audit T2): how long
             # a return waits for the signal its learners and its cards are fed from, a
             # censoring at its horizon included. The scored loop is the same closure
             # when a real score closed it: what a judgement of that role waits on
             # before its evidence is complete (the cascade's inner loop, T10).
+            # R16b-1: it closes when the world fixed the outcome (``ready_tick``),
+            # never at a wait an outer loop imposed on it (a D5 settlement deferred to
+            # its window's close), so no loop measures its own period as its inner one
+            # (II.IV.c). A policy decision (uptake, a lambda post, a ballot) is an
+            # outer loop on its own schedule, never a role's settle loop.
             rt = self.runtime
             role = rt._decision_role(handle)
-            ticks = max(0, rt.ticks_consumed - opened)
+            closed = ready_tick if ready_tick is not None else rt.ticks_consumed
+            ticks = max(0, closed - opened)
             rt.clockwork.record(f"settle:{role}", ticks)
             if kwargs.get("status") == SettleStatus.SETTLED:
                 rt.clockwork.record(f"scored:{role}", ticks)
