@@ -220,7 +220,7 @@ def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):
     assert reliever and holder and max(reliever) < min(p for p in holder if p > 0)
 
 
-# --- future work (R16b-10) ---------------------------------------------------------------
+# --- intermittent support (R16b-10, wave 16c) --------------------------------------------
 
 
 def _half_judge(view):
@@ -229,23 +229,65 @@ def _half_judge(view):
     return P.verdict(0.3)(view) if view.window % 2 == 0 else P.decline(view)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="intermittent measurement escapes the ratchet; answered by "
-                   "sampling rate, next wave")
-def test_an_intermittently_measured_failure_is_still_ratcheted():
-    """R16b-10's one support rule enters a card into the failing attractor only over a
-    wholly measured tail. A population that measures its violating card only every
-    other window (the judges alternate a low verdict and a decline, by window) is never
-    entered, so the duration price never reaches it. The answer is the sampling rate
-    (enough samples per window), not a weaker support rule."""
+@pytest.fixture(scope="module")
+def intermittent(shared_run):
+    """One live run supplies the actuator proof and the remaining ratchet limitation."""
     seats = [P.producer("steady-a", P.hold), P.producer("steady-b", P.hold),
              *(P.judge(f"judge-{i}", _half_judge) for i in range(4)),
              *(P.meta(f"meta-{i}", P.conformity(0.8)) for i in range(2))]
     cards = [P.card("verdict-floor", "verdict_mean", "at least 0.5", answers_for="producer",
                     norm="useful inquiry")]
-    run = P.run(P.world(seats, cards=cards), P.Population(seats), events=300)
+    # §IV.b: declare H = 9s / min_ratio so the ordinary actuator clock can respond
+    # in this bounded world. No clock is forced; 220 events cover the full nine-window
+    # immune horizon (216 still closes only eight), with synchronized refusals intact.
+    manifest = P.world(seats, cards=cards, changes={"timing": {"world_repricing": "9s"}})
+    return shared_run("sf-intermittent", lambda: P.run(
+        manifest, P.Population(seats), events=220, instrument=False))
+
+
+def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured(intermittent):
+    """Extra real draws cannot manufacture the fully measured tail R16b-10 requires."""
+    run = intermittent
+    windows = {r["window"]: r for r in run.rows("price.window")}
+    immune = run.rows("immune.window")
+    assert len(immune) >= run.physics.H
     violated = g.card_violations(run.events, "verdict-floor")
-    assert violated and all(v > 0 for v in violated.values())  # violated when measured
-    assert [r for r in run.events
-            if r.get("kind") in ("immune.price_ratchet", "immune.price_ratchet_saturated")
-            and r.get("card_id") == "verdict-floor"]
+    assert violated and all(v == pytest.approx(0.4) for v in violated.values())
+    raises = run.rows("sampling.rate_raise")
+    assert raises  # Outside xfail: a broken actuator must fail, not become expected.
+    for row in raises:
+        gap = row["gaps"]["verdict-floor"]
+        assert gap["unmeasured_windows"] > 0
+        assert "verdict-floor" in windows[gap["last_measured_window"]]["values"]
+        assert "verdict-floor" not in windows[row["window"]]["values"]
+        assert row["rate_after"] > row["rate_before"]
+    first = raises[0]
+    assert any(r["seq"] > first["seq"]
+               and first["rate_before"] <= r["sample"] < r["share"]
+               and r["share"] > first["rate_before"]
+               for r in run.rows("route.multi_judge"))
+    after = [r for r in immune if r["window"] > first["window"]]
+    assert any(r["gap"] is not None and r["gap"] >= run.physics.gap_threshold for r in after)
+    assert any(r["window"] % 2 for r in after)
+    for row in immune:
+        measured = row["profile"]["card:verdict-floor"]
+        if row["window"] % 2:
+            assert measured is None
+        else:
+            assert measured == pytest.approx(0.3)
+        assert "card:verdict-floor" not in row["violated_cards"]
+        assert not row["flags"]["stable_failure"]
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="sampling buys extra draws but all judges still decline on odd "
+                   "windows; R16b-10 requires a wholly measured tail, so no ratchet")
+def test_an_intermittently_measured_failure_is_still_ratcheted(intermittent):
+    """§II.b duration pricing remains unreachable under synchronized refusal gaps.
+
+    Producers hold throughout: this is not producer produce/NOOP alternation. The
+    independent passing test proves the §IV.b rate response without weakening support
+    or interpreting a judge's refusal as a measurement.
+    """
+    assert [r for r in intermittent.rows("immune.price_ratchet", "immune.price_ratchet_saturated")
+            if r.get("card_id") == "verdict-floor"]
