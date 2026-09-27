@@ -199,8 +199,11 @@ class Assembly:
             messages.extend(self.memory.get(req.parent_handle, []))
         messages.append({"role": "user", "content": req.prompt_text()})
         policy = req.scoring_channel == "policy"
-        # ``wire_schema`` is a pure function of these four values and of module
-        # constants, and one contract is rendered several times per invocation, so
+        # Essay II.IV.c: neither the factory nor its control apparatus may be slower
+        # than its environment, so the loop's own cost is kept down wherever that
+        # changes nothing it does. ``wire_schema`` is a pure function of these four
+        # values and of module constants, and one contract is rendered several
+        # times per invocation, so
         # its answer is kept by content (``_wire_key``) on this assembly, whose
         # lifetime bounds the memo. A hit returns a fresh copy equal in every value,
         # type and key order to what ``wire_schema`` returns, so no request byte and
