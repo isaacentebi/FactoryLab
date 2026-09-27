@@ -337,11 +337,12 @@ NULLABLE_BY_VALUE = {
 }
 
 
-def _literally_nullable(*, omitted):
-    """Every (kind, field) of ``UNIT_FIELDS`` some emitter leaves out (``omitted``), or
-    writes as the constant None or as a conditional with a None branch (not ``omitted``)."""
+def _literally_nullable(*, omitted, root=ROOT):
+    """Every (kind, field) of ``UNIT_FIELDS`` some emitter under ``root`` leaves out
+    (``omitted``), or writes as the constant None or as a conditional with a None branch
+    (not ``omitted``)."""
     found = set()
-    for path in sorted((ROOT / "factorylab").rglob("*.py")):
+    for path in sorted((root / "factorylab").rglob("*.py")):
         for node in ast.walk(ast.parse(path.read_text())):
             if not isinstance(node, ast.Dict):
                 continue
@@ -370,6 +371,51 @@ def test_s4_nullable_fields_are_exactly_what_the_emitters_write_as_none():
     ``NULLABLE`` exactly what some emitter writes as None."""
     assert set(g.OMITTED) == _literally_nullable(omitted=True)
     assert set(g.NULLABLE) == _literally_nullable(omitted=False) | set(NULLABLE_BY_VALUE)
+
+
+#: The last main before wave 16: the tree whose emitters wrote a pre-wave-16 diary.
+BEFORE_WAVE_16 = "5db5ead"
+
+
+def _tree_at(commit, into):
+    """``factorylab/`` as it stood at ``commit``, or a skip where the history is absent."""
+    import subprocess
+
+    archive = subprocess.run(["git", "-C", str(ROOT), "archive", commit, "factorylab"],
+                             capture_output=True, check=False)
+    if archive.returncode:
+        pytest.skip(f"{commit} is not in this checkout's history")
+    subprocess.run(["tar", "-x", "-C", str(into)], input=archive.stdout, check=True)
+    return into
+
+
+def test_s4_legacy_omissions_are_exactly_what_the_pre_wave_16_emitters_left_out(tmp_path):
+    """Codex on c78f2bc: a diary a pre-wave-16 world wrote holds its emitters' shapes.
+    ``LEGACY_OMITTED`` is exactly what those emitters left out and today's write; every
+    field they wrote as None is still ``NULLABLE``."""
+    old = _tree_at(BEFORE_WAVE_16, tmp_path)
+    assert set(g.LEGACY_OMITTED) == (_literally_nullable(omitted=True, root=old)
+                                     - _literally_nullable(omitted=True))
+    assert _literally_nullable(omitted=False, root=old) <= set(g.NULLABLE)
+
+
+def test_s4_reads_the_real_pre_wave_16_thrash_charge_whole():
+    """Codex on c78f2bc (gauntlet.py:2804): the captured pre-wave-16 ``thrash.charged``
+    row (``reward_before``, no ``raw``) is bounded, not malformed; without either, or
+    with ``raw`` missing from a wave-16 row, it fails."""
+    manifest = {"prices": {"penalty_cap": 0.5}}
+    legacy = REAL["legacy_rows"]["thrash.charged"]
+    assert "raw" not in legacy and "reward_before" in legacy
+    assert g.s4_boundedness([legacy], manifest).ok
+    neither = {k: v for k, v in legacy.items() if k != "reward_before"}
+    result = g.s4_boundedness([neither], manifest)
+    assert result.status == g.FAIL
+    assert {bad["field"] for bad in result.evidence["bad"]} == {"reward_before", "raw"}
+    assert g.s4_boundedness([_set(legacy, "reward_before", 1.5)], manifest).status == g.FAIL
+    current = {k: v for k, v in REAL["rows"]["thrash.charged"].items() if k != "raw"}
+    result = g.s4_boundedness([current], manifest)
+    assert result.status == g.FAIL
+    assert {bad["field"] for bad in result.evidence["bad"]} == {"reward_before", "raw"}
 
 
 def test_s4_a_missing_required_field_fails_on_every_real_row():

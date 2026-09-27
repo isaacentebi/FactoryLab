@@ -2801,7 +2801,7 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
     "router.carried": ("reward",),
     "router.step_rescaled": ("reward", "stepped_as"),
     # Wave 16 (R10-l): the round's raw score and its learned value on the one map; a
-    # pre-wave-16 row carried the reward before the charge instead.
+    # pre-wave-16 row carried the reward before the charge instead (``LEGACY_OMITTED``).
     "thrash.charged": ("reward", "reward_before", "raw", "charge"),
     "propensity.learned": ("reward",),
     "evaluator.settled": ("consequence", "grade", "reward"),
@@ -2886,6 +2886,20 @@ OMITTED: dict[tuple[str, str], Any] = {
     **{("consequence.uninformative", name): (lambda row: "reason" in row)
        for name in ("q", "y")},
 }
+#: The unit fields a pre-wave-16 emitter left out, each under the condition it did. The
+#: gauntlet reads a diary its world wrote, and a world launched before wave 16 wrote
+#: the historical shapes (5db5ead, the last main before it). Pinned against that tree's
+#: emitters by tests/gauntlet/test_criteria_schema.py:
+#: - ``thrash.charged`` ``raw``: the old emitter (5db5ead feedback.py
+#:   ``_thrash_charged``, :2356) wrote ``charge``, ``reward_before`` and ``reward``;
+#:   the round's raw score came in wave 16 (R10-l), as ``reward_before`` left.
+#: Every other kind S4 reads kept its unit and capped fields across wave 16: the router
+#: priced rows only gained ``status``; ``price.update`` gained ``at_cap``, ``bound`` and
+#: ``integrator_frozen``, none bounded here; ``consequence.marked`` and
+#: ``verdict.consequence_late`` stopped being written, their old rows whole.
+LEGACY_OMITTED: dict[tuple[str, str], Any] = {
+    ("thrash.charged", "raw"): lambda row: "reward_before" in row,
+}
 #: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
 CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
     "price.penalty": ("penalty",),
@@ -2942,7 +2956,7 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
                 if value is ABSENT:
                     # Only a field the kernel's emitter leaves out, under the condition
                     # it does, may be absent (``OMITTED``); every other absence fails.
-                    omitted = OMITTED.get((kind, name))
+                    omitted = OMITTED.get((kind, name)) or LEGACY_OMITTED.get((kind, name))
                     if omitted is None or not omitted(row):
                         bad.append({"kind": kind, "field": name, "value": None,
                                     "missing": True, "absent": True,
