@@ -483,11 +483,62 @@ def _cpu_s() -> float:
     return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
 
 
+#: Whether a world event was stepped during this test's setup or call.
+_STEPPED_A_WORLD = pytest.StashKey[bool]()
+
+
+class _WorldGuard:
+    """Records, per test, whether a world stepped an event during its setup or call.
+
+    Every world, whatever starts it (``run_world``, ``Runtime.run``, a resume's replay,
+    the CLI or an operator script in process), steps each event through
+    ``Runtime._process_event``: for this session that method is wrapped to mark the
+    test whose setup or call is running. The static classifier reads source and can
+    miss a world behind a wrapper; this reads what ran. It lives in test code only:
+    the class is patched for the session and put back at its end.
+    """
+
+    def __init__(self):
+        self.current = None  # the item whose setup or call is running, or None
+        self.original = None
+
+    def pytest_sessionstart(self, session):
+        from factorylab.runtime import loop
+
+        self.original = original = loop.Runtime._process_event
+        guard = self
+
+        def stepping(rt, event):
+            if guard.current is not None:
+                guard.current.stash[_STEPPED_A_WORLD] = True
+            return original(rt, event)
+
+        loop.Runtime._process_event = stepping
+
+    def pytest_sessionfinish(self, session):
+        from factorylab.runtime import loop
+
+        if self.original is not None:
+            loop.Runtime._process_event = self.original
+
+
+def _stepped_a_world_problem(item) -> str | None:
+    """Why a check-tier test broke the tier's rule that it runs no world, or None."""
+    if item.stash.get(_STEPPED_A_WORLD, False):
+        return "stepped a world event"
+    return None
+
+
 def _measured(item, when):
+    guard = item.config.pluginmanager.get_plugin("factorylab-world-guard")
     start = _cpu_s()
+    if guard is not None and when in ("setup", "call"):
+        guard.current = item
     try:
         return (yield)
     finally:
+        if guard is not None:
+            guard.current = None
         item.stash.setdefault(_PHASE_CPU, {})[when] = _cpu_s() - start
 
 
@@ -521,8 +572,9 @@ def pytest_runtest_makereport(item, call):
                               else "check" if item.get_closest_marker("check") else None)
     if report.when != "call" or not report.passed or report.factorylab_tier != "check":
         return report
-    problem = _check_limit_problem(item.stash[_PHASE_CPU], item.stash[_PHASE_WALL],
-                                   _seconds_from_env(CHECK_LIMIT_ENV, CHECK_LIMIT_DEFAULT_S))
+    problem = _stepped_a_world_problem(item) or _check_limit_problem(
+        item.stash[_PHASE_CPU], item.stash[_PHASE_WALL],
+        _seconds_from_env(CHECK_LIMIT_ENV, CHECK_LIMIT_DEFAULT_S))
     if problem is not None:
         report.outcome = "failed"
         report.longrepr = (
@@ -574,6 +626,8 @@ class _GateBudget:
 
 
 def pytest_configure(config):
+    # Every process that runs tests watches its worlds.
+    config.pluginmanager.register(_WorldGuard(), "factorylab-world-guard")
     # Only the process that sees every report judges the budget: the controller under
     # xdist, or the one process without it.
     if not hasattr(config, "workerinput"):

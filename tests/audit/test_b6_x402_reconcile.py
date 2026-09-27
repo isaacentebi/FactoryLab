@@ -16,6 +16,7 @@ pytestmark = pytest.mark.usefixtures("write_ahead")
 
 
 
+@pytest.mark.gate  # steps a world event through the runtime
 def test_next_tick_reconciles_uncertainty_without_recharging_or_inventing_a_refund(monkeypatch):
     rt = make_runtime()
     try:

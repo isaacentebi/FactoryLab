@@ -330,6 +330,7 @@ def test_one_run_reads_base_through_the_operator_s_rpc_only(tmp_path, monkeypatc
     assert len(w["venice"].paid) == 1 and "eth_call" in operator
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 @pytest.mark.parametrize("name", ["SIGINT", "SIGTERM", "SIGHUP"])
 def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
         tmp_path, monkeypatch, capsys, name):
@@ -379,6 +380,7 @@ def operator_main(w, monkeypatch, out):
                            "--duration", "60m", "--source-root", str(repo_root())])
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 def test_a_signal_as_the_finally_begins_or_during_the_report_cannot_skip_it(
         tmp_path, monkeypatch, capsys):
     from scripts import edition4_rehearsal as rehearsal
@@ -413,6 +415,7 @@ def test_a_signal_as_the_finally_begins_or_during_the_report_cannot_skip_it(
     assert not handled & signal.pthread_sigmask(signal.SIG_BLOCK, [])  # and released
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 def test_nohup_keeps_sighup_ignored_and_the_run_goes_on(tmp_path, monkeypatch, capsys):
     w = wired(tmp_path, monkeypatch)
     settle = w["venice"].settle
@@ -448,6 +451,7 @@ def test_restore_puts_back_a_handler_installed_from_c_as_the_default():
         signal.signal(signal.SIGHUP, previous)
 
 
+@pytest.mark.gate  # the rehearsal's entry runs a world
 def test_rehearse_without_stops_arms_nothing(tmp_path, monkeypatch):
     from scripts import edition4_rehearsal as rehearsal
 

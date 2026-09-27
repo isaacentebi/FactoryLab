@@ -9,10 +9,14 @@ budget fails the run unless it is excepted by name. These pin all three.
 import ast
 from pathlib import Path
 
+import pytest
+
 from tests.conftest import (
+    _STEPPED_A_WORLD,
     CHECK_WALL_CEILING_S,
     _check_limit_problem,
     _files_over_budget,
+    _stepped_a_world_problem,
     _world_functions,
 )
 
@@ -115,3 +119,19 @@ def test_a_gate_file_over_its_budget_fails_unless_it_is_excepted_by_name():
     assert _files_over_budget(spent, 60.0, {"tests/c.py": "why it cannot be smaller"}) == {
         "tests/a.py": 61.0}
     assert _files_over_budget(spent, None, {}) == {}
+
+
+@pytest.mark.check  # deliberately: the guard must catch a check test that steps a world
+def test_a_check_test_that_steps_a_one_event_world_fails_under_the_guard(request):
+    """The runtime guard, live: building a runtime steps nothing; running a one-event
+    world marks this test, and the check tier's report fails it with the fix. The mark
+    is then cleared, so this test itself passes (it is the guard's own proof)."""
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+
+    rt = Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=.1)
+    assert _stepped_a_world_problem(request.node) is None
+    rt.run()
+    assert _stepped_a_world_problem(request.node) == "stepped a world event"
+    request.node.stash[_STEPPED_A_WORLD] = False
