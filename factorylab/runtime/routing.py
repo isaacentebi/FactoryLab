@@ -41,6 +41,15 @@ from factorylab.world.models import ModelRequest
 #: (``forecast``), a grade of the tier below (``conformity``), or a counter-verdict
 #: against another judge (``counter``).
 JUDGING_SHAPES = frozenset({"forecast", "conformity", "counter"})
+
+#: Kernel channels whose decisions are no measured role's settle sample (time audit
+#: T2): a policy decision (uptake, a lambda post, a ballot) is an outer loop on its own
+#: schedule, and a consequence decision is a sealed forecast
+#: (``open_forecast_decision``, settled by ``SettlementEngine``), whose loop is the
+#: ``forecast`` meter. Without a seat or an emitted kind, a forecast fell through
+#: ``_decision_role`` to ``producer`` and a stalled one lengthened producer pricing
+#: (Sol on #157).
+ROLELESS_CHANNELS = frozenset({"policy", "consequence"})
 #: The adversarial layer's reward shapes (essay II.III.b): an antagonist's exposure
 #: and an adversarial judge's counter-verdict. Their routing mass is capped at
 #: ``evaluation.adversarial_share`` (the majority of evaluations stay
@@ -173,6 +182,30 @@ class ContractQueue:
         clock = self.runtime.decision_ticks.get(handle)
         return None if clock is None else clock[1]
 
+    def terminal_tick(self, handle: str) -> int | None:
+        """The world tick a decision's round first closed at, or None while it is open.
+
+        Guarantees it is the first terminal event and never moves after: the cutoff for
+        a timeout, the tick the world fixed its outcome for a settlement (``ready_tick``,
+        R16b-1), so a later settlement, a deferral to its window's close or a credit
+        waiting on that close never lengthens it (Astra on #157; essay II.IV.c)."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None or len(clock) < 3 else clock[2]
+
+    def terminal_window(self, handle: str) -> int | None:
+        """The price window a decision's round first closed in (``terminal_tick``), or
+        None while it is open or when it closed before any window opened."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None or len(clock) < 4 else clock[3]
+
+    def _close_round(self, handle: str, closed: int) -> None:
+        """Record ``handle``'s first terminal tick and the price window open then; a
+        later terminal event records nothing."""
+        clock = self.runtime.decision_ticks.get(handle)
+        if clock is not None and len(clock) < 3:
+            window = getattr(self.runtime, "window", None)
+            clock.extend([closed, getattr(window, "index", None)])
+
     def expire_due(self) -> list[str]:
         """Time out every pending decision whose tick cutoff has passed (time audit T3).
 
@@ -199,23 +232,56 @@ class ContractQueue:
                 if reason is not None and rt._settle_declined(decision.handle, reason):
                     continue
                 due.append(decision.handle)
-        return self.queue.time_out(due, now_ns)
+        return self.time_out(due, now_ns)
+
+    def time_out(self, handles, now_ns):
+        """Time out ``handles`` in the kernel queue; each closes its role's settle loop.
+
+        R16b-2: a cutoff is how long the loop took to close. Guarantees each decision
+        this timed out adds one ``settle:<role>`` closure, from its opening to its tick
+        cutoff (the tick it timed out at when it has none), so the meter measures every
+        closure and never only the survivors; a policy decision or a forecast
+        (``ROLELESS_CHANNELS``) is no role's sample.
+        A late settlement after it is not a first closure and records nothing.
+        """
+        expired = self.queue.time_out(handles, now_ns)
+        rt = self.runtime
+        for handle in expired:
+            opened = self.opened_tick(handle)
+            if opened is None:
+                continue
+            cutoff = self.deadline_tick(handle)
+            closed = rt.ticks_consumed if cutoff is None else min(cutoff, rt.ticks_consumed)
+            self._close_round(handle, closed)
+            if self.get(handle).channel in ROLELESS_CHANNELS:
+                continue  # the resolved channel: a polymorphic return's selected one
+            rt.clockwork.record(f"settle:{rt._decision_role(handle)}", max(0, closed - opened))
+        return expired
 
     def forget_ticks(self) -> None:
-        """Drop the tick record of every decision whose outcome is final.
+        """Drop the tick record of every decision that is final and fully learned.
 
-        A final decision is never cut off again and its router has learned it in
-        the event that settled it, so only pending and timed-out ones (whose late
-        settlement still reaches a learner) keep their record.
+        Guarantees a round's opening and first terminal tick outlive both of their
+        consumers: its role's settle meter (at that terminal) and its router's meter
+        (when the router learns it). A record is kept while the kernel still owes the
+        decision anything (``DecisionQueue.owed``: pending, timed out with a late
+        settlement's right, a retained child, or a delivered return its consumer has
+        not read, which is how a router learns), and while its router is owed a credit
+        at its window's close (D5, R16b-2). A settlement deferred to that close is
+        delivered only then, so dropping the record at the close lost its router
+        sample (Astra on #157).
         """
         rt = self.runtime
+        owed = getattr(rt, "noop_credits", {})
         for handle in list(rt.decision_ticks):
+            if handle in owed:
+                continue
             try:
-                status = self.queue.get(handle).status
+                still_owed = self.queue.owed(handle)
             except KeyError:
                 del rt.decision_ticks[handle]
                 continue
-            if status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+            if still_owed is None:
                 del rt.decision_ticks[handle]
 
     def outstanding(self, actor=None):
@@ -227,22 +293,38 @@ class ContractQueue:
         Guarantees every settlement the runtime makes, whatever path made it (a
         verdict, a ballot, a censoring), is seen once by the runtime's settlement
         hook after the kernel retained it: what a decision composed is credited
-        from its one settlement (W4, ``CompositionMixin._settled``).
+        from its one settlement (W4, ``CompositionMixin._settled``). Its role's settle
+        meter closes when the world fixed the decision's outcome (``ready_tick``),
+        never at a wait an outer loop imposed on it (R16b-1); a policy decision is
+        never a role's sample.
         """
         if channel != self.get(handle).channel:
             raise ValueError("settlement must address the selected return channel")
+        ready_tick = kwargs.pop("ready_tick", None)
         first = self.queue.get(handle).status is SettleStatus.PENDING
         result = self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
         opened = self.opened_tick(handle)
         if first and opened is not None:
+            self._close_round(
+                handle, ready_tick if ready_tick is not None else self.runtime.ticks_consumed)
+        # The resolved channel (``get``): a polymorphic seat's selected output, never
+        # its raw ``emits`` (Codex on #157).
+        if (first and opened is not None
+                and self.get(handle).channel not in ROLELESS_CHANNELS):
             # The settle loop of this decision's measured role (time audit T2): how long
             # a return waits for the signal its learners and its cards are fed from, a
             # censoring at its horizon included. The scored loop is the same closure
             # when a real score closed it: what a judgement of that role waits on
             # before its evidence is complete (the cascade's inner loop, T10).
+            # R16b-1: it closes when the world fixed the outcome (``ready_tick``),
+            # never at a wait an outer loop imposed on it (a D5 settlement deferred to
+            # its window's close), so no loop measures its own period as its inner one
+            # (II.IV.c). A policy decision or a forecast (``ROLELESS_CHANNELS``) is
+            # never a role's settle loop.
             rt = self.runtime
             role = rt._decision_role(handle)
-            ticks = max(0, rt.ticks_consumed - opened)
+            closed = ready_tick if ready_tick is not None else rt.ticks_consumed
+            ticks = max(0, closed - opened)
             rt.clockwork.record(f"settle:{role}", ticks)
             if kwargs.get("status") == SettleStatus.SETTLED:
                 rt.clockwork.record(f"scored:{role}", ticks)

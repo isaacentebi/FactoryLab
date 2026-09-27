@@ -123,3 +123,20 @@ def test_invalid_cadence_parameters(field, value):
     params = {"sample": 200, "min_ratio": 3, "backstop": 200, field: value}
     with pytest.raises(ValueError):
         GovernanceCadence(Ledger(clock_ns=lambda: 0), **params)
+
+
+def test_the_consequence_floor_is_h_and_a_non_positive_floor_is_refused():
+    """R16b-4: the floor replaces the backstop, is ledgered when it moves, and is a
+    positive integer of ticks; nothing else is accepted."""
+    ledger = Ledger()
+    cadence = GovernanceCadence(ledger, sample=10, min_ratio=3, backstop=60)
+    assert cadence.consequence_period_events() == 60
+    cadence.set_floor(120)
+    assert cadence.consequence_period_events() == 120
+    cadence.set_floor(120)  # unchanged: nothing more is ledgered
+    rows = [i for i in ledger._recovery_items() if i["kind"] == "cadence.floor"]
+    assert [(r["before"], r["ticks"]) for r in rows] == [(60, 120)]
+    for bad in (0, -1, 1.5, True, "120"):
+        with pytest.raises(ValueError):
+            cadence.set_floor(bad)
+    assert cadence.consequence_period_events() == 120

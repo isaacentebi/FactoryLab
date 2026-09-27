@@ -252,10 +252,11 @@ def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_win
     assert any(i["graded_by"] is not None for i in settled)
 
 
-# Two seeds, since tier recursion draws on the stream; seed 3 is the one whose world
-# reaches a fourth tier within these 120 events (the first tier-four grade lands at
-# event 107), so its row proves every shallower tier as well.
-@pytest.mark.parametrize("seed", [1, 3])
+# Two seeds, since tier recursion draws on the stream; seed 2 is one whose world
+# reaches a fourth tier within these 120 events, so its row proves every shallower tier
+# as well. (Seed 3 did before wave 16b floored the consequence loop at H and closed
+# settle meters at score ready; its first tier-four grade now settles after event 140.)
+@pytest.mark.parametrize("seed", [1, 2])
 def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(scripted_runtime_run, seed):
     """Essay II.III.b: evaluators are graded from above, tier upon tier; II.IV.c: a
     verdict rises a tier only after settling, through a window at least min_ratio times
@@ -288,7 +289,7 @@ def test_a_fourth_tier_grades_the_third_and_its_grades_count(scripted_runtime_ru
     grade-window fix (dd1ee21) claimed tier four; this world reaches it: a tier-three
     grader's MetaVerdict rises through its own cascade window, the tier above grades
     it, and the grade counts."""
-    rt, items = _recursive_world(scripted_runtime_run, 3)
+    rt, items = _recursive_world(scripted_runtime_run, 2)
     assert rt.stats.meta_verdicts.get(4, 0) >= 1
     assert [i for i in items if i["kind"] == "evaluator.meta_grade" and i["tier"] == 4]
     assert any(i["tier"] == 3 for i in items if i["kind"] == "cascade.release")

@@ -164,19 +164,67 @@ def test_sf1a_counts_measured_observations_and_expires_with_the_tail():
     result = g.sf1a_detection(sparse + closes, M, card="c")
     assert result.status == g.UNSUPPORTED
     assert result.evidence["episodes"][0]["observations"] == 6
-    # Measured every other window long enough: the deadline is the tenth observation's
-    # window (19), not onset + 9 windows (10).
+    # Measured every other window only: no whole k-window tail ever measured it, so the
+    # kernel never enters it (R16b-10) and no flag is demanded, however long.
     long = [_price_window(w, 0.0) for w in range(1, 41, 2)]
-    closes = [_w(i, sf=i >= 15) for i in range(1, 45)]
-    result = g.sf1a_detection(long + closes, M, card="c")
-    assert result.ok and result.evidence["detected"][0]["deadline"] == 19
     late = [_w(i, sf=i >= 25) for i in range(1, 45)]
-    assert g.sf1a_detection(long + late, M, card="c").status == g.FAIL
+    assert g.sf1a_detection(long + late, M, card="c").status != g.FAIL
+    unflagged = [_w(i) for i in range(1, 45)]
+    assert g.sf1a_detection(long + unflagged, M, card="c").status == g.UNSUPPORTED
+    # A whole tail first (windows 1-3), then every other window: demanded, and the
+    # deadline is the tenth observation's window (17), not onset + 9 windows (10).
+    mixed = [_price_window(w, 0.0) for w in (1, 2, 3, *range(5, 41, 2))]
+    closes = [_w(i, sf=i >= 15) for i in range(1, 45)]
+    result = g.sf1a_detection(mixed + closes, M, card="c")
+    assert result.ok and result.evidence["detected"][0]["deadline"] == 17
+    assert g.sf1a_detection(mixed + late, M, card="c").status == g.FAIL
     # Measurements four windows apart: the tail (k = 3) loses each before the next.
     apart = [_price_window(w, 0.0) for w in range(1, 60, 4)]
     result = g.sf1a_detection(apart + [_w(i) for i in range(1, 62)], M, card="c")
     assert result.status == g.UNSUPPORTED
     assert {e["observations"] for e in result.evidence["episodes"]} == {1}
+
+
+def test_sf1a_rebases_the_demand_to_the_first_whole_tail_after_sparse_observations():
+    """Codex on #157: an episode holds more than H sparse observations (every other
+    window, 1-21: eleven) before its first whole k-window tail (21, 22, 23: support at
+    23). The demand is rebased there, keeping the slack a fully measured episode gets
+    (H - k + 1 = 7 observations after support: window 30), so an organ that never flags
+    fails and is never read as unsupported."""
+    rows = [_price_window(w, 0.0) for w in (*range(1, 22, 2), *range(22, 41))]
+    never = g.sf1a_detection(rows + [_w(i) for i in range(1, 45)], M, card="c")
+    assert never.status == g.FAIL, never.evidence
+    (episode,) = never.evidence["failed"]
+    assert (episode["support"], episode["deadline"]) == (23, 30)
+    # Negative control: an organ that flags within the rebased deadline passes.
+    within = g.sf1a_detection(rows + [_w(i, sf=i >= 30) for i in range(1, 45)], M,
+                              card="c")
+    assert within.ok and within.evidence["detected"][0]["deadline"] == 30
+    # One window past it fails.
+    late = g.sf1a_detection(rows + [_w(i, sf=i >= 31) for i in range(1, 45)], M, card="c")
+    assert late.status == g.FAIL
+    # Astra's counterexample: dense from 22 to 100; a flag only at 100 fails.
+    dense = [_price_window(w, 0.0) for w in (*range(1, 22, 2), *range(22, 101))]
+    only_100 = g.sf1a_detection(dense + [_w(i, sf=i == 100) for i in range(1, 104)], M,
+                                card="c")
+    assert only_100.status == g.FAIL and only_100.evidence["failed"][0]["deadline"] == 30
+
+
+def test_sf1a_counts_no_flag_before_support_and_none_in_an_unsupported_episode():
+    """Sol on #157: a flag before the episode's support is not a detection of it, so an
+    organ that flagged once at window 5 and never after support (23) fails; and an
+    episode that never had a whole measured tail demands nothing and is never passed by
+    a stray flag in it: unsupported."""
+    rows = [_price_window(w, 0.0) for w in (*range(1, 22, 2), *range(22, 41))]
+    early = g.sf1a_detection(rows + [_w(i, sf=i == 5) for i in range(1, 45)], M, card="c")
+    assert early.status == g.FAIL and early.evidence["failed"][0]["first_flag"] is None
+    both = g.sf1a_detection(rows + [_w(i, sf=i in (5, 28)) for i in range(1, 45)], M,
+                            card="c")
+    assert both.ok and both.evidence["detected"][0]["first_flag"] == 28
+    sparse = [_price_window(w, 0.0) for w in range(1, 41, 2)]  # never a whole tail
+    stray = g.sf1a_detection(sparse + [_w(i, sf=i == 25) for i in range(1, 45)], M,
+                             card="c")
+    assert stray.status == g.UNSUPPORTED, stray.evidence
 
 
 def _ratchets(*pairs):
@@ -297,19 +345,40 @@ def _saturated(*pairs):
 
 
 def test_sf1d_durations_are_read_per_saturation_episode():
-    """The sweep (A): two sustained runs at the cap, each counted from 1, pass; the count
-    may restart only at 1, and every sustained run needs its own episode reaching r."""
+    """The sweep (A), as the kernel writes the duration (R-E, R10-e): a saturated ratchet
+    carries the failing attractor's own duration, so an episode starts wherever the
+    attractor stood and rises by one per row at a later window; every sustained run
+    needs its own episode reaching r inside its windows."""
     two = _windowed("c", [*[(0.5, 1.0, 0.5)] * 3, (0.2, 1.0, 0.2), *[(0.5, 1.0, 0.5)] * 3])
     both = _saturated((1, 1), (2, 2), (3, 3), (5, 1), (6, 2), (7, 3))
     assert g.sf1d_escalation(two + both, M, card="c").ok
-    one_episode = g.sf1d_escalation(two + _saturated((1, 1), (2, 2), (3, 3), (5, 4)),
-                                    M, card="c")
-    assert one_episode.status == g.FAIL and one_episode.evidence["unmatched"] == [
-        {"run": [5, 7]}]
-    skipped = g.sf1d_escalation(
+    # The attractor held across the uncapped update: its duration continued (4).
+    held = g.sf1d_escalation(two + _saturated((1, 1), (2, 2), (3, 3), (5, 4)), M, card="c")
+    assert held.ok, held.evidence
+    # It resumed at the duration it stood at, after plain ratchets (2): a new episode.
+    resumed = g.sf1d_escalation(
         two + _saturated((1, 1), (2, 2), (3, 3), (5, 2), (6, 3), (7, 4)), M, card="c")
-    assert skipped.status == g.FAIL
-    assert [m["duration"] for m in skipped.evidence["malformed"]] == [2, 3, 4]
+    assert resumed.ok, resumed.evidence
+    # Violating: the second run's saturation never reached r inside its windows.
+    short = g.sf1d_escalation(two + _saturated((1, 1), (2, 2), (3, 3), (5, 1)), M,
+                              card="c")
+    assert short.status == g.FAIL and short.evidence["unmatched"] == [{"run": [5, 7]}]
+
+
+def test_sf1d_a_claimed_duration_is_backed_by_the_ratchet_stream():
+    """Sol on #157: three capped updates and one isolated saturated row claiming
+    ``duration = 10`` is one saturated window, not sustained saturation: nothing in the
+    diary counted the duration up to 10, so the run is unmatched and SF-1d fails. A
+    duration counted up by ordinary ratchets (1-7) and then saturated ones (8-10) at
+    the run's windows passes."""
+    at_cap = _windowed("c", [(0.5, 1.0, 0.5)] * 3, first=11)
+    isolated = g.sf1d_escalation(at_cap + _saturated((13, 10)), M, card="c")
+    assert isolated.status == g.FAIL, isolated.evidence
+    assert isolated.evidence["unmatched"] == [{"run": [11, 13]}]
+    assert isolated.evidence["uncredited"] == [{"window": 13, "duration": 10}]
+    counted = _ratchets(*[(w, w) for w in range(1, 8)]) + _saturated((11, 8), (12, 9),
+                                                                      (13, 10))
+    assert g.sf1d_escalation(at_cap + counted, M, card="c").ok
 
 
 def test_sf1d_episodes_are_aligned_to_their_runs_not_counted():
@@ -1755,12 +1824,11 @@ def test_k1_s4_a_penalty_only_diary_is_checked_not_unsupported():
     assert g.s4_boundedness([over | {"penalty": 0.3}], M).ok
 
 
-def test_a1_sf1a_measurements_k_apart_are_one_episode_as_the_kernel_reads_them():
-    """Sol A1 (disagreed, with the kernel's own predicate): the tail is the last k
-    windows (versions.py:82) and a card fails while every window of it that measured the
-    card violated, and one did (live.py:334-347). Measurements k apart keep a violating
-    measurement in every tail between them, so the kernel's failing set never drops the
-    card: one episode. k + 1 apart, one tail holds none: two episodes."""
+def test_a1_sf1a_a_card_enters_the_attractor_only_over_a_wholly_measured_tail():
+    """R16b-10, the kernel's one support rule (``live.persistent_violations``): a card
+    enters the failing attractor only when every window of its ``k``-window tail
+    measured it violating; measurements k apart (a gap in every tail) never enter it;
+    a card already held stays in it across the gaps (M-6)."""
     from factorylab.versioning.live import persistent_violations
 
     k = g.physics(M).k
@@ -1769,15 +1837,20 @@ def test_a1_sf1a_measurements_k_apart_are_one_episode_as_the_kernel_reads_them()
         return {"window": index, "profile": {"foo": 0.5} if measured else {},
                 "regions": {"foo": {"kind": "min", "lo": 1.0, "hi": None, "scale": 1.0}}}
 
-    for gap, episodes in ((k, 1), (k + 1, 2)):
-        last = 2 + gap
-        diary = {i: window(i, i in (2, last)) for i in range(1, last + 1)}
-        # The kernel's reading at every window from the first full tail to the second
-        # measurement: diary[W - k + 1 .. W].
-        failing = {w: persistent_violations([diary[i] for i in range(w - k + 1, w + 1)])
-                   == ["foo"] for w in range(max(k, 2), last + 1)}
-        assert all(failing.values()) is (episodes == 1), failing
-        assert len(g.violation_episodes({2: 1.0, last: 1.0}, k)) == episodes
+    last = 2 + k
+    sparse = {i: window(i, i in (2, last)) for i in range(1, last + 1)}
+    tails = {w: [sparse[i] for i in range(w - k + 1, w + 1)] for w in range(k, last + 1)}
+    assert not any(persistent_violations(t) for t in tails.values())
+    assert all(persistent_violations(t, held=("foo",)) == ["foo"]
+               for w, t in tails.items() if w >= 2 and any(x["profile"] for x in t))
+    dense = [window(i, True) for i in range(1, k + 1)]
+    assert persistent_violations(dense) == ["foo"]
+    # SF-1a never demands a flag of an episode no whole tail measured.
+    violated = {2: 1.0, last: 1.0}
+    rows = [{"kind": "price.window", "window": w, "values": {"foo": 0.5},
+             "regions": {"foo": {"kind": "min", "lo": 1.0, "hi": None, "scale": 1.0}}}
+            for w in violated] + [_w(i) for i in range(1, last + 2)]
+    assert g.sf1a_detection(rows, M, card="foo").status == g.UNSUPPORTED
 
 
 def test_b1_s8_a_down_step_is_the_kernels_exactly():
@@ -2215,9 +2288,11 @@ def test_s1_an_orphaned_act_fails_with_no_sampled_decision_at_all():
 
 
 def test_sf1d_a_broken_saturation_count_fails_before_any_sustained_run():
-    broken = _saturated((5, 1), (6, 3))
-    result = g.sf1d_escalation(broken, M, card="c")
-    assert result.status == g.FAIL and result.evidence["malformed"]
+    """A duration below one, or a count that rose without the organ acting again (the
+    same window), is no duration at all: it fails whatever the runs show."""
+    for broken in (_saturated((5, 1), (6, 0)), _saturated((5, 1), (5, 2))):
+        result = g.sf1d_escalation(broken, M, card="c")
+        assert result.status == g.FAIL and result.evidence["malformed"], broken
     assert g.sf1d_escalation(_saturated((5, 1), (6, 2)), M,
                              card="c").status == g.UNSUPPORTED
 
@@ -2259,7 +2334,7 @@ def _thin_violations():
         "SF-1b": (g.sf1b_ratchet_cadence, [_w(3, acts=True), *_ratchets((3, 1))], {}),
         "SF-1c": (g.sf1c_anti_windup, _updates("c", [(0.5, 1.0, 0.5), (0.5, 1.0, 0.6)]),
                   {"card": "c"}),
-        "SF-1d": (g.sf1d_escalation, _saturated((5, 1), (6, 3)), {"card": "c"}),
+        "SF-1d": (g.sf1d_escalation, _saturated((5, 1), (6, 0)), {"card": "c"}),
         "SF-1e": (g.sf1e_gain, [_w(1, sf=True), _gain(1, 0.2, 0.15, "cleared")], {}),
         "SF-1f": (g.sf1f_route_open, [_novelty(amount=1)], {}),
         "SF-2b": (g.sf2b_order_blind, [_penalty("a", 0.5), _penalty("b", 0.25)],
@@ -2676,3 +2751,135 @@ def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
     row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
            "effective": None}
     assert g.s4_boundedness([row | {"unresolved": ["c"]}], M).ok
+
+
+# --- wave 16b follow-ups -----------------------------------------------------------------
+
+
+def test_sf1b_reads_a_saturated_ratchet_as_the_ratchet_at_its_bound():
+    """Once a card reaches its own bound the organ ledgers a saturated ratchet with the
+    duration still rising; SF-1b reads it as the ratchet, never a missed one."""
+    closes = [_w(i, acts=i % 3 == 0, sf=True) for i in range(1, 13)]
+    rising = closes + _ratchets((3, 1), (6, 2)) + _saturated((9, 3), (12, 4))
+    assert g.sf1b_ratchet_cadence(rising, M).ok
+    # Violating: a saturated ratchet whose duration fell back is still a reset.
+    reset = g.sf1b_ratchet_cadence(closes + _ratchets((3, 1), (6, 2))
+                                   + _saturated((9, 1), (12, 2)), M)
+    assert reset.status == g.FAIL
+    assert any("duration_reset" in p for p in reset.evidence["problems"])
+
+
+def _timeout(handle):
+    """``decision.timeout``: the round reached its tick cutoff (queue.py ``time_out``)."""
+    return {"kind": "decision.timeout", "return": {"handle": handle, "channel": "timeout",
+                                                   "status": "timed_out", "score": 0.0}}
+
+
+def test_sf1e_counts_a_round_that_timed_out_at_its_cutoff_and_once():
+    """R16b-2: a cutoff is how long the router's loop took to close, and a late
+    settlement after it is not a second closure."""
+    def diary(*closing):
+        rows = [_open("r1", "a")]
+        for window in range(1, 9):
+            rows.append(_price_window(window, 0.5))
+            rows += [row for at, row in closing if at == window]
+        return _seq(rows)
+
+    only_late = g.router_round_periods(diary((7, _settled("r1"))))
+    cut_off = g.router_round_periods(diary((2, _timeout("r1")), (7, _settled("r1"))))
+    assert cut_off["router:Tick"] < only_late["router:Tick"]
+    assert cut_off == g.router_round_periods(diary((2, _timeout("r1"))))
+
+
+def test_th1c_and_th1d_charge_nothing_on_a_round_drawn_in_the_niche():
+    """The kernel's niche predicate (``g.niche_rounds``): a protected trial's decision
+    (``price.contribution`` with ``niche: true``) bears no thrash charge, whatever its
+    movement; a charge on one fails both criteria."""
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7
+        {"kind": "price.contribution", "handle": "d2", "window": 1, "niche": True},
+    ])
+    assert g.expected_thrash_charges(rows, M, core_only=False)["d2"] == 0.0
+    learned = rows + [_settled("d2"), {"kind": "router.learned", "handle": "d2",
+                                        "router": "router:Tick", "learner": "router:Tick",
+                                        "path": "direct", "exempt": "niche"}]
+    assert g.th1c_movement(learned, M).status != g.FAIL  # nothing was owed
+    charged = learned + [{"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+                          "charge": 0.4 * 0.7, "reward": 0.4}]
+    assert g.th1c_movement(charged, M).status == g.FAIL
+    assert g.th1d_frontier(charged, M).status == g.FAIL
+
+
+def test_s5b_a_penalty_ledgered_before_its_decision_opened_fails():
+    """R16b-8: S5b builds its actors and draws in ledger order. A settled score (or a
+    learned round) ledgered before its ``decision.open`` is never credited to a router:
+    it fails, whatever the mean it would have made."""
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.3, "penalty": 0.0, "reward": 0.3}
+    in_order = [_open("s0", "seat"), _penalty("s0", 0.0) | {"raw": 0.3}, credit]
+    assert g.s5b_observed_neutral(in_order, M).ok
+    reversed_ = [_penalty("s0", 0.0) | {"raw": 0.3}, _open("s0", "seat"), credit]
+    result = g.s5b_observed_neutral(reversed_, M)
+    assert result.status == g.FAIL
+    assert result.evidence["before_open"] == [{"kind": "price.penalty", "handle": "s0"}]
+
+
+def _learned_row(handle, raw, router="router:Tick"):
+    return {"kind": "router.learned", "handle": handle, "router": router, "learner": router,
+            "action": "seat", "path": "direct", "scored": True, "raw": raw}
+
+
+def test_s5b_a_learned_round_traces_to_its_routers_open():
+    """Sol on #157: a ``router.learned`` row for a handle nobody opened ("ghost") seeded
+    the router's mean and passed. A learned round must trace to an earlier
+    ``decision.open`` of its handle by its router: a ghost fails, and so does a round
+    opened by another actor."""
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.9, "penalty": 0.0, "reward": 0.9}
+    traced = [_open("s0", "seat"), _learned_row("s0", 0.9), credit]
+    assert g.s5b_observed_neutral(traced, M).ok
+    ghost = g.s5b_observed_neutral([_learned_row("ghost", 0.9), credit], M)
+    assert ghost.status == g.FAIL, ghost.evidence
+    assert ghost.evidence["untraced_learned"] == [
+        {"handle": "ghost", "router": "router:Tick", "opened_by": None}]
+    other = g.s5b_observed_neutral(
+        [_open("s0", "seat", actor="router:Other"), _learned_row("s0", 0.9), credit], M)
+    assert other.status == g.FAIL and other.evidence["untraced_learned"][0]["opened_by"] == (
+        "router:Other")
+
+
+def test_sf1e_a_credited_round_closes_at_its_timeout_not_where_it_was_learned():
+    """Codex on #157 (the gauntlet's mirror of Astra A): a round of router:Slow times out
+    one window after it opens, and its credit waits for a price close, so its
+    ``router.learned`` row is ledgered three windows after the open. The kernel's meter
+    closes the round at its cutoff (``closed_window``), so the router's period is 1, not
+    3; a gain climbing one step every 9 windows is then too slow for the organ's cadence
+    and fails. Read at the learned row's position, the period was 3 and it passed."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 120)]
+
+    def diary(closed_after):
+        rows = []
+        for w in range(1, 118):
+            rows.append({"kind": "price.window", "window": w})
+            if w % 5 == 0:
+                rows.append(_open(f"r{w}", "a", actor="router:Slow"))
+            if w % 5 == 1 and w > 5:
+                rows.append(_timeout(f"r{w - 1}"))
+            if w % 5 == 3 and w > 5:
+                rows.append({"kind": "router.learned", "handle": f"r{w - 3}",
+                             "router": "router:Slow", "learner": "router:Slow",
+                             "action": "a", "path": "credit", "scored": False,
+                             "closed_window": w - 3 + 1 + closed_after})
+        return rows
+
+    at_cutoff = diary(closed_after=1)  # opened in window w + 1, cut off in w + 2
+    assert g.router_round_periods(at_cutoff)["router:Slow"] == 1
+    climb = [_gain(w, round(0.1 + 0.05 * n, 2), round(0.15 + 0.05 * n, 2),
+                   router="router:Slow") for n, w in enumerate(range(3, 84, 9))]
+    assert g.sf1e_gain(at_cutoff + closes + climb, M).status == g.FAIL
+    # Negative control: a round that truly closed three windows after its open allows it.
+    at_close = diary(closed_after=3)
+    assert g.router_round_periods(at_close)["router:Slow"] == 3
+    assert g.sf1e_gain(at_close + closes + climb, M).ok

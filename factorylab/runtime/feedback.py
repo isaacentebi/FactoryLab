@@ -332,9 +332,14 @@ class FeedbackMixin:
         question. It belongs to the window — it is named in the report — but it
         is not evidence yet, and the upward report is made of evidence (§6.C). A
         subject this runtime cannot address at all (a judgement of an event rather
-        than a decision) is not held open by a fact that will never arrive.
+        than a decision) is not held open by a fact that will never arrive. A subject
+        whose score is fixed and whose settlement waits only for its window's price
+        share (D5, ``deferred_settlements``) is finished evidence (R16b-1, R16b-3):
+        the fixed score is the evidence, the price share the outer loop's business.
         """
         about = ev.payload.get("about_handle") or ev.payload.get("about")
+        if about in self.deferred_settlements:
+            return True
         try:
             return self.queue.get(about).status is not SettleStatus.PENDING
         except (KeyError, TypeError):
@@ -1410,6 +1415,16 @@ class FeedbackMixin:
         if horizon is None:
             horizon = self.ev.consequence_backstop_ticks * tick_ns(self.tick_clock)
         return horizon
+
+    def _horizon_ticks(self) -> int:
+        """H in delivered ticks, rounded up (``ticks_for``): the first tick at or after H,
+        so no loop derived from the consequence loop is shorter than ``min_ratio`` times
+        H in wall time (essay II.IV.c; Codex on #157: at a tick that does not divide H,
+        floor division put the consequence loop short of H). A world that lists no venue
+        has no H: its consequence backstop (R16b-4)."""
+        if self.m.consequence_horizon_ns is None:
+            return self.ev.consequence_backstop_ticks
+        return ticks_for(self.m.consequence_horizon_ns, self.tick_clock)
 
     def _patience_ns(self) -> int:
         """How long a consequence may stay unanswered after its judgement opened.
@@ -2688,20 +2703,70 @@ class FeedbackMixin:
         # Booked only for a round that trained the router: the seat's own baseline, the
         # delay abstentions wait for and the scales they are priced on all describe
         # rounds the router learned from, never one that trained nothing.
-        opened = self.queue.opened_tick(lr.handle)
-        if opened is not None:
-            # The router's own loop, in world ticks (time audit T3): the delay its
-            # abstentions wait and the period its epochs and gain steps respect (T6).
-            ticks = max(0, self.ticks_consumed - opened)
-            target.latency[0] += ticks
-            target.latency[1] += 1
-            self.clockwork.record(f"router:{state.kind}", ticks)
+        self._router_learned(state, target, lr.handle, prop.chosen,
+                             "direct" if target is state else "carried", scored=settled)
+        self._record_router_round(state, target, lr.handle)
         if settled:
             target.observed.record(prop.chosen, charged)
             # Read, not consumed: the seat's own learner reads it too (R10-g); the
             # price evidence is pruned once both have (``_prune_price_evidence``).
             target.record_round(lr.definition_version,
                                 self.raw_scores.get(lr.handle, float(lr.score)))
+
+    def _router_learned(self, drawer: Any, target: Any, handle: str, action: str,
+                        path: str, *, scored: bool) -> None:
+        """Ledger the one ``router.learned`` row of a router round that trained (R16b-5).
+
+        Observability only, never physics (the ledger is not seat-visible): the round,
+        the router that drew it and the one that learned it, the drawn arm, its raw
+        score, card penalty, thrash charge (``exempt: "niche"`` when a stored charge
+        was dropped by the niche rule) and learned reward, whether a real score trained
+        it (``scored``: only those enter the router's observed mean, D4), the path
+        that trained it (``direct``, ``carried`` to a successor, or ``credit`` at its
+        window's close), and where its loop closed: its opening and first terminal tick
+        and the price window it closed in (``closed_window``; None when unrecorded).
+        Guarantees "every round learned exactly once" (essay I.a,
+        Blum-Mansour) is a diary invariant: one row per trained round, NOOP included.
+        """
+        value = getattr(self, "_router_round_value", None) or {}
+        self._router_round_value = None
+        if value.get("handle") != handle:
+            value = {}
+        self.ledger.append({
+            "kind": "router.learned", "handle": handle, "router": drawer.learner.id,
+            "learner": target.learner.id, "action": action, "path": path, "scored": scored,
+            # Where the round's loop closed, as its router meter reads it (Codex on
+            # #157): opened and first terminal tick, and the price window it closed in,
+            # never the later tick or window it was learned in.
+            "opened_tick": self.queue.opened_tick(handle),
+            "closed_tick": self.queue.terminal_tick(handle),
+            "closed_window": self.queue.terminal_window(handle),
+            **{k: v for k, v in value.items() if k != "handle"},
+            "ts": self.clock.now_ns})
+
+    def _record_router_round(self, state: Any, target: Any, handle: str) -> None:
+        """One learned seat round closes its router's loop, from its opening to its
+        first terminal tick (``terminal_tick``).
+
+        The router's own loop, in world ticks (time audit T3): the delay its
+        abstentions wait and the period its epochs and gain steps respect (T6).
+        Guarantees one closure per learned round, whichever path learned it (the
+        direct return, or a decline, censoring or cutoff credited at its window's
+        close, R16b-2): a meter fed only by the rounds that did not wait measured
+        the survivors (D5's selection bias). The closure ends where the round did (its
+        cutoff, or the tick its outcome was fixed), never where an outer loop let it be
+        learned: a credit waiting on the price close, or a late score, is the outer
+        loop's delay, not this loop's (II.IV.c; Astra on #157). A NOOP is never a
+        sample: its own due is derived from this meter.
+        """
+        opened = self.queue.opened_tick(handle)
+        if opened is None:
+            return
+        closed = self.queue.terminal_tick(handle)
+        ticks = max(0, (self.ticks_consumed if closed is None else closed) - opened)
+        target.latency[0] += ticks
+        target.latency[1] += 1
+        self.clockwork.record(f"router:{state.kind}", ticks)
 
     def _abstention_owed_or_credited(self, lr: LearningReturn) -> bool:
         """Whether this abstention is already owed, or was credited on an earlier return.
@@ -2778,7 +2843,13 @@ class FeedbackMixin:
                                 **({"status": credit["status"]} if "status" in credit else {}),
                                 "penalty": penalty, "reward": reward, "ts": now})
             fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
-            self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
+            learned = self._apply_router_round(drawer, handle, credit["p"], credit["executed"],
+                                               fb)
+            if learned:
+                self._router_learned(drawer, self._successor_state(drawer), handle, action,
+                                     "credit", scored=False)
+            if learned and action != NOOP:
+                self._record_router_round(drawer, self._successor_state(drawer), handle)
 
     def _priced_abstention(self, handle: str) -> float:
         """An abstention's price: the card penalty charged against the router's
@@ -2863,8 +2934,15 @@ class FeedbackMixin:
         charge of equal size lower it equally. A thrash charge is ledgered
         (``thrash.charged``).
         """
+        stored = self.thrash_charges.get(handle, 0.0) if router is not None else 0.0
         charge = self._thrash_charge(handle) if router is not None else 0.0
         learned = self._learned(raw, penalty + charge, self._charge_bound(router is not None))
+        if router is not None:
+            # What ``router.learned`` states once the round trains (R16b-5).
+            self._router_round_value = {
+                "handle": handle, "raw": raw, "penalty": penalty, "charge": charge,
+                "reward": learned,
+                **({"exempt": "niche"} if stored > 0 and charge == 0 else {})}
         if charge > 0:
             self.ledger.append({"kind": "thrash.charged", "handle": handle,
                                 "router": router.learner.id, "charge": charge,

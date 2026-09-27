@@ -18,11 +18,6 @@ from factorylab.charter.controller import PriceController
 from scripts import gauntlet as g
 from tests.gauntlet import populations as P
 
-#: Wave 16's price-loop runaway, for wave 16b (reported on the wave 16 merge).
-RUNAWAY = ("kernel gap (a): price-loop runaway — the price window's measured inner loop "
-           "includes the deferred-settlement wait for the price window itself (§IV.c); "
-           "fixed by wave 16b")
-
 pytestmark = pytest.mark.gate
 
 UPTAKE = P.UPTAKE["id"]
@@ -34,8 +29,11 @@ def sf1(shared_run):
 
 
 def _transient_world():
-    """SF-1 with one transient resolution: hold-a registers observations for four windows."""
-    return P.sf1(hold_a=P.relieving_in(range(30, 34), P.hold, "relief"))
+    """SF-1 with one transient resolution: hold-a registers observations for twenty
+    windows. (Four sufficed while the price loop ran away and its windows grew to
+    hundreds of ticks; at the steady cadence a window is four ticks, and the organ's
+    horizon needs the relief to outlast it before the flag clears, wave 16b.)"""
+    return P.sf1(hold_a=P.relieving_in(range(30, 50), P.hold, "relief"))
 
 
 @pytest.fixture(scope="module")
@@ -51,12 +49,13 @@ def test_sf1a_stable_failure_is_detected_within_the_horizon(sf1):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_the_card_is_ratcheted_by_duration_on_the_organs_loop(sf1):
     result = g.sf1b_ratchet_cadence(sf1.events, sf1.manifest)
     assert result.ok, result.evidence
+    # At the card's own bound the ratchet is ledgered saturated, its duration counting
+    # on (R-E, R10-e): both kinds are the one ratchet.
     durations = [r["duration"] for r in sf1.rows("immune.price_ratchet")
-                 if r["card_id"] == UPTAKE]
+                 + sf1.rows("immune.price_ratchet_saturated") if r["card_id"] == UPTAKE]
     assert max(durations) >= sf1.physics.r  # the duration really accrued
 
 
@@ -84,7 +83,6 @@ def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
     assert g.sf1b_ratchet_cadence(mutant.events, mutant.manifest).status != g.PASS
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     """Astra M-6's control: when the card is briefly satisfied the flag clears at an
     acting window, the duration ends, and the next ratchet starts again from one."""
@@ -93,7 +91,6 @@ def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
     mutant = P.run(*_transient_world(), events=300, patches=[
         (PriceController, "end_failure", lambda self, card_id, *, window: None)])
@@ -107,21 +104,15 @@ def test_sf1c_the_integral_is_frozen_while_the_penalty_sits_at_the_cap(sf1):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="kernel gap reported to the architect (wave 16 merge): the card "
-                   "penalty sits at the cap for 2 updates, never min_ratio = 3. The price "
-                   "loop's period is min_ratio x its measured settle loop, and producers "
-                   "settle only at price-window closes, so each window lasts ~1.6-2x the "
-                   "last (sf1 closes at ticks 12, 29, 44, 58, 90, 157, 322, 537, 854, "
-                   "1467): no run reaches a sustained saturation (essay IV.c)")
 def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
     result = g.sf1d_escalation(sf1.events, sf1.manifest, card=UPTAKE)
     assert result.ok, result.evidence
 
 
-# No Tick router bound is reached in the windows the runaway leaves, so the reading has
-# no ``router:Tick`` entry (KeyError) rather than a failed assertion.
-@pytest.mark.xfail(strict=True, raises=(AssertionError, KeyError), reason=RUNAWAY)
+# The Tick router's loop counts every round it learned, from its opening to its first
+# terminal tick (R16b-2; Astra on #157): a scored round deferred to its window's close
+# is sampled at score ready, no longer lost at the close, so the loop is short enough
+# that its gain bound lies within a 300-event world.
 def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
     """No router unwound while flagged or missed a bound the run covered, and the Tick
     router, whose own loop is the organ's, reached gamma_max. The judges' routers step on
@@ -227,3 +218,34 @@ def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):
     reliever = [p for s, p in gaps if s == "reliever"]
     holder = [p for s, p in gaps if s == "holder"]
     assert reliever and holder and max(reliever) < min(p for p in holder if p > 0)
+
+
+# --- future work (R16b-10) ---------------------------------------------------------------
+
+
+def _half_judge(view):
+    """A judge that answers 0.3 (under the 0.5 floor) on even windows and declines on odd
+    ones: the card is violated whenever measured, and measured every other window."""
+    return P.verdict(0.3)(view) if view.window % 2 == 0 else P.decline(view)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="intermittent measurement escapes the ratchet; answered by "
+                   "sampling rate, next wave")
+def test_an_intermittently_measured_failure_is_still_ratcheted():
+    """R16b-10's one support rule enters a card into the failing attractor only over a
+    wholly measured tail. A population that measures its violating card only every
+    other window (the judges alternate a low verdict and a decline, by window) is never
+    entered, so the duration price never reaches it. The answer is the sampling rate
+    (enough samples per window), not a weaker support rule."""
+    seats = [P.producer("steady-a", P.hold), P.producer("steady-b", P.hold),
+             *(P.judge(f"judge-{i}", _half_judge) for i in range(4)),
+             *(P.meta(f"meta-{i}", P.conformity(0.8)) for i in range(2))]
+    cards = [P.card("verdict-floor", "verdict_mean", "at least 0.5", answers_for="producer",
+                    norm="useful inquiry")]
+    run = P.run(P.world(seats, cards=cards), P.Population(seats), events=300)
+    violated = g.card_violations(run.events, "verdict-floor")
+    assert violated and all(v > 0 for v in violated.values())  # violated when measured
+    assert [r for r in run.events
+            if r.get("kind") in ("immune.price_ratchet", "immune.price_ratchet_saturated")
+            and r.get("card_id") == "verdict-floor"]

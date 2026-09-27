@@ -76,10 +76,51 @@ class ScriptedProvider:
             reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
+        reply = self._satisfy_contract(reply, req, text, inputs)
         reply = names_declined_trade(reply, text, inputs, self._producer_calls)
         return ModelResponse(
             req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
         )
+
+    def _satisfy_contract(self, reply: Any, req: ModelRequest, text: str,
+                          inputs: dict[str, Any]) -> Any:
+        """``reply`` answering the whole contract when it lacks a field every admitted
+        shape obliges (``contract_requires``; R16b-7), else ``reply`` as it is.
+
+        Guarantees a combined contract (a ballot that must also carry a verdict, say) is
+        answered whole, never by the one form its classifier picked, and the answer is
+        built from the admitted schema: only the fields an admitted shape names (a
+        closed schema, ``additionalProperties: false``, gets no stray field), each
+        value this population gives that field alone, fitted to that field's own
+        bounds and enum; it is returned only if the original contract admits it
+        (``_admits``, nested unions included), else ``reply`` is returned unchanged
+        (Sol and Codex on #157). Harness only: the kernel never reads this.
+        """
+        if not isinstance(reply, dict):
+            return reply
+        required = contract_requires(req, text)
+        if required <= set(reply):
+            return reply
+        schema = _contract_schema(req, text)
+        if schema is None:
+            return reply
+        answers = {"conformity": lambda: self._meta(inputs),
+                   "vote": lambda: {"vote": True, "reason": "scripted yes"},
+                   "assessment": lambda: {"assessment": "scripted testimony"},
+                   "verdict": lambda: self._evaluate(req, inputs)}
+        for shape in _admitted_shapes(schema):
+            properties = shape.get("properties") or {}
+            closed = shape.get("additionalProperties") is False
+            answer = {k: v for k, v in reply.items() if not closed or k in properties}
+            for field in shape.get("required") or ():
+                if field not in answer and field in answers:
+                    value = answers[field]().get(field)
+                    if value is not None:
+                        answer[field] = value
+            answer = {k: _fit(v, properties.get(k)) for k, v in answer.items()}
+            if _admits(answer, schema):  # the original contract, never the flat shape
+                return answer
+        return reply
 
     @staticmethod
     def _trading_equity(seat: Any) -> Any:
@@ -431,6 +472,143 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
     if not isinstance(schema, dict):
         return frozenset()
     return frozenset().union(*_shape_required(schema))
+
+
+def _contract_schema(req: ModelRequest | None, text: str) -> dict | None:
+    """The request's outcome schema, from the same trusted sources as
+    ``outcome_required``: the rendered ``OUTCOME SCHEMA`` line, else the wire schema."""
+    marker = "OUTCOME SCHEMA\n"
+    tail = _kernel_tail(text)
+    if marker in tail:
+        try:
+            schema = json.loads(tail.split(marker, 1)[1].split("\n", 1)[0])
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+        if isinstance(schema, dict):
+            return schema
+    schema = req.response_schema if req is not None else None
+    return schema if isinstance(schema, dict) else None
+
+
+def _admitted_shapes(schema: dict) -> list[dict]:
+    """The flat shapes a schema admits: along every path through its ``anyOf`` /
+    ``oneOf`` unions, however deep (a local ``$ref`` resolved beside its siblings),
+    each level's properties and requirements merged, and the shape closed when any
+    level on the path is. Guarantees a nested branch's requirement (a ``verdict`` two
+    unions down) is in the shape (Codex on #157); a union that refers back to a node
+    already on its path is not walked again, so a recursive one terminates."""
+    defs = schema.get("$defs") if isinstance(schema.get("$defs"), dict) else {}
+
+    def target(node: dict) -> dict | None:
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            found = defs.get(ref[len("#/$defs/"):])
+            return found if isinstance(found, dict) else None
+        return None
+
+    def merge(a: dict, b: dict) -> dict:
+        return {"properties": {**a["properties"], **b["properties"]},
+                "required": [*a["required"], *b["required"]],
+                "closed": a["closed"] or b["closed"]}
+
+    def shapes(node: dict, path: frozenset[int]) -> list[dict]:
+        own = {"properties": dict(node.get("properties") or {}),
+               "required": [f for f in node.get("required") or () if isinstance(f, str)],
+               "closed": node.get("additionalProperties") is False}
+        found = [own]
+        ref = target(node)
+        if ref is not None and id(ref) not in path:
+            found = [merge(a, b) for a in found for b in shapes(ref, path | {id(ref)})]
+        alts = node.get("anyOf") or node.get("oneOf")
+        if isinstance(alts, list):
+            below = [shape for alt in alts if isinstance(alt, dict) and id(alt) not in path
+                     for shape in shapes(alt, path | {id(alt)})]
+            if below:
+                found = [merge(a, b) for a in found for b in below]
+        return found
+
+    return [{"properties": shape["properties"], "required": shape["required"],
+             **({"additionalProperties": False} if shape["closed"] else {})}
+            for shape in shapes(schema, frozenset({id(schema)}))]
+
+
+#: The JSON types a scripted answer's fields are checked against (``_admits``).
+_JSON_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool,
+               "number": (int, float), "integer": int, "null": type(None)}
+
+
+def _admits(answer: Any, schema: dict, root: dict | None = None,
+            path: frozenset[int] = frozenset()) -> bool:
+    """Whether ``schema`` admits ``answer``, read level by level as the kernel's
+    ``validate_schema`` reads it: a local ``$ref`` binds beside its siblings, some
+    ``anyOf`` / ``oneOf`` alternative must admit it, however deep, and each level's
+    type, enum, numeric bounds, required fields, closure and properties hold. The
+    world layer imports nothing of the factory's validator (package boundary), so the
+    scripted seat checks its own answer against the original contract here (Codex on
+    #157). A node already on the path is not entered again: a recursive union ends."""
+    if not isinstance(schema, dict):
+        return True
+    root = schema if root is None else root
+    if id(schema) in path:
+        return False
+    path = path | {id(schema)}
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        defs = root.get("$defs") if isinstance(root.get("$defs"), dict) else {}
+        found = defs.get(ref[len("#/$defs/"):]) if ref.startswith("#/$defs/") else None
+        if not isinstance(found, dict) or not _admits(answer, found, root, path):
+            return False
+    alts = schema.get("anyOf") or schema.get("oneOf")
+    if isinstance(alts, list) and not any(
+            _admits(answer, alt, root, path) for alt in alts if isinstance(alt, dict)):
+        return False
+    kinds = schema.get("type")
+    kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
+    if kinds and not any(isinstance(answer, _JSON_TYPES.get(k, ())) and not (
+            k in ("number", "integer") and isinstance(answer, bool)) for k in kinds):
+        return False
+    if isinstance(schema.get("enum"), list) and answer not in schema["enum"]:
+        return False
+    if type(answer) in (int, float) and (
+            ("minimum" in schema and answer < schema["minimum"])
+            or ("maximum" in schema and answer > schema["maximum"])
+            or ("exclusiveMinimum" in schema and answer <= schema["exclusiveMinimum"])
+            or ("exclusiveMaximum" in schema and answer >= schema["exclusiveMaximum"])):
+        return False
+    if isinstance(answer, dict):
+        properties = schema.get("properties") or {}
+        if any(f not in answer for f in schema.get("required") or ()):
+            return False
+        if schema.get("additionalProperties") is False and set(answer) - set(properties):
+            return False
+        for key, value in answer.items():
+            if key in properties and not _admits(value, properties[key], root):
+                return False
+    return True
+
+
+def _fit(value: Any, schema: Any) -> Any:
+    """``value`` moved inside ``schema``'s own enum and numeric bounds, when it has any:
+    the first enum member for a value outside it, a number clamped to its inclusive
+    bounds, or the midpoint of its bounds for an exclusive one it crosses."""
+    if not isinstance(schema, dict):
+        return value
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum and value not in enum:
+        return enum[0]
+    if type(value) not in (int, float):
+        return value
+    lo = schema.get("minimum", schema.get("exclusiveMinimum"))
+    hi = schema.get("maximum", schema.get("exclusiveMaximum"))
+    if "minimum" in schema and value < schema["minimum"]:
+        value = schema["minimum"]
+    if "maximum" in schema and value > schema["maximum"]:
+        value = schema["maximum"]
+    crosses = (("exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"])
+               or ("exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]))
+    if crosses and lo is not None and hi is not None:
+        value = (lo + hi) / 2
+    return value
 
 
 def _shape_required(schema: dict) -> list[frozenset[str]]:

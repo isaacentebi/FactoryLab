@@ -814,6 +814,8 @@ ROUTER_SOURCES: dict[str, tuple[str, ...]] = {
     "router.step_rescaled": ("learner_id",),
     "router.abstention_priced": ("router",),
     "router.decline_priced": ("router",),
+    # R16b-5: the router that drew the round and the one that learned it.
+    "router.learned": ("router", "learner"),
     "propensity.unlearned": ("learner_id",),
     "thrash.charged": ("router",),
     "compute.route": ("router",),
@@ -988,19 +990,42 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
     episode: a flag by the deadline detects it; a later flag, or none once the episode
     holds more than ``H`` observations, fails it; a shorter unflagged episode is no
     evidence. ``pass`` needs one detected episode and no failed one.
+
+    The kernel enters a card into the failing attractor only over a tail that measured
+    it in every window (R16b-10: a gap is neither compliance nor violation), so the
+    demand starts where some window's whole ``k``-window tail first measured the card
+    violating (its *support*). A fully measured episode has support at its ``k``-th
+    observation and its deadline at its ``H + 1``-th, ``H - k + 1`` observations later;
+    an episode whose support comes later, after sparse observations, is rebased to keep
+    that slack: its deadline is the ``H - k + 1``-th measured violation after its
+    support, never earlier than the ``H + 1``-th overall (Codex on #157: discarding the
+    deadline let an organ that never flags escape as unsupported). Only a flag at or
+    after support counts. An episode measured intermittently throughout has no support
+    and is no evidence here, a stray flag in it included (it escapes the ratchet:
+    answered by the sampling rate, a later wave).
     """
     ph = physics(manifest)
-    episodes = violation_episodes(card_violations(events, card), ph.k)
+    violated = card_violations(events, card)
+    episodes = violation_episodes(violated, ph.k)
+    full = {w for w in violated
+            if all(violated.get(w - i, 0) > 0 for i in range(ph.k))}
     if not episodes:
         return _unsupported("SF-1a", "the card was never violated", card=card)
     flags = card_flagged(events, card)
     detected, failed, short = [], [], []
     for observed, end in episodes:
         onset = observed[0]
-        first = min((w for w in flags if onset <= w <= end), default=None)
-        deadline = observed[ph.H] if len(observed) > ph.H else None
+        support = min((w for w in observed if w in full), default=None)
+        # A flag counts from support on (Sol on #157): one before it is not a reading of
+        # a tail the kernel could enter, and an episode never supported demands nothing
+        # and detects nothing, whatever stray flag it carries.
+        first = None if support is None else min(
+            (w for w in flags if support <= w <= end), default=None)
+        due = None if support is None else max(
+            ph.H, observed.index(support) + ph.H - ph.k + 1)
+        deadline = observed[due] if due is not None and len(observed) > due else None
         entry = {"onset": onset, "observations": len(observed), "end": end,
-                 "first_flag": first, "deadline": deadline, "H": ph.H}
+                 "support": support, "first_flag": first, "deadline": deadline, "H": ph.H}
         if first is not None and (deadline is None or first <= deadline):
             detected.append(entry)
         elif first is not None or deadline is not None:
@@ -1017,6 +1042,9 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
 @criterion("SF-1b")
 def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1b: ratchets move on the organ's loop, and duration strictly rises while flagged.
+
+    A ratchet is ``immune.price_ratchet`` or, at the card's own bound,
+    ``immune.price_ratchet_saturated``: the duration keeps counting either way.
 
     The organ acts (gain, ratchet) only on its own loop (versioning P5), so duration is
     read on the grid of acting windows. At each acting window flagged stable failure
@@ -1052,7 +1080,11 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
          and need(w, "window") not in thrash),
         lambda w: need(w, "window"),
         lambda w: {c.removeprefix("card:") for c in need(w, "violated_cards")})
-    ratchets = rows_of(events, "immune.price_ratchet")
+    # A saturated ratchet is the ratchet at the card's own bound: the organ counts its
+    # duration and ledgers ``immune.price_ratchet_saturated`` instead (wave 16, R-E and
+    # R10-e), so both kinds are the one ratchet this reads (wave 16b follow-up).
+    ratchets = (rows_of(events, "immune.price_ratchet")
+                + rows_of(events, "immune.price_ratchet_saturated"))
     # One ratchet per card per window (immune.py ``_ratchet_failing``): a duplicate is
     # malformed, never a second duration that overwrites the first (Codex on d3dc486).
     at: dict[tuple[str, int], int] = unique_map(
@@ -1188,13 +1220,19 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     Wave 16 R-E: "At saturation, ledger the fact and publish it to governance". Demanded
     only once the penalty has sat at the cap for ``min_ratio`` consecutive updates (the
     same partition as SF-1c: one capped update followed by uncapped ones is not
-    sustained saturation). Durations are read per saturation episode (A): an episode
-    starts at duration 1 and each next row is the previous plus one, at the next window;
-    a new episode may start at 1 after the cap released, never mid-count. Episodes are aligned, not
-    counted: every sustained run needs an episode whose rows *inside the run's windows*
-    (``update_windows``) reach a duration of ``min_ratio``: overlapping the run, or
-    reaching ``min_ratio`` outside it, is not escalation of that run. A saturation row
-    names its ``window``.
+    sustained saturation). Durations are read per saturation episode (A), as the kernel
+    writes them (R-E, R10-e): a saturated ratchet carries the failing attractor's own
+    duration, which kept counting from the ratchets before it, so an episode starts at
+    whatever duration the attractor stood at, and each next row is the previous plus
+    one at a later window (the organ's acting grid, not every window). A row whose
+    duration does not continue the episode starts another; whether the duration fell
+    back while the attractor held is SF-1b's reading, over both ratchet kinds. Episodes
+    are aligned, not counted: every sustained run needs an episode whose rows *inside
+    the run's windows* (``update_windows``) reach a duration of ``min_ratio``:
+    overlapping the run, or reaching ``min_ratio`` outside it, is not escalation of that
+    run. A saturation row names its ``window`` and its ``duration``, and its duration
+    counts only when the ratchet stream backs it (``_credible_ratchets``; Sol on #157):
+    one isolated row claiming a large duration is not sustained saturation.
     """
     ph = physics(manifest)
     at = update_windows(events)
@@ -1207,23 +1245,27 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     current: list[Mapping] | None = None
     for row in rows:
         d, window = row.get("duration"), row.get("window")
-        if not isinstance(window, int) or isinstance(window, bool):
+        if (not isinstance(window, int) or isinstance(window, bool)
+                or not isinstance(d, int) or isinstance(d, bool) or d < 1):
             malformed.append({"duration": d, "window": window})
             current = None
-        elif isinstance(d, int) and not isinstance(d, bool) and d == 1:
-            current = [row]
-            episodes.append(current)
-        elif (current is not None and isinstance(d, int) and not isinstance(d, bool)
-              and d == need(current[-1], "duration") + 1
-              and window == need(current[-1], "window") + 1):
+        elif current is not None and d == need(current[-1], "duration") + 1:
+            if window <= need(current[-1], "window"):
+                # The count rose without the organ acting again: never a duration.
+                malformed.append({"duration": d, "window": window})
+                current = None
+                continue
             current.append(row)
         else:
-            # A broken count stays broken until a new episode starts at 1.
-            malformed.append({"duration": d, "window": window})
-            current = None
+            # A new episode, at the duration the attractor stood at (R10-e).
+            current = [row]
+            episodes.append(current)
     spans = [(min(need(r, "window") for r in e), max(need(r, "window") for r in e),
               need(e[-1], "duration"))
              for e in episodes]
+    credible = _credible_ratchets(events, card)
+    uncredited = [{"window": need(r, "window"), "duration": need(r, "duration")}
+                  for e in episodes for r in e if id(r) not in credible]
     if not sustained:
         if malformed:
             # A broken saturation count is observed whatever the runs show.
@@ -1238,13 +1280,40 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
             unmatched.append({"run": None, "why": "the run's windows are not ledgered"})
             continue
         lo, hi = min(windows_of), max(windows_of)
-        if not any(max((need(x, "duration") for x in e if lo <= need(x, "window") <= hi), default=0)
+        if not any(max((need(x, "duration") for x in e if lo <= need(x, "window") <= hi
+                        and id(x) in credible), default=0)
                    >= ph.r for e in episodes):
             unmatched.append({"run": [lo, hi]})
     return _result("SF-1d", bool(rows) and not malformed and not unmatched,
                    card=card, saturated_rows=len(rows), episodes=spans[:6],
                    sustained_runs=len(sustained), unmatched=unmatched[:5],
-                   malformed=malformed[:5], longest_run=longest)
+                   uncredited=uncredited[:5], malformed=malformed[:5], longest_run=longest)
+
+
+def _credible_ratchets(events: list[Mapping], card: str) -> set[int]:
+    """The ``id``s of ``card``'s ratchet rows whose duration the ratchet stream backs.
+
+    Sol on #157: a row's duration is a claim, and one isolated saturated row carrying
+    ``duration = 10`` is not ten windows of the attractor. Over the card's ordinary and
+    saturated ratchets together (the one duration count, R-E, R10-e), a row of
+    duration 1 is credible, and a row of duration ``d`` is credible only when a
+    credible row of duration ``d - 1`` sits at an earlier window. Guarantees a
+    duration SF-1d reads was counted up, row by row, in the diary itself."""
+    stream = [row for row in events
+              if row.get("kind") in ("immune.price_ratchet", "immune.price_ratchet_saturated")
+              and need(row, "card_id") == card]
+    earliest: dict[int, int] = {}  # a credible duration: the first window it stood at
+    credible: set[int] = set()
+    for row in sorted(stream, key=lambda r: (r.get("window") if isinstance(r.get("window"), int)
+                                             else math.inf)):
+        d, window = row.get("duration"), row.get("window")
+        if (not isinstance(d, int) or isinstance(d, bool) or not isinstance(window, int)
+                or isinstance(window, bool) or d < 1):
+            continue
+        if d == 1 or earliest.get(d - 1, math.inf) < window:
+            credible.add(id(row))
+            earliest.setdefault(d, window)
+    return credible
 
 
 def gamma_of(values: list[float]) -> float:
@@ -1319,22 +1388,48 @@ def router_retirements(events: list[Mapping]) -> dict[str, int]:
 
 def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     """Each router's round period in windows: the p90 of its rounds' closures, from the
-    window a decision it drew opened in to the window the decision settled in
-    (``decision.settle``, when the router learns the round), never below 1. It is the
+    window a decision it drew opened in to the window its round first closed in
+    (``decision.settle``, or ``decision.timeout`` for a round that reached its cutoff:
+    a cutoff is how long the loop took to close, R16b-2), never below 1. It is the
     world's measure of the router's loop (``clockwork.record("router:<kind>")`` in
     ``FeedbackMixin._learn_router_return``), read from the rounds, never from the gain
-    rows it bounds."""
+    rows it bounds. A round closes once: a late settlement after its timeout is not a
+    second closure.
+
+    A diary that writes ``router.learned`` (R16b-5) names every round the kernel's meter
+    samples (a decline, censoring or cutoff credited at its window's close included; a
+    NOOP never), and states where its loop closed: ``closed_window``, the price window
+    of its first terminal tick (the cutoff, or the tick its outcome was fixed), which is
+    what the meter measures to (Codex on #157). A round learned later, a credit waiting
+    on a price close, is never measured to where it was learned. A row without the field
+    (an older diary) is read at its own position."""
     opened = _decision_windows(events)
+    if any(row.get("kind") == "router.learned" for row in events):
+        window, closures = 1, defaultdict(list)
+        for row in events:
+            if row.get("kind") == "price.window":
+                window = need(row, "window") + 1
+            elif row.get("kind") == "router.learned" and need(row, "action") != "NOOP":
+                start = opened.get(need(row, "handle"))
+                closed = row.get("closed_window")
+                closed = window if not isinstance(closed, int) or isinstance(closed, bool) \
+                    else closed
+                if start is not None:
+                    closures[need(row, "router")].append(max(0, closed - start))
+        return {router: max(1, sorted(values)[min(len(values) - 1,
+                                                  math.ceil(0.9 * len(values)) - 1)])
+                for router, values in closures.items()}
     actor = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
                        lambda row: need(row, "handle"), lambda row: need(row, "actor"))
-    window, closures = 1, defaultdict(list)
+    window, closures, closed = 1, defaultdict(list), set()
     for row in events:
         if row.get("kind") == "price.window":
             window = need(row, "window") + 1
-        elif row.get("kind") == "decision.settle":
-            handle = need(row, "return.handle")  # queue.py ``settle``: always
+        elif row.get("kind") in ("decision.settle", "decision.timeout"):
+            handle = need(row, "return.handle")  # queue.py ``settle``/``time_out``: always
             router, start = actor.get(handle), opened.get(handle)
-            if isinstance(router, str) and start is not None:
+            if isinstance(router, str) and start is not None and handle not in closed:
+                closed.add(handle)
                 closures[router].append(max(0, window - start))
     out = {}
     for router, values in closures.items():
@@ -1926,16 +2021,30 @@ def _tv(a: Mapping[str, float], b: Mapping[str, float]) -> float:
     return 0.5 * math.fsum(abs(a.get(x, 0.0) - b.get(x, 0.0)) for x in set(a) | set(b))
 
 
+def niche_rounds(events: list[Mapping]) -> set[str]:
+    """The decisions taken in the unhistoried niche, by the kernel's one predicate
+    (``PricingMixin._in_split`` / ``_is_niche``; wave 16, R-E as amended): a decision of
+    a seat in its protected trial, whose ``price.contribution`` carries ``niche: true``,
+    and one that took an unhistoried action the novelty reserve paid for
+    (``niche.action``)."""
+    return ({need(row, "handle") for row in rows_of(events, "price.contribution")
+             if row.get("niche")}
+            | {need(row, "handle") for row in rows_of(events, "niche.action")})
+
+
 def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
                             core_only: bool = True) -> dict[str, float]:
     """Each core router draw's charge: ``min(cap, λ_t · min(1, TV))`` (``_record_movement``).
 
     λ_t is the thrash price the last closed window left in force before the draw; TV
     is the total variation from the same router's previous draw, over the union of
-    both menus. Zero for a router's first draw. ``core_only=False`` prices every
-    router's draws, whatever ``evaluation.no_swap_regret_kinds`` names.
+    both menus. Zero for a router's first draw, and zero for a round drawn in the
+    niche (``niche_rounds``: ``_thrash_charge`` drops its stored charge, R-E as
+    amended). ``core_only=False`` prices every router's draws, whatever
+    ``evaluation.no_swap_regret_kinds`` names.
     """
     ph = physics(manifest)
+    niche = niche_rounds(events)
     lam, last, out = 0.0, {}, {}
     for row in events:
         kind = row.get("kind")
@@ -1953,13 +2062,16 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
             before = last.get(router)
             moved = _tv(now, before) if before else 0.0
             last[router] = now
-            unique_put(out, need(row, "handle"), min(ph.cap, lam * min(1.0, moved)), row)
+            charge = 0.0 if need(row, "handle") in niche else min(ph.cap, lam * min(1.0, moved))
+            unique_put(out, need(row, "handle"), charge, row)
     return out
 
 
 #: The rows only a round's learning writes, each naming the round's handle (TH-1c).
 LEARNING_ROWS = frozenset({"propensity.learned", "propensity.unlearned", "thrash.charged",
-                           "router.carried", "router.step_rescaled", "router.decline_priced"})
+                           "router.carried", "router.step_rescaled", "router.decline_priced",
+                           # R16b-5: every round a router trains on writes one.
+                           "router.learned"})
 
 
 def delivered_rounds(events: list[Mapping]) -> set[str]:
@@ -1967,8 +2079,8 @@ def delivered_rounds(events: list[Mapping]) -> set[str]:
     ``LEARNING_ROWS`` row names the handle. A ``runtime.event_done`` after the
     settlement is not enough: ``_learn_router_return`` has returns before any charge
     (a keyed router's spent frozen round: "nothing trains, nothing is booked"), so
-    delivery is not a learning attempt. (The i10 world holds three judge rounds,
-    decision-71, -86 and -109, settled and delivered with no learning row.)"""
+    delivery is not a learning attempt. Every round a router trains on writes
+    ``router.learned`` (R16b-5), so a round it learned is never read as unlearned."""
     # Every learning row names its round (feedback.py writes ``handle`` on each): a row
     # without one is malformed, never a None that matches nothing (Codex on c78f2bc).
     touched = {need(row, "handle") for row in events if row.get("kind") in LEARNING_ROWS}
@@ -2094,9 +2206,11 @@ def thrash_attributed(events: list[Mapping], manifest: Mapping) -> dict[str, boo
 def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1d: every charge lands on a router the diary attributes the thrash price to
     (``thrash_attributed``: the moving roles' routers under I-10, else the core), and
-    none on a niche decision. A charge on a round no attributed draw opened fails."""
+    none on a niche decision (``niche_rounds``, the kernel's predicate: a protected
+    trial's decisions as well as unhistoried actions). A charge on a round no attributed
+    draw opened fails."""
     attributed = thrash_attributed(events, manifest)
-    niche = {need(row, "handle") for row in rows_of(events, "niche.action")}
+    niche = niche_rounds(events)
     bad = []
     for row in rows_of(events, "thrash.charged"):
         handle = need(row, "handle")
@@ -3131,15 +3245,26 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     effective ones"). Once a router has one, its ``neutral`` must equal their mean to
     1e-9, whatever that mean is (a router whose rounds truly average 0.5 credits 0.5);
     before the first, the prior stands and the row is not read.
+
+    A diary that writes ``router.learned`` (R16b-5) states when each round entered its
+    router's mean: a scored round at the moment its router learned it (the kernel's
+    ``record_round``, on the learning router), never at its ``price.penalty`` (a round
+    deferred to its window's close is settled there and learned at the next delivery,
+    after a credit priced at that close). Its scored rows are read instead, and each
+    must trace to an earlier ``decision.open`` of its handle by its ``router``: one that
+    does not (never opened, or opened by another actor) fails (Sol on #157).
     """
+    learned_rows = any(row.get("kind") == "router.learned" for row in events)
     seats = decision_seats(events)
-    actors = unique_map(rows_of(events, "decision.open"), lambda row: need(row, "handle"),
-                        lambda row: need(row, "actor"))
+    # Built in ledger order (R16b-8): a score or a learned round can only name a decision
+    # already opened; one ledgered before its ``decision.open`` fails, never credited.
+    actors: dict[str, Any] = {}
     # Only a round its router drew enters that router's mean (``router_draw``): a self
     # child's score is its parent's choice, never a round the router played.
-    drawn = {need(row, "handle") for row in rows_of(events, "decision.open") if router_draw(row)}
+    drawn: set[str] = set()
+    ever_opened = {need(row, "handle") for row in rows_of(events, "decision.open")}
     raws: dict[str, list[float]] = defaultdict(list)
-    bad, checked, untraced = [], 0, 0
+    bad, checked, untraced, early, ghosts = [], 0, 0, [], []
     # A decision that timed out was learned once, neutrally, at its cutoff: a late
     # settlement after it (the queue's late-settlement right) is never learned again
     # (feedback.py ``_learn_router_return``: "learned once already, neutrally, at its
@@ -3172,6 +3297,15 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
 
     for row in events:
         kind = row.get("kind")
+        if kind == "decision.open":
+            unique_put(actors, need(row, "handle"), need(row, "actor"), row)
+            if router_draw(row):
+                drawn.add(need(row, "handle"))
+            continue
+        if (kind in ("price.penalty", "router.learned") and need(row, "handle") not in actors
+                and need(row, "handle") in ever_opened):
+            early.append({"kind": kind, "handle": need(row, "handle")})
+            continue
         if kind == "decision.timeout":
             timed_out.add(need(row, "return.handle"))
             continue
@@ -3184,6 +3318,20 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
             old = new.rsplit("@", 1)[0]
             raws[new] = list(raws.get(old, ()))
             hand_over(old, new)
+            continue
+        if kind == "router.learned" and actors.get(need(row, "handle")) != need(row, "router"):
+            # Sol on #157: a learned round traces to its decision's open by the router
+            # that drew it; a never-opened handle ("ghost") or another actor's is no
+            # round of any router's mean, and fails.
+            ghosts.append({"handle": need(row, "handle"), "router": need(row, "router"),
+                           "opened_by": actors.get(need(row, "handle"))})
+            continue
+        if learned_rows and kind == "router.learned":
+            if (need(row, "scored") and need(row, "action") != "NOOP"
+                    and need(row, "raw") is not None):
+                raws[learner_of(need(row, "learner"))].append(float(need(row, "raw")))
+            continue
+        if learned_rows and kind == "price.penalty":
             continue
         if kind == "price.penalty" and need(row, "handle") in timed_out:
             continue
@@ -3213,10 +3361,18 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
                 if abs(float(need(row, "neutral")) - mean) > 1e-9:
                     bad.append({"handle": need(row, "handle"), "neutral": need(row, "neutral"),
                                 "observed_mean": mean, "rounds": len(observed)})
+    if early:
+        return _result("S5b", False, before_open=early[:5], checked=checked,
+                       mismatched=len(bad), example=bad[:3],
+                       why="a score or learned round is ledgered before its decision opened")
     if untraced:
         return _result("S5b", False, untraced=untraced, checked=checked,
                        mismatched=len(bad), example=bad[:3],
                        why="a settled score traces to no decision.open with an actor")
+    if ghosts:
+        return _result("S5b", False, untraced_learned=ghosts[:5], checked=checked,
+                       mismatched=len(bad), example=bad[:3],
+                       why="a learned round traces to no decision.open by its router")
     if not checked:
         return _unsupported("S5b", "no abstention was priced after a settled round")
     return _result("S5b", not bad, checked=checked, mismatched=len(bad), example=bad[:3],

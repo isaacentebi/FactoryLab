@@ -22,8 +22,6 @@ REAL = json.loads((ROOT / "tests/fixtures/gauntlet_real_rows.json").read_text())
 
 #: Kinds a fixture may use that no gauntlet world emits, each with its reason.
 NOT_EMITTED = {
-    "immune.price_ratchet_saturated": "wave 16 D5/R-E names the saturation row; no kernel "
-                                      "on this branch emits it (SF-1d is a strict xfail)",
     "challenge.proposed": "emitted by governance._register_challenge with the challenge "
                           "record (its handle included); no gauntlet world files a challenge",
     "price.register": "emitted by PriceController.register_pending with kind and card_id "
@@ -669,6 +667,8 @@ IDENTITY_GET_ALLOWED: dict[tuple[str, str], str] = {
     ("Malformed", "window"): "evidence of a row already refused; any kind, any shape",
     ("sf0_relation", "window"): "a manifest card's optional block, not a ledger row",
     ("sf1d_escalation", "window"): "read as nullable and reported as malformed evidence",
+    ("_credible_ratchets", "window"): "a ratchet without an integer window is never "
+                                      "credible; SF-1d reports it as malformed evidence",
     ("router_presence", "window"): "immune.* kinds differ; one without window is placed "
                                    "by the price window it was written in",
     ("ld1a_accrual", "window"): "evidence of a row the criterion already fails",
