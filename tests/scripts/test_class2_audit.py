@@ -1522,8 +1522,10 @@ def test_a_release_after_the_first_needs_the_gated_previous_files(released, tmp_
     render = lambda **kw: tool.render([WORLD], tmp_path / "out", seed=7,  # noqa: E731
                                       rendered=False, essay=ESSAY,
                                       release_range=f"{rel}..{head}", repo=repo, **kw)
-    for kw in ({}, {"previous": triage}, {"previous_corpus": prior}):
-        with pytest.raises(tool.AuditInputInvalid, match="needs the last release's"):
+    for kw, why in (({}, "needs the last release's"),
+                    ({"previous": triage}, "needs the last release's"),
+                    ({"previous_corpus": prior}, "'scripted' needs its own --previous")):
+        with pytest.raises(tool.AuditInputInvalid, match=why):
             render(**kw)
     other = tmp_path / "other.jsonl"
     other.write_text("\n".join(prior.read_text().splitlines()[1:]) + "\n")
@@ -1906,15 +1908,41 @@ def test_the_gate_re_verifies_the_range_against_the_last_release(released, tmp_p
     assert tool.range_problems(repo, key) == []
     # The key names the gated previous files the render was bound to.
     assert key["previous_corpus_sha"] == tool.sha256_file(released[6])
-    assert key["previous_triage_sha256"] == tool.sha256_file(released[7])
-    for field in ("previous_corpus_sha", "previous_triage_sha256"):
-        other = key | {field: "2" * 64}
+    assert key["previous_triage_sha256"] == {WORLD: tool.sha256_file(released[7])}
+    for field, forged in (("previous_corpus_sha", "2" * 64),
+                          ("previous_triage_sha256", {WORLD: "2" * 64}),
+                          ("previous_triage_sha256", {})):
+        other = key | {field: forged}
         assert any("last release's gate recorded" in p
                    for p in tool.range_problems(repo, other)), field
     moved = key | {"range_shas": [later, head], "range": f"{later}..{head}"}
     assert any("not the last audited release" in p for p in tool.range_problems(repo, moved))
     other = key | {"provenance_id": "0" * 64}
     assert any("provenance prompt" in p for p in tool.range_problems(repo, other))
+
+
+def test_each_rendered_world_takes_only_its_own_previous_triage(released, tmp_path):
+    """Codex on 3e82964: with several worlds, each world the last release gated needs its
+    OWN previous triage, bound to that world and to the digest its gate recorded: a
+    triage of a world not rendered, a second triage of one world, or a missing one is
+    refused, and the prompt shows each in its world's section."""
+    repo, _root, _early, rel, _later, head, prior, triage = released
+    record = tool.last_release(repo, head)
+    base = {"first": False, "previous_corpus": prior}
+    ok = tool.previous_problems(repo, head, previous=[triage], worlds=[WORLD], **base)
+    assert ok == []
+    assert any("needs its own --previous triage" in p for p in tool.previous_problems(
+        repo, head, previous=[], worlds=[WORLD], **base))
+    assert any("two previous triages" in p for p in tool.previous_problems(
+        repo, head, previous=[triage, triage], worlds=[WORLD], **base))
+    assert any("not of a rendered world" in p for p in tool.previous_problems(
+        repo, head, previous=[triage], worlds=["edition6-capital-loop"], **base))
+    # A rendered world the last release did not gate takes none, and may not name one.
+    assert "edition6-capital-loop" not in record["triages"]
+    assert tool.previous_problems(repo, head, previous=[triage],
+                                  worlds=[WORLD, "edition6-capital-loop"], **base) == []
+    section = tool.previous_section({WORLD: "a triage", "w2": "another"}, [WORLD, "w2"])
+    assert section == f"### {WORLD}\n\na triage\n\n### w2\n\nanother"
 
 
 def test_a_previous_triage_must_be_the_last_releases(released, tmp_path):
@@ -2065,7 +2093,7 @@ def test_no_policy_or_evidence_read_bypasses_the_release_commit():
         "sha256_file": ["read_bytes("],         # digests, of any file
         "_jsonl": ["read_input("],               # samples, corpus, previous corpus
         "read_previous_triage": ["read_input("],  # bound by the recorded digest
-        "previous_problems": ["read_input("],     # the same file, digest-checked
+        "_triage_world": ["read_input("],         # the same files, digest-checked
         "load_key": ["read_input("],              # bound to its corpus and prompts
         "calibration_problems": ["read_bytes("],  # the input, compared to its recompute
         "beside_text": ["read_input("],          # a prompt, compared to its recompute

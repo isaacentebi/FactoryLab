@@ -43,7 +43,9 @@ therefore cannot recommend text that steers (AGENTS rule 2).
    minimal sufficient disclosure; the obedience constraint), §II.b (hard casts) and §IV.a
    (norms, the read-only wall, metrics ceded); AGENTS.md rules 1–5.
 3. **The allowlist** (`tests/audit/class2_allowlist.toml`), with its reasons.
-4. **Last release's triage file** (`render --previous`) and `rejected.jsonl`, with each
+4. **Last release's triage file of each world rendered** (`render --previous`, one per
+   world the last release gated, each in its own world's section) and `rejected.jsonl`,
+   with each
    finding's disposition and the reasons for REJECTED findings, so they are not
    re-litigated unless their text changed.
 5. **The corpus diff** since the last audited release (`render --previous-corpus`, the
@@ -295,10 +297,11 @@ that commit (`release_commit`); `gate` refuses a key of any other release (`--re
 default HEAD). The range's base is the last audited release: the commit
 `docs/audits/class2/last_release` records as committed at the release (before the first
 release there is no such file, and the base is the repository root, whose own commit the
-provenance pass also reads). After the first release `--previous` and
-`--previous-corpus` are required, and each must be the file the last release's gate
-recorded: `last_release` holds the release corpus's sha256 and each gated world's triage
-sha256. `render` refuses any other base or previous file (and any previous file on the
+provenance pass also reads). After the first release `--previous-corpus` is required,
+and so is one `--previous` triage for each rendered world the last release gated (its
+own world's, never another's; a world it did not gate takes none); each must be the
+file the last release's gate recorded: `last_release` holds the release corpus's
+sha256 and each gated world's triage sha256, and the key binds each world to its own. `render` refuses any other base or previous file (and any previous file on the
 first release); `gate` re-verifies the base and the previous digests the key names, and
 recomputes the provenance prompt from the range. When a gate passes it writes the
 release, its release corpus's digest and the gated triage file's digest to
