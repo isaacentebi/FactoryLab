@@ -1,0 +1,66 @@
+{
+  "_schema": "FABRICATED EXAMPLE. Every value in this file is invented to show the shape of site/data/progress.json. It describes no real world and must never be presented as one. The page shows it only on request, under an EXAMPLE banner.",
+  "updated": "2030-01-21T00:00:00Z",
+  "example": true,
+  "status": {
+    "live": true,
+    "headline": "Example world, day 20.",
+    "line": "Invented data, shown so the structure can be read before a real world exists."
+  },
+  "worlds": [
+    {
+      "name": "Example world",
+      "venue": "An exchange testnet (example)",
+      "genesis": "2030-01-01T00:00:00Z",
+      "state": "running",
+      "ended": null,
+      "versions": [
+        { "v": 0, "from": "2030-01-01", "to": "2030-01-06", "gap": 0.04, "note": "Genesis regime: mostly declines, judges near their base rates." },
+        { "v": 1, "from": "2030-01-06", "to": "2030-01-14", "gap": 0.11, "note": "Settled into small, fee-aware trades on two coins." },
+        { "v": 2, "from": "2030-01-14", "to": null, "gap": 0.19, "note": "Forecasting on event markets now carries a share of producer returns." }
+      ],
+      "objectives": [
+        { "at": "2030-01-03", "text": "Keep inference spend per settled return inside a stated band.", "via": "metric card", "state": "adopted" },
+        { "at": "2030-01-07", "text": "Hold judges' disagreement on declined trades below a bound.", "via": "metric card", "state": "adopted" },
+        { "at": "2030-01-11", "text": "Add an event market on funding-rate direction as a surface.", "via": "registration", "state": "adopted" },
+        { "at": "2030-01-15", "text": "Retire a seed evaluator whose verdicts track its base rate.", "via": "motion", "state": "proposed" },
+        { "at": "2030-01-18", "text": "Shorten the tick while the venue reprices faster.", "via": "motion", "state": "retired" }
+      ],
+      "pathologies": {
+        "stable_failure": { "now": "absent", "history": ["unknown", "unknown", "unknown", "present", "present", "present", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent"] },
+        "thrash": { "now": "absent", "history": ["unknown", "unknown", "unknown", "absent", "absent", "absent", "present", "present", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent"] },
+        "overfitting": { "now": "unknown", "history": ["unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "absent", "absent", "absent", "absent", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown"] },
+        "learning_death": { "now": "absent", "history": ["unknown", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent", "absent"] }
+      },
+      "charter": {
+        "edition": 2,
+        "norms": ["Truthful commitments", "Care with scarce resources", "Useful inquiry", "Capacity to revise inadequate practices"],
+        "revisions": [
+          { "at": "2030-01-01", "kind": "genesis", "text": "Edition 1: the seed population's own drafted cards." },
+          { "at": "2030-01-09", "kind": "amendment", "text": "A cost card's acceptable region widened after a committee vote." },
+          { "at": "2030-01-16", "kind": "edition", "text": "Edition 2: a holdout criterion proposed by a seat, adopted." }
+        ],
+        "constraints": [
+          { "card": "Spend per settled return", "role": "producers", "lambda": 0.12, "saturated": false },
+          { "card": "Judge disagreement on declines", "role": "evaluators", "lambda": 0.31, "saturated": false },
+          { "card": "Revision rate", "role": "governance", "lambda": 0.05, "saturated": false },
+          { "card": "Independent uptake", "role": "producers", "lambda": 0.5, "saturated": true }
+        ],
+        "lambda_total": [0.10, 0.18, 0.30, 0.52, 0.71, 0.84, 0.80, 0.66, 0.58, 0.61, 0.70, 0.74, 0.79, 0.83, 0.90, 0.95, 0.97, 0.98, 0.98, 0.98]
+      },
+      "evaluation": {
+        "compute_share": { "evaluators": 0.58, "producers": 0.29, "governance": 0.13 },
+        "tiers_reached": 3,
+        "families": 4,
+        "disagreement": [0.31, 0.29, 0.33, 0.35, 0.30, 0.27, 0.26, 0.24, 0.25, 0.22, 0.21, 0.23, 0.20, 0.19, 0.21, 0.18, 0.19, 0.17, 0.18, 0.16],
+        "variance": [0.08, 0.09, 0.11, 0.14, 0.12, 0.10, 0.13, 0.15, 0.09, 0.08, 0.07, 0.08, 0.07, 0.06, 0.07, 0.06, 0.06, 0.05, 0.06, 0.05],
+        "autocorrelation": [0.12, 0.18, 0.25, 0.41, 0.52, 0.47, 0.33, 0.28, 0.22, 0.19, 0.17, 0.18, 0.16, 0.15, 0.17, 0.14, 0.15, 0.13, 0.14, 0.12]
+      },
+      "consequences": {
+        "settled": { "count": 1284, "paid_off": 0.41, "declines_right": 0.68 },
+        "spend_micro_usd": { "inference": 41250000, "venue_fees": 3120000, "data": 450000, "hosting": 6000000 },
+        "treasury_micro_usd": { "in": 25000000, "out": 20000000 }
+      }
+    }
+  ]
+}

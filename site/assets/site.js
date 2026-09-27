@@ -51,24 +51,32 @@
   if (bar) {
     document.body.classList.add("has-bar");
     window.FL.progress().then(function (d) {
+      // One cell per world ever launched: sodium while it runs, grey once it has ended.
       var rail = bar.querySelector(".rail");
-      var items = [];
-      d.eras.forEach(function (e) { e.items.forEach(function (i) { items.push(i); }); });
-      var lastMerged = -1;
-      items.forEach(function (it, n) { if (it.status === "merged") lastMerged = n; });
+      var worlds = d.worlds || [];
       if (rail) {
         rail.innerHTML = "";
-        items.forEach(function (it, n) {
+        worlds.forEach(function (w) {
           var i = document.createElement("i");
-          i.className = it.status === "merged" ? (n === lastMerged ? "now" : "m") : it.status === "open" ? "o" : "p";
-          i.title = (it.id ? it.id + " · " : "") + it.title + " (" + it.status + ")";
+          i.className = w.state === "running" ? "now" : "m";
+          i.title = w.name + " (" + w.state + ")";
           rail.appendChild(i);
         });
+        if (!worlds.length) {
+          var i = document.createElement("i");
+          i.className = "p";
+          i.title = "No world launched yet";
+          rail.appendChild(i);
+          var s = document.createElement("span");
+          s.textContent = "Worlds: none yet";
+          s.style.marginLeft = "10px";
+          rail.appendChild(s);
+        }
       }
       var head = bar.querySelector("[data-head]");
-      if (head) head.innerHTML = "HEAD&nbsp;<b>" + d.head.sha + "</b>";
+      if (head) head.innerHTML = (d.status.live ? "<b class='sig'>●</b>&nbsp;Live" : "○&nbsp;Not live");
       var ms = bar.querySelector("[data-milestone]");
-      if (ms) ms.innerHTML = "<b>" + d.milestone.title + "</b>&nbsp;·&nbsp;" + window.FL.fmtDate(d.milestone.date);
+      if (ms) ms.innerHTML = "<b>" + d.status.headline + "</b>";
     }).catch(function () {
       var ms = bar.querySelector("[data-milestone]");
       if (ms) ms.textContent = "Progress data unavailable";
