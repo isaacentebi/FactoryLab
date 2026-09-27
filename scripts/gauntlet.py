@@ -495,9 +495,12 @@ def sf0_relation(manifest: Mapping, *, regions: Mapping[str, Mapping] | None = N
         rows.append({"card": None, "window_kind": "windows", "region_kind": None,
                      "v_ref": 1.0, "w_sat": saturates, "H": ph.H,
                      "ok": saturates is None or saturates >= ph.H})
+    # The price law it read, as the diary launched it: the bind-time neutralisation of
+    # the SF-0 inputs (``kernel_problem``) never reaches this reading.
     return _result("SF-0", all(need(row, "ok") for row in rows), cards=rows,
                    gain_headroom_windows=min((need(row, "w_sat") for row in rows
-                                              if need(row, "w_sat") is not None), default=None))
+                                              if need(row, "w_sat") is not None), default=None),
+                   kp=ph.kp, eta=ph.eta, penalty_cap=ph.cap)
 
 
 # --- diary access ------------------------------------------------------------------------

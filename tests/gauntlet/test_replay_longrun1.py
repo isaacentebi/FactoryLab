@@ -79,8 +79,21 @@ def test_longrun1_reset_a_ratchet_while_its_attractor_held_sf1b(diary):
 
 
 def test_longrun1_saturated_in_one_window_sf0(diary):
+    """SF-0 reads the diary's TRUE launched price law (kp 0.5, eta 0.5): the SF-0 inputs
+    are set aside only inside bind-time validation (``kernel_problem``), and every other
+    kernel rule still applies there."""
     result = diary[2]["SF-0"]
     assert result.status == g.FAIL and result.evidence["gain_headroom_windows"] == 1
+    assert (result.evidence["kp"], result.evidence["eta"]) == (0.5, 0.5)
+    events, manifest, _results = diary
+    launched = g.diary_identity(events)["manifest"]
+    assert (launched["prices"]["kp"], launched["prices"]["eta"]) == (0.5, 0.5)
+    assert g.physics(manifest).kp == 0.5 and g.physics(manifest).eta == 0.5
+    # Nothing else is neutralised: any other rule the kernel enforces still refuses it.
+    for block, field, value in (("novelty", "share", -0.1), ("prices", "decay", 0.0),
+                                ("prices", "kd", -1.0), ("immune", "k", 1)):
+        bad = {**launched, block: {**launched[block], field: value}}
+        assert g.kernel_problem(bad) is not None, (block, field)
 
 
 def test_longrun1_drew_every_arm_by_its_own_seed_s1(diary):
