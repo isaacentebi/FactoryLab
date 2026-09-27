@@ -41,6 +41,15 @@ from factorylab.world.models import ModelRequest
 #: (``forecast``), a grade of the tier below (``conformity``), or a counter-verdict
 #: against another judge (``counter``).
 JUDGING_SHAPES = frozenset({"forecast", "conformity", "counter"})
+
+#: Kernel channels whose decisions are no measured role's settle sample (time audit
+#: T2): a policy decision (uptake, a lambda post, a ballot) is an outer loop on its own
+#: schedule, and a consequence decision is a sealed forecast
+#: (``open_forecast_decision``, settled by ``SettlementEngine``), whose loop is the
+#: ``forecast`` meter. Without a seat or an emitted kind, a forecast fell through
+#: ``_decision_role`` to ``producer`` and a stalled one lengthened producer pricing
+#: (Sol on #157).
+ROLELESS_CHANNELS = frozenset({"policy", "consequence"})
 #: The adversarial layer's reward shapes (essay II.III.b): an antagonist's exposure
 #: and an adversarial judge's counter-verdict. Their routing mass is capped at
 #: ``evaluation.adversarial_share`` (the majority of evaluations stay
@@ -223,7 +232,8 @@ class ContractQueue:
         R16b-2: a cutoff is how long the loop took to close. Guarantees each decision
         this timed out adds one ``settle:<role>`` closure, from its opening to its tick
         cutoff (the tick it timed out at when it has none), so the meter measures every
-        closure and never only the survivors; a policy decision is no role's sample.
+        closure and never only the survivors; a policy decision or a forecast
+        (``ROLELESS_CHANNELS``) is no role's sample.
         A late settlement after it is not a first closure and records nothing.
         """
         expired = self.queue.time_out(handles, now_ns)
@@ -235,7 +245,7 @@ class ContractQueue:
             cutoff = self.deadline_tick(handle)
             closed = rt.ticks_consumed if cutoff is None else min(cutoff, rt.ticks_consumed)
             self._close_round(handle, closed)
-            if self.queue.get(handle).channel == "policy":
+            if self.queue.get(handle).channel in ROLELESS_CHANNELS:
                 continue
             rt.clockwork.record(f"settle:{rt._decision_role(handle)}", max(0, closed - opened))
         return expired
@@ -289,7 +299,8 @@ class ContractQueue:
         if first and opened is not None:
             self._close_round(
                 handle, ready_tick if ready_tick is not None else self.runtime.ticks_consumed)
-        if first and opened is not None and self.queue.get(handle).channel != "policy":
+        if (first and opened is not None
+                and self.queue.get(handle).channel not in ROLELESS_CHANNELS):
             # The settle loop of this decision's measured role (time audit T2): how long
             # a return waits for the signal its learners and its cards are fed from, a
             # censoring at its horizon included. The scored loop is the same closure
@@ -298,8 +309,8 @@ class ContractQueue:
             # R16b-1: it closes when the world fixed the outcome (``ready_tick``),
             # never at a wait an outer loop imposed on it (a D5 settlement deferred to
             # its window's close), so no loop measures its own period as its inner one
-            # (II.IV.c). A policy decision (uptake, a lambda post, a ballot) is an
-            # outer loop on its own schedule, never a role's settle loop.
+            # (II.IV.c). A policy decision or a forecast (``ROLELESS_CHANNELS``) is
+            # never a role's settle loop.
             rt = self.runtime
             role = rt._decision_role(handle)
             closed = ready_tick if ready_tick is not None else rt.ticks_consumed

@@ -1417,7 +1417,8 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
   fixed its first outcome, censorings and cutoffs included, a cutoff at its cutoff
   tick, R16b-2: a score whose settlement waits for its window's close counts at the
   tick it was fixed, never at the close, R16b-1; a policy-channel decision, an
-  outer loop on its own schedule, is no role's sample), its scored loop
+  outer loop on its own schedule, and a sealed forecast's consequence-channel
+  decision, whose loop is `forecast`, are no role's sample), its scored loop
   (`scored:<role>`, the same when a real score closed it), each router kind's
   learned seat rounds (`router:<kind>`, one sample per round learned, from its
   open to its first terminal tick, the same tick its role's settle loop closed at:

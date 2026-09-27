@@ -132,3 +132,30 @@ def test_a_cutoff_credited_at_the_close_closes_the_routers_loop_at_its_cutoff(
     learned = [i for i in rt.ledger._recovery_items()
                if i["kind"] == "router.learned" and i["handle"] == handle]
     assert [(i["path"], i["scored"]) for i in learned] == [("credit", False)]
+
+
+def _forecast(rt, at: int) -> str:
+    """A sealed forecast's decision, as ``open_forecast_decision`` opens one."""
+    from factorylab.settlement.forecast import open_forecast_decision
+
+    rt.ticks_consumed = at
+    return open_forecast_decision(
+        rt.queue, evaluator_id="evaluator:x", event_id=f"forecast-{at}", q=0.7,
+        deadline_ns=rt.clock.now_ns + 5 * rt.tick_clock.interval_ns, parent_handle=None,
+        now_event=0, horizon=3)
+
+
+def test_a_forecast_is_no_producers_settle_sample(monkeypatch):
+    """Sol on #157: a forecast decision has no seat and no emitted kind, so it fell
+    through to ``producer``: a stalled forecast's timeout, and a settled forecast's
+    closure, lengthened producer pricing. Its loop is the ``forecast`` meter only."""
+    rt = _runtime(monkeypatch)
+    stalled = _forecast(rt, at=10)
+    rt.ticks_consumed = 40
+    assert rt.queue.expire_due() == [stalled]
+    settled = _forecast(rt, at=50)
+    rt.ticks_consumed = 52
+    rt.queue.settle(settled, channel="consequence", score=0.1, status=SettleStatus.SETTLED,
+                    definition_version="brier-v1", sampling_ref=None)
+    assert not [name for name in rt.clockwork.latencies
+                if name.startswith(("settle:", "scored:"))]
