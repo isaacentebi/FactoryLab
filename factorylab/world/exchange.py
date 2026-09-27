@@ -122,6 +122,7 @@ class Fill:
     liquidation: bool = False
     market: str = "perp"
     inventory_size: Decimal | None = None
+    observed_at_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1648,7 +1649,12 @@ class HyperliquidExchange:
                 ))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
                 continue
-        return out
+        # Chapter II §III.b: response observation is a measured outside fact. The
+        # journal records it with the fills, so replay never consults a fresh clock.
+        import time
+
+        observed_at_ns = time.time_ns()
+        return [replace(fill, observed_at_ns=observed_at_ns) for fill in out]
 
     def candles(self, coin: str, interval: str, n: int) -> list[dict]:
         """Return up to n recent OHLCV buckets in increasing nanosecond timestamp order."""

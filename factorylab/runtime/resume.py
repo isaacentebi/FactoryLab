@@ -962,7 +962,8 @@ _COMPONENT_FIELDS = (
                           # Codex on #152: the facts seen through, and returns' economics
                           # frozen at their horizon.
                           "facts_ns", "tick_through_ns", "history")),
-    ("consequence_fills", "", ("since_ns", "seen", "through_ns")),
+    ("consequence_fills", "", ("since_ns", "seen", "through_ns", "measured",
+                               "propagation_bound_ns", "observation_complete")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.

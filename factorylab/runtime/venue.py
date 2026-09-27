@@ -599,8 +599,8 @@ class VenueMixin:
         """The instant one fact stream (``lots.FACT_STREAMS``) is delivered through, or
         None when this runtime keeps no watermark for it (Codex on #152, R10-o).
 
-        Guarantees, for Hyperliquid, what ``_stream_through`` states (a live read's
-        request instant, or the time a fake or recorded venue was advanced to); for
+        Guarantees, for Hyperliquid, what ``_stream_through`` states (including the
+        measured live fill delay, or the exact fake/recorded advance time); for
         Polymarket, the instant its events feed and each token's book were last read
         successfully (``PolymarketSurface.through``: a simulated venue's advance time,
         or a live read's instant before it), and minus infinity for one never read. A
@@ -625,12 +625,11 @@ class VenueMixin:
         """The earliest instant through which the venue has delivered every fact of
         ``streams``, or None when this runtime keeps no venue watermark (ruling R10-o).
 
-        Guarantees, for a live venue, the instant before the request time of the latest
-        successful read of each polled stream (``LiveVenue.through``; fills from the fill
-        cursor), and
-        minus infinity for a stream never read successfully (nothing waits on an
-        unread stream as if it were empty); for a fake or recorded venue, the time it
-        was last advanced to (``advance_through_ns``), every stream alike.
+        Guarantees live fills trail the successful read's request time by the maximum
+        observed first-seen delay (the cursor's empirical bound, not a proof of future
+        completeness). Other polled streams use ``LiveVenue.through``. An unmeasured
+        or unread stream is minus infinity; fake and recorded venues keep their exact
+        ``advance_through_ns``, every stream alike.
         """
         venue = getattr(self, "venue", None)
         if venue is None:

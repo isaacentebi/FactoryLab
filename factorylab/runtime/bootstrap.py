@@ -406,7 +406,8 @@ class BootstrapMixin:
                                self.observer)
         self.consequences = ContractConsequences(
             self.ledger, self.ev.consequence_backstop_ticks, self)
-        self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
+        self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns,
+                                            measured=self.live)
 
         # world
         self.exchange = JournalProxy(

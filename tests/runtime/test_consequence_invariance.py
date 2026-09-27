@@ -16,8 +16,10 @@ every variant produces byte-identical outcomes, consequence rows and late money.
 named-trade side runs the runtime's own freeze, observation, lapse and pricing methods
 on a stand-in carrying only their state, so 400 variants fit in the check tier.
 
-Assumed of the venue, as every venue in this repository delivers: facts arrive in
-fact-time order across batches (a batch holds the facts through its instant), and two
+Most variants deliver facts in fact-time order across batches. The late-fill mode
+withholds an older BTC execution until after a newer ETH execution was observed,
+using the measured FillCursor and its launch-floor overlap. This exercises cross-
+instrument reordering, not arbitrary reordering of FIFO fills or funding. Two
 fills of one instant keep the venue's own order (their order is itself a fact); a
 funding payment is stated at its funding time (``funding_ns``). A third of the variants
 read a polled venue whose fills and funding arrive only at polls that lag the ticks, with
@@ -31,11 +33,13 @@ from __future__ import annotations
 
 import json
 import random
+from decimal import Decimal
 from types import SimpleNamespace
 
 from factorylab.runtime.feedback import FeedbackMixin
 from factorylab.runtime.venue import VenueMixin
-from factorylab.settlement.consequence import ReturnConsequences
+from factorylab.settlement.consequence import FillCursor, ReturnConsequences
+from factorylab.world.exchange import Fill
 
 S = 10**9
 T0 = 3 * 3600 * S - 60 * S  # an hour boundary falls 60 s in
@@ -280,17 +284,22 @@ def _run(rng: random.Random) -> dict:
     # every fact through it to accounting before its watermark rises. In a third, the
     # tape ends with the last fact: its final advance is followed at once by the
     # terminal settlement, complete through the tape's close, and nothing after it.
-    mode = rng.choice(("advance", "lag", "tape_end"))
+    mode = rng.choice(("advance", "lag", "tape_end", "late_fill"))
+    late_fill = mode == "late_fill"
+    fill_cursor = FillCursor(_Rows(), start_ns=T0, measured=True)
+    visible_fills = []
     # Resolve schedules: frequent, or sparse (outcomes fixed long after their facts).
     per_fact, per_batch = rng.choice(((0.3, 0.5), (0.0, 0.1)))
-    lag = mode == "lag"
+    lag = mode in ("lag", "late_fill")
     facts = _facts()
     if lag:
         # Hyperliquid's fills and funding, and Polymarket's events, are each polled on
         # their own schedule. In half, Hyperliquid's fills read is unavailable from 80 s
         # to 220 s, across the horizons, while Polymarket's events (a resolution after
         # H) keep arriving: its pre-H fills are delivered after the resolution.
-        outage = rng.random() < 0.5
+        outage = rng.random() < 0.5 and not late_fill
+        if late_fill:
+            facts.extend([(_t(20), "poll"), (_t(45), "poll")])
         for kind in ("poll", "pmpoll"):
             at = T0
             while at < _t(330):
@@ -362,10 +371,38 @@ def _run(rng: random.Random) -> dict:
                 _deliver(book, fact, event)
             elif kind in ("poll", "pmpoll"):
                 buffer = polled if kind == "poll" else pm_polled
+                pending = []
+                funding = []
                 for reported in sorted(buffer, key=lambda f: f[0]):
-                    _deliver(book, reported, event)
-                buffer.clear()
-                if kind == "poll":
+                    # An old BTC fill arrives after a newer ETH execution, before
+                    # BTC funding. No FIFO order within an instrument is changed.
+                    if (late_fill and kind == "poll" and reported[1] == "fill"
+                            and reported[2] == "o-A1" and at < _t(45)):
+                        pending.append(reported)
+                    elif late_fill and kind == "poll" and reported[1] == "fill":
+                        visible_fills.append(Fill(
+                            order_id=reported[2], coin=reported[3], is_buy=reported[4],
+                            size=Decimal(reported[5]), px=Decimal(reported[6]),
+                            fee=Decimal(0), ts_ns=reported[0], observed_at_ns=at))
+                    elif late_fill and kind == "poll":
+                        funding.append(reported)
+                    else:
+                        _deliver(book, reported, event)
+                buffer[:] = pending
+                if kind == "poll" and late_fill:
+                    exchange = SimpleNamespace(fills=lambda since: [
+                        f for f in visible_fills if f.ts_ns >= since])
+                    delivered = [(ts, "Fill", {**payload, "ts_ns": ts})
+                                 for ts, payload in fill_cursor.poll(exchange, now_ns=at)]
+                    delivered += [(f[0], "Funding", f) for f in funding]
+                    for _ts, event_kind, payload in sorted(delivered, key=lambda row: row[0]):
+                        if event_kind == "Fill":
+                            book.observe("Fill", payload, event)
+                        else:
+                            _deliver(book, payload, event)
+                    book.hl_ns = (fill_cursor.through_ns if fill_cursor.through_ns is not None
+                                  else float("-inf"))
+                elif kind == "poll":
                     book.hl_ns = at
                 else:
                     book.pm_ns = at

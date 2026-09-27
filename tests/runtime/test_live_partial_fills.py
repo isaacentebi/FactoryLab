@@ -8,7 +8,9 @@ that kept the deleted live-venue fill fields restores with them ignored.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +55,59 @@ def test_an_order_filled_in_three_parts_is_booked_three_times_once_each(same, re
     assert [ts for ts, _ in first] == [10 * MS, 20 * MS]
     assert [ts for ts, _ in second] == [30 * MS]
     assert all(payload["order_id"] == "order-1" for _ts, payload in first + second)
+
+
+def test_live_first_seen_delay_holds_unknown_then_grows_without_losing_older_fills():
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+    from factorylab.runtime.venue import VenueMixin
+    from tests.conftest import make_runtime
+
+    rt = make_runtime(live=True)
+    cursor = rt.consequence_fills
+    start = cursor.since_ns
+    venue = PartialVenue()
+    venue.shown = []
+    assert cursor.poll(venue, now_ns=start + 100) == []
+    assert rt._stream_through(("fills",)) == float("-inf")
+    newer = replace(_part(start + 80, same=True), observed_at_ns=start + 110)
+    venue.shown = [newer]
+    assert len(cursor.poll(venue, now_ns=start + 100)) == 1
+    assert cursor.propagation_bound_ns == 30  # response, not request time
+    assert rt._stream_through(("fills",)) == start + 69
+
+    restored = make_runtime(live=True)
+    restore_runtime(restored, runtime_state(rt))
+    cursor = restored.consequence_fills
+    older = replace(_part(start + 20, same=True), observed_at_ns=start + 200)
+    venue.shown = [older, newer, older]  # identical executions retain multiplicity
+    assert [ts for ts, _ in cursor.poll(venue, now_ns=start + 190)] == [start + 20] * 2
+    assert cursor.since_ns == start
+    assert cursor.propagation_bound_ns == 180
+    assert restored._stream_through(("fills",)) == start + 9  # can retreat
+    # A later response timestamp is not part of an execution's identity or first-seen.
+    venue.shown = [replace(f, observed_at_ns=start + 300) for f in venue.shown]
+    assert cursor.poll(venue, now_ns=start + 290) == []
+    assert cursor.propagation_bound_ns == 180
+    assert restored._stream_through(("fills",)) == start + 109
+    row = [r for r in restored.ledger._recovery_items()
+           if r["kind"] == "consequence.fill_propagation"][-1]
+    assert row["bound_ns"] == 180 and row["observations"] == []
+    # Fake/tape advancement remains exact regardless of a cursor's measured state.
+    exact = SimpleNamespace(venue=None, advance_through_ns=start + 300)
+    assert VenueMixin._stream_through(exact, ("fills",)) == start + 300
+
+
+def test_live_missing_observation_never_becomes_a_completeness_claim():
+    cursor = FillCursor(Ledger(), start_ns=0, measured=True)
+    venue = PartialVenue()
+    venue.shown = [replace(_part(10, same=True), observed_at_ns=20)]
+    cursor.poll(venue, now_ns=20)
+    venue.shown += [_part(15, same=True)]
+    cursor.poll(venue, now_ns=30)
+    assert cursor.through_ns is None
+    venue.shown += [replace(_part(40, same=True), observed_at_ns=50)]
+    cursor.poll(venue, now_ns=50)
+    assert cursor.through_ns is None
 
 
 def test_a_checkpoint_with_the_retired_venue_fill_fields_restores_without_them():

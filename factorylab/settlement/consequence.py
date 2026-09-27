@@ -855,12 +855,12 @@ class FillCursor:
     """Inclusive fill polls preserve partial fills and repeated identical executions once each.
 
     Timestamp plus all Fill fields and their multiplicity distinguish observations,
-    never the order id alone (an order filled in parts is several fills); only the
-    latest timestamp's counts need retaining because the next poll includes that
-    timestamp. It is the one fill path: every fill the runtime books is read here.
+    never the order id alone. Exact venues retain the latest timestamp's counts.
+    Live reads retain every count since launch: an empirical propagation maximum is
+    not a proof that a future fill cannot arrive later. Every booked fill passes here.
     """
 
-    def __init__(self, ledger: Ledger, *, start_ns: int) -> None:
+    def __init__(self, ledger: Ledger, *, start_ns: int, measured: bool = False) -> None:
         """Exclude pre-launch executions, persisting the initial inclusive boundary."""
         if type(start_ns) is not int or start_ns < 0:
             raise ValueError("start_ns must be nonnegative integer nanoseconds")
@@ -868,17 +868,22 @@ class FillCursor:
         self.ledger = ledger
         self.since_ns = start_ns
         self.seen: dict[tuple, int] = {}
-        # Ruling R10-o: the request time of the latest successful fills read, the
-        # instant every execution at or before it has been delivered through.
+        self.measured = measured
+        self.propagation_bound_ns: int | None = None
+        self.observation_complete = True
+        # Chapter II §III.b: live completeness is an observation, not a request-time
+        # assertion. Until a timed execution is observed there is no measured bound.
         self.through_ns: int | None = None
 
     def poll(self, exchange, *, strict: bool = False,
              now_ns: int | None = None) -> list[tuple[int, dict]]:
         """Return unseen executions in timestamp order, persisting the cursor before advance.
 
-        Guarantees each execution's payload states its own venue time (``fill_ns``),
-        and that a successful read made at ``now_ns`` advances ``through_ns`` to it; a
-        failed read advances nothing (ruling R10-o).
+        Guarantees each execution states its venue time (``fill_ns``). Exact reads
+        advance through ``now_ns``; measured reads trail it by the largest observed
+        first-seen delay, remaining unknown before the first timed fill. A failed
+        read changes nothing. The empirical bound can grow and the watermark can
+        retreat; neither proves the maximum delay of executions not yet observed.
         """
         try:
             fills = exchange.fills(self.since_ns)
@@ -886,11 +891,9 @@ class FillCursor:
             if strict:
                 raise
             return []
-        if now_ns is not None:
-            self.through_ns = now_ns if self.through_ns is None else max(self.through_ns,
-                                                                          now_ns)
         counts = Counter()
         result = []
+        observations = []
         for fill in sorted(fills, key=lambda f: f.ts_ns):
             if fill.ts_ns < self.since_ns:
                 continue
@@ -911,9 +914,33 @@ class FillCursor:
             if counts[key] > self.seen.get(key, 0):
                 # Its own venue time, outside the cursor's identity key (R10-o).
                 result.append((fill.ts_ns, {**payload, "fill_ns": fill.ts_ns}))
+                observed = getattr(fill, "observed_at_ns", None)
+                if self.measured and observed is not None:
+                    observations.append((fill.ts_ns, observed))
+        bound = self.propagation_bound_ns
+        if observations:
+            bound = max(bound or 0, *(max(0, seen - ts) for ts, seen in observations))
+        complete = self.observation_complete and len(observations) == len(result)
+        if self.measured and now_ns is not None:
+            through = None if bound is None or not complete else now_ns - bound
+            # Chapter II §III.b: the measured outside fact is public and replayable.
+            # Arrival timestamps come from the journalled adapter response, not a
+            # wall-clock read during replay. A new maximum may retreat the watermark.
+            self.ledger.append({"kind": "consequence.fill_propagation",
+                                "read_ns": now_ns, "through_ns": through,
+                                "bound_ns": bound, "observation_complete": complete,
+                                "observations": [[ts, seen] for ts, seen in observations]})
+            self.through_ns = through
+        elif now_ns is not None:
+            self.through_ns = max(self.through_ns or now_ns, now_ns)
+        self.propagation_bound_ns = bound
+        if self.measured:
+            self.observation_complete = complete
         if result:
-            latest = max(ts for ts, _ in result)
-            seen = {key: count for key, count in counts.items() if key[0] == latest}
+            latest = self.since_ns if self.measured else max(ts for ts, _ in result)
+            seen = ({key: max(self.seen.get(key, 0), counts.get(key, 0))
+                     for key in self.seen | counts} if self.measured else
+                    {key: count for key, count in counts.items() if key[0] == latest})
             self.ledger.append(
                 {
                     "kind": "consequence.fill_cursor",

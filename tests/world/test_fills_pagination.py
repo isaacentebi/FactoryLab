@@ -60,7 +60,7 @@ def test_a_stalled_full_page_fails_closed():
         _venue(lambda user, start: same).fills(5 * NS_PER_MS)
 
 
-def test_the_watermark_does_not_pass_fills_not_yet_read():
+def test_the_watermark_does_not_pass_fills_not_yet_read(monkeypatch):
     """The second page fails once: the poll fails, nothing is consumed and the
     watermark stays; the next poll reads both pages and only then advances it."""
     outage = {"second": True}
@@ -73,11 +73,13 @@ def test_the_watermark_does_not_pass_fills_not_yet_read():
         return REST
 
     venue = _venue(fetch)
-    cursor = FillCursor(Ledger(), start_ns=0)
+    cursor = FillCursor(Ledger(), start_ns=0, measured=True)
+    monkeypatch.setattr("time.time_ns", lambda: 10_010 * NS_PER_MS)
     with pytest.raises(VenueUnavailable):
         cursor.poll(venue, strict=True, now_ns=10_000 * NS_PER_MS)
     assert cursor.through_ns is None  # nothing proven delivered
     outage["second"] = False
     fills = cursor.poll(venue, strict=True, now_ns=10_001 * NS_PER_MS)
     assert len(fills) == FILLS_PAGE + 2
-    assert cursor.through_ns == 10_001 * NS_PER_MS
+    assert cursor.propagation_bound_ns == 10_009 * NS_PER_MS
+    assert cursor.through_ns == -8 * NS_PER_MS
