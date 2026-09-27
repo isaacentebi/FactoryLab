@@ -464,6 +464,22 @@ def _sf2_window(*members):
 KW = {"card": "c", "relievers": {"rel"}, "holders": {"hold"}}
 
 
+def test_sf2a_a_handle_invoked_in_two_roles_fails_and_a_repeated_round_passes():
+    """Codex on e74c48d (gauntlet.py:1496): a handle's invocation rows are its opening
+    call and its tool rounds, all in one role. A repeated round in the same role is
+    read once; two rows naming different roles are a conflicting diary, a failure,
+    never the last role read."""
+    def diary(role):
+        again = {"kind": "invocation", "handle": "d2", "role": role, "status": "ok"}
+        window = _sf2_window(_member("d1", "rel"), [*_member("d2", "hold"), again],
+                             _member("d3", "hold"))
+        return window + [_penalty("d1", 0.0), _penalty("d2", 0.5), _penalty("d3", 0.5)]
+    assert g.sf2_gradient(diary("producer"), M, **KW).ok
+    result = g.sf2_gradient(diary("evaluator"), M, **KW)
+    assert result.status == g.FAIL
+    assert result.evidence["malformed"]["field"] == "one role per handle 'd2'"
+
+
 def test_sf2a_relievers_bear_nothing_and_holders_share_equally():
     window = _sf2_window(_member("d1", "rel"), _member("d2", "hold"), _member("d3", "hold"))
     good = window + [_penalty("d1", 0.0), _penalty("d2", 0.5), _penalty("d3", 0.5)]

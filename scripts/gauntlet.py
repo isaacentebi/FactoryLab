@@ -1550,7 +1550,13 @@ def split_members(events: list[Mapping]) -> dict[int, dict[str, str | None]]:
     generic split counts (pricing.py:1021-1025). A niche decision is in no split (wave
     16 R-E: ``PricingMixin._in_split``, 57aefe7 on wave16-reward-physics)."""
     opened = _decision_windows(events)
-    roles = {need(row, "handle"): need(row, "role") for row in rows_of(events, "invocation")}
+    roles: dict[str, str] = {}
+    for row in rows_of(events, "invocation"):
+        # A handle's invocations (its opening call and its tool rounds) are one seat's,
+        # in one role: a second role for it is a conflicting row, a malformed diary,
+        # never the last one read (Codex on e74c48d).
+        if roles.setdefault(need(row, "handle"), need(row, "role")) != need(row, "role"):
+            raise Malformed(row, f"one role per handle {need(row, 'handle')!r}")
     niche = niche_handles(events)
     out: dict[int, dict[str, str | None]] = defaultdict(dict)
     for row in rows_of(events, "decision.open"):
