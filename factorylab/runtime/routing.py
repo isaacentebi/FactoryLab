@@ -241,13 +241,17 @@ class ContractQueue:
         return expired
 
     def forget_ticks(self) -> None:
-        """Drop the tick record of every decision whose outcome is final.
+        """Drop the tick record of every decision that is final and fully learned.
 
-        A final decision is never cut off again, so only pending and timed-out ones
-        (whose late settlement still reaches a learner) keep their record, and a
-        final one its router is still owed (a decline, censoring or cutoff credited
-        at its window's close, D5): that credit closes the router's loop from the
-        tick it opened (R16b-2).
+        Guarantees a round's opening and first terminal tick outlive both of their
+        consumers: its role's settle meter (at that terminal) and its router's meter
+        (when the router learns it). A record is kept while the kernel still owes the
+        decision anything (``DecisionQueue.owed``: pending, timed out with a late
+        settlement's right, a retained child, or a delivered return its consumer has
+        not read, which is how a router learns), and while its router is owed a credit
+        at its window's close (D5, R16b-2). A settlement deferred to that close is
+        delivered only then, so dropping the record at the close lost its router
+        sample (Astra on #157).
         """
         rt = self.runtime
         owed = getattr(rt, "noop_credits", {})
@@ -255,11 +259,11 @@ class ContractQueue:
             if handle in owed:
                 continue
             try:
-                status = self.queue.get(handle).status
+                still_owed = self.queue.owed(handle)
             except KeyError:
                 del rt.decision_ticks[handle]
                 continue
-            if status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+            if still_owed is None:
                 del rt.decision_ticks[handle]
 
     def outstanding(self, actor=None):

@@ -115,6 +115,9 @@ def test_a_settled_decision_feeds_its_roles_settle_loop_and_a_scored_one_its_sco
                     definition_version="t", sampling_ref=None)
     assert rt.clockwork.latencies["settle:producer"] == [4, 6]
     assert rt.clockwork.latencies["scored:producer"] == [4]
+    rt.queue.forget_ticks()  # delivered and not yet read: a learner still reads them
+    assert scored in rt.decision_ticks and censored in rt.decision_ticks
+    rt._release_read_deliveries()  # no reader of this actor: released as made
     rt.queue.forget_ticks()
     assert scored not in rt.decision_ticks and censored not in rt.decision_ticks
 

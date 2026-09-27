@@ -38,6 +38,40 @@ def test_the_settle_meter_closes_at_score_ready_not_at_the_price_close(monkeypat
     assert penalty["penalty"] > 0
 
 
+def test_a_deferred_scored_round_keeps_its_router_sample(monkeypatch):
+    """Astra on #157 (R16b-1): a router's round opened at 10, scored at 13 and settled at
+    its window's close at 20 closes its role's loop at 3 and is learned once; its router
+    sample is 3 too. The close pruned its tick record before the router read the return
+    delivered there, so no router sample was taken at all."""
+    from factorylab.cortex.request import Return
+    from tests.runtime.test_cutoff_meter import _drawn_at
+
+    rt = _runtime(monkeypatch)
+    state, handle = _drawn_at(rt, "seed-decider", at=10)
+    rt.handle_to_assembly[handle] = "seed-decider"
+    rt._contribution(handle, "producer").update(invocations=1, ok=1, cost=100)
+    rt.card_samples.returned(handle=handle, assembly="seed-decider", role="producer",
+                             window=rt.window.index,
+                             ret=Return(handle, {"action": "hold"}, 100, "ok"))
+    rt.window.producer_returns += 1
+    rt.window.noop_returns += 1
+    rt.ticks_consumed = 13
+    _settle(rt, handle)
+    assert handle in rt.deferred_settlements  # waits for the close (D5)
+    rt.ticks_consumed = 20
+    rt._close_price_window()
+    rt._deliver_returns()
+    assert rt.clockwork.latencies["settle:producer"] == [3]
+    assert rt.clockwork.latencies[f"router:{state.kind}"] == [3]
+    learned = [i for i in rt.ledger._recovery_items()
+               if i["kind"] == "router.learned" and i["handle"] == handle]
+    assert [(i["path"], i["scored"]) for i in learned] == [("direct", True)]
+    assert handle in rt.decision_ticks  # its return is delivered, not yet released
+    rt._release_read_deliveries()  # the router read it: the kernel owes it nothing
+    rt._close_price_window()  # so its record goes at the next prune
+    assert handle not in rt.decision_ticks
+
+
 def test_a_checkpointed_deferral_keeps_its_ready_tick_and_an_older_one_the_close(
         monkeypatch):
     rt = _runtime(monkeypatch)
