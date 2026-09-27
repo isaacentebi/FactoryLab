@@ -12,15 +12,19 @@ reached by a short run, so it is found here, statically, in the source:
 * **Seat-bound paths.** The tool, connector, web-search and child-request entry points
   (``ROOTS``), and every try-block whose handler puts the caught exception's text in a
   seat position (an *exception funnel*: ``_run_tool``'s ``except Exception``, a refused
-  registration's reason): whatever those run, transitively, can raise a message a seat
-  reads.
+  registration's reason, or a name bound to its text that the function publishes in a
+  payload, like ``validation_error``): whatever those run, transitively, can raise a
+  message a seat reads.
 * **Sources.** On those paths: every ``raise``'s message and every error/reason value;
   anywhere: every sink's reason argument; and every string a *reason function* returns
   (a function whose result is placed in a seat position).
 * **Payloads.** Every literal a seat receives in a request, a tool result or its inbox,
   whatever its key: the arguments of every payload call (``PAYLOAD_CALLS``: a request's
   description, inputs and schema; a continuation's inputs; an inbox outcome; a fact
-  noted to the owner) and every value a tool entry point returns (``ROOTS``, success
+  noted to the owner; a Return's ``outputs`` and ``status``, which ``public_return``
+  publishes to judges, a parent and the world block, at ``Return(…)``, ``replace(ret,
+  outputs=…)`` and every wrapper that passes them on; an event's payload) and every
+  value a tool entry point returns (``ROOTS``, success
   and refusal alike), followed through dict values, list items, ``**`` spreads, local bindings and
   what is added to them, and into the return values of every function called there.
 
@@ -86,7 +90,20 @@ PAYLOAD_TARGETS: dict[str, tuple[str, frozenset[str]]] = {
                      frozenset({"inputs"})),
     "_note_to_owner": ("factorylab.runtime.compute:ComputeMixin._note_to_owner",
                        frozenset({"kind", "**"})),
+    # A seat's return as others read it: ``public_return`` publishes every key of a
+    # Return's ``outputs`` but the continuity fields, to the judges (loop.py, compute.py
+    # routed and child returns), a parent (composition.py ``request:`` results) and the
+    # world block (wake.py); its ``status`` goes beside it. A kernel diagnostic set there
+    # (``validation_error``, a ``reason``) is seat-bound whatever its key (Codex on
+    # b6b1d1e). ``replace(ret, outputs=…, status=…)`` is read the same (``RETURN_FIELDS``).
+    "Return": ("factorylab.cortex.request:Return", frozenset({"outputs", "status"})),
+    # An event's payload is what its subscribers' requests carry (the judged return's
+    # outputs and status among it).
+    "_emit": ("factorylab.runtime.loop:Runtime._emit", frozenset({"payload"})),
 }
+#: The fields of a Return that a seat reads (``public_return`` and the ``status`` beside
+#: it), where ``dataclasses.replace`` rebuilds one: ``replace(ret, outputs=…)``.
+RETURN_FIELDS = frozenset({"outputs", "status"})
 
 
 def _target(path: str) -> Any:
@@ -439,6 +456,8 @@ class Scan:
                                 and (c.endswith("Mixin") or c == "Runtime")}
         self.sinks = dict(SINKS)
         self._close_sinks()
+        self.payload_calls = dict(PAYLOAD_CALLS)
+        self._close_payloads()
         self.reachable = self._reach()
         self.reason_fns: set[str] = set()
         #: A seat-raised package exception's message template: the ``__init__`` (or
@@ -570,6 +589,29 @@ class Scan:
                             changed = True
                             break
 
+    def _close_payloads(self) -> None:
+        """A wrapper that passes a parameter on as a payload argument is a payload call
+        (``malformed(outputs, finish)`` -> ``Return(…, outputs, …)``): its callers'
+        arguments at that position are seat-bound too."""
+        changed = True
+        while changed:
+            changed = False
+            for fn in self.fns.values():
+                name = fn.node.name
+                for node in _own_nodes(fn.node):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    for arg in self._payload_args(node):
+                        if not (isinstance(arg, ast.Name) and arg.id in fn.params):
+                            continue
+                        index = fn.params.index(arg.id)
+                        positions, keywords = self.payload_calls.get(
+                            name, (frozenset(), frozenset()))
+                        if index not in positions or arg.id not in keywords:
+                            self.payload_calls[name] = (positions | {index},
+                                                        keywords | {arg.id})
+                            changed = True
+
     # --- reachability ------------------------------------------------------------------
 
     def _seat_positions(self, node: ast.AST, *, dicts: bool) -> list[ast.AST]:
@@ -594,15 +636,31 @@ class Scan:
         out: dict[str, set[str]] = {}
         for fn in self.fns.values():
             dicts = reachable is not None and fn.key in reachable
+            # Every payload argument anywhere in the function is a seat position (a
+            # Return's outputs, an event payload): a handler that binds the exception's
+            # text to a name the function later publishes there is a funnel.
+            published = {n.id for node in _own_nodes(fn.node) if isinstance(node, ast.Call)
+                         for arg in self._payload_args(node) for n in ast.walk(arg)
+                         if isinstance(n, ast.Name)}
             for node in _own_nodes(fn.node):
                 if not isinstance(node, ast.Try):
                     continue
-                funnel = any(
-                    any(isinstance(n, ast.Name) and n.id == handler.name
-                        for value in self._seat_positions(sub, dicts=dicts)
+                funnel = False
+                for handler in node.handlers:
+                    if handler.name is None:
+                        continue
+                    carriers = {handler.name} | {
+                        t.id for sub in ast.walk(handler) if isinstance(sub, ast.Assign)
+                        and any(isinstance(n, ast.Name) and n.id == handler.name
+                                for n in ast.walk(sub.value))
+                        for t in sub.targets if isinstance(t, ast.Name)}
+                    funnel = funnel or bool((carriers - {handler.name}) & published) or any(
+                        isinstance(n, ast.Name) and n.id in carriers
+                        for sub in ast.walk(handler)
+                        for value in [*self._seat_positions(sub, dicts=dicts),
+                                      *(self._payload_args(sub)
+                                        if isinstance(sub, ast.Call) else [])]
                         for n in ast.walk(value))
-                    for handler in node.handlers if handler.name is not None
-                    for sub in ast.walk(handler))
                 if not funnel:
                     continue
                 for stmt in node.body:
@@ -829,9 +887,12 @@ class Scan:
                 and any(r in ast.unparse(f.value) for r in INBOX_RECEIVERS) \
                 and not _is_ledger_row(call):
             return [kw.value for kw in call.keywords if kw.arg == "outcome"]
-        if name not in PAYLOAD_CALLS:
+        if name == "replace":
+            # ``dataclasses.replace`` of a Return: the fields a seat reads.
+            return [kw.value for kw in call.keywords if kw.arg in RETURN_FIELDS]
+        if name not in self.payload_calls:
             return []
-        positions, keywords = PAYLOAD_CALLS[name]
+        positions, keywords = self.payload_calls[name]
         out = [a for i, a in enumerate(call.args) if i in positions]
         out += [kw.value for kw in call.keywords
                 if kw.arg is None or "*" in keywords or kw.arg in keywords]

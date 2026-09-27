@@ -524,3 +524,63 @@ def test_every_seat_bound_call_is_mapped_from_its_real_signature():
     positions, keywords = st.call_mapping("factorylab.runtime.compute:ComputeMixin._request",
                                           frozenset({"description", "settlement"}))
     assert positions == {1, 7} and keywords == {"description", "settlement"}
+
+
+def _published_by_returns(seat):
+    """Every (source, key, text) a Return publishes through ``public_return``: each key of
+    a dict literal built as a Return's ``outputs`` (``Return(h, outputs, …)``,
+    ``replace(ret, outputs=…)``, or a wrapper that passes it on, like ``malformed``),
+    its value rendered at every expression shape the Renderer reads (literals, local
+    names and their bindings, f-strings, branches)."""
+    import ast
+
+    from tests.audit.class2_seat_text import (
+        Renderer,
+        _call_name,
+        _own_nodes,
+        has_literal_text,
+        local_bindings,
+    )
+
+    out = []
+    wrappers = {name for name, (positions, _kw) in seat.payload_calls.items()
+                if name not in ("Return", "_emit") and positions}
+    for key, fn in seat.fns.items():
+        renderer = None
+        for node in _own_nodes(fn.node):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _call_name(node)
+            outputs = [kw.value for kw in node.keywords if kw.arg == "outputs"]
+            if name == "Return" and len(node.args) > 1:
+                outputs.append(node.args[1])
+            elif name in wrappers and name == "malformed" and node.args:
+                outputs.append(node.args[0])
+            elif name not in ("Return", "replace", "malformed"):
+                continue
+            for value in outputs:
+                if not isinstance(value, ast.Dict):
+                    continue
+                renderer = renderer or Renderer(seat, fn.module, local_bindings(fn.node))
+                for k, v in zip(value.keys, value.values, strict=True):
+                    label = k.value if isinstance(k, ast.Constant) else "**"
+                    out += [(key, label, text) for text in renderer.render(v)
+                            if has_literal_text(text)]
+    return out
+
+
+def test_every_key_a_return_publishes_is_a_traced_seat_text(seat):
+    """Codex on b6b1d1e: ``public_return`` publishes every key of a Return's outputs to
+    the judges, a parent and the world block, so each is a seat-bound sink, not only
+    ``error`` and ``reason``. Every kernel string any key can carry (``validation_error``
+    among them) is a traced seat text of the function that builds it; one that is not
+    fails here."""
+    published = _published_by_returns(seat)
+    keys = {label for _key, label, _text in published}
+    assert {"validation_error", "reason"} <= keys, keys
+    texts = {(t.source, t.text) for t in seat.texts}
+    untraced = sorted({(key, label, text) for key, label, text in published
+                       if (key, text) not in texts})
+    assert untraced == [], untraced[:10]
+    assert ("factorylab/cortex/assembly.py::Assembly.invoke",
+            "answer is not a JSON object") in texts
