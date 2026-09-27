@@ -6,7 +6,7 @@ import pytest
 
 from factorylab.kernel.ledger import Ledger
 from factorylab.settlement.consequence import FillCursor
-from factorylab.world.exchange import AccountState, Fill, Position
+from factorylab.world.exchange import AccountState, Fill, OrderResult, Position
 
 
 class Venue:
@@ -40,6 +40,115 @@ def cursor(venue):
     return result
 
 
+def test_net_neutral_hidden_orders_recover_before_watermark():
+    venue = Venue(fees=False)
+    c = cursor(venue)
+    for ts in (100, 150):
+        c.submitted(str(ts), now_ns=ts)
+        c.acknowledged(str(ts), {'order_id': str(ts), 'status': 'filled'})
+    venue.lookup = lambda client, **kw: OrderResult(kw['order_id'], 'filled', D(1), None)
+    venue.executed = [fill(100), replace(fill(150), is_buy=False, realized=D('.02'))]
+    assert c.poll(venue, now_ns=200, tick_ns=10) == []
+    assert c.through_ns is None
+    venue.shown = venue.executed
+    assert len(c.poll(venue, now_ns=210, tick_ns=10)) == 2
+    assert venue.calls[-1] <= 100
+    assert c.through_ns == 210
+
+
+@pytest.mark.parametrize('terminal', ['cancelled', 'resting'])
+def test_exact_partial_status_and_truncated_page_recovery(terminal):
+    venue = Venue(fees=False)
+    c = cursor(venue)
+    c.submitted('order', now_ns=50)
+    c.acknowledged('order', {'order_id': '100', 'status': 'resting'})
+    first = fill(100)
+    second = replace(fill(150), order_id='100')
+    venue.executed = [first, second]
+    venue.shown = [first]
+    venue.lookup = lambda *a, **k: OrderResult('100', terminal, D(2), None)
+    assert len(c.poll(venue, now_ns=200)) == 1
+    assert c.through_ns is None
+    venue.shown = venue.executed
+    assert [ts for ts, _ in c.poll(venue, now_ns=210)] == [150]
+    assert c.through_ns == 210
+    assert bool(c.orders) == (terminal == 'resting')
+
+
+def test_no_order_liquidation_recovers_via_position_residual():
+    venue = Venue(fees=False)
+    venue.executed = [fill(10)]
+    c = cursor(venue)
+    liquidation = replace(fill(150), order_id='', is_buy=False, liquidation=True)
+    venue.executed.append(liquidation)
+    c.poll(venue, now_ns=200)
+    assert c.through_ns is None
+    venue.shown = [liquidation]
+    assert len(c.poll(venue, now_ns=210)) == 1
+    assert c.through_ns == 210
+
+
+def test_long_open_order_retains_identity_without_repeated_ledger_scan():
+    venue = Venue()
+    c = cursor(venue)
+    c.submitted('open', now_ns=50)
+    c.acknowledged('open', {'order_id': '100', 'status': 'resting'})
+    venue.lookup = lambda *a, **kw: OrderResult('100', 'resting', D(1), None)
+    venue.shown = venue.executed = [fill(100)]
+    assert len(c.poll(venue, now_ns=200)) == 1
+    def forbidden_scan():
+        raise AssertionError('open execution identity was evicted')
+    c.ledger._iter_items = forbidden_scan
+    for now in (300, 400, 500):
+        assert c.poll(venue, now_ns=now) == []
+    assert len(c.seen) == 1
+
+
+def test_submicro_cash_and_fee_audit_never_block_position_evidence():
+    venue = Venue()
+    venue.account = lambda: AccountState(D('999.00000001'), D(0), (), D(0),
+        reconciliation_cash_usd=D('999.00000001'), cumulative_fees_usd=D('.00000001'))
+    c = cursor(venue)
+    c.poll(venue, now_ns=200)
+    assert c.through_ns == 200
+    assert c.expected_cash['perp'] is None
+
+
+def test_production_shaped_open_position_and_funding_cash_are_audit_only():
+    from types import SimpleNamespace
+
+    from factorylab.world.exchange import HyperliquidExchange
+
+    exchange = HyperliquidExchange.__new__(HyperliquidExchange)
+    exchange._address = 'offline-fixture'
+    exchange._guarded = lambda name, call: call()
+    state = {'marginSummary': {'accountValue': '1000', 'totalRawUsd': '1000',
+                              'totalMarginUsed': '0'}, 'assetPositions': []}
+    exchange._info = SimpleNamespace(user_state=lambda address: state,
+        query_order_by_oid=lambda address, oid: {'status': 'order', 'order': {
+            'status': 'filled', 'order': {'oid': oid, 'origSz': '1', 'sz': '0'}}})
+    c = cursor(exchange)
+    c.submitted('factory', now_ns=50)
+    c.acknowledged('factory', {'order_id': '100', 'status': 'filled'})
+    state['assetPositions'] = [{'position': {'coin': 'BTC', 'szi': '1', 'entryPx': '100'}}]
+    state['marginSummary'].update(accountValue='999', totalRawUsd='899', totalMarginUsed='10')
+    exchange.fills = lambda start: [replace(fill(100), px=D(100), fee=D(1))]
+    assert len(c.poll(exchange, now_ns=200)) == 1
+    assert c.through_ns == 200
+    state['marginSummary'].update(accountValue='998', totalRawUsd='898')
+    assert c.poll(exchange, now_ns=210) == []
+    assert c.through_ns == 210
+
+
+def test_funding_cash_without_execution_does_not_block_positions():
+    venue = Venue(fees=False)
+    c = cursor(venue)
+    venue.account = lambda: AccountState(D(999), D(999), (), D(0),
+                                         reconciliation_cash_usd=D(999))
+    c.poll(venue, now_ns=200)
+    assert c.through_ns == 200
+
+
 def test_late150_visible210_recovers_after_mismatch_without_advancing_checkpoint():
     venue = Venue()
     c = cursor(venue)
@@ -70,6 +179,10 @@ def test_missing_independent_fees_never_certifies_net_neutral_invisible_executio
     venue = Venue(fees=False)
     c = cursor(venue)
     venue.executed = [fill(100), replace(fill(150), is_buy=False, realized=D('.02'))]
+    for ts in (100, 150):
+        c.submitted(str(ts), now_ns=ts)
+        c.acknowledged(str(ts), {'order_id': str(ts), 'status': 'filled'})
+    venue.lookup = lambda client, **kw: OrderResult(kw['order_id'], 'filled', D(1), None)
     c.poll(venue, now_ns=200)
     assert c.through_ns is None
     assert c.reconciliation_ns == 200
@@ -87,9 +200,13 @@ def test_known_fee_residual_prevents_net_neutral_checkpoint_advance():
     venue = Venue()
     c = cursor(venue)
     venue.executed = [fill(100), replace(fill(150), is_buy=False, realized=D('.02'))]
+    for ts in (100, 150):
+        c.submitted(str(ts), now_ns=ts)
+        c.acknowledged(str(ts), {'order_id': str(ts), 'status': 'filled'})
+    venue.lookup = lambda client, **kw: OrderResult(kw['order_id'], 'filled', D(1), None)
     c.poll(venue, now_ns=200)
     assert c.through_ns is None
-    assert c.reconciliation_ns == 0
+    assert c.reconciliation_ns == 200  # Net agreement is not the discovery frontier.
     venue.shown = venue.executed
     assert len(c.poll(venue, now_ns=210)) == 2
     assert c.through_ns == 210
@@ -147,6 +264,9 @@ def test_reconciled_identity_memory_is_bounded(count):
     sizes = []
     for i in range(1, count+1):
         f = fill(i*10)
+        c.submitted(f.order_id, now_ns=f.ts_ns)
+        c.acknowledged(f.order_id, {'order_id': f.order_id, 'status': 'filled'})
+        venue.lookup = lambda client, **kw: OrderResult(kw['order_id'], 'filled', D(1), None)
         venue.shown = [f]
         # Constant-time account facts avoid retaining the entire synthetic venue history.
         venue.account = lambda i=i: AccountState(D(1000)-D('.01')*i, D(0),

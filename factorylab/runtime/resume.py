@@ -969,7 +969,7 @@ _COMPONENT_FIELDS = (
                                "propagation_bound_ns", "observation_complete",
                                "reconciliation_ns", "expected_positions", "expected_cash",
                                "expected_fees", "recovery_span_ns", "incomplete_since_ns",
-                               "last_residual")),
+                               "last_residual", "orders", "baseline_ns", "legacy_boundary_ns")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
@@ -1145,7 +1145,8 @@ def _migrate_fill_cursor(saved, running) -> dict:
                 "observation_complete": True, "reconciliation_ns": None,
                 "expected_positions": None, "expected_cash": None, "expected_fees": None,
                 "recovery_span_ns": 0, "incomplete_since_ns": None,
-                "last_residual": None, **saved}
+                "last_residual": None, "orders": {}, "baseline_ns": None,
+                "legacy_boundary_ns": None, **saved}
     for field in ("launch_ns", "since_ns", "read_ns", "through_ns", "propagation_bound_ns",
                   "reconciliation_ns", "recovery_span_ns", "incomplete_since_ns"):
         value = migrated[field]
@@ -1165,6 +1166,23 @@ def _migrate_fill_cursor(saved, running) -> dict:
         for key, count in seen.items()
     ):
         raise ResumeError("invalid fill cursor seen")
+    for field in ("baseline_ns", "legacy_boundary_ns"):
+        value = migrated[field]
+        if value is not None and (type(value) is not int or value < 0):
+            raise ResumeError(f"invalid fill cursor {field}")
+    if not isinstance(migrated["orders"], dict):
+        raise ResumeError("invalid fill cursor orders")
+    for client, order in migrated["orders"].items():
+        try:
+            valid = (isinstance(client, str) and isinstance(order, dict)
+                     and type(order["submitted_ns"]) is int and order["submitted_ns"] >= 0
+                     and (order["oid"] is None or isinstance(order["oid"], str))
+                     and isinstance(order["booked"], str)
+                     and Decimal(order["booked"]).is_finite() and Decimal(order["booked"]) >= 0)
+        except (KeyError, TypeError, ArithmeticError):
+            valid = False
+        if not valid:
+            raise ResumeError("invalid fill cursor order evidence")
     positions, cash = migrated["expected_positions"], migrated["expected_cash"]
     if (positions is None) != (cash is None):
         raise ResumeError("invalid fill cursor accounting baseline")
@@ -1178,7 +1196,7 @@ def _migrate_fill_cursor(saved, running) -> dict:
         except ArithmeticError:
             valid_positions = False
         if not valid_positions or set(cash) != {"perp", "spot"} or any(
-            type(value) is not int for value in cash.values()
+            value is not None and type(value) is not int for value in cash.values()
         ):
             raise ResumeError("invalid fill cursor accounting facts")
     if migrated["expected_fees"] is not None and type(migrated["expected_fees"]) is not int:

@@ -635,7 +635,7 @@ class VenueMixin:
         """The earliest instant through which the venue has delivered every fact of
         ``streams``, or None when this runtime keeps no venue watermark (ruling R10-o).
 
-        Live fills require independent position, raw cash and cumulative fee agreement.
+        Live fills require exact per-factory-order filled sizes and position agreement.
         A net-account recovery checkpoint or measured publication delay alone never
         proves completeness. Other polled streams use ``LiveVenue.through``. An unmeasured
         or unread stream is minus infinity; fake and recorded venues keep their exact
@@ -1343,6 +1343,8 @@ class VenueMixin:
                   "args": dict(args), "result": {"status": "uncertain"}}
         self.ledger.append({"kind": "order.intent", **intent})
         self.order_intents[client_id] = intent
+        if operation != "venue.cancel":
+            self.consequence_fills.submitted(client_id, now_ns=self.clock.now_ns)
         self.consequences.order_intent(client_id, handle, args["coin"])
         # Submitted or lost, a write is the venue possibly moving: nothing observed
         # before it describes the account an order is weighed against afterwards.
@@ -1445,6 +1447,7 @@ class VenueMixin:
                             "handle": intent["handle"], "result": result,
                             **({"poll": polls} if uncertain else {})})
         self.order_intents[client_id] = {**intent, "result": dict(result), "polls": polls}
+        self.consequence_fills.acknowledged(client_id, result)
         if result["status"] != "uncertain":
             if intent["operation"] == "venue.cancel":
                 if result["status"] == "cancelled":

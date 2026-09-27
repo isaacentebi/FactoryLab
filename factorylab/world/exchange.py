@@ -1613,6 +1613,7 @@ class HyperliquidExchange:
 
         Runtime polling may defer a failed read, while terminal reconciliation
         reports that failure explicitly. Neither advances the inclusive cursor.
+        Contract: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
         Time pages contain at most 2,000 rows, within the endpoint's most recent
         10,000 fills (Hyperliquid info endpoint, userFillsByTime). Inclusive pages
         deduplicate trade ids. Neither short nor saturated responses prove execution

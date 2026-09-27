@@ -860,8 +860,8 @@ class FillCursor:
 
     Timestamp plus all Fill fields and their multiplicity distinguish observations,
     never the order id alone. Exact venues retain the latest timestamp's counts.
-    Live reads keep stable venue identities through the last reconciled account
-    interval plus measured overlap. Durable identities support backward recovery;
+    Live discovery retains unresolved submissions plus measured overlap.
+    Recent identities stay in memory; Durable identities support backward recovery;
     an empirical delay maximum never certifies completeness.
     """
 
@@ -883,11 +883,28 @@ class FillCursor:
         self.read_ns: int | None = None
         self.reconciliation_ns: int | None = None
         self.expected_positions: dict[str, str] | None = None
-        self.expected_cash: dict[str, int] | None = None
+        self.expected_cash: dict[str, int | None] | None = None
         self.expected_fees: int | None = None
         self.last_residual: dict | None = None
         self.recovery_span_ns = 0
         self.incomplete_since_ns: int | None = None
+        self.orders: dict[str, dict] = {}
+        self.baseline_ns: int | None = None
+        self.legacy_boundary_ns: int | None = None
+
+    def submitted(self, client_id: str, *, now_ns: int) -> None:
+        """Retain unresolved submission evidence until exact venue quantities agree."""
+        if self.measured and client_id not in self.orders:
+            self.orders[client_id] = {"submitted_ns": now_ns, "oid": None, "booked": "0",
+                                      "identities": []}
+
+    def acknowledged(self, client_id: str, result: dict) -> None:
+        """Bind a submission to its venue identity without treating an ACK as delivery."""
+        if client_id in self.orders:
+            if result.get("order_id") is not None:
+                self.orders[client_id]["oid"] = str(result["order_id"])
+            if result.get("status") == "rejected":
+                del self.orders[client_id]
 
     @staticmethod
     def _micro(value) -> int:
@@ -897,14 +914,22 @@ class FillCursor:
         return int(amount)
 
     @classmethod
+    def _audit_micro(cls, value):
+        """Unrepresentable audit cash is unavailable, never a position-proof failure."""
+        try:
+            return None if value is None else cls._micro(value)
+        except (ValueError, ArithmeticError, TypeError):
+            return None
+
+    @classmethod
     def _account_facts(cls, account):
-        if account.stale or account.reconciliation_cash_usd is None:
-            raise ValueError("fresh raw collateral unavailable")
+        if account.stale:
+            raise ValueError("fresh positions unavailable")
         positions = {"perp:" + p.coin: str(p.size) for p in account.positions if p.size}
-        cash = {"perp": cls._micro(account.reconciliation_cash_usd), "spot": 0}
+        cash = {"perp": cls._audit_micro(account.reconciliation_cash_usd), "spot": 0}
         for balance in account.spot_balances:
             if balance.coin == "USDC":
-                cash["spot"] = cls._micro(balance.total)
+                cash["spot"] = cls._audit_micro(balance.total)
             elif balance.total:
                 positions["spot:" + balance.coin] = str(balance.total)
         return positions, cash
@@ -913,51 +938,75 @@ class FillCursor:
         """Anchor accounting before executions; never infer a missing historical baseline."""
         positions, cash = self._account_facts(account)
         fees = (None if account.cumulative_fees_usd is None
-                else self._micro(account.cumulative_fees_usd))
+                else self._audit_micro(account.cumulative_fees_usd))
         self.ledger.append({"kind": "consequence.fill_baseline", "read_ns": now_ns,
                             "positions": positions, "cash_micro_usd": cash,
-                            "cumulative_fees_micro_usd": fees})
+                            "cumulative_fees_micro_usd": fees,
+                            "cash_usd_exact": str(account.reconciliation_cash_usd)})
         self.expected_positions, self.expected_cash = positions, cash
+        self.baseline_ns = now_ns
         self.expected_fees = fees
         self.reconciliation_ns = now_ns
 
     def _reconcile(self, exchange, result, *, now_ns, read_start, tick_ns, bound, identified):
         # Chapter II §III.b: independent account facts, not response counts or an
         # empirical latency maximum, decide whether the observed net changes agree.
-        if self.expected_positions is not None:
-            # Validate the entire cash batch before any partial accounting mutation.
+        for ts, fill in result:
+            for order in self.orders.values():
+                if order["oid"] == fill["order_id"]:
+                    order["booked"] = str(Decimal(order["booked"]) + Decimal(fill["size"]))
+            if self.expected_positions is None or (self.baseline_ns is not None
+                                                   and ts <= self.baseline_ns):
+                continue
+            market = fill["market"]
+            coin = fill["coin"].split("/")[0] if market == "spot" else fill["coin"]
+            key = market + ":" + coin
+            signed = Decimal(fill["inventory_size"]) * (1 if fill["is_buy"] else -1)
+            size = Decimal(self.expected_positions.get(key, "0")) + signed
+            if size:
+                self.expected_positions[key] = str(size)
+            else:
+                self.expected_positions.pop(key, None)
+            cash_change = (Decimal(fill["realized_usd"]) if market == "perp"
+                           else -signed * Decimal(fill["px"])) - Decimal(fill["fee_usd"])
+            change = self._audit_micro(cash_change)
+            expected = self.expected_cash[market]
+            self.expected_cash[market] = (None if change is None or expected is None
+                                          else expected + change)
+            fee = self._audit_micro(fill["fee_usd"])
+            self.expected_fees = (None if fee is None or self.expected_fees is None
+                                  else self.expected_fees + fee)
+        orders_complete = True
+        for client, order in list(self.orders.items()):
+            if order["oid"] is None:
+                # Runtime's bounded uncertain-intent reconciliation owns identity lookup.
+                orders_complete = False
+                continue
             try:
-                for _, fill in result:
-                    signed = Decimal(fill["inventory_size"]) * (1 if fill["is_buy"] else -1)
-                    cash = (Decimal(fill["realized_usd"]) if fill["market"] == "perp"
-                            else -signed * Decimal(fill["px"])) - Decimal(fill["fee_usd"])
-                    self._micro(cash)
-                    self._micro(fill["fee_usd"])
-            except (ValueError, ArithmeticError):
-                self.expected_positions = self.expected_cash = None
-                self.expected_fees = None
-        if self.expected_positions is not None:
-            for _, fill in result:
-                market = fill["market"]
-                coin = fill["coin"].split("/")[0] if market == "spot" else fill["coin"]
-                key = market + ":" + coin
-                signed = Decimal(fill["inventory_size"]) * (1 if fill["is_buy"] else -1)
-                size = Decimal(self.expected_positions.get(key, "0")) + signed
-                if size:
-                    self.expected_positions[key] = str(size)
-                else:
-                    self.expected_positions.pop(key, None)
-                cash = (Decimal(fill["realized_usd"]) if market == "perp"
-                        else -signed * Decimal(fill["px"])) - Decimal(fill["fee_usd"])
-                self.expected_cash[market] += self._micro(cash)
-                if self.expected_fees is not None:
-                    self.expected_fees += self._micro(fill["fee_usd"])
+                status = exchange.lookup(client, **({"order_id": order["oid"]}
+                                                    if order["oid"] else {}))
+                if status.order_id is not None and order["oid"] is None:
+                    order["oid"] = str(status.order_id)
+                equal = (str(status.order_id) == order["oid"]
+                         and status.status in ("filled", "cancelled", "resting")
+                         and status.filled_size == Decimal(order["booked"]))
+                self.ledger.append({"kind": "consequence.fill_order", "client_id": client,
+                                    "order_id": order["oid"], "read_ns": now_ns,
+                                    "status": status.status, "booked_size": order["booked"],
+                                    "reported_size": str(status.filled_size), "matched": equal})
+                orders_complete &= equal
+                if equal and status.status in ("filled", "cancelled"):
+                    del self.orders[client]
+            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
+                orders_complete = False
         reason, positions, cash, fees = None, None, None, None
         try:
             account = exchange.account()
+            if account.observed_at_ns is not None and account.observed_at_ns < now_ns:
+                raise ValueError("positions observed before reconciliation target")
             positions, cash = self._account_facts(account)
             if account.cumulative_fees_usd is not None:
-                fees = self._micro(account.cumulative_fees_usd)
+                fees = self._audit_micro(account.cumulative_fees_usd)
         except (RuntimeError, ValueError, AttributeError, ArithmeticError) as exc:
             reason = str(exc)
         if self.expected_positions is None:
@@ -970,11 +1019,11 @@ class FillCursor:
                               if Decimal(positions.get(key, "0"))
                               != Decimal(self.expected_positions.get(key, "0"))}
             cash_delta = {key: cash[key] - self.expected_cash[key] for key in cash
-                          if cash[key] != self.expected_cash[key]}
+                          if cash[key] is not None and self.expected_cash[key] is not None
+                          and cash[key] != self.expected_cash[key]}
         fee_verified = fees is not None and self.expected_fees is not None
         fee_delta = fees - self.expected_fees if fee_verified else None
-        matched = (reason is None and not position_delta and not cash_delta
-                   and fee_delta in (None, 0))
+        matched = reason is None and not position_delta
         if matched:
             self.reconciliation_ns = now_ns
             self.recovery_span_ns = 0
@@ -984,16 +1033,19 @@ class FillCursor:
                 self.incomplete_since_ns = self.reconciliation_ns or self.launch_ns
             self.recovery_span_ns = max(1, tick_ns, bound or 0,
                                         2 * self.recovery_span_ns)
-        complete = matched and fee_verified and fee_delta == 0 and identified
+        complete = (matched and orders_complete and identified
+                    and self.legacy_boundary_ns is None)
         self.ledger.append({"kind": "consequence.fill_reconciliation", "read_ns": now_ns,
                             "matched": matched, "reason": reason,
                             "reconciliation_ns": self.reconciliation_ns,
                             "read_start_ns": read_start,
                             "position_delta": position_delta, "cash_delta_micro_usd": cash_delta,
+                            "cash_usd_exact": (str(account.reconciliation_cash_usd)
+                                               if reason is None else None),
                             "independent_fee_verification": ("available" if fee_verified
                                                              else "unavailable"),
                             "fee_delta_micro_usd": fee_delta, "complete": complete,
-                            "scope": "net positions and raw cash; not execution completeness",
+                            "scope": "exact factory order sizes and positions; cash is audit only",
                             "incomplete_since_ns": self.incomplete_since_ns})
         residual = {"start_ns": self.incomplete_since_ns,
                     "position_delta": position_delta, "cash_delta_micro_usd": cash_delta}
@@ -1014,18 +1066,21 @@ class FillCursor:
         """Return unseen executions in timestamp order, persisting the cursor before advance.
 
         Exact venues advance through now. Live polls reconcile each response against
-        fresh positions, raw cash and independent cumulative fees; absent evidence is
-        UNKNOWN. Delay bounds optimize overlap only. A mismatch holds the recovery
-        checkpoint and widens geometrically, recovering dedup identities from the ledger.
-        Net reconciliation without fees bounds normal memory but never proves completeness.
+        fresh positions and exact per-order executed quantities; absent evidence is
+        UNKNOWN. Cash and fees are audit facts, not proof. Delay bounds optimize overlap
+        only. Position mismatches widen recovery; unresolved submissions retain their
+        discovery floor independently of the account reconciliation checkpoint.
         """
         if type(tick_ns) is not int or tick_ns < 0:
             raise ValueError("tick_ns must be nonnegative integer nanoseconds")
         read_start = self.since_ns
-        if self.measured and self.reconciliation_ns is not None:
-            read_start = max(self.launch_ns, self.reconciliation_ns
-                             - (self.propagation_bound_ns or 0) - tick_ns
-                             - self.recovery_span_ns)
+        if self.measured:
+            floor = min((o["submitted_ns"] for o in self.orders.values()),
+                        default=self.since_ns)
+            if self.incomplete_since_ns is not None:
+                floor = min(floor, self.incomplete_since_ns)
+            read_start = max(self.launch_ns, floor - (self.propagation_bound_ns or 0)
+                             - tick_ns - self.recovery_span_ns)
         try:
             fills = exchange.fills(read_start)
         except RuntimeError:  # read-only venue without an account
@@ -1037,10 +1092,12 @@ class FillCursor:
             # Exceptional recovery scans durable identities without retaining the
             # lifetime index in RAM. Normal polling touches only its overlap.
             candidate_ids = {(fill.ts_ns, "venue", fill.venue_id) for fill in fills
-                             if getattr(fill, "venue_id", None)}
+                             if getattr(fill, "venue_id", None) and fill.ts_ns < self.since_ns
+                             and (fill.ts_ns, "venue", fill.venue_id) not in prior}
             candidate_times = {fill.ts_ns for fill in fills
                                if not getattr(fill, "venue_id", None)}
-            for row in self.ledger._iter_items():
+            rows = self.ledger._iter_items() if candidate_ids or candidate_times else ()
+            for row in rows:
                 if row.get("kind") == "consequence.fill_identity":
                     key = tuple(row["key"])
                     if (read_start <= key[0] < self.since_ns
@@ -1071,6 +1128,9 @@ class FillCursor:
             counts[key] += 1
             if counts[key] > prior.get(key, 0):
                 if self.measured:
+                    for order in self.orders.values():
+                        if order["oid"] == fill.order_id:
+                            order.setdefault("identities", []).append(key)
                     self.ledger.append({"kind": "consequence.fill_identity", "key": list(key),
                                         "count": counts[key]})
                 # Its own venue time, outside the cursor's identity key (R10-o).
@@ -1097,11 +1157,14 @@ class FillCursor:
                             tick_ns=tick_ns, bound=bound,
                             identified=all(getattr(f, "venue_id", None) for f in fills))
         if result or (self.measured and now_ns is not None):
-            latest = (max(self.launch_ns, (self.reconciliation_ns or self.launch_ns)
+            latest = (max(self.launch_ns, (now_ns or self.launch_ns)
                           - (bound or 0) - tick_ns) if self.measured
                       else max(ts for ts, _ in result))
+            retained = {tuple(key) for order in self.orders.values()
+                        for key in order.get("identities", ())}
             seen = ({key: max(prior.get(key, 0), counts.get(key, 0))
-                     for key in prior | counts if key[0] >= latest} if self.measured else
+                     for key in prior | counts if key[0] >= latest or key in retained}
+                    if self.measured else
                     {key: count for key, count in counts.items() if key[0] == latest})
             self.ledger.append(
                 {

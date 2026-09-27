@@ -94,6 +94,9 @@ class _Rows:
     def _recovery_items(self) -> list[dict]:
         return list(self.rows)
 
+    def _iter_items(self):
+        return iter(self.rows)
+
 
 class _Book(ReturnConsequences):
     """The consequence book on the venue's clock, as the runtime's is."""
