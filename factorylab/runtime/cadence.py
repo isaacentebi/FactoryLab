@@ -36,6 +36,10 @@ class GovernanceCadence:
         # R16b-4: the consequence loop's floor, the one consequence horizon H in
         # delivered ticks (``set_floor``); the backstop until the runtime states it.
         self._floor = backstop
+        # The live source of that floor (``bind_floor``): read on every use, so a tick
+        # change (a clock amendment, the measured delivered interval) never leaves it
+        # stale (Codex on #157). Not checkpointed: the runtime binds it when built.
+        self._floor_source = None
         self._min_support = min_support
         self._outstanding: dict[str, int] = {}
         self._current_event = 0
@@ -128,6 +132,23 @@ class GovernanceCadence:
                                  "ticks": ticks})
             self._floor = ticks
 
+    def bind_floor(self, source) -> None:
+        """Read the consequence floor from ``source()`` on every use from now on.
+
+        Guarantees the floor is H in the ticks delivered at the moment it is read: a
+        tick interval that changes mid-window changes it at once, so no period derived
+        from the consequence loop falls below ``min_ratio × ceil(H / tick)``. The
+        ``set_floor`` value remains the ledgered, checkpointed record."""
+        self._floor_source = source
+
+    def _current_floor(self) -> int:
+        if self._floor_source is None:
+            return self._floor
+        ticks = self._floor_source()
+        if type(ticks) is not int or ticks < 1:
+            raise ValueError("the consequence floor is a positive number of ticks")
+        return ticks
+
     def consequence_period_events(self) -> int:
         """The consequence loop in ticks: its floor, or the p90 settlement above it.
 
@@ -135,7 +156,7 @@ class GovernanceCadence:
         loop. The floor, the consequence horizon H in delivered ticks
         (``set_floor``), remains even after warm-up.
         """
-        estimate = self._floor
+        estimate = self._current_floor()
         if len(self._latencies) >= self._min_support:
             ordered = sorted(self._latencies)
             estimate = max(estimate, ordered[(9 * len(ordered) + 9) // 10 - 1])

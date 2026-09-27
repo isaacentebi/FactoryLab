@@ -1925,6 +1925,8 @@ class GovernanceMixin:
                 )
                 self.tick_clock.set_interval(interval)
                 self.stats.clock_changes += 1
+                # The floor is read live (``bind_floor``); its record moves with the tick.
+                self.cadence.set_floor(self._horizon_ticks())
         self.stats.amendments_activated += 1
         self.window.amendments_activated += 1
         self.card_samples.revised(am.proposer_handle)

@@ -207,7 +207,10 @@ class PricingMixin:
         self.cadence.configure(min_support=self.m.timing.min_support)
         # R16b-4: the consequence loop is floored at H from the start, before any
         # schedule, patience, novelty accrual or viability is derived from it (Sol and
-        # Astra on #157); each window's open refreshes it at the delivered tick.
+        # Astra on #157), and read at the delivered tick whenever it is used, so a tick
+        # change mid-window never leaves it stale (Codex on #157). Each window's open
+        # ledgers it (``cadence.floor``) and checkpoints it.
+        self.cadence.bind_floor(self._horizon_ticks)
         self.cadence.set_floor(self._horizon_ticks())
         self.price_windows: dict[int, MeasureWindow] = {}
         self.price_origins: dict[str, dict[str, int]] = {}
@@ -329,12 +332,10 @@ class PricingMixin:
         closed = self.window.index if self.reserve_window_start is not None else None
         if closed is not None:
             self._close_price_window()
-        # R16b-4: the consequence loop is floored at H in the ticks delivered now,
-        # installed when the runtime is built (``_init_fidelity``) and refreshed as
-        # each window opens (the delivered tick moves), before anything this window
-        # derives from it: at launch, the sampling actuator's first period and the
-        # governance viability it publishes (Astra and Sol on #157: checked against
-        # the backstop first, viability was stale).
+        # R16b-4: the consequence floor, read live from the delivered tick
+        # (``_init_fidelity``), is ledgered as each window opens, before anything this
+        # window derives from it: at launch, the sampling actuator's first period and
+        # the governance viability it publishes (Astra and Sol on #157).
         self.cadence.set_floor(self._horizon_ticks())
         schedule = self.clockwork.fire("price", now, inner)
         self._ledger_loop("price", schedule, inner_loop="card samples")

@@ -351,6 +351,30 @@ def test_a_short_backstop_never_schedules_launch_or_passes_viability_below_h():
     assert not rt.governance_viable
 
 
+def test_a_faster_clock_mid_window_moves_the_floor_at_once():
+    """Codex on #157 (R16b-4; II.IV.c): H = 20 s at a 2 s tick is 10 ticks. A clock
+    amended to 1 s mid-window makes it 20 ticks at once: the consequence loop and every
+    period derived over it (patience, the policy floor, governance's need) read
+    ``ceil(H / new tick)``, never the 10 the window opened with, so no outer period
+    falls below ``min_ratio × H``."""
+    base = load_manifest("scripted")
+    manifest = replace(base, tick_interval_ns=2 * 10**9,
+                       timing=replace(base.timing, world_repricing_ns=60 * 10**9))
+    rt = Runtime(manifest, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+    rt._manage_reserve_window()
+    assert rt.cadence.consequence_period_events() == 10
+    rt.tick_clock.set_interval(10**9)  # what an activated clock amendment does, mid-window
+    ratio, floor = rt.m.timing.min_ratio, 20  # ceil(20 s / 1 s)
+    assert rt._horizon_ticks() == floor
+    assert rt.cadence.consequence_period_events() >= floor
+    assert rt.cadence.slowest_period_events() >= floor
+    assert rt._patience() >= ratio * floor
+    assert rt._policy_floor() >= ratio * floor
+    assert rt.cadence.viability(run_ticks=500, world_ticks=None)["needed_ticks"] >= (
+        ratio * floor)
+
+
 def test_a_promise_is_graded_no_sooner_than_min_ratio_consequence_periods():
     rt = make_runtime()
     assert rt._policy_floor() == rt.m.timing.min_ratio * rt.cadence.consequence_period_events()
