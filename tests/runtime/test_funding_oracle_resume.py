@@ -141,6 +141,79 @@ def test_stale_mark_retains_gap_for_later_named_trade_and_releases_it():
 
 
 @pytest.mark.gate
+def test_permanently_stale_mark_retains_only_frozen_horizon_and_replays():
+    from copy import deepcopy
+
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal
+
+    interval = 60_000_000_000
+
+    class Venue(FakeExchange):
+        settled_funding = True
+        funding_interval_ns = interval
+
+        def mids(self):
+            return {}
+
+        def settled_funding_history(self, coin, start, end):
+            return []
+
+    exchange = Venue(seed=1, coins=('BTC',), funding_interval_ns=interval)
+    base = load_manifest('scripted')
+    manifest = replace(base, exchange=replace(base.exchange, kind='hyperliquid', coins=('BTC',)),
+                       timing=replace(base.timing, world_repricing_ns=270_000_000_000))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1, exchange=exchange,
+                 clock_source=ClockSource(0, 1_000_000_000, 1).events())
+    try:
+        rt._observe_mid('BTC', 0, '100')
+        rt.venue.settled_launch_ns = 0
+        rt._freeze_named('probe', {'coin': 'BTC', 'side': 'buy'}, (('BTC', '100'),),
+                         declined=None, attempted=None)
+        frozen = rt.reference_mids.pop('probe')
+        assert frozen['open_ns'] == 0
+        assert frozen['due_ns'] == rt._horizon_ns()
+        assert rt.venue.funding_needed('BTC', frozen['due_ns'])
+        assert not rt.venue.funding_needed('BTC', frozen['due_ns'] + 1)
+        assert not rt.venue.funding_needed('BTC', 0)
+        before = runtime_state(rt)
+        prefix = len(rt.ledger.ledger._recovery_items())
+        rt.ledger.active = True
+
+        def drive():
+            states = []
+            for step in range(1, 12):
+                rt.clock.now_ns = step * interval
+                rt.venue._settled_rates(rt.clock.now_ns, {'BTC'})
+                # One new frontier boundary may await next poll's pruning; the
+                # predicate itself never retains it beyond the frozen horizon.
+                rt.venue._settled_rates(rt.clock.now_ns, {'BTC'})
+                gaps = rt.venue.settled_gaps['BTC']
+                assert all(0 < boundary <= frozen['due_ns'] for boundary in gaps)
+                if rt._funding_patience_over(frozen):
+                    assert not gaps
+                states.append(deepcopy((rt.venue.settled_gaps, rt.venue.settled_emitted)))
+            return states
+
+        expected = drive()
+        rows = rt.ledger.ledger._recovery_items()[prefix:]
+        replay = RecoveryJournal(rt.ledger.ledger, lambda: rt.clock.now_ns)
+        replay.io_store = rt.ledger.io_store
+        replay.active = True
+        replay.tail = iter(rows)
+        restore_runtime(rt, before)
+        def forbidden(*args, **kwargs):
+            raise AssertionError('replay called venue')
+        exchange.settled_funding_history = forbidden
+        rt.venue.exchange = JournalProxy(exchange, replay, 'exchange')
+        rt.venue.ledger = replay
+        assert drive() == expected
+        assert replay.peek() is None
+    finally:
+        rt._ledger_lock.close()
+
+
+@pytest.mark.gate
 def test_settled_launch_fingerprints_and_gaps_survive_checkpoint():
     class Venue(FakeExchange):
         settled_funding = True
