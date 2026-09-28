@@ -479,8 +479,12 @@ def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
 
 
 def test_the_edition6_worlds_carry_the_schema_on_the_probed_routes_alone():
-    # DeepSeek left json_schema after the first live capital-loop rehearsal (9 of 11 real
-    # contracts malformed under it); Qwen and MiniMax keep it.
-    expected = frozenset({"qwen/qwen3.8-flash", "minimax/minimax-m3"})
+    # Chapter II §I.a I/O conformance: DeepSeek left json_schema after the first live
+    # rehearsal; Qwen left after the 2026-09-27 host schema refusal. MiniMax keeps it.
+    expected = frozenset({"minimax/minimax-m3"})
     for world in ("edition6-testnet-rehearsal", "edition6-capital-loop"):
-        assert load_manifest(world).schema_contract_models() == expected
+        manifest = load_manifest(world)
+        assert manifest.schema_contract_models() == expected
+        qwen_routes = {"qwen/qwen3.8-flash", "venice:qwen-3-8-flash"}
+        assert {model.id: model.contract for model in manifest.models
+                if model.id in qwen_routes} == dict.fromkeys(qwen_routes, "json_object")
