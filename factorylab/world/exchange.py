@@ -1728,8 +1728,11 @@ class HyperliquidExchange:
     def order_book(self, coin: str, depth: int) -> dict:
         """Return at most depth levels per side, bids descending and asks ascending."""
         _check_count(depth, 20)
-        raw = self._guarded("l2_snapshot", lambda: self._info.l2_snapshot(self._wire_coin(coin)))
         try:
+            # Chapter II §II.b/§III.b: the SDK's market lookup is part of the
+            # evidence boundary too; an unknown market supplies no liquidity fact.
+            raw = self._guarded(
+                "l2_snapshot", lambda: self._info.l2_snapshot(self._wire_coin(coin)))
             if not isinstance(raw["levels"], list) or len(raw["levels"]) != 2:
                 raise ValueError("invalid book sides")
             sides = []

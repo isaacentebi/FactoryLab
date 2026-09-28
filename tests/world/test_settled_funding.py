@@ -154,6 +154,38 @@ def test_book_parser_normalizes_malformed_response(raw):
             exchange.order_book("BTC", 20)
 
 
+def test_sdk_unknown_book_market_stays_unavailable_until_metadata_recovers():
+    """An SDK lookup failure sends no request, aborts no tick and invents no book."""
+    from hyperliquid.info import Info
+
+    exchange = object.__new__(HyperliquidExchange)
+    exchange.name = "synthetic-live"
+    info = object.__new__(Info)
+    info.name_to_coin = {}
+    calls = []
+
+    def post(path, payload):
+        calls.append((path, payload))
+        return {"time": H // 1_000_000, "levels": [[], []]}
+
+    info.post = post
+    exchange._info = info
+    exchange.mids = lambda: {"PURR/USDC": Decimal(1)}
+    exchange.funding = lambda: []
+    exchange.funding_payments = lambda since: []
+    venue = LiveVenue(exchange)
+    with pytest.raises(VenueUnavailable, match="book normalization failed"):
+        exchange.order_book("PURR/USDC", 20)
+    assert calls == []
+    assert venue.on_tick(H)
+    assert calls == []
+    info.name_to_coin["PURR/USDC"] = "@1"
+    venue.on_tick(H + 1)
+    assert calls == [("/info", {"type": "l2Book", "coin": "@1"})]
+    assert exchange.order_book("PURR/USDC", 20) == {
+        "coin": "PURR/USDC", "ts_ns": H, "bids": [], "asks": []}
+
+
 def test_malformed_book_does_not_abort_tick_or_block_settlement_retry():
     exchange = object.__new__(HyperliquidExchange)
     exchange.name = "synthetic-live"
