@@ -148,6 +148,9 @@ MOVING_INSTITUTION_KEYS = frozenset({"clock"})
 #: are named here, so a section handle cannot address another seat. A section is
 #: retrieved through ``institution_section``, which returns the same value the
 #: prefix rendered and the validators read -- never a second copy of it.
+# Chapter II §I.b: detailed admission facts are retrieved, never standing instructions.
+RETRIEVABLE_ADMISSION_SECTIONS = frozenset({"admission", "proposals", "trials", "reserve"})
+
 INSTITUTION_SECTIONS = frozenset({
     "a_return_may_include", "accounting_facts", "action_labels", "assemblies",
     "catalogue", "clock", "committee", "composition", "compute_supply", "connectors",
@@ -248,7 +251,7 @@ class SchematicsMixin:
             "args_schema": {"type": "object", "properties": {"x": {"type": "number"}}},
             "returns_schema": {"type": "object", "properties": {"y": {"type": "number"}},
                                "required": ["y"]},
-            "code": "python: read a JSON object from stdin, print a JSON object",
+            "code": "Python program; stdin: one JSON object; stdout: one JSON object",
             "timeout_s": 2,
         },
         "program": {
@@ -258,9 +261,9 @@ class SchematicsMixin:
             "model_id": "program",
             "accepts": ["Tick"],
             "emits": ["ProducerReturn"],
-            "code": "python: read one JSON object from stdin with prompt, description, inputs, "
-            "outcome_schema and state; print the same Return JSON a model would, plus an "
-            "optional state object to keep",
+            "code": "Python program; stdin: one JSON object with prompt, description, inputs, "
+            "outcome_schema and state; stdout: the same Return JSON a model would produce, "
+            "plus an optional state object to keep",
             "timeout_s": 10,
             "state_policy": "private",
             "trigger": "optional; makes the seat a watcher the kernel wakes from world state "
@@ -621,6 +624,7 @@ class SchematicsMixin:
                         "no place in the rotation."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
+                        "trial_amount_micro": self.m.evaluation.trial_amount_micro,
                         "trials": self.m.novelty.trials,
                         "patience_ticks": self._patience(),
                         "flow_period_ticks": self._consequence_period()},
@@ -730,8 +734,8 @@ class SchematicsMixin:
                            "and the seller's charge is the call's only cost; a fetch without "
                            "pay costs no money. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
-                           "tool_rounds": 2,
-                           "continuation_tool_kinds": ["population", "artifact"],
+                           "tool_rounds": self.MAX_TOOL_ROUNDS,
+                           "continuation_tool_kinds": sorted(self.PARSE_KINDS),
                            "encoding": "UTF-8 with replacement", "redirects": "refused",
                            "oversize": "refused", "credentials": False},
             "population_tools": {
@@ -950,6 +954,8 @@ class SchematicsMixin:
         one section an ask: no name returns the whole block, because a retrieval
         that can dump everything is the manual again.
         """
+        if name in RETRIEVABLE_ADMISSION_SECTIONS:
+            return self._admission_section(name)
         if name not in INSTITUTION_SECTIONS:
             raise ValueError(f"no institutional section named {name!r}")
         block = self._institutional_block()
@@ -958,6 +964,45 @@ class SchematicsMixin:
             # an invented empty section.
             raise ValueError(f"section {name!r} is not published by this world")
         return block[name]
+
+    def _trial_admission(self) -> dict[str, Any]:
+        """Publish the committed trial amount, not an example amount from another world."""
+        return {
+            "trial_amount_micro": self.m.evaluation.trial_amount_micro,
+            "units": "integer micro-USD",
+            "rule": "Registration's novelty trial amount is evaluation.trial_amount_micro. "
+                    "Admission checks the remaining novelty reserve; paths requiring a "
+                    "proposer's entitlement also check that entitlement. An explicit "
+                    "assembly endowment is separate from the novelty admission amount.",
+        }
+
+    def _proposal_admission(self) -> dict[str, Any]:
+        """Admission metadata accompanies, without changing, each executable skeleton."""
+        from factorylab.cortex.admission_registration import registration_admission_schematics
+
+        facts = registration_admission_schematics()
+        return {kind: {"identifiers": facts["identifiers"],
+                       "trial": self._trial_admission(),
+                       "details": 'world.read {"section":"admission"}'}
+                for kind in self.PROPOSAL_SHAPES}
+
+    def _admission_section(self, name: str) -> dict[str, Any]:
+        """Only explicit retrieval carries the detailed seat-return admission reference."""
+        if name in {"trials", "reserve"}:
+            return self._trial_admission()
+        if name == "proposals":
+            return {"proposal_shapes": self.PROPOSAL_SHAPES,
+                    "proposal_admission": self._proposal_admission()}
+        from factorylab.cortex.admission_governance import governance_admission_schematics
+        from factorylab.cortex.admission_registration import registration_admission_schematics
+        from factorylab.cortex.admission_structure import structural_admission_schematics
+        from factorylab.cortex.admission_tools import tool_admission_schematics
+
+        return {"registration": registration_admission_schematics(),
+                "structural": structural_admission_schematics(),
+                "governance": governance_admission_schematics(self.m),
+                "tools": tool_admission_schematics(self.m),
+                "trial": self._trial_admission()}
 
     def _institutional_directory(self, institutions: dict[str, Any]) -> dict[str, Any]:
         """The sections a compact prompt did not carry, by exact handle.
@@ -970,8 +1015,8 @@ class SchematicsMixin:
         move with the registries and the measured loops, and this directory is
         part of the stable prefix.
         """
-        handles = sorted(set(institutions) - INSTITUTION_INLINE_KEYS
-                         - MOVING_INSTITUTION_KEYS)
+        handles = sorted((set(institutions) - INSTITUTION_INLINE_KEYS
+                          - MOVING_INSTITUTION_KEYS) | RETRIEVABLE_ADMISSION_SECTIONS)
         tool = "world.read" if "world.read" in getattr(self, "tool_specs", {}) else None
         return {
             "sections": handles,
@@ -1787,7 +1832,11 @@ class SchematicsMixin:
             "tools": {"max_depth": self.m.tools.max_depth,
                       "max_children": self.m.tools.max_children,
                       "max_tool_calls": self.m.tools.max_tool_calls,
-                      "continuations_per_request": 1},
+                      "max_tool_rounds": self.MAX_TOOL_ROUNDS,
+                      "continuation_admission": "After a write or child, the next call is "
+                      "the final answer. A read-only continuation requires remaining "
+                      "budget for that call and its final answer; external text limits "
+                      "subsequent tools to the published continuation_tool_kinds."},
             "committee": {
                 "seats": self.m.committee.seats,
                 "quorum": self.m.committee.quorum,
@@ -1815,6 +1864,7 @@ class SchematicsMixin:
                 "non-binding testimony. Cards on a removed norm are refused",
             },
             "novelty": {"share": nov.share, "trials": nov.trials,
+                        "trial_amount_micro": self.m.evaluation.trial_amount_micro,
                         "flow": "share of the spendable budget per measured consequence "
                         "period, accrued window by window and never more than one period's "
                         "share at once",
@@ -2447,7 +2497,8 @@ class SchematicsMixin:
             ),
             "policy": self._mechanics_block()["committee"]["liability"],
             "novelty_reserve": (
-                "registrations draw on the novelty reserve at the trial amount; a refused "
+                f"registrations draw on the novelty reserve at the trial amount of "
+                f"{self.m.evaluation.trial_amount_micro} integer micro-USD; a refused "
                 "proposal returns its trial to the window and its reason reaches the "
                 "proposer's outcome inbox; a registered assembly keeps protected compute until "
                 f"{self.m.novelty.trials} settled consequences have been delivered to it or "

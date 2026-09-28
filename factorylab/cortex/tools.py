@@ -9,6 +9,10 @@ from dataclasses import dataclass
 
 from factorylab.cortex.sandbox import NoJail, jail_available, run_python
 
+# Chapter II §I.b: execution and public schematics share the enforced limits.
+TOOL_CPU_S = 2
+DEFAULT_MAX_OUTPUT_BYTES = 8192
+
 
 @dataclass(frozen=True)
 class PopulationTool:
@@ -25,7 +29,7 @@ class PopulationTool:
 
 
 class ToolRunner:
-    def __init__(self, *, max_output_bytes: int = 8192) -> None:
+    def __init__(self, *, max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES) -> None:
         """Guarantee a positive integer UTF-8 stdout budget for each result."""
         if type(max_output_bytes) is not int or max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be a positive int")
@@ -54,7 +58,7 @@ class ToolRunner:
                 tool.code,
                 stdin=stdin,
                 timeout_s=tool.timeout_s,
-                cpu_s=min(tool.timeout_s, 2),
+                cpu_s=min(tool.timeout_s, TOOL_CPU_S),
                 # One extra byte makes truncation detectable by the result cap.
                 max_output_bytes=max(self.max_output_bytes + 1, 2000),
             )

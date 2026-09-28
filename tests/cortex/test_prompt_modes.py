@@ -26,6 +26,7 @@ from factorylab.cortex.schematics import (
     INSTITUTION_INLINE_KEYS,
     INSTITUTION_SECTIONS,
     MOVING_INSTITUTION_KEYS,
+    RETRIEVABLE_ADMISSION_SECTIONS,
 )
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import PromptSpec, load_manifest, manifest_from_dict
@@ -124,13 +125,29 @@ def test_compact_names_every_section_it_does_not_carry(modes):
     block = reference._institutional_block()
     directory = compact._institutional_directory(block)
     named = set(directory["sections"])
-    assert named == set(block) - INSTITUTION_INLINE_KEYS - MOVING_INSTITUTION_KEYS
+    assert named == ((set(block) - INSTITUTION_INLINE_KEYS - MOVING_INSTITUTION_KEYS)
+                     | RETRIEVABLE_ADMISSION_SECTIONS)
     assert named  # a compaction that carried everything would prove nothing
     for section in directory["sections"]:
-        assert section in INSTITUTION_SECTIONS
+        assert section in INSTITUTION_SECTIONS | RETRIEVABLE_ADMISSION_SECTIONS
     # Every handle the directory prints is a handle the reader can actually use.
     for section in named:
-        assert compact.institution_section(section) == block[section]
+        if section in block:
+            assert compact.institution_section(section) == block[section]
+        else:
+            assert compact.institution_section(section)
+
+
+def test_admission_details_are_retrievable_without_preloading_the_manual(modes):
+    for rt in modes:
+        prefix = rt._stable_prefix_text()
+        allowed = rt.tool_specs["world.read"]["args_schema"]["properties"]["section"]["enum"]
+        for section in RETRIEVABLE_ADMISSION_SECTIONS:
+            assert section in allowed
+            facts = rt.institution_section(section)
+            assert facts
+            assert section not in rt._institutional_block()
+            assert json.dumps(facts, sort_keys=True, indent=2) not in prefix
 
 
 def test_grounded_actor_access_keeps_operating_routes_out_of_grading_facts(modes):

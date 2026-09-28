@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from factorylab.cortex.registration import Rejected, ToolProposal, parse_proposals
+from factorylab.cortex.registration import SLUG_RULE, Rejected, ToolProposal, parse_proposals
 from factorylab.cortex.sandbox import SandboxResult, jail_available
 from factorylab.cortex.tools import PopulationTool, ToolRunner, as_spec
 
@@ -57,11 +57,11 @@ def test_tool_proposal_accepts_empty_properties_and_boundaries():
 
 
 @pytest.mark.parametrize(("field", "value", "reason"), [
-    ("id", "a", "id must be a slug of 2-48 chars"),
-    ("id", "a" * 49, "id must be a slug of 2-48 chars"),
-    ("id", "Bad Id", "id must be a slug of 2-48 chars"),
-    ("id", "ab\n", "id must be a slug of 2-48 chars"),
-    ("id", [], "id must be a slug of 2-48 chars"),
+    ("id", "a", SLUG_RULE),
+    ("id", "a" * 49, SLUG_RULE),
+    ("id", "Bad Id", SLUG_RULE),
+    ("id", "ab\n", SLUG_RULE),
+    ("id", [], SLUG_RULE),
     ("description", " ", "description is required"),
     ("description", None, "description is required"),
     ("description", "d" * 501, "description exceeds 500 chars"),
