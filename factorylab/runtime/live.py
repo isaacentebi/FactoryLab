@@ -300,7 +300,7 @@ class WallClock:
 class LiveVenue:
     """Adapts a real ``Exchange`` to per-tick world events.
 
-    Each tick reads mids and funding. Rates remain observations; separate
+    Each tick reads mids, L2 books and funding. Rates remain observations; separate
     venue-identified funding payments carry actual cash. Fills are never read here:
     the consequence fill cursor (``settlement.consequence.FillCursor``) is the one fill
     path, whose watermark is the fills stream's.
@@ -328,6 +328,25 @@ class LiveVenue:
     # fact-time at or before it has been delivered. A failed or skipped read does not
     # advance it.
     through: dict[str, int] = field(default_factory=dict)
+    # Chapter II §III.b: retain the boundary poll's oracle, never a later quote
+    # substituted when the settled rate becomes visible. The read time is evidence.
+    funding_oracles: dict[str, dict[int, tuple[str, int]]] = field(default_factory=dict)
+
+    # Chapter II §III.b: rate evidence starts at launch, not its first answered poll.
+    settled_launch_ns: int | None = None
+    settled_emitted: dict[str, dict[int, tuple[str, str | None, int | None]]] = field(
+        default_factory=dict)
+    settled_gaps: dict[str, set[int]] = field(default_factory=dict)
+    funding_needed: Callable[[str, int], bool] | None = None
+
+    def _funding_needed(self, coin: str, boundary: int) -> bool:
+        """Keep unknown consumers retryable; stop only when their absence is established."""
+        return self.funding_needed is None or self.funding_needed(coin, boundary)
+
+    def __post_init__(self) -> None:
+        """Keep the initial funding bound independent of the moving payment cursor."""
+        if self.settled_launch_ns is None:
+            self.settled_launch_ns = self.last_funding_ns
 
     def funding_payments(self, now_ns: int) -> list[WorldEvent]:
         """Emit post-launch funding once, with an inclusive cursor that keeps timestamp peers."""
@@ -366,8 +385,87 @@ class LiveVenue:
             return None
         return frozenset(self.markets())
 
+    def _settled_rates(self, now_ns: int, coins: set[str]) -> list[WorldEvent]:
+        """Deliver first observations and corrections without pinning forward reads.
+
+        Chapter II §III.b/§IV.c: unresolved evidence remains retryable only while
+        an open outcome can consume it, independently of newer venue facts.
+        """
+        interval = int(self.exchange.funding_interval_ns)
+        out = []
+        if self.settled_launch_ns is None:
+            self.settled_launch_ns = now_ns
+        for coin in sorted(coins):
+            key = f"settled:{coin}"
+            cursor = self.through.setdefault(
+                key, self.settled_launch_ns - self.settled_launch_ns % interval)
+            emitted = self.settled_emitted.setdefault(coin, {})
+            gaps = self.settled_gaps.setdefault(coin, set())
+            gaps.intersection_update(stamp for stamp in tuple(gaps)
+                                     if self._funding_needed(coin, stamp))
+            # Each retry is an exact boundary, never an ever-growing old range.
+            # Observed boundaries remain correction-readable for their consumers.
+            retry = gaps | {stamp for stamp in emitted if stamp < cursor
+                            and self._funding_needed(coin, stamp)}
+            reads = [(cursor, now_ns), *((stamp, stamp) for stamp in sorted(retry))]
+            for start, end in reads:
+                try:
+                    rows = self.exchange.settled_funding_history(coin, start, end)
+                except (RuntimeError, OSError, ValueError, ArithmeticError):
+                    continue
+                stamps = set()
+                for row in rows:
+                    if not start <= row.ts_ns <= end or row.ts_ns % interval:
+                        continue
+                    publication = row.published_at_ns
+                    if publication is not None and not (
+                            row.ts_ns <= publication < row.ts_ns + interval
+                            and publication <= now_ns):
+                        continue
+                    stamps.add(row.ts_ns)
+                    oracle = self.funding_oracles.get(coin, {}).get(row.ts_ns)
+                    fingerprint = (str(row.rate), oracle[0] if oracle else None,
+                                   oracle[1] if oracle else None)
+                    if emitted.get(row.ts_ns) == fingerprint:
+                        continue
+                    emitted[row.ts_ns] = fingerprint
+                    out.append(WorldEvent(
+                        WorldEventKind.FUNDING, now_ns, self.exchange.name,
+                        {"coin": coin, "rate": str(row.rate), "paid_usd": "0",
+                         "funding_ns": row.ts_ns, "settled": True,
+                         "published_at_ns": publication,
+                         "mark": fingerprint[1], "oracle_observed_at_ns": fingerprint[2],
+                         "oracle_offset_seconds": (
+                             str(Decimal(oracle[1] - row.ts_ns) / Decimal(NS_PER_SECOND))
+                             if oracle else None)}))
+                gaps.difference_update(stamps)
+                if start == cursor and end == now_ns:
+                    forward = now_ns - now_ns % interval
+                    gaps.update(stamp for stamp in range(cursor, forward + 1, interval)
+                                if stamp not in emitted and self._funding_needed(coin, stamp))
+                    self.through[key] = forward
+            self.settled_emitted[coin] = {
+                stamp: fingerprint for stamp, fingerprint in emitted.items()
+                if stamp >= self.through[key] or self._funding_needed(coin, stamp)}
+            # Chapter II §III.b: do not discard a gap's original boundary oracle
+            # merely because a newer boundary arrived first.
+            self.funding_oracles[coin] = {
+                stamp: oracle for stamp, oracle in self.funding_oracles.get(coin, {}).items()
+                if stamp >= self.through[key] or stamp in gaps
+                or self._funding_needed(coin, stamp)}
+        return out
+
     def on_tick(self, now_ns: int) -> list[WorldEvent]:
         traded = self._broadcast()
+        # Chapter II §III.b: capability is evidence even when every history read fails.
+        if self.ledger is not None:
+            for coin in sorted(traded if traded is not None else self.exchange.coins):
+                if "/" not in coin:
+                    regime = getattr(self.exchange, "funding_regime", None)
+                    self.ledger.append({"kind": "funding.regime", "market": coin,
+                                        "regime": regime(coin) if regime is not None else (
+                                            "settled" if getattr(self.exchange, "settled_funding",
+                                                                 False) else "legacy")})
         out: list[WorldEvent] = []
         try:
             mids = self.exchange.mids()
@@ -385,6 +483,13 @@ class LiveVenue:
                     {"coin": coin, "mid": str(mid)},
                 )
             )
+        # Chapter II §II.b/§III.b: retain the venue's liquidity as an outside fact,
+        # independent of whether a seat asks for a book or the mids read succeeds.
+        for coin in sorted(traded if traded is not None else mids):
+            try:
+                self.exchange.order_book(coin, 20)
+            except (RuntimeError, OSError, ValueError, ArithmeticError):
+                continue
         try:
             funding = self.exchange.funding()
             self.through["rates"] = now_ns
@@ -395,6 +500,14 @@ class LiveVenue:
         for f in funding:
             if traded is not None and f.coin not in traded:
                 continue
+            if getattr(self.exchange, "settled_funding", False):
+                interval = int(self.exchange.funding_interval_ns)
+                boundary = f.ts_ns - f.ts_ns % interval
+                # The current context cannot supply an oracle for a skipped hour.
+                # Preserve the first observed oracle of this boundary's poll only.
+                if f.mark is not None:
+                    self.funding_oracles.setdefault(f.coin, {}).setdefault(
+                        boundary, (str(f.mark), f.ts_ns))
             out.append(
                 WorldEvent(
                     WorldEventKind.FUNDING,
@@ -410,6 +523,15 @@ class LiveVenue:
                     },
                 )
             )
+        if getattr(self.exchange, "settled_funding", False):
+            # Chapter II §III.b: a failed current-rate read cannot hide available
+            # settlement evidence for configured/registered perpetuals. Spot pairs
+            # have no periodic funding; durable cursors retain former markets.
+            coins = ({coin for coin in traded if "/" not in coin}
+                     if traded is not None else {f.coin for f in funding})
+            coins.update(key.removeprefix("settled:") for key in self.through
+                         if key.startswith("settled:"))
+            out.extend(self._settled_rates(now_ns, coins))
         out.extend(self.funding_payments(now_ns))
         return out
 

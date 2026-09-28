@@ -1532,8 +1532,14 @@ class FeedbackMixin:
             funding["rates"] = [row for row in funding["rates"] if row[0] > ts_ns]
             funding["marks"] = [row for row in funding.get("marks") or [] if row[0] > ts_ns]
 
+    def _strict_funding(self, coin: str) -> bool:
+        """Require settled evidence only for markets whose venue declares that regime."""
+        regime = getattr(self.exchange, "funding_regime", None)
+        return (regime(coin) == "settled" if regime is not None
+                else bool(getattr(self.exchange, "settled_funding", False)))
+
     def _observe_funding(self, coin: str, ts_ns: int, rate: str,
-                         mark: str | None = None) -> None:
+                         mark: str | None = None, *, settled: bool = False) -> None:
         """One venue funding-rate print: the rate in force at each funding time it passes.
 
         Guarantees every open named trade on ``coin`` assigns the funding times this
@@ -1543,15 +1549,26 @@ class FeedbackMixin:
         with its fact time (``_funding_history``; Codex on #152): a trade opened at a
         stale venue mark reads each funding time's own print, never the latest.
         """
+        if self._strict_funding(coin) and not settled:
+            return
         for frozen in self.reference_mids.values():
             funding = frozen.get("funding")
             if frozen.get("coin") != coin or funding is None:
                 continue
-            res = frozen.get("res")
-            if res is not None and funding["cursor"] >= res[0]:
+            if (self._settled_funding_pending(frozen)
+                    and self._funding_patience_over(frozen)):
+                # Chapter II §IV.c: a late publication cannot rewind a censored outcome.
                 continue
-            advance_funding(funding, int(ts_ns), str(rate), mark)
-        history = self._funding_history(coin)
+            res = frozen.get("res")
+            if res is not None and funding["cursor"] >= res[0] and not settled:
+                continue
+            if settled and (ts_ns <= funding["cursor"] and
+                            frozen.get("open_ns") is not None and ts_ns <= frozen["open_ns"]):
+                continue
+            if settled and frozen.get("due_ns") is not None and ts_ns > frozen["due_ns"]:
+                continue
+            advance_funding(funding, int(ts_ns), str(rate), mark, settled=settled)
+        history = [row for row in self._funding_history(coin) if row[0] != int(ts_ns)]
         history.append([int(ts_ns), str(rate), None if mark is None else str(mark)])
         history.sort(key=lambda row: row[0])
         # Need-based retention (wave 17b): the print in force at the earliest instant a
@@ -1611,6 +1628,22 @@ class FeedbackMixin:
         opened = frozen["open_ns"] if frozen.get("open_ns") is not None else frozen["ns"]
         return opened + self._patience_ns()
 
+    def _funding_patience_over(self, frozen: dict) -> bool:
+        """Expire missing settled funding at opening plus world repricing in venue time."""
+        # Chapter II §IV.b: the current event's venue clock counts even when its
+        # funding publication precedes the tick that advances delivered-through time.
+        venue_now = max(v for v in (self.clock.now_ns,
+                                    getattr(self, "facts_seen_ns", None),
+                                    getattr(self, "tick_through_ns", None)) if v is not None)
+        return venue_now >= frozen["open_ns"] + self.m.timing.world_repricing_ns
+
+    def _settled_funding_pending(self, frozen: dict) -> bool:
+        """Identify named outcomes whose horizon still lacks settled funding truth."""
+        funding = frozen.get("funding")
+        return bool(funding and funding.get("strict") and frozen.get("due_ns") is not None
+                    and funding_due(funding, frozen["open_ns"], frozen["due_ns"])
+                    == FUNDING_PENDING)
+
     def _reference_outcome(self, frozen: dict) -> tuple[str, list[str] | None]:
         """Whether a frozen named trade can be priced now: ``(state, funding rates)``.
 
@@ -1619,9 +1652,16 @@ class FeedbackMixin:
         world's clock is a patience past the trade's opening without both, or when a
         funding time in the window had no rate read before it (then with
         ``FUNDING_UNKNOWN`` in place of the rates); ``measured`` with the funding rates
-        otherwise.
+        otherwise. Missing settled live funding instead waits exactly world repricing
+        from opening in venue time, then returns ``funding evidence absent``.
         """
         due, res = frozen.get("due_ns"), frozen.get("res")
+        if self._settled_funding_pending(frozen):
+            # Chapter II §III.b, §IV.b–c: missing truth is censored at ratio-based
+            # patience, not held forever by the missing stream's own watermark.
+            if self._funding_patience_over(frozen):
+                return "none", "funding evidence absent"
+            return "open", None
         through = self._facts_through(frozen)
         lapsed = through > self._frozen_lapse_ns(frozen)
         if res is None or due is None:
@@ -1703,11 +1743,16 @@ class FeedbackMixin:
         self.reference_mids.pop(about, None)
         self.window.non_acting_outcomes += 1  # wave 16, R-H: fixed now, either way
         if state == "none":
-            if rates == FUNDING_UNKNOWN:
-                # A funding time in its window had no venue print at or before it: fixed
-                # and uninformative, never a guessed payment (Codex on #152).
+            if rates in (FUNDING_UNKNOWN, "funding evidence absent"):
+                # Chapter II §III.b: absent evidence never becomes a guessed payment.
                 self.ledger.append({"kind": "consequence.uninformative", "handle": about,
-                                    "reason": FUNDING_UNKNOWN})
+                                    "reason": rates})
+            if rates == "funding evidence absent":
+                for rec in self.pending.values():
+                    if rec.evaluation and rec.tier == 1 and rec.about == about:
+                        self.ledger.append({"kind": "evaluation.consequence_censored",
+                                            "handle": rec.handle, "about_handle": about,
+                                            "reason": rates, "ts": self.clock.now_ns})
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)
         if None in self._fee_legs(frozen):
             # Ruling R10-i, per leg: the venue never stated the rate one leg pays by its
@@ -1927,6 +1972,8 @@ class FeedbackMixin:
             # the rate in force at each is read from the venue's own prints.
             "funding": (None if interval is None else
                         {"interval": int(interval),
+                         **({"strict": True} if self._strict_funding(coin)
+                            else {}),
                          "cursor": cursor,
                          # The print in force at its opening, never a later one.
                          "rate": latest[1] if latest is not None else None, "rates": [],
@@ -1939,7 +1986,8 @@ class FeedbackMixin:
             # Opened at a stale venue mark: the prints since it pass their own funding
             # times, each at the rate in force at it (Codex on #152).
             for ts_ns, rate, mark in (row for row in history if row[0] > cursor):
-                advance_funding(funding, int(ts_ns), str(rate), mark)
+                advance_funding(funding, int(ts_ns), str(rate), mark,
+                                settled=funding.get("strict", False))
 
     def _score_verdict(self, rec: PendingJudgement, y: float, kind: str) -> None:
         """Score one judge's verdict against its return's measured outcome (ruling R1).
@@ -2061,13 +2109,45 @@ class FeedbackMixin:
                             and not r.consequence_closed), key=lambda r: r.handle):
             self._score_meta(meta, score)
 
+    def _consequence_deadline_ns(self, about: str | None, deadline: int) -> int:
+        """Keep a verdict open through every unresolved consequence it depends on.
+
+        Chapter II §III.b, §IV.c: recursive grades and counter-verdicts cannot lose
+        the underlying outcome's guaranteed patience to their own verdict timeout.
+        Closed dependencies add no patience; missing dependencies retain the caller's
+        ordinary deadline. The walk is bounded even for a malformed cyclic chain.
+        """
+        seen = set()
+        while about is not None and about not in seen:
+            seen.add(about)
+            if about in self.consequence_scores or about in self.world_outcomes:
+                break
+            rec = self.pending.get(about)
+            if rec is not None and rec.evaluation:
+                if rec.consequence_closed:
+                    break
+                deadline = max(deadline, self.clock.now_ns - self._age_ns(rec)
+                               + self._patience_ns())
+                about = rec.about
+                continue
+            frozen = self.reference_mids.get(about)
+            if frozen is not None:
+                dependency_deadline = (
+                    frozen["open_ns"] + self.m.timing.world_repricing_ns
+                    if self._settled_funding_pending(frozen)
+                    else self._frozen_lapse_ns(frozen))
+                deadline = max(deadline, dependency_deadline)
+            break
+        return deadline
+
     def _settle_evaluations(self) -> None:
         """Advance every evaluator decision's two signals, then settle what is complete.
 
         A judge's consequence closes when its return's outcome is measured or known
         to be absent; a meta's when the decision it graded closes. Either closes
-        empty past its consequence patience on the world's clock (``_patience_ns``;
-        wave 16, D2). The grade window closes once the tier above has read it
+        empty past its consequence patience on the world's clock, extended through
+        unresolved dependencies (``_consequence_deadline_ns``; Chapter II §IV.c).
+        The grade window closes once the tier above has read it
         (``_grade_window_over``). A decision with both closed settles on
         ``evaluation_reward``, less its card penalty, or censored with neither.
         """
@@ -2084,7 +2164,9 @@ class FeedbackMixin:
                 if state == "none":
                     self._close_consequence(rec.handle, None, rec)
                     continue
-            if self._age_ns(rec) > self._patience_ns():
+            deadline = self._consequence_deadline_ns(
+                rec.about, self.clock.now_ns - self._age_ns(rec) + self._patience_ns())
+            if self.clock.now_ns > deadline:
                 self._close_consequence(rec.handle, None, rec)
         self._settle_exposures()
         self._settle_counters()
@@ -2110,7 +2192,8 @@ class FeedbackMixin:
         # past that opening (Codex on #152). One a return that acted left unread lapses
         # on the same clock.
         for handle in [h for h, frozen in self.reference_mids.items()
-                       if self._facts_through(frozen) > self._frozen_lapse_ns(frozen)]:
+                       if self._facts_through(frozen) > self._frozen_lapse_ns(frozen)
+                       and self._reference_outcome(frozen)[0] != "open"]:
             del self.reference_mids[handle]
 
     def _kept_ns(self, value: Any) -> int:
@@ -2309,7 +2392,9 @@ class FeedbackMixin:
             opened = rec.get("ns")
             age = (self.clock.now_ns - opened if opened is not None
                    else (self.ticks_consumed - rec["tick"]) * tick_ns(self.tick_clock))
-            if state == "open" and age <= patience:
+            deadline = self._consequence_deadline_ns(
+                rec["about"], self.clock.now_ns - age + patience)
+            if state == "open" and self.clock.now_ns <= deadline:
                 continue
             del self.pending_counters[handle]
             try:

@@ -406,7 +406,8 @@ class BootstrapMixin:
                                self.observer)
         self.consequences = ContractConsequences(
             self.ledger, self.ev.consequence_backstop_ticks, self)
-        self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
+        self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns,
+                                            measured=self.live)
 
         # world
         self.exchange = JournalProxy(
@@ -415,6 +416,13 @@ class BootstrapMixin:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
+        if self.live:
+            # Chapter II §III.b: an independent pre-execution account anchors fills.
+            try:
+                account = self.exchange.account()
+                self.consequence_fills.initialize(account, now_ns=self.clock.now_ns)
+            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
+                pass  # FillCursor retries; venue writes await an account anchor.
         # Every answered venue read is kept for the rest of its tick, so an identical
         # seat read is answered without a request (``ComputeMixin._tick_answer``).
         self._tick_reads = None
@@ -425,7 +433,15 @@ class BootstrapMixin:
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
             LiveVenue(self.exchange, ledger=self.ledger,
-                      last_funding_ns=self.clock.now_ns, markets=self._trading_markets)
+                      last_funding_ns=self.clock.now_ns, markets=self._trading_markets,
+                      funding_needed=lambda coin, boundary: any(
+                          frozen.get("coin") == coin
+                          and (frozen.get("funding") or {}).get("strict")
+                          and frozen.get("open_ns") is not None
+                          and frozen["open_ns"] < boundary
+                          and (frozen.get("due_ns") is None or boundary <= frozen["due_ns"])
+                          and not self._funding_patience_over(frozen)
+                          for frozen in self.reference_mids.values()))
             if self.live
             else None
         )

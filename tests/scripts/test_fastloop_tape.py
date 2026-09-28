@@ -89,13 +89,11 @@ def test_a_market_decision_fills_a_tick_later_and_is_accounted_to_its_decision(
     at a later tick against a newer recorded row than the one its decision was shown,
     at the taker rate, and its fill is booked to the decision that sent it."""
     tape = _short_tape(tmp_path / "short.tape.json", 12, fees=True)
-    decide = fastloop.PolicyProvider._decide_trade
-
     def buys_once(self, inputs, n):
         if n == 2:
             return {"action": "order", "coin": "BTC", "side": "buy", "size": "0.001",
                     "rationale": "scripted market order"}
-        return decide(self, inputs, n)
+        return {"action": "hold"}
 
     monkeypatch.setattr(fastloop.PolicyProvider, "_decide_trade", buys_once)
     card = fastloop.run("scripted", None, WORLD, tmp_path / "out", cap_usd="2", seed=1,

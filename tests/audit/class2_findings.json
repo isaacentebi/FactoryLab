@@ -63,6 +63,16 @@
    "status": "untriaged"
   },
   {
+   "id": "91f812568327",
+   "world": "compute-continuity-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/judge/inputs/producer.description",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "f26ec7bfa42e",
    "world": "compute-continuity-roster",
    "surface": "rendered",
@@ -370,6 +380,16 @@
    "path": "compute-continuity-roster/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "d9cb328bce49",
+   "world": "compute-continuity-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/produce/request/#prose",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -2773,6 +2793,16 @@
    "status": "untriaged"
   },
   {
+   "id": "0e6a77ec4975",
+   "world": "scripted",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted/request/judge/inputs/producer.description",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "629002407eb4",
    "world": "scripted",
    "surface": "rendered",
@@ -3070,6 +3100,16 @@
    "path": "scripted/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "de2870243ccc",
+   "world": "scripted",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted/request/produce/request/#prose",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -3473,6 +3513,16 @@
    "status": "untriaged"
   },
   {
+   "id": "619751b876a9",
+   "world": "scripted-crash",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted-crash/request/judge/inputs/producer.description",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "aab96f66373a",
    "world": "scripted-crash",
    "surface": "rendered",
@@ -3770,6 +3820,16 @@
    "path": "scripted-crash/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "8b41546fdf3f",
+   "world": "scripted-crash",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted-crash/request/produce/request/#prose",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -4173,6 +4233,16 @@
    "status": "untriaged"
   },
   {
+   "id": "ce44f8c12d65",
+   "world": "testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet/request/judge/inputs/producer.description",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "e65543822ad5",
    "world": "testnet",
    "surface": "rendered",
@@ -4480,6 +4550,16 @@
    "path": "testnet/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "89fc44097ed1",
+   "world": "testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet/request/produce/request/#prose",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -4883,6 +4963,16 @@
    "status": "untriaged"
   },
   {
+   "id": "f963d7e5c70e",
+   "world": "testnet-10m-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/judge/inputs/producer.description",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "6cc9d4149ae3",
    "world": "testnet-10m-roster",
    "surface": "rendered",
@@ -5190,6 +5280,16 @@
    "path": "testnet-10m-roster/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "b48cd8f02fc7",
+   "world": "testnet-10m-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/produce/request/#prose",
+   "quote": "respond to event fill on fake.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {

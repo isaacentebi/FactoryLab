@@ -242,6 +242,8 @@ class LotTable:
     released: tuple[int, ...] = ()
     released_orders: tuple[tuple[str, str, int, str | None], ...] = ()
     released_late: tuple[tuple[str, Fraction, int], ...] = ()
+    # Chapter II §III.b: retain ownership only for still-publishable funding boundaries.
+    funding_allocations: tuple[tuple[str, int, tuple[tuple[str | None, Fraction], ...]], ...] = ()
 
     def seed_spot(self, coin: str, size: str, px: str) -> "LotTable":
         """Launch inventory has an exact basis and no decision receives opening credit."""
@@ -610,9 +612,44 @@ class LotTable:
         return replace(self, released_late=tuple(
             (handle, total, booked) for handle, (total, booked) in rows.items()))
 
-    def funding(self, coin: str, paid_usd: str) -> "LotTable":
-        """Allocate a signed observed funding payment by open quantity, without rounding."""
+    def capture_funding(self, coin: str, boundary: int) -> "LotTable":
+        """Freeze boundary ownership once, independently of subsequent closes and corrections."""
+        if any(c == coin and at == boundary for c, at, _ in self.funding_allocations):
+            return self
+        owners: dict[str | None, Fraction] = {}
+        for lot in self.lots:
+            if lot.coin == coin and lot.market == "perp":
+                owners[lot.handle] = owners.get(lot.handle, Fraction(0)) + lot.size
+        return replace(self, funding_allocations=(*self.funding_allocations,
+                                                  (coin, boundary, tuple(owners.items()))))
+
+    def funding(self, coin: str, paid_usd: str, *, boundary: int | None = None,
+                final: bool = False) -> "LotTable":
+        """Allocate funding to frozen boundary owners when retained, never replacement lots."""
         paid = exact(paid_usd) * 1_000_000
+        allocation = next((rows for c, at, rows in self.funding_allocations
+                           if c == coin and at == boundary), None)
+        if allocation is not None:
+            total = sum((size for _, size in allocation), Fraction(0))
+            accounts = {r.handle: r for r in self.returns}
+            late = {}
+            for handle, size in allocation:
+                # Chapter II §III.b: an unowned share cannot become a return's consequence.
+                if handle is None or not paid or not total:
+                    continue
+                credit = -paid * size / total
+                if handle in accounts:
+                    account = accounts[handle]
+                    accounts[handle] = replace(account,
+                                              realized_micro=account.realized_micro + credit)
+                else:
+                    late[handle] = credit
+            table = self._accounts(accounts)._credit_released(late)
+            return replace(table, funding_allocations=tuple(
+                row for row in table.funding_allocations
+                if not (final and row[:2] == (coin, boundary))))
+        if boundary is not None:
+            raise ValueError("funding boundary ownership is unavailable")
         total = sum((lot.size for lot in self.lots if lot.coin == coin), Fraction(0))
         if not total or not paid:
             return self

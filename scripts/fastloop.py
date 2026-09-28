@@ -122,7 +122,7 @@ class PolicyProvider(ScriptedProvider):
     """A deterministic stand-in population for the edition-4 contracts.
 
     It is not a model of behaviour. It exists so every institution a paid run
-    reaches — tool rounds, a limit order reported as ``order``, a repeated order,
+    reaches — tool rounds, market and limit orders reported as ``order``, a repeated order,
     verdicts scored against the world, metas — is reached for free, and so the
     prompts the real seats would be sent are rendered and measured.
     """
@@ -212,8 +212,8 @@ class PolicyProvider(ScriptedProvider):
             # The PR121 journey: after a tool trade, report it as "order" with no fields.
             wrote = any(str(r.get("tool", "")).startswith("venue.place")
                         for r in inputs["tool_results"])
-            return ({"action": "order", "rationale": "limit order submitted via tool",
-                     "working_state": {"pending": "limit resting"}} if wrote else
+            return ({"action": "order", "rationale": "order submitted via tool",
+                     "working_state": {"pending": "venue order"}} if wrote else
                     {"action": "hold", "rationale": "read the venue; nothing to do"})
         self.decisions += 1
         n = self.decisions
@@ -263,6 +263,11 @@ class PolicyProvider(ScriptedProvider):
                     "type": "object", "properties": {"summary": {"type": "string"}},
                     "required": ["summary"]},
                 "propensity": {"request": 0.5, "hold": 0.5}, "chosen": "request"}]}
+        # Chapter II §II.b: execution-harness fixtures, not a seat strategy. Market
+        # legs exercise fills and realized P&L even on a taker-only recording.
+        if n % 7 in (1, 6) and mid:
+            return {"action": "order", "tool_calls": [{"tool": "venue.place_market", "args": {
+                "coin": "BTC", "side": "buy" if n % 7 == 1 else "sell", "size": "0.001"}}]}
         if tool_listed and n % 3 == 1:
             return {"action": "investigate", "tool_calls": [{
                 "tool": HALF_SPREAD["id"],

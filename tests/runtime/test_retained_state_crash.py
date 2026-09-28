@@ -325,7 +325,8 @@ class WeighedVenue(FakeExchange):
     """A live-shaped venue: it keeps the adapter's count of request weight sent."""
 
     def __init__(self):
-        super().__init__(seed=1, coins=("BTC",), start_cash_usd=Decimal("100"))
+        super().__init__(seed=1, coins=("BTC",), spot_pairs=("BTC/USDC",),
+                         start_cash_usd=Decimal("100"))
         self.sent = 0
 
     def request_weight_sent(self):

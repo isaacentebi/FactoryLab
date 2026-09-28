@@ -65,7 +65,7 @@ NO_TAKER_RATE = ("the recording states no taker fee rate for this market by now:
 NO_MAKER_RATE = ("the recording states no maker fee rate for this market by now: orders "
                  "that can rest are refused")
 #: Where a fee rate on the tape came from (``Tape.fee_at``): the venue's own statement
-#: of this account's rates (``userFees``, read with the instrument listing), the fills
+#: of this account's rates (``userFees``, or a legacy instrument listing), the fills
 #: the venue booked on this market, or the fills it booked on the venue's other markets
 #: of the same class (perp or spot), pooled.
 FEE_SOURCES = ("venue_read", "fills", "fills_pooled")
@@ -151,8 +151,10 @@ def _split_items(directory: Path) -> Iterator[dict]:
     ``io.result.jsonl`` runs to hundreds of megabytes of recorded answers; only the
     answers to the venue reads a tape keeps are parsed.
     """
+    # Chapter II §III.b: an empty settled history cannot become predicted cash
+    # merely because the same measured diary was split into per-kind files.
     for name in ("event_Launch", "event_Tick", "event_MarketMid", "event_Funding",
-                 "event_Fill", "order.intent", "order.acknowledged"):
+                 "event_Fill", "funding.regime", "order.intent", "order.acknowledged"):
         path = directory / f"{name}.jsonl"
         if path.exists():
             with open(path, encoding="utf-8") as handle:
@@ -176,7 +178,7 @@ def _split_items(directory: Path) -> Iterator[dict]:
 
 
 #: The recorded venue reads a tape keeps besides its events.
-_KEPT_READS = ("exchange.instruments", "exchange.order_book")
+_KEPT_READS = ("exchange.instruments", "exchange.order_book", "exchange.refresh_fee_rates")
 
 
 def _nonzero(text: Any) -> bool:
@@ -222,17 +224,18 @@ _IMMEDIATE = frozenset({"venue.place_market", "venue.close"})
 
 
 def _fill_side(fill_ts: int, payload: dict, orders: dict) -> str | None:
-    """Whether a recorded fill took liquidity ("taker") or provided it ("maker"), from
-    what the diary recorded of its order, or None where that does not settle it.
+    """The venue's recorded liquidity side, or None when explicitly unknown.
 
-    The diary does not record the venue's ``crossed`` flag, so the side is read off the
-    order: every fill of an immediate-or-cancel order took liquidity; so did every fill
-    of a limit the venue acknowledged as filled; a fill of a limit the venue
-    acknowledged as resting with nothing filled, observed after that acknowledgement,
-    met it on the book, so it provided liquidity. A limit acknowledged resting with a
-    part already filled, a liquidation, and a fill whose order the diary does not name
-    are left out: their side is not recorded.
+    A boolean ``crossed`` is authoritative, including for partial fills of one order.
+    A present but unknown flag stays unknown. Older diaries without the field retain
+    their order-evidence inference: immediate orders and limits acknowledged filled
+    took liquidity; limits acknowledged resting with nothing filled, observed after
+    acknowledgement, provided it. Ambiguous orders supply no rate.
     """
+    # Chapter II §III.b: the venue's execution fact outranks an order-level inference.
+    if "crossed" in payload:
+        crossed = payload["crossed"]
+        return ("taker" if crossed else "maker") if type(crossed) is bool else None
     order = orders.get(str(payload.get("order_id")))
     if order is None or payload.get("liquidation"):
         return None
@@ -261,9 +264,37 @@ def _steps(observations: list[tuple[int, str, str]], *, every: bool) -> list[lis
     return steps
 
 
-def _fee_record(kept: list[str], reads: list, fills: list, orders: dict) -> dict:
+def _fee_record(kept: list[str], reads: list, fills: list, orders: dict,
+                fee_reads: list) -> dict:
     """Each kept market's fee rates as the diary recorded them, by source and side."""
     observed: dict[tuple[str, str, str], list] = {}
+    for ts, call, answer in fee_reads:
+        if not isinstance(answer, dict):
+            continue
+        applicable = None
+        if "status" in answer:
+            if answer["status"] != "ok":
+                continue
+            applicable = answer.get("markets", ())
+            answer = answer.get("answer")
+            if not isinstance(answer, dict):
+                continue
+        for market in kept:
+            if applicable is not None and ("spot" if "/" in market else "perp") not in applicable:
+                continue
+            fields = ("userSpotCrossRate", "userSpotAddRate") if "/" in market else (
+                "userCrossRate", "userAddRate")
+            for side, name in zip(("taker", "maker"), fields, strict=True):
+                try:
+                    rate = Decimal(str(answer[name]))
+                except (KeyError, TypeError, ArithmeticError, ValueError):
+                    continue
+                if rate.is_finite():
+                    observed.setdefault((market, "venue_read", side), []).append(
+                        (ts, str(rate.normalize()), f"exchange.refresh_fee_rates call {call}"))
+    # Chapter II §III.b: only an applicable parsed outside fact supersedes cached
+    # evidence, and never before it was observed. Failed refreshes establish nothing.
+    raw_since = {key: min(row[0] for row in rows) for key, rows in observed.items()}
     for ts, call, listing in reads:
         if not isinstance(listing, dict):
             continue
@@ -273,11 +304,16 @@ def _fee_record(kept: list[str], reads: list, fills: list, orders: dict) -> dict
                         or "userFees" not in str(row.get("fee_basis", ""))):
                     continue
                 for side in ("taker", "maker"):
-                    rate = row.get(f"{side}_fee_rate")
-                    if rate is not None:
-                        observed.setdefault((row["coin"], "venue_read", side), []).append(
-                            (ts, str(Decimal(str(rate)).normalize()),
-                             f"exchange.instruments call {call}"))
+                    key = (row["coin"], "venue_read", side)
+                    if key in raw_since and ts >= raw_since[key]:
+                        continue
+                    try:
+                        rate = Decimal(str(row.get(f"{side}_fee_rate")))
+                    except (TypeError, ArithmeticError, ValueError):
+                        continue
+                    if rate.is_finite():
+                        observed.setdefault(key, []).append(
+                            (ts, str(rate.normalize()), f"exchange.instruments call {call}"))
     seen: dict[tuple[str, int], int] = {}
     for ts, payload in fills:
         market = str(payload.get("coin"))
@@ -304,11 +340,11 @@ def cut(path: str | Path) -> dict:
     perp's funding-rate observations, stamped as delivered; the recorded order books,
     stamped with the venue's own book time; the first recorded instrument listing; and
     the account's fee rates, each stamped with the instant the diary recorded it and
-    naming what it was read from (``_fee_record``): the venue's own statement of them
-    with each instrument read, and the fills the venue booked. A funding row that
-    moved money (``paid_usd`` non-zero) is an account payment of the run that recorded
-    it, not market data, and is left out: a replay's payments are computed from its
-    own positions (Chapter II §II.b). Only a diary of a live venue states fee rates: a
+    naming what it was read from (``_fee_record``): the venue's own userFees answers
+    (instrument reads in legacy diaries), and the fills the venue booked. Settled market
+    evidence is retained independently of any account payment on the same event. The
+    payment itself is left out: replay computes payments from its own positions
+    (Chapter II §II.b). Only a diary of a live venue states fee rates: a
     simulated venue's are its own constants, never the world's.
     """
     path = Path(path)
@@ -318,15 +354,26 @@ def cut(path: str | Path) -> dict:
     ticks: list[int] = []
     mids: dict[str, dict[int, str]] = {}
     funding: dict[str, dict[int, list]] = {}
+    settled_funding: dict[str, list[dict]] = {}
+    funding_regime: dict[str, str] = {}
     books: dict[str, dict[int, list]] = {}
     instruments = None
     names: dict[int, str] = {}
     reads: list[tuple[int, int, Any]] = []
+    fee_reads: list[tuple[int, int, Any]] = []
     fills: list[tuple[int, dict]] = []
     intents: dict[str, str] = {}
     acks: dict[str, tuple[dict, int]] = {}
     for item in items:
         kind = item.get("kind")
+        if kind == "funding.regime":
+            market, regime = str(item["market"]), str(item["regime"])
+            if regime not in ("legacy", "settled"):
+                raise ValueError("unknown funding evidence regime")
+            if market in funding_regime and funding_regime[market] != regime:
+                raise ValueError("funding evidence regime changed within recording")
+            funding_regime[market] = regime
+            continue
         if kind == "io.call":
             names[item["seq"]] = item.get("name")
             continue
@@ -344,6 +391,11 @@ def cut(path: str | Path) -> dict:
                 listing = _decode(item["result"])
                 instruments = listing if instruments is None else instruments
                 reads.append((int(item.get("ts") or 0), item.get("call"), listing))
+            elif name == "exchange.refresh_fee_rates":
+                answer = _decode(item["result"])
+                # Old refresh calls returned None; they did not record userFees.
+                if isinstance(answer, dict):
+                    fee_reads.append((int(item.get("ts") or 0), item.get("call"), answer))
             elif name == "exchange.order_book":
                 book = _decode(item["result"])
                 if isinstance(book, dict) and book.get("ts_ns"):
@@ -365,9 +417,22 @@ def cut(path: str | Path) -> dict:
             mids.setdefault(str(payload["coin"]), {})[ts] = str(payload["mid"])
         elif event.get("kind") == "Fill":
             fills.append((ts, payload))
-        elif event.get("kind") == "Funding" and not _nonzero(payload.get("paid_usd", "0")):
-            # The rate's own instant, when the diary's venue stated one.
-            funding.setdefault(str(payload["coin"]), {})[funding_instant(payload, ts)] = [
+        elif event.get("kind") == "Funding":
+            # Chapter II §III.b: publication and effective boundary are distinct facts;
+            # the recorded oracle is not interchangeable with a replay's mid.
+            if payload.get("settled") is True:
+                settled_funding.setdefault(str(payload["coin"]), []).append({
+                    "published_at_ns": ts, "funding_ns": funding_instant(payload, ts),
+                    **({"venue_published_at_ns": payload["published_at_ns"]}
+                       if payload.get("published_at_ns") is not None else {}),
+                    "settled": True, "rate": str(payload["rate"]),
+                    "premium": None if payload.get("premium") is None else str(payload["premium"]),
+                    "mark": None if payload.get("mark") is None else str(payload["mark"]),
+                    "oracle_observed_at_ns": payload.get("oracle_observed_at_ns")})
+                continue
+            if _nonzero(payload.get("paid_usd", "0")):
+                continue  # an account payment alone supplies no settled market evidence
+            funding.setdefault(str(payload["coin"]), {})[ts] = [
                 str(payload["rate"]),
                 None if payload.get("premium") is None else str(payload["premium"])]
     exchange = manifest.get("exchange") or {}
@@ -382,7 +447,7 @@ def cut(path: str | Path) -> dict:
                 intents[client_id], result.get("status"),
                 Decimal(str(result.get("filled_size") or 0)), ack_ts)
     live = exchange.get("kind") == "hyperliquid"
-    fees = _fee_record(kept, reads, fills, orders) if live else {}
+    fees = _fee_record(kept, reads, fills, orders, fee_reads) if live else {}
     listing = None
     if isinstance(instruments, dict):
         listing = {market: [row for row in rows if isinstance(row, dict)
@@ -396,6 +461,10 @@ def cut(path: str | Path) -> dict:
         "mids": {c: [[ts, px] for ts, px in sorted(mids[c].items())] for c in kept},
         "funding": {c: [[ts, *row] for ts, row in sorted(funding[c].items())]
                     for c in kept if c in funding},
+        "funding_regime": {c: funding_regime.get(c, "settled" if c in settled_funding
+                                                else "legacy") for c in kept if "/" not in c},
+        "settled_funding": {c: sorted(rows, key=lambda r: r["published_at_ns"])
+                            for c, rows in settled_funding.items() if c in kept},
         "books": {c: [[ts, *sides] for ts, sides in sorted(books[c].items())]
                   for c in kept if c in books},
         "instruments": listing,
@@ -496,6 +565,12 @@ class Tape:
 
     def funding_at(self, coin: str, ts_ns: int) -> tuple[int, Decimal, Decimal | None] | None:
         row = self._row("funding", coin, ts_ns)
+        settled = [r for r in self.data.get("settled_funding", {}).get(coin, ())
+                   if r["published_at_ns"] <= ts_ns]
+        if settled and (row is None or settled[-1]["published_at_ns"] >= row[0]):
+            latest = settled[-1]
+            return (latest["published_at_ns"], Decimal(latest["rate"]),
+                    None if latest["premium"] is None else Decimal(latest["premium"]))
         if row is None:
             return None
         return int(row[0]), Decimal(row[1]), None if row[2] is None else Decimal(row[2])
@@ -647,8 +722,10 @@ class TapeVenue(FakeExchange):
     one at or before its own instant; its instant only moves forward, to the world's
     ticks, which the world's own clock sets (the tape is sampled at the world's tick,
     never the reverse); funding is charged once per hour boundary of tape time on the
-    position held at that boundary, at the last recorded rate and mid at or before it,
-    and never once per recorded row; past the tape's last row the last row holds and
+    position held at that boundary. Settled recordings charge only on publication,
+    using the retained boundary oracle; missing oracles stay unknown. Legacy recordings
+    use the last recorded rate and mid, never once per recorded row. Past the tape's
+    last row the last row holds and
     the tape never loops. Its name, ``tape:<sha8>``, says what it is.
 
     Fills are the recording's, never kinder (money path; Chapter II §II.b, the hard
@@ -697,6 +774,13 @@ class TapeVenue(FakeExchange):
         missing = [m for m in (*coins, *spot_pairs) if m not in tape.markets]
         if missing:
             raise ValueError(f"the tape recorded no mids for {missing}")
+        regimes = tape.data.get("funding_regime", {})
+        if any(value not in ("legacy", "settled") for value in regimes.values()):
+            raise ValueError("unknown funding evidence regime")
+        self._settled_markets = frozenset(
+            c for c in tape.perps
+            if regimes.get(c, "settled" if c in tape.data.get("settled_funding", {})
+                           else "legacy") == "settled")
         self._tape = tape
         # The fake's own terms are never read here, and are set so that none could leak
         # if one were (Codex review of #151, 7b8de4f): every fee is the recorded rate
@@ -735,6 +819,15 @@ class TapeVenue(FakeExchange):
         # instant they were accrued to: what a partial hour owes when the world ends.
         self._accrued: dict[str, Decimal] = {}
         self._accrued_at = self._last_funding_ns
+        self._funding_sizes: dict[int, dict[str, Decimal]] = {}
+        self._settled_seen: dict[str, int] = {}
+        self._settled_paid: dict[tuple[str, int], Decimal] = {}
+        self._settled_evidence: dict[tuple[str, int], tuple] = {}
+        self.settled_funding = bool(self._settled_markets)
+
+    def funding_regime(self, coin: str) -> str:
+        """Each market keeps its own evidence requirement, including empty histories."""
+        return "settled" if coin in self._settled_markets else "legacy"
 
     @property
     def tape(self) -> Tape:
@@ -843,6 +936,14 @@ class TapeVenue(FakeExchange):
             self._advance_vaults()
         return events
 
+    def funding_boundaries(self, ts_ns: int) -> tuple[tuple[str, int], ...]:
+        """Only crossed boundaries with unpublished evidence require retained ownership."""
+        through = min(ts_ns, self._tape.end_ns)
+        return tuple(sorted({(coin, row["funding_ns"])
+                             for coin, rows in self._tape.data.get("settled_funding", {}).items()
+                             for row in rows[self._settled_seen.get(coin, 0):]
+                             if self._last_funding_ns < row["funding_ns"] <= through}))
+
     def _settle_funding(self, ts_ns: int) -> list[WorldEvent]:
         """One funding settlement per hour boundary of tape time crossed up to ``ts_ns``."""
         events: list[WorldEvent] = []
@@ -851,6 +952,72 @@ class TapeVenue(FakeExchange):
             events.extend(self._fund(boundary))
             self._last_funding_ns = boundary
             boundary += NS_PER_HOUR
+        events.extend(self._published_funding(ts_ns))
+        return events
+
+    def _published_funding(self, ts_ns: int) -> list[WorldEvent]:
+        """Charge only published oracle evidence on the position retained at its boundary.
+
+        Repeated publications do not pay twice; a correction pays only its difference.
+        A missing oracle never becomes a mid, and pre-launch boundaries charge nothing.
+        """
+        events = []
+        for coin, rows in self._tape.data.get("settled_funding", {}).items():
+            index = self._settled_seen.get(coin, 0)
+            while index < len(rows) and rows[index]["published_at_ns"] <= ts_ns:
+                row = rows[index]
+                index += 1
+                boundary = row["funding_ns"]
+                mark = None if row["mark"] is None else Decimal(row["mark"])
+                if mark is not None and (not mark.is_finite() or mark <= 0):
+                    mark = None
+                rate = Decimal(row["rate"])
+                key = (coin, boundary)
+                evidence = (rate, row["premium"], mark, row["oracle_observed_at_ns"])
+                if self._settled_evidence.get(key) == evidence:
+                    continue
+                self._settled_evidence[key] = evidence
+                # Chapter II §III.b: realized consequence uses the measured oracle,
+                # and §II.b: a repeated outside fact cannot move the wallet twice.
+                paid = Decimal(0)
+                if mark is not None and boundary in self._funding_sizes:
+                    total = self._funding_sizes[boundary].get(coin, Decimal(0)) * mark * rate
+                    paid = total - self._settled_paid.get(key, Decimal(0))
+                    self._settled_paid[key] = total
+                    self._cash -= paid
+                    self._funding_payments.append(FundingPayment(
+                        f"{boundary}:{coin}:{index}", coin, paid, rate, boundary))
+                premium = None if row["premium"] is None else Decimal(row["premium"])
+                # Chapter II §III.b: publication controls visibility, not effective order.
+                self._funding_history = [
+                    event for event in self._funding_history
+                    if (event.coin, event.ts_ns) != (coin, boundary)]
+                self._funding_history.append(FundingEvent(coin, rate, premium, boundary, mark))
+                self._funding_history.sort(key=lambda event: event.ts_ns)
+                events.append(WorldEvent(WorldEventKind.FUNDING, row["published_at_ns"],
+                                         self.name, {"coin": coin, "rate": str(rate),
+                                         "paid_usd": str(paid), "funding_ns": boundary,
+                                         **({"allocation_boundary_ns": boundary,
+                                             "allocation_final": not any(
+                                                 future["funding_ns"] == boundary
+                                                 and any(future.get(k) != row.get(k) for k in (
+                                                     "rate", "premium", "mark",
+                                                     "oracle_observed_at_ns"))
+                                                 for future in rows[index:])}
+                                            if boundary in self._funding_sizes else {}),
+                                         "settled": True,
+                                         **({"published_at_ns": row["venue_published_at_ns"]}
+                                            if "venue_published_at_ns" in row else {}),
+                                         "mark": None if mark is None else str(mark),
+                                         "oracle_observed_at_ns": row["oracle_observed_at_ns"]}))
+            self._settled_seen[coin] = index
+        # Chapter II §III.b: retain boundary cash bases only while a recorded
+        # publication can still consume them. Emitted events carry their allocation key.
+        pending = {row["funding_ns"]
+                   for coin, rows in self._tape.data.get("settled_funding", {}).items()
+                   for row in rows[self._settled_seen.get(coin, 0):]}
+        self._funding_sizes = {at: sizes for at, sizes in self._funding_sizes.items()
+                               if at in pending}
         return events
 
     def _accrue(self, ts_ns: int) -> None:
@@ -898,13 +1065,17 @@ class TapeVenue(FakeExchange):
         # The boundary settles the hour whatever was held inside it: nothing accrued
         # before it is owed again.
         self._accrued, self._accrued_at = {}, boundary
-        return self._charge(boundary, {c: p.size for c, p in self._positions.items()},
-                            f"{boundary}")
+        sizes = {c: p.size for c, p in self._positions.items()}
+        if self._settled_markets:
+            self._funding_sizes[boundary] = sizes
+        return self._charge(boundary, sizes, f"{boundary}")
 
     def _charge(self, instant: int, sizes: dict[str, Decimal], ident: str) -> list[WorldEvent]:
         """Charge ``sizes`` (signed, in position-hours) at the recorded rate and mid."""
         events: list[WorldEvent] = []
         for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
+            if coin in self._settled_markets:
+                continue  # settled recordings charge only their published boundary evidence
             rate_row = self._tape.funding_at(coin, instant)
             mark_row = self._tape.mid_at(coin, instant)
             if rate_row is None or mark_row is None:
@@ -977,7 +1148,13 @@ class TapeVenue(FakeExchange):
         for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
             row = self._tape.funding_at(coin, self._now_ns)
             if row is not None:
-                out.append(FundingEvent(coin, row[1], row[2], row[0]))
+                published = [r for r in self._tape.data.get("settled_funding", {}).get(coin, ())
+                             if r["published_at_ns"] <= self._now_ns]
+                latest = published[-1] if published else None
+                mark = (Decimal(latest["mark"]) if latest is not None
+                        and latest["published_at_ns"] == row[0]
+                        and latest["mark"] is not None else None)
+                out.append(FundingEvent(coin, row[1], row[2], row[0], mark))
         return out
 
     # ---- the venue's terms, published as facts (Chapter II §I.b)
@@ -1101,9 +1278,11 @@ class TapeVenue(FakeExchange):
         "its price and the opposite top of book is at or through its price, at its "
         "price, at maker_fee_rate, up to what the top level on that side still holds. "
         "Size taken from one recorded snapshot is not offered again. "
-        "Funding settles at each UTC hour on the position then held, at the last "
-        "recorded rate and mid, and pro rata for the part of an hour when the world "
-        "ends. The recording states no leverage terms: perp positions are margined at "
+        "Funding uses the position held at each UTC hour. Settled recordings charge "
+        "at publication using the retained boundary oracle; absent oracle evidence "
+        "remains unknown. Legacy recordings use the last recorded rate and mid, and "
+        "pro rata for the part of an hour when the world ends. "
+        "The recording states no leverage terms: perp positions are margined at "
         "1x, and are closed at the mid, at taker_fee_rate (maker_fee_rate while no "
         "taker rate is recorded), when the perps account's "
         "equity is below zero. The recording has no vaults.")

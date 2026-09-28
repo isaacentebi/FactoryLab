@@ -54,13 +54,60 @@ def test_a_full_page_is_followed_to_the_end_and_boundary_peers_are_kept_once():
     assert len(fills) == FILLS_PAGE + 2  # every trade once, the reread boundary included
 
 
+@pytest.mark.parametrize("since_ms, complete", [(0, False), (1, False)])
+def test_retained_history_cap_is_unknown_and_survives_journal_replay(since_ms, complete):
+    from factorylab.runtime.resume import RecoveryJournal
+    from factorylab.world.exchange import FILLS_HISTORY
+
+    history = [_row(i, i + 1) for i in range(FILLS_HISTORY)]
+    venue = _venue(lambda user, start: [row for row in history if row["time"] >= start]
+                   [:FILLS_PAGE])
+    ledger = Ledger()
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.active = True
+    fills = journal.call("exchange.fills", venue.fills, (since_ms * NS_PER_MS,), {})
+    assert len(fills) == FILLS_HISTORY
+    assert all(fill.history_complete == complete for fill in fills)
+    replay = RecoveryJournal(ledger, lambda: 0)
+    replay.io_store = journal.io_store
+    replay.active = True
+    replay.tail = [{**row, "ts": 0} for row in ledger._recovery_items()]
+
+    def refuse(*args):
+        raise AssertionError("replay cannot reread the venue")
+
+    recovered = replay.call("exchange.fills", refuse, (since_ms * NS_PER_MS,), {})
+    assert recovered == fills
+    cursor = FillCursor(Ledger(), start_ns=since_ms * NS_PER_MS, measured=True)
+    assert len(cursor.poll(SimpleNamespace(fills=lambda start: recovered),
+                           now_ns=fills[0].observed_at_ns)) == FILLS_HISTORY
+    assert (cursor.through_ns is not None) == complete
+    row = [r for r in cursor.ledger._recovery_items()
+           if r["kind"] == "consequence.fill_propagation"][-1]
+    assert row["history_complete"] == complete
+
+
+@pytest.mark.parametrize("bad", [None, {"coin": "BTC"},
+                                    {**_row(2, 2), "sz": "NaN"},
+                                    {**_row(2, 2), "side": "X"},
+                                    {**_row(2, 2), "coin": "BTC/USDC", "feeToken": "OTHER"}])
+@pytest.mark.parametrize("valid_peer", [False, True])
+def test_any_unrepresentable_execution_fails_entire_read(bad, valid_peer):
+    rows = ([_row(1, 1)] if valid_peer else []) + [bad]
+    venue = _venue(lambda user, start: rows)
+    venue._is_spot = lambda coin: coin == "BTC/USDC"
+    venue._public_coin = lambda coin: coin
+    with pytest.raises(VenueUnavailable, match="fill"):
+        venue.fills(0)
+
+
 def test_a_stalled_full_page_fails_closed():
     same = [_row(i, 5) for i in range(FILLS_PAGE)]
     with pytest.raises(VenueUnavailable, match="stalled"):
         _venue(lambda user, start: same).fills(5 * NS_PER_MS)
 
 
-def test_the_watermark_does_not_pass_fills_not_yet_read():
+def test_the_watermark_does_not_pass_fills_not_yet_read(monkeypatch):
     """The second page fails once: the poll fails, nothing is consumed and the
     watermark stays; the next poll reads both pages and only then advances it."""
     outage = {"second": True}
@@ -73,11 +120,13 @@ def test_the_watermark_does_not_pass_fills_not_yet_read():
         return REST
 
     venue = _venue(fetch)
-    cursor = FillCursor(Ledger(), start_ns=0)
+    cursor = FillCursor(Ledger(), start_ns=0, measured=True)
+    monkeypatch.setattr("time.time_ns", lambda: 10_010 * NS_PER_MS)
     with pytest.raises(VenueUnavailable):
         cursor.poll(venue, strict=True, now_ns=10_000 * NS_PER_MS)
     assert cursor.through_ns is None  # nothing proven delivered
     outage["second"] = False
     fills = cursor.poll(venue, strict=True, now_ns=10_001 * NS_PER_MS)
     assert len(fills) == FILLS_PAGE + 2
-    assert cursor.through_ns == 10_001 * NS_PER_MS
+    assert cursor.propagation_bound_ns == 10_009 * NS_PER_MS
+    assert cursor.through_ns is None  # no independent baseline/fee evidence

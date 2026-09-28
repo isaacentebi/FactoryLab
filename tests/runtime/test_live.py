@@ -52,19 +52,24 @@ class StubExchange:
 
     name = "stub-testnet"
 
-    def __init__(self, launch_ns=0) -> None:
+    def __init__(self, launch_ns=0, *, now_ns=None) -> None:
         self.launch_ns = launch_ns
+        self.now_ns = now_ns or (lambda: self.launch_ns)
         self.calls = 0
 
     def mids(self):
         self.calls += 1
         return {"BTC": Decimal("70000") + self.calls, "ETH": Decimal("2500")}
 
+    def order_book(self, coin, depth):
+        raise RuntimeError("book unavailable")
+
     def funding(self):
         return [FundingEvent("BTC", Decimal("0.0001"), Decimal("0.001"), 0)]
 
     def account(self):
-        return AccountState(Decimal("100"), Decimal("100"), (), Decimal(0))
+        return AccountState(Decimal("100"), Decimal("100"), (), Decimal(0),
+                            observed_at_ns=self.now_ns())
 
     def instruments(self):
         return {"perp": [{"coin": "BTC", "lot_size": "0.00001", "tick_size": "0.1"},
@@ -208,7 +213,8 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
     clock = LiveClock(
         interval_ns=1_000_000_000, count=25, now_ns=ft.now_ns, sleep=ft.sleep
     ).events()
-    s = run_world(m, events=25, seed=5, exchange=StubExchange(ft.now_ns()), clock_source=clock)
+    s = run_world(m, events=25, seed=5,
+                  exchange=StubExchange(ft.now_ns(), now_ns=ft.now_ns), clock_source=clock)
     st = s["stats"]
     assert s["live"] is True and s["terminated"] is False
     assert st["reconciliations"] >= 2  # every 10 ticks

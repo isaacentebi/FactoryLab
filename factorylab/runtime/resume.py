@@ -343,6 +343,15 @@ class RecoveryJournal:
     def __getattr__(self, name):
         return getattr(self.ledger, name)
 
+    def _iter_items(self, **kwargs):
+        """Expose only the authenticated prefix already consumed by replay."""
+        next_row = self.peek()
+        boundary = None if next_row is None else next_row["seq"]
+        for row in self.ledger._iter_items(**kwargs):
+            if boundary is not None and row["seq"] >= boundary:
+                break
+            yield row
+
     @property
     def tail(self):
         return self._tail
@@ -576,10 +585,11 @@ def _read_only(name: str) -> bool:
         # The safety path's wall-clock and delivered-tick reads (time audit T8).
         "now_ns", "tick_ns",
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
+        "settled_funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
-        "reserve_balance", "discover_index", "instruments",
+        "reserve_balance", "discover_index", "instruments", "refresh_fee_rates",
         # The live adapter's count of venue request weight it has sent: a read of its
         # own counter, replayed from the journal and never a write to the venue.
         "request_weight_sent",
@@ -964,7 +974,11 @@ _COMPONENT_FIELDS = (
                           # Codex on #152: the facts seen through, and returns' economics
                           # frozen at their horizon.
                           "facts_ns", "tick_through_ns", "history")),
-    ("consequence_fills", "", ("since_ns", "seen", "through_ns")),
+    ("consequence_fills", "", ("launch_ns", "read_ns", "since_ns", "seen", "through_ns", "measured",
+                               "propagation_bound_ns", "observation_complete",
+                               "reconciliation_ns", "expected_positions", "expected_cash",
+                               "expected_fees", "recovery_span_ns", "incomplete_since_ns",
+                               "last_residual", "orders", "baseline_ns")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
@@ -1064,7 +1078,11 @@ def runtime_state(rt) -> Checkpoint:
                               for aid, learner in rt.assembly_learners.items()},
         "retired_routers": [st.state() for st in rt.retired_routers.values()],
         "venue": encode({"last_funding_ns": rt.venue.last_funding_ns,
+                         "settled_launch_ns": rt.venue.settled_launch_ns,
+                         "settled_emitted": rt.venue.settled_emitted,
+                         "settled_gaps": rt.venue.settled_gaps,
                          "seen_funding": rt.venue.seen_funding,
+                         "funding_oracles": rt.venue.funding_oracles,
                          "through": rt.venue.through}) if rt.venue else None,
         "venue_tool_log": encode(rt.venue_tools.log) if rt.venue_tools else None,
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
@@ -1123,6 +1141,90 @@ def _restored_tick_clock(running, saved: dict, *, instant_ns: int):
     callbacks = ({"now_ns": running.now_ns, "sleep": running.sleep}
                  if wall_paced(running) else {})
     return LiveClock.restore(saved, **callbacks)
+
+
+def _migrate_fill_cursor(saved, running) -> dict:
+    """Reject malformed fill state before mutation; migrate genuine legacy cursors exactly."""
+    # Chapter II §III.b, §II.b: a resumed outside-fact cursor cannot partially replace
+    # a world's accounting state, nor acquire evidence absent from its checkpoint.
+    if not isinstance(saved, dict) or not {"since_ns", "seen", "through_ns"} <= saved.keys():
+        raise ResumeError("invalid fill cursor component")
+    migrated = {"launch_ns": saved["since_ns"], "read_ns": None,
+                "measured": running.measured, "propagation_bound_ns": None,
+                "observation_complete": True, "reconciliation_ns": None,
+                "expected_positions": None, "expected_cash": None, "expected_fees": None,
+                "recovery_span_ns": 0, "incomplete_since_ns": None,
+                "last_residual": None, "orders": {}, "baseline_ns": None, **saved}
+    for field in ("launch_ns", "since_ns", "read_ns", "through_ns", "propagation_bound_ns",
+                  "reconciliation_ns", "recovery_span_ns", "incomplete_since_ns"):
+        value = migrated[field]
+        optional = field in ("read_ns", "through_ns", "propagation_bound_ns",
+                             "reconciliation_ns", "incomplete_since_ns")
+        if value is None and optional:
+            continue
+        if type(value) is not int or (field != "through_ns" and value < 0):
+            raise ResumeError(f"invalid fill cursor {field}")
+    for field in ("measured", "observation_complete"):
+        if type(migrated[field]) is not bool:
+            raise ResumeError(f"invalid fill cursor {field}")
+    seen = migrated["seen"]
+    if not isinstance(seen, dict) or any(
+        not isinstance(key, tuple) or not key or type(key[0]) is not int
+        or key[0] < 0 or type(count) is not int or count <= 0
+        for key, count in seen.items()
+    ):
+        raise ResumeError("invalid fill cursor seen")
+    value = migrated["baseline_ns"]
+    if value is not None and (type(value) is not int or value < 0):
+        raise ResumeError("invalid fill cursor baseline_ns")
+    if not isinstance(migrated["orders"], dict):
+        raise ResumeError("invalid fill cursor orders")
+    for client, order in migrated["orders"].items():
+        try:
+            valid = (isinstance(client, str) and isinstance(order, dict)
+                     and type(order["submitted_ns"]) is int and order["submitted_ns"] >= 0
+                     and (order["oid"] is None or isinstance(order["oid"], str))
+                     and isinstance(order["booked"], str)
+                     and Decimal(order["booked"]).is_finite() and Decimal(order["booked"]) >= 0)
+        except (KeyError, TypeError, ArithmeticError):
+            valid = False
+        if not valid:
+            raise ResumeError("invalid fill cursor order evidence")
+    positions, cash = migrated["expected_positions"], migrated["expected_cash"]
+    if (positions is None) != (cash is None):
+        raise ResumeError("invalid fill cursor accounting baseline")
+    if positions is not None:
+        if not isinstance(positions, dict) or not isinstance(cash, dict):
+            raise ResumeError("invalid fill cursor accounting maps")
+        try:
+            valid_positions = all(isinstance(key, str) and isinstance(value, str)
+                                  and Decimal(value).is_finite()
+                                  for key, value in positions.items())
+        except ArithmeticError:
+            valid_positions = False
+        if not valid_positions or set(cash) != {"perp", "spot"} or any(
+            value is not None and type(value) is not int for value in cash.values()
+        ):
+            raise ResumeError("invalid fill cursor accounting facts")
+    if migrated["expected_fees"] is not None and type(migrated["expected_fees"]) is not int:
+        raise ResumeError("invalid fill cursor expected_fees")
+    residual = migrated["last_residual"]
+    if residual is not None:
+        if (not isinstance(residual, dict)
+                or set(residual) != {"position_delta", "cash_delta_micro_usd", "start_ns"}
+                or type(residual["start_ns"]) is not int or residual["start_ns"] < 0
+                or not isinstance(residual["position_delta"], dict)
+                or not isinstance(residual["cash_delta_micro_usd"], dict)):
+            raise ResumeError("invalid fill cursor last_residual")
+        try:
+            valid = all(isinstance(k, str) and isinstance(v, str) and Decimal(v).is_finite()
+                        for k, v in residual["position_delta"].items())
+        except ArithmeticError:
+            valid = False
+        if not valid or any(not isinstance(k, str) or type(v) is not int
+                            for k, v in residual["cash_delta_micro_usd"].items()):
+            raise ResumeError("invalid fill cursor residual facts")
+    return migrated
 
 
 def restore_runtime(rt, state: dict) -> None:
@@ -1214,6 +1316,16 @@ def restore_runtime(rt, state: dict) -> None:
     # assigned: a world does not continue with a seat's memory or a seat's
     # outcomes missing, and a refusal must leave this runtime untouched.
     components = decode(state["components"])
+    saved_fills = components.get("consequence_fills")
+    # Chapter II §II.b, §III.b: absent per-order evidence cannot be reconstructed
+    # by discarding executions. The authenticated adapter, not cursor flags, is live.
+    if (not saved_venue["deterministic"] and isinstance(saved_fills, dict)
+            and "orders" not in saved_fills):
+        raise ResumeError(
+            "this world's live fill cursor predates per-order accounting; start a new world",
+            code="legacy_live_cursor")
+    components["consequence_fills"] = _migrate_fill_cursor(
+        components.get("consequence_fills"), rt.consequence_fills)
     _check_artifacts(rt.artifacts,
                      index=(components.get("artifacts") or {}).get("index") or {},
                      assemblies=decode(state["assemblies"]),
@@ -1334,7 +1446,13 @@ def restore_runtime(rt, state: dict) -> None:
         router = RouterState.restore(saved)
         rt.retired_routers[router.learner.id] = router
     if rt.venue and state["venue"] is not None:
-        for name, value in decode(state["venue"]).items():
+        saved_venue_state = decode(state["venue"])
+        # Chapter II §III.b: legacy continuation starts from its durable launch,
+        # never the destination process's first successful funding poll.
+        saved_venue_state.setdefault("settled_launch_ns", rt.consequence_fills.launch_ns)
+        saved_venue_state.setdefault("settled_emitted", {})
+        saved_venue_state.setdefault("settled_gaps", {})
+        for name, value in saved_venue_state.items():
             if name in _RETIRED_VENUE_FIELDS:
                 continue  # an older checkpoint's retired fill path: read and ignored
             setattr(rt.venue, name, value)
