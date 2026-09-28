@@ -75,7 +75,7 @@ class PredicateRunner:
         self.available = jail_available()
 
     def run_batch(self, code: str, facts: list[dict]) -> list[bool | None]:
-        """One bounded jail resolves a batch; each item gets a fresh predicate namespace."""
+        """A bounded batch has fresh restricted builtins per item; failures stay unsupported."""
         from factorylab.cortex.sandbox import NoJail, run_python
         from factorylab.runtime.observations import OBSERVATION_CPU_S, OBSERVATION_TIMEOUT_S
 
@@ -83,12 +83,23 @@ class PredicateRunner:
             return [None] * len(facts)
         # §IV.c: process count is bounded by predicates, not decisions times predicates.
         harness = '''
-import json, sys
+import builtins, json, sys
 batch = json.load(sys.stdin)
 values = []
+def pure_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level or name not in ('math', 'statistics'):
+        raise ImportError('predicate imports only math and statistics')
+    return builtins.__import__(name, globals, locals, fromlist, level)
 for facts in batch['facts']:
     try:
-        namespace = {}
+        # §I.a: no mutable builtin dictionary is shared by independent factual inputs.
+        safe_builtins = {name: value for name, value in vars(builtins).items()
+                         if not name.startswith('_') and name not in (
+                             'setattr', 'delattr', 'globals', 'vars', 'locals', 'getattr',
+                             'exec', 'eval', 'compile', 'open', 'input', 'breakpoint',
+                             'help', 'exit', 'quit')}
+        safe_builtins['__import__'] = pure_import
+        namespace = {'__builtins__': safe_builtins}
         exec(batch['code'], namespace)
         value = namespace['resolve'](facts)
         values.append(value if type(value) is bool else None)

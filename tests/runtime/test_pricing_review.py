@@ -152,7 +152,7 @@ def test_ownerless_holdout_reports_charged_pressure_below_controller_cap():
     assert row["charged_pressure"] == pytest.approx(state["charged_pressure"])
 
 
-def test_ten_predicates_five_hundred_decisions_use_ten_jails(monkeypatch):
+def test_ten_predicates_five_hundred_decisions_use_twenty_jails(monkeypatch):
     import contextlib
     import io
     import json
@@ -192,7 +192,7 @@ def test_ten_predicates_five_hundred_decisions_use_ten_jails(monkeypatch):
     calls.clear()
     results = rt._holdout_results({"c": 0.8})
     attribution = rt._holdout_attribution(results)["c"]
-    assert len(calls) <= 10
+    assert len(calls) == 20
     expected = {}
     for i, entry in enumerate(entries):
         failures = [str(j) for j in range(500) if j + 1 > i]

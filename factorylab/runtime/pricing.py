@@ -1077,11 +1077,13 @@ class PricingMixin:
                 continue
             supported = [h for h in handles
                          if all(decision_facts[h].get(k) is not None for k in reads)]
-            batch = [facts, *(decision_facts[h] for h in supported)]
+            # §I.a: attribution failure cannot change the independently measured fact.
+            aggregate = self._resolve_holdout(entry, facts)
+            batch = [decision_facts[h] for h in supported]
             runner = self.predicate_runner
             values = (runner.run_batch(predicate.code, batch) if hasattr(runner, "run_batch")
                       else [self._resolve_holdout(entry, f) for f in batch])
-            batches[entry] = (values[0], dict(zip(supported, values[1:], strict=True)))
+            batches[entry] = (aggregate, dict(zip(supported, values, strict=True)))
         for card in cards:
             results = {entry: batches[entry][0] for entry in card.holdout}
             out[card.id] = {"results": results, "decision_results": {
