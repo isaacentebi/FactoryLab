@@ -138,7 +138,7 @@ PROTOCOL_REL = "docs/audits/class2/auditor-protocol.md"
 AGENTS_REL = "AGENTS.md"
 ALLOWLIST_REL = "tests/audit/class2_allowlist.toml"
 WORLD_REL = "worlds/{world}.toml"
-#: The sha256 of the canonical ``docs/essay.md``, committed: the essay is the
+#: The sha256 of the canonical Chapter II authority text, committed: the essay is the
 #: experimenter's document and never committed, so the digest committed at the release
 #: is what binds the authority text the prompt quotes. A changed essay needs a commit
 #: changing this file, which the provenance pass shows.
@@ -1657,8 +1657,8 @@ def calibration_problems(key_path: Path, key: dict, repo: Path,
     * the corpus prompt: rendered again (``prompt_text``) from the release's committed
       protocol, AGENTS.md, allowlist and ``rejected.jsonl``, the last release's triage
       as its gate-recording commit holds it, and the recomputed input, equal to
-      ``prompt.md``, its authority text taken from ``essay`` (default: the repository's
-      ``docs/essay.md``) only once it hashes to the digest committed at the release
+      ``prompt.md``, its authority text taken from ``essay`` (default: the repository-local
+      essay file) only once it hashes to the digest committed at the release
       (``verified_authority``);
     * the range and the provenance: the range and the previous files are the release's
       (``range_commits``), the key's record of the code that ran is the release's

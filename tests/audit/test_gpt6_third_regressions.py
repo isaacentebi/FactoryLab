@@ -9,8 +9,8 @@ still pass are kept verbatim at the bottom of this file: two are the reviewer's 
 controls, and eight characterize findings this patch deliberately does not repair
 (`reading.md` §9 lists them), so they stay as the record of what is still open.
 
-The reviewer's untouched originals live under
-``docs/audits/v6/gpt6-third/review/tests/audit/``. Its second file,
+The reviewer's untouched originals are not retained in this tree; the converted
+regressions below preserve the checks. Its second file,
 ``test_candidate_repairs_4618f6f.py``, was a patch generator over the old source rather
 than a test of this tree; its eleven checks are covered by the conversions below.
 

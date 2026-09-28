@@ -389,7 +389,8 @@ class Client:
 
 
 # Venice's payee in the unpaid 402 quote recorded live on 11 September 2026
-# (docs/research/venice.md, "x402 flow") and pinned by the capital-loop world.
+# (see docs/architecture/capital-loop-rehearsal.md for the quote procedure)
+# and pinned by the capital-loop world.
 PAYEE = "0x2670b922ef37c7df47158725c0cc407b5382293f"
 
 

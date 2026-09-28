@@ -1,6 +1,6 @@
 """Edition 3, R3-F: the acceptance for attention and continuity, completed.
 
-The plan's acceptance for this workstream, verbatim (``docs/plans/edition3-r3.md``,
+The historical R3 plan's acceptance for this workstream, verbatim (
 "R3-F Attention and continuity, completed", plus the three the task added):
 
 * a refusal lands in the deciding seat's inbox with an id;

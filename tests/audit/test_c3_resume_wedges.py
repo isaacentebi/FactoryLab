@@ -1,7 +1,7 @@
 """Cold audit round three, seat 3: recovery paths that refuse a resumable world, or
 resume one that should be refused.
 
-Each test reproduces one finding in docs/audits/v3/defects-fable.md and fails on the
+Each test reproduces one finding in the historical round-three cold audit and fails on the
 audited commit. Nothing here touches a network.
 """
 

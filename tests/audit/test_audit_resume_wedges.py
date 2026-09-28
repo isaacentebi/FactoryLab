@@ -1,6 +1,6 @@
 """Cold audit, seat 4: recorded failures that wedge a world permanently.
 
-Each test reproduces one finding in docs/audits/v2/defects-fable.md. They fail on
+Each test reproduces one finding in the historical round-two cold audit. They fail on
 the audited commit; a fix makes them pass. Nothing here touches a network.
 """
 

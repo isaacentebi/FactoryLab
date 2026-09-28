@@ -1,9 +1,8 @@
-# Edition 3 testnet manifest (docs/plans/edition3.md, C5; GPT-6 Pro's architect reading,
-# docs/audits/v6/gpt6/architect-review.md §10-§13). The nine-seat roster of §10.3 with the
+# Edition 3 testnet manifest (C5; GPT-6 Pro's architect reading §10-§13). The nine-seat roster of §10.3 with the
 # seed lenses of §11 verbatim, live Hyperliquid testnet, fake-USD accounting, real prepaid
 # inference. Rehearsal only; no real money moves. Never name a copy of this `funded`.
 #
-# The charter below is the edition 2 ratified charter (docs/charter/edition2-ratified.toml),
+# The charter below is the edition 2 ratified charter,
 # carried so this world can be rehearsed before edition 3's charter exists. W3 drafts the
 # edition 3 charter (C3) and the coordinator ratifies it on this roster; only then does the
 # roster digest belong here. `roster_sha256` is deliberately absent until that vote: the
@@ -13,7 +12,7 @@ seed = 3
 # $300 of inference backing, precommitted whole (GPT-6 §12.1). $120 is released at genesis
 # and the remaining $180 in three weekly tranches below.
 initial_balance_usd = "300"
-# Ten-minute tick (docs/launch-decisions.md, kept from edition 2): one coalesced world
+# Ten-minute tick (kept from edition 2): one coalesced world
 # update per seat per tick (C2), not one request per price print.
 # 120 s, not the 600 s this world first ran at: a tick must be at most the consequence
 # horizon (world_repricing / min_ratio = 20 min) over min_ratio (wave 16, D2).
@@ -110,8 +109,8 @@ input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.49"
 reasoning = { enabled = false }
 
-# The nine seats of GPT-6 §10.3, with R3-E's prompts (GPT-6's third reading, §7 and §8;
-# docs/audits/v6/gpt6-third/prompts.md).
+# The nine seats of GPT-6 §10.3, with R3-E's prompts (third reading, §7 and §8).
+# Public schematics follow Chapter II §I.b; see factorylab/cortex/schematics.py.
 #
 # Every seat's `system_prompt` is the common system contract, verbatim and identical for
 # all nine: what a return must satisfy, how to refuse, what the fixed norms are and are
@@ -129,7 +128,7 @@ reasoning = { enabled = false }
 # is in the contract above, and it was the largest repeated thing in the roster.
 #
 # The constructor's lens is the rewritten one of §8; the other eight are their
-# `docs/audits/v6/gpt6/seed-prompts.md` paragraphs, verbatim.
+# historical seed-prompt paragraphs, verbatim.
 
 # GPT-6 §10.3: the cheap route the local screen scored 100% on.
 [[models]]
@@ -336,16 +335,14 @@ principal_usd = "120"
 # population's own Core gas.
 spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 
-# Edition 3 charter as ratified on 15 September 2026 (docs/charter/edition3-ratified.toml,
-# draft docs/charter/edition3-draft.toml, decisions docs/plans/edition3.md C3): five norms
+# Edition 3 charter as ratified on 15 September 2026 under C3: five norms
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
 # Ratified 16 September 2026 by the seeded five-seat committee of this roster (GLM on Venice,
 # Luna on OpenRouter; every seat prompt opens with the JSON and refusal contract; GLM seats at
-# 4,096 output tokens after run 3's length cut-offs; earlier ballots under docs/charter/history/):
-# docs/charter/edition3-ratification.json. The first ballot, on the roster GPT-6 proposed, is
-# under docs/charter/history/ (roster 488c62ef…).
+# 4,096 output tokens after run 3's length cut-offs).
+# The first ballot used the roster GPT-6 proposed (roster 488c62ef…).
 # Re-ratified after rehearsal 5: the GLM tier now disables Venice thinking, so the roster
 # text moved and the coordinator re-ratifies this charter on the digest below. The charter
 # itself is unchanged, so `ratified_sha256` is exactly what the committee voted.
