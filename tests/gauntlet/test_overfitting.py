@@ -127,6 +127,16 @@ def test_of2c_negative_control_a_kernel_that_ignores_holdouts_fails():
     assert result.status == g.FAIL, result.evidence
 
 
+def test_of2c_negative_control_ownerless_holdouts_fail():
+    """§IV.a: the failed holdout must charge its attributee, not merely raise λ."""
+    mutant = P.run(*P.of2(), events=OF2, patches=[
+        (PricingMixin, "_holdout_attribution", lambda self, held: {})])
+    after = _activated_after(mutant, "hold-used-registrations")
+    result = g.of2c_holdout_bites(mutant.events, mutant.manifest, card=CARD,
+                                 seats={"registrar"}, after_window=after)
+    assert result.status == g.FAIL, result.evidence
+
+
 def test_of2d_the_holdout_traces_to_the_adversarys_own_return(of2):
     """Astra H-4: the holdout row's handle is a decision the ProducerReturn router drew for
     the seated adversary, on which it returned; the kernel adds none."""

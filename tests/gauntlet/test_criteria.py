@@ -1226,12 +1226,25 @@ def test_of2c_the_holdout_part_of_a_violation_is_what_bites():
     rows = _seq([_price_window(5, 0.3), _open("d1", "registrar"),
             _penalty("d1", 0.5, window=5, violation=0.05) | {"terms": [{
                 "card_id": "c", "observation": "revision_rate", "window": 5,
-                "violation": 0.05, "lambda": 0.5, "weight": 0.025, "share": 0.5}]}])
+                "violation": 0.05, "lambda": 0.5, "weight": 0.025, "share": 0.5,
+                "attributed_holdout_violation": 0.05, "holdout_share": 0.5}]}])
     assert g.of2c_holdout_bites(rows, M, card="c", seats={"registrar"}, after_window=4).ok
     region_only = _seq([rows[0], rows[1], _penalty("d1", 0.5, window=5, violation=0.0)])
     result = g.of2c_holdout_bites(region_only, M, card="c", seats={"registrar"},
                                   after_window=4)
     assert result.status == g.FAIL
+
+
+@pytest.mark.parametrize("attributed,share", [(0.0, 0.5), (0.05, 0.0), (0.0, 0.0)])
+def test_of2c_ownerless_holdout_is_not_a_registrar_charge(attributed, share):
+    """§IV.a: a global failed holdout and proxy share do not prove attributed pressure."""
+    rows = _seq([_price_window(5, 0.3), _open("d1", "registrar"),
+                 _penalty("d1", 0.5, window=5, violation=0.05) | {"terms": [{
+                     "card_id": "c", "observation": "revision_rate", "window": 5,
+                     "violation": 0.05, "lambda": 0.5, "weight": 0.025, "share": 0.5,
+                     "attributed_holdout_violation": attributed, "holdout_share": share}]}])
+    result = g.of2c_holdout_bites(rows, M, card="c", seats={"registrar"}, after_window=4)
+    assert result.status == g.FAIL, result.evidence
 
 
 def test_i3c_and_i4a_niche_against_noop_and_the_blind_actuator():
