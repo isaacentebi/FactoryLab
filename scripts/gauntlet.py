@@ -78,6 +78,10 @@ class Result:
         raise TypeError("read Result.ok or Result.status, not the Result itself")
 
 
+#: Every status a Return can carry (factorylab/cortex/request.py, ``Return.status``).
+RETURN_STATUSES = frozenset({"ok", "malformed", "refused", "failed"})
+
+
 class Malformed(Exception):
     """A row lacks a field its kind's emitter always writes: missing evidence, never a
     value. A criterion that reads it fails (``criterion``), naming the row and field."""
@@ -2841,29 +2845,37 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     decision stays behind the return, so no seat can alias a sampler it cannot predict.
 
     A draw on a ``ProducerReturn`` event (its own ledger row, carried with its
-    ``about_handle``) comes after that event, and the event after an ``ok`` or
-    ``refused`` invocation of the producer that made it. Chapter II §III.b: a delivered
-    refusal is still a return for judges, not an unmade action. Every draw is checked:
-    a return with neither status ledgered before publication fails, never drops out
+    ``about_handle``) comes after that event, and the event after the invocation of
+    the producer that made it, regardless of status. Chapter II §III.b: unsuccessful
+    outputs are still returns for judges. compute.py explicitly publishes failed
+    returns too; invocation rows do not record Return.delivered. Every draw is checked:
+    a return with no invocation ledgered before publication fails, never drops out
     of the count."""
-    made: dict[str, list[int]] = defaultdict(list)
+    made: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for row in rows_of(events, "invocation"):
         handle = need(row, "handle")
-        if isinstance(handle, str) and handle and need(row, "status") in ("ok", "refused"):
-            made[handle].append(need(row, "seq"))
-    # loop.py emits every ProducerReturn with its ``about_handle``.
+        # A row the runtime could not emit (no status, or one outside Return.status)
+        # proves nothing: need() fails the criterion on a missing one (Codex on #169).
+        if need(row, "status") not in RETURN_STATUSES:
+            raise Malformed(row, "status")
+        if isinstance(handle, str) and handle:
+            made[handle].append((need(row, "seq"), need(row, "status")))
+    # loop.py emits every ProducerReturn with its ``about_handle`` and the same
+    # ``ret.status`` compute.py ledgers on the invocation (Codex on #169).
     published = unique_map(
         (row for row in rows_of(events, "event") if need(row, "event.kind") == "ProducerReturn"),
         lambda row: need(row, "event.id"),
-        lambda row: (need(row, "event.payload.about_handle"), need(row, "seq")))
+        lambda row: (need(row, "event.payload.about_handle"), need(row, "seq"),
+                     need(row, "event.payload.status")))
     checked, early, unmade = 0, [], []
     for row in rows_of(events, "decision.open"):
         # A draw on an event that is no ProducerReturn is not a draw on a return.
         if need(row, "event_id") not in published:
             continue
-        handle, event_seq = published[need(row, "event_id")]
+        handle, event_seq, status = published[need(row, "event_id")]
         checked += 1
-        if not any(seq < event_seq for seq in made.get(handle, ())):
+        if not any(seq < event_seq and made_status == status
+                   for seq, made_status in made.get(handle, ())):
             unmade.append({"draw": need(row, "handle"), "return": handle})
         elif need(row, "seq") <= event_seq:
             early.append(need(row, "handle"))
