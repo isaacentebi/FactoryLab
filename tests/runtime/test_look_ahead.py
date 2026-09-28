@@ -56,9 +56,9 @@ def test_a_release_date_bound_refuses_a_tape_on_release_day_even_with_a_waiver()
     from scripts import fastloop
 
     manifest = fastloop.simulation_manifest(WORLD, 1, tape=TAPE, allow_unknown_cutoff=True)
-    model_id = "deepseek/deepseek-v4.1-flash"
+    model_id = "google/gemini-3.8-flash"
     cutoff = next(m.training_cutoff for m in manifest.models if m.id == model_id)
-    assert cutoff == "2026-09-10"
+    assert cutoff == "2026-09-02"
     assert manifest.look_ahead_refusal(model_id) is None
     end = cutoff_end_ns(cutoff)
     on_release_day = replace(manifest, exchange=replace(
@@ -67,8 +67,8 @@ def test_a_release_date_bound_refuses_a_tape_on_release_day_even_with_a_waiver()
         on_release_day.validate()
     after_release_day = replace(manifest, exchange=replace(
         manifest.exchange, tape=replace(manifest.exchange.tape, start_ns=end)))
-    # Other roster models are bounded later (mimo is listed 2026-09-21), so only this
-    # model's own guard is read at the day after its release.
+    # Every other roster model is bounded earlier (Gemini 3.8 Flash is the latest release
+    # on the menu), so this model's own guard is the one read at the day after its release.
     assert after_release_day.look_ahead_refusal(model_id) is None
 
 
@@ -138,14 +138,12 @@ def test_the_harness_turns_the_web_off_and_records_the_admission(tmp_path):
     assert card["web"] == "off" and card["allow_unknown_cutoff"] is True
     assert card["unknown_cutoffs"] == []
     assert {m.id: m.training_cutoff for m in manifest.models if m.training_cutoff} == {
-        "deepseek/deepseek-v4.1-flash": "2026-09-10",
-        "venice:deepseek-v4-1-flash": "2026-09-10",
         "z-ai/glm-5.3-flash": "2026-08-26",
         "venice:z-ai-glm-5-3-flash": "2026-08-26",
-        "minimax/minimax-m3": "2026-05-31",
+        "google/gemini-3.8-flash": "2026-09-02",
         "qwen/qwen3.8-flash": "2026-08-26",
         "venice:qwen-3-8-flash": "2026-08-26",
-        "xiaomi/mimo-v2.6-flash": "2026-09-21",
+        "anthropic/claude-sonnet-5.5": "2026-06-30",
         "openai/gpt-5.6-sol": "2026-02-16",
         "openai/gpt-6-luna": "2026-05-18",
         "openai/gpt-6-sol": "2026-04-20",

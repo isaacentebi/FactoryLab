@@ -25,22 +25,21 @@ class StubProvider:
     def catalogue(self):
         """Expose explicit fixture metadata for every model in the rehearsal roster."""
         rows = (
-            ("deepseek/deepseek-v4.1-flash", "0.00000015", "0.00000060", 384_000),
             ("openai/gpt-5.6-sol", "0.00000200", "0.00001000", 128_000),
             ("venice:z-ai-glm-5-3-flash", "0.00000015", "0.00000050", 131_072),
             ("venice:qwen-3-8-flash", "0.00000014", "0.00000049", 131_072),
             # Edition 6's OpenRouter routes of the same two models.
-            ("z-ai/glm-5.3-flash", "0.00000009", "0.00000030", 131_072),
+            ("z-ai/glm-5.3-flash", "0.00000015", "0.00000050", 131_072),
             ("qwen/qwen3.8-flash", "0.00000015", "0.00000047", 131_072),
             ("openai/gpt-5.6-luna", "0.00000020", "0.00000120", 128_000),
             ("openai/gpt-5.6-luna:online", "0.00000020", "0.00000120", 128_000),
             # Edition 6's roster since #135, and the capital loop's Venice routes of it.
             ("openai/gpt-6-luna", "0.00000010", "0.00000050", 128_000),
             ("openai/gpt-6-sol", "0.00000200", "0.00001000", 128_000),
-            ("minimax/minimax-m3", "0.00000030", "0.00000120", 131_072),
-            ("xiaomi/mimo-v2.6-flash", "0.00000014", "0.00000028", 131_072),
+            # The 28 September 2026 replacements of DeepSeek, MiniMax and MiMo.
+            ("google/gemini-3.8-flash", "0.00000075", "0.00000375", 65_536),
+            ("anthropic/claude-sonnet-5.5", "0.00000200", "0.00001000", 128_000),
             ("venice:openai-gpt-6-luna", "0.000000125", "0.000000625", 128_000),
-            ("venice:deepseek-v4-1-flash", "0.000000375", "0.00000150", 384_000),
         )
         return [
             CatalogueEntry(
@@ -121,8 +120,9 @@ def test_launch_factors_are_explicit_and_reasoning_changes_roster_with_provenanc
     assert rehearsal.roster_hash(factored) != rehearsal.roster_hash(original)
 
     enabled = rehearsal.effective_manifest(original, reasoning="on")
-    assert dict(enabled.models[0].reasoning) == {"enabled": True}
-    assert dict(enabled.models[1].reasoning) == {"effort": "low"}
+    menu = {model.id: model for model in enabled.models}
+    assert dict(menu["qwen/qwen3.8-flash"].reasoning) == {"enabled": True}
+    assert dict(menu["openai/gpt-5.6-sol"].reasoning) == {"effort": "low"}
     declared_on = replace(
         original,
         models=tuple(replace(model, reasoning=(("effort", "low"),))

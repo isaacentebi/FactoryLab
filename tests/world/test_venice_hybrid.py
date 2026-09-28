@@ -295,8 +295,7 @@ def test_the_capital_loop_world_starts_on_openrouter_and_caps_one_conversion():
     world = capital_loop()
     menu = {m.id: m for m in world.models}
     assert all(menu[a.model_id].provider == "openrouter" for a in world.assemblies)
-    assert {"venice:openai-gpt-6-luna", "venice:deepseek-v4-1-flash",
-            "venice:qwen-3-8-flash"} <= set(menu)
+    assert {"venice:openai-gpt-6-luna", "venice:qwen-3-8-flash"} <= set(menu)
     assert world.treasury.venice_network == "base-mainnet"
     # The first real conversion (24 September 2026) is exactly one $5 tranche.
     assert world.treasury.max_venice_per_window == FIVE
@@ -314,8 +313,7 @@ def test_the_capital_loop_world_seats_the_testnet_worlds_models_on_other_routes(
         menu = {m.id: m for m in world.models}
         return {a.id: menu[a.model_id].id.removeprefix("venice:") for a in world.assemblies}
 
-    same = {"deepseek-v4-1-flash": "deepseek/deepseek-v4.1-flash",
-            "openai-gpt-6-luna": "openai/gpt-6-luna",
+    same = {"openai-gpt-6-luna": "openai/gpt-6-luna",
             "qwen-3-8-flash": "qwen/qwen3.8-flash"}
     loop = {seat: same.get(m, m) for seat, m in served(capital_loop()).items()}
     assert loop == served(load_manifest("worlds/edition6-testnet-rehearsal.toml"))
