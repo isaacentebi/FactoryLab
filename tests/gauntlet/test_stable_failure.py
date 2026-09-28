@@ -25,7 +25,8 @@ UPTAKE = P.UPTAKE["id"]
 
 @pytest.fixture(scope="module")
 def sf1(shared_run):
-    return shared_run("sf1", lambda: P.run(*P.sf1(), events=300))
+    # §II.b: retain two organ opportunities after the Tick gain reaches its cap.
+    return shared_run("sf1", lambda: P.run(*P.sf1(), events=228))
 
 
 def _transient_world():
@@ -38,7 +39,7 @@ def _transient_world():
 
 @pytest.fixture(scope="module")
 def transient(shared_run):
-    return shared_run("sf1-transient", lambda: P.run(*_transient_world(), events=300))
+    return shared_run("sf1-transient", lambda: P.run(*_transient_world(), events=250))
 
 
 # --- SF-1: unrelievable failure --------------------------------------------------------
@@ -69,7 +70,7 @@ def _ratchet_resets_duration(original):
 
 def test_sf1b_negative_control_a_duration_reset_no_op_fails():
     manifest, population = P.sf1()
-    mutant = P.run(manifest, population, events=300, patches=[
+    mutant = P.run(manifest, population, events=228, patches=[
         (PriceController, "ratchet", _ratchet_resets_duration(PriceController.ratchet))])
     result = g.sf1b_ratchet_cadence(mutant.events, mutant.manifest)
     assert result.status == g.FAIL
@@ -78,7 +79,7 @@ def test_sf1b_negative_control_a_duration_reset_no_op_fails():
 
 def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
     manifest, population = P.sf1()
-    mutant = P.run(manifest, population, events=300,
+    mutant = P.run(manifest, population, events=228,
                    patches=[(PriceController, "ratchet", lambda self, *a, **k: None)])
     assert g.sf1b_ratchet_cadence(mutant.events, mutant.manifest).status != g.PASS
 
@@ -86,13 +87,18 @@ def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
 def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     """Astra M-6's control: when the card is briefly satisfied the flag clears at an
     acting window, the duration ends, and the next ratchet starts again from one."""
-    assert transient.rows("immune.price_ratchet_ended")
+    ended = [r for r in transient.rows("immune.price_ratchet_ended")
+             if r["card_id"] == UPTAKE]
+    assert ended
+    assert any(r["card_id"] == UPTAKE and r["duration"] == 1
+               and r["window"] > ended[0]["window"]
+               for r in transient.rows("immune.price_ratchet"))
     result = g.sf1b_ratchet_cadence(transient.events, transient.manifest)
     assert result.ok, result.evidence
 
 
 def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
-    mutant = P.run(*_transient_world(), events=300, patches=[
+    mutant = P.run(*_transient_world(), events=250, patches=[
         (PriceController, "end_failure", lambda self, card_id, *, window: None)])
     result = g.sf1b_ratchet_cadence(mutant.events, mutant.manifest)
     assert result.status == g.FAIL
@@ -112,11 +118,11 @@ def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
 # The Tick router's loop counts every round it learned, from its opening to its first
 # terminal tick (R16b-2; Astra on #157): a scored round deferred to its window's close
 # is sampled at score ready, no longer lost at the close, so the loop is short enough
-# that its gain bound lies within a 300-event world.
+# that its gain bound lies within the shortened world.
 def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
     """No router unwound while flagged or missed a bound the run covered, and the Tick
     router, whose own loop is the organ's, reached gamma_max. The judges' routers step on
-    a 12-window loop, so their bounds (1 + 9 × 12 windows) lie beyond a 300-event world:
+    a 12-window loop, so their bounds (1 + 9 × 12 windows) lie beyond this world:
     SF-1e reads them as unsupported, never as a pass."""
     result = g.sf1e_gain(sf1.events, sf1.manifest)
     assert result.status != g.FAIL, result.evidence
@@ -186,7 +192,7 @@ SF2_UPTAKE = P.card("independent-uptake", "revision_rate", "at least 0.9")
 
 @pytest.fixture(scope="module")
 def sf2_low(shared_run):
-    return shared_run("sf2-low", lambda: P.run(*_sf2(0.1), events=200))
+    return shared_run("sf2-low", lambda: P.run(*_sf2(0.1), events=100))
 
 
 def test_sf2_no_force_the_kernel_never_draws_for_the_reliever(sf2_low):

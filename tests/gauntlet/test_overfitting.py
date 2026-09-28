@@ -20,11 +20,11 @@ from tests.gauntlet import populations as P
 
 pytestmark = pytest.mark.gate
 
-#: Each world's events: the smallest that exhibit every criterion read from it. Probed
-#: at half and two-thirds of the first cut (300 and 400), where every criterion, and
-#: every negative control run on the same world as its positive, held.
-OF1 = 150
-OF2 = 200
+#: §III.b / §IV.a: retain settled counter-verdicts and the complete holdout lifecycle.
+#: Every consumer and matched negative control was probed at 100 and 150 events;
+#: 100 retains repeated consequence grades, adoption and post-adoption price rows.
+OF1 = 100
+OF2 = 100
 
 CARD = P.REVISION["id"]
 

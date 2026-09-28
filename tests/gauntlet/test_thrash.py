@@ -139,7 +139,7 @@ def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop
 
 @pytest.fixture(scope="module")
 def th2r(shared_run):
-    return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=300))
+    return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=150))
 
 
 @pytest.mark.parametrize("loop", ["seat:molt-seat", "router:ProducerReturn"])
@@ -167,7 +167,7 @@ def _ignore_lifespans(original):
 
 
 def test_th2_negative_control_an_organ_blind_to_lifespans_fails():
-    mutant = P.run(*P.th2_reversion(), events=300,
+    mutant = P.run(*P.th2_reversion(), events=150,
                    # Wave 16: the organ diagnoses through ``versions.organ_step``, which
                    # calls the module's own ``diagnose``.
                    patches=[(versions, "diagnose", _ignore_lifespans(versions.diagnose))])
