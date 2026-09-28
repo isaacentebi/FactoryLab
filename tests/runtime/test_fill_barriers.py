@@ -152,4 +152,33 @@ def test_execution_at_anchor_is_not_preanchor():
     f = Fill('external', 'BTC', True, D(1), D(10), D(0), 200, venue_id='boundary')
     venue = SimpleNamespace(fills=lambda start: [f], account=lambda: account(size=1))
     assert [ts for ts, _ in c.poll(venue, now_ns=200)] == [200]
+    assert c.expected_positions == {'perp:BTC': '1'}
+    assert c.through_ns == 200
     assert c.poll(venue, now_ns=200) == []
+
+
+@pytest.mark.gate
+def test_5000_partials_one_resting_order_has_bounded_identity_memory():
+    c = FillCursor(Ledger(), start_ns=0, measured=True)
+    c.initialize(account(observed=10), now_ns=0)
+    c.submitted('resting', now_ns=11)
+    c.acknowledged('resting', {'order_id': 'resting'})
+    for i in range(1, 5001):
+        now = i * 100
+        f = Fill('resting', 'BTC', True, D(1), D(10), D(0), now - 10,
+                 observed_at_ns=now, venue_id=str(i))
+        starts = []
+        venue = SimpleNamespace(
+            fills=lambda start, f=f, starts=starts: starts.append(start) or (
+                [f] if f.ts_ns >= start else []),
+            account=lambda now=now, i=i: account(observed=now, size=i),
+            lookup=lambda *a, now=now, i=i, **kw: status('resting', observed=now, size=i))
+        assert len(c.poll(venue, now_ns=now, tick_ns=10)) == 1
+        assert c.through_ns == now
+        if i > 1:
+            assert starts == [now - 120]
+        assert c.orders['resting']['submitted_ns'] == now
+        assert len(c.orders['resting']['identities']) <= 1
+        assert len(c.seen) <= 1
+        assert c.poll(venue, now_ns=now, tick_ns=10) == []
+    assert c.orders['resting']['booked'] == '5000'

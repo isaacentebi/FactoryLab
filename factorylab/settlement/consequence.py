@@ -1011,6 +1011,13 @@ class FillCursor:
                 orders_complete &= equal
                 if equal and status.status in ("filled", "cancelled"):
                     del self.orders[client]
+                elif equal:
+                    # Chapter II §III.b: accounted quantity closes discovery through this
+                    # read, even while the remainder rests. Older identities are durable.
+                    order["submitted_ns"] = max(order["submitted_ns"], now_ns)
+                    floor = order["submitted_ns"] - (bound or 0) - tick_ns
+                    order["identities"] = [key for key in order.get("identities", ())
+                                           if key[0] >= floor]
             except (RuntimeError, ValueError, AttributeError, ArithmeticError):
                 orders_complete = False
         reason, positions, cash, fees = None, None, None, None
@@ -1108,8 +1115,6 @@ class FillCursor:
         if self.measured:
             floor = min((o["submitted_ns"] for o in self.orders.values()),
                         default=self.since_ns)
-            if self.baseline_ns is not None and self.baseline_ns > self.launch_ns:
-                floor = self.launch_ns  # Pre-anchor observations remain auditable.
             if self.incomplete_since_ns is not None:
                 floor = min(floor, self.incomplete_since_ns)
             read_start = max(self.launch_ns, floor - (self.propagation_bound_ns or 0)

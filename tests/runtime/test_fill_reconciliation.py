@@ -101,7 +101,9 @@ def test_long_open_order_retains_identity_without_repeated_ledger_scan():
     c.ledger._iter_items = forbidden_scan
     for now in (300, 400, 500):
         assert c.poll(venue, now_ns=now) == []
-    assert len(c.seen) == 1
+    assert not c.seen
+    assert c.orders['open']['submitted_ns'] == 500
+    assert not c.orders['open']['identities']
 
 
 def test_submicro_cash_and_fee_audit_never_block_position_evidence():
