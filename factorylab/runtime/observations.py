@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 # is not a public window fact and never reaches a registered observation.
 # The early-warning summaries are the evaluators' (``runtime.ews``), not a public fact.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices", "closed_holdouts",
+                         "closed_cards", "closed_prices", "closed_holdouts", "closed_held",
                          "series_discarded", "ews_variance", "ews_autocorrelation",
                          # The provider and family names are text; the observations
                          # below publish their concentration, not the names.

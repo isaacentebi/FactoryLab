@@ -94,6 +94,8 @@ class MeasureWindow:
     market_purchases: int = 0
     decisions: dict[str, dict] = field(default_factory=dict)
     closed_values: dict[str, float] | None = None
+    # R16c-3: the last supported facts available at this close, never future evidence.
+    closed_held: dict[str, dict] = field(default_factory=dict)
     # Per rate observation, frozen at the close: the decisions in its denominator and
     # in its numerator (wave 16, D5: who relieved a violation of the rate).
     closed_relief: dict[str, dict[str, list]] = field(default_factory=dict)
@@ -578,7 +580,10 @@ class PricingMixin:
                     # controller-to-sample ratio from now (essay II.IV.c; T2).
                     self.card_clock[card.id] = self.ticks_consumed
                 self.card_unmeasured.pop(card.id, None)
+                self.card_held.pop(card.id, None)
             known[card.id] = meaning
+        self.card_held = {cid: fact for cid, fact in self.card_held.items()
+                          if cid in {card.id for card in self.charter.cards}}
 
     def _derive_regions(self) -> None:
         """Every readable card of the current edition holds a region; unreadable ones hold none.
@@ -790,7 +795,18 @@ class PricingMixin:
         # that replaced it (docs/manifest.md, observation units and attribution). It is frozen
         # before the immune organ runs: a ratchet it issues prices the next window, never
         # the window whose failure it diagnosed.
-        self.window.closed_cards = tuple(c for c in self.charter.cards if c.id in card_values)
+        # §II.b soft casts; R10/D4 and R16c-3: refusal cannot erase a supported
+        # violation. Keep only its proxy fact, not old holdouts or their owners.
+        for card in self.charter.cards:
+            if card.id in card_values:
+                self.card_held[card.id] = {
+                    "identity": list(metric_identity(card)), "source_window": w.index,
+                    "value": card_values[card.id],
+                    "region": asdict(self.regions[card.id]),
+                    "violation": violation(self.regions[card.id], card_values[card.id]),
+                }
+        self.window.closed_held = {cid: dict(fact) for cid, fact in self.card_held.items()}
+        self.window.closed_cards = tuple(self.charter.cards)
         self.window.closed_prices = {c.id: self.controller.price(c.id)
                                      for c in self.window.closed_cards}
         self._ledger_unattributed()
@@ -1159,7 +1175,7 @@ class PricingMixin:
         priced: list[tuple] = []
         seen: set[str] = set()
         for window in windows:
-            closed = window.closed_values is not None and bool(window.closed_cards)
+            closed = window.closed_values is not None
             for card in (window.closed_cards if closed else self.charter.cards):
                 observation = book.get(card.observation)
                 if card.id in seen or observation is None:
@@ -1173,7 +1189,7 @@ class PricingMixin:
         return priced
 
     def _penalty_terms(self, cards: str, handle: str | None, *,
-                       as_role: str | None = None) -> list[dict]:
+                       as_role: str | None = None, abstaining: bool = False) -> list[dict]:
         """Late decisions keep their own windows; current windows use observed causal prefixes.
 
         ``as_role`` scopes ``handle`` in that role wherever a share is measured by role,
@@ -1190,7 +1206,35 @@ class PricingMixin:
                       else window.closed_values)
             regions = self.regions if window.closed_values is None else window.closed_regions
             region = regions.get(card.id)
-            if region is None or card.id not in values:
+            if region is None:
+                continue
+            if card.id not in values:
+                fact = (self.card_held if window.closed_values is None
+                        else window.closed_held).get(card.id)
+                if (not abstaining or fact is None
+                        or fact["identity"] != list(metric_identity(card))
+                        or fact["source_window"] >= window.index):
+                    continue
+                # Held evidence is not a new measurement. Shares belong to the
+                # refusing window, not to the authors of the supported source.
+                source_region = CardRegion(**fact["region"])
+                share = self._decision_share(
+                    window, handle, observation.id, card.answers_for, source_region,
+                    fact["value"], as_role=as_role,
+                ) if handle is not None else 1.0
+                if handle is not None and observation.id == "cost_per_return":
+                    share = self._cost_share(card, window, handle, share)
+                terms.append({
+                    "card_id": card.id, "observation": observation.id,
+                    "window": window.index, "held": True,
+                    "source_window": fact["source_window"],
+                    "violation": fact["violation"], "proxy_violation": fact["violation"],
+                    "holdout_violation": 0.0, "attributed_holdout_violation": 0.0,
+                    "proxy_share": share, "holdout_share": 0.0, "holdout_attributees": {},
+                    "lambda": price,
+                    "weight": card_pressure(price, fact["violation"], self.m.prices.penalty_cap),
+                    "share": share,
+                })
                 continue
             holdouts = (self.card_samples.holdouts if window.closed_values is None
                         else window.closed_holdouts)
@@ -1437,7 +1481,7 @@ class PricingMixin:
         return hits if floor else members - hits
 
     def _penalty_for(self, cards: str, handle: str | None = None, *,
-                     as_role: str | None = None) -> float:
+                     as_role: str | None = None, abstaining: bool = False) -> float:
         """Cap the total pressure, then allocate its penalty-weighted contribution share.
 
         A decision taken in the unhistoried niche bears no penalty (wave 16, R-E as
@@ -1447,7 +1491,7 @@ class PricingMixin:
         """
         if not self._in_split(handle):
             return 0.0
-        terms = self._penalty_terms(cards, handle, as_role=as_role)
+        terms = self._penalty_terms(cards, handle, as_role=as_role, abstaining=abstaining)
         total = held_sum(*(t["weight"] for t in terms))
         if total <= 0:
             return 0.0

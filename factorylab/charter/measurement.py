@@ -29,7 +29,8 @@ COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                      "closed_prices", "closed_scopes", "closed_holdouts", "series_discarded",
+                      "closed_prices", "closed_scopes", "closed_holdouts", "closed_held",
+                      "series_discarded",
                       # Wave 16, D5: who relieved a rate, by decision handle.
                       "closed_relief", "closed_holdout_attribution",
                       "paid_off_settled", "paid_off_handles",

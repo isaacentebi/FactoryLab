@@ -246,7 +246,7 @@ def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured
     violated = g.card_violations(run.events, "verdict-floor")
     assert violated and all(v == pytest.approx(0.4) for v in violated.values())
     raises = run.rows("sampling.rate_raise")
-    assert raises  # Outside xfail: a broken actuator must fail, not become expected.
+    assert raises  # Sampling must respond independently of the held-liability price.
     for row in raises:
         gap = row["gaps"]["verdict-floor"]
         assert gap["unmeasured_windows"] > 0
@@ -335,6 +335,7 @@ def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(in
         if handle not in niche:
             term, = row["terms"]
             assert term["card_id"] == "verdict-floor" and term["window"] == origin
+            assert not term.get("held", False)
             assert term["violation"] == pytest.approx(violation)
             assert term["lambda"] == pytest.approx(price)
             assert term["share"] == pytest.approx(share)
@@ -344,9 +345,16 @@ def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(in
     assert not [r for r in run.rows("immune.price_ratchet", "immune.price_ratchet_saturated")
                 if r["card_id"] == "verdict-floor"]
 
-    # §IV.a/§II.b: evaluator liability uses only the population's evaluator card.
-    # Keep the exact ordinary-law check outside xfail, even when pressure is zero.
+
+def test_intermittent_declines_pay_held_violation_after_support_not_during_warmup(intermittent):
+    """§II.b/R16c-3: refusal retains supported liability, not invented measurements.
+
+    The same-identity conformity card supplies the held fact. Warm-up and the
+    unhistoried niche remain exempt; neither sampling support nor the cap changes.
+    """
+    run = intermittent
     card = "conformity-floor"
+    contributions = {r["handle"]: r for r in run.rows("price.contribution")}
     declined = {r["handle"] for r in run.rows("commission.declined")
                 if r["assembly_id"].startswith("judge-")
                 and contributions[r["handle"]]["window"] % 2}
@@ -354,43 +362,47 @@ def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(in
     assert declined and len(credits) == len(declined)
     closes = {r["window"]: r for r in run.rows("price.window")}
     updates = [r for r in run.rows("price.update") if r["card_id"] == card]
-    # The card really measures conformity when delivered; an unknown observation or
-    # absent upper tier must not masquerade as the synchronized-refusal limitation.
+    # The ceded evaluator card really measures delivered conformity, independently
+    # of the refusal ledger and its computed price terms (§IV.a).
     assert updates and all(r["value"] == pytest.approx(0.8) for r in updates)
+    supported = [close for close in closes.values() if card in close["values"]]
+    assert supported and all(close["values"][card] == pytest.approx(0.8)
+                             for close in supported)
     cap = run.manifest["prices"]["penalty_cap"]
+    warmup, niche, charged = [], [], []
     for row in credits:
         own = contributions[row["handle"]]
+        close = closes[own["window"]]
+        assert card not in close["values"]
+        prior = [source for source in supported if source["window"] < own["window"]]
+        if not prior:
+            assert row["penalty"] == 0.0
+            warmup.append(row["handle"])
         if own.get("niche"):
             assert row["penalty"] == 0.0
+            niche.append(row["handle"])
             continue
-        close = closes[own["window"]]
-        # Count-based liability waits for its origin close; no future price enters.
+        # Count-based liability waits for its origin close; no later fact or price enters.
         assert close["seq"] < row["seq"]
-        value = close["values"].get(card)
-        violation = 0.0 if value is None else max(0.0, (0.9 - value) / 0.9)
+        source = prior[-1] if prior else None
+        violation = 0.0 if source is None else (0.9 - source["values"][card]) / 0.9
         prices = [r for r in updates if r["window_end_event"] <= close["window_end_event"]
                   and r["seq"] < row["seq"]]
         price = prices[-1]["lambda_after"] if prices else 0.0
         peers = [r for r in contributions.values() if r["window"] == own["window"]
                  and r["role"] == "evaluator" and not r.get("niche")]
         share = max(run.manifest["prices"]["min_blame_share"], 1 / len(peers))
-        assert row["penalty"] == pytest.approx(min(cap, price * violation) * share)
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="Population conformity card is unmeasured in every odd window; "
-                   "every odd-window judge decline still has zero charge with this card")
-def test_intermittent_every_declined_judge_draw_pays_an_abstention_charge(intermittent):
-    """§IV.a: the population's positive-charge demand is not a universal kernel rule."""
-    run = intermittent
-    contributions = {r["handle"]: r for r in run.rows("price.contribution")}
-    declined = {r["handle"] for r in run.rows("commission.declined")
-                if r["assembly_id"].startswith("judge-")
-                and contributions[r["handle"]]["window"] % 2}
-    credits = [r for r in run.rows("router.decline_priced") if r["handle"] in declined]
-    assert declined and len(credits) == len(declined)
-    unpaid = [r["handle"] for r in credits if r["penalty"] <= 0]
-    unmeasured = [r["window"] for r in run.rows("price.window")
-                  if r["window"] % 2 and "conformity-floor" not in r["values"]]
-    assert not unpaid, (f"{len(unpaid)}/{len(declined)} declined judge draws are unpriced; "
-                        f"conformity-floor unmeasured in windows {unmeasured}: {unpaid}")
+        expected = min(cap, price * violation) * share
+        assert row["penalty"] == pytest.approx(expected)
+        if source is not None:
+            term, = row["terms"]
+            assert term["card_id"] == card and term["window"] == own["window"]
+            assert term["held"] is True and term["source_window"] == source["window"]
+            assert term["violation"] == pytest.approx(violation)
+            assert term["lambda"] == pytest.approx(price)
+            assert term["share"] == pytest.approx(share)
+            assert expected > 0
+            charged.append(row["handle"])
+    assert warmup, "the shared world must witness unmeasured warm-up"
+    assert niche, "the shared world must witness protected declines"
+    assert charged, "supported liability must reach at least one unprotected decline"

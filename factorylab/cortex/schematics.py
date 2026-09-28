@@ -2267,7 +2267,13 @@ class SchematicsMixin:
                 "filled, or would have filled, bears in the window it was drawn in (a NOOP "
                 "weighs each role by the odds its draw gave that role's seats); before the "
                 "router's first settled round r is the published prior "
-                f"{NEUTRAL_REWARD}. A seat's own learner is credited the same"
+                f"{NEUTRAL_REWARD}. A seat's own learner is credited the same. "
+                "Only a NOOP or decline in an unmeasured role-card window uses the last "
+                "supported proxy violation of that same metric identity, at the refusing "
+                "window's price and decision share. Without a supported predecessor the "
+                "held charge is zero. Held terms record held=true and source_window; "
+                "old holdouts are not carried forward. Ordinary acts have no held fallback; "
+                "niche exemptions, menu-role weights and penalty caps are unchanged"
             ),
             "evaluation_sampling": (
                 f"Additional-judge probability starts at {ev.multi_judge_share}; its live "

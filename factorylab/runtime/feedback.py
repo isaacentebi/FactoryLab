@@ -2733,6 +2733,7 @@ class FeedbackMixin:
                                 "handle": lr.handle, "router": state.learner.id,
                                 "status": str(lr.status), "neutral": raw,
                                 "penalty": penalty, "reward": charged,
+                                "terms": self._abstention_price_terms(lr.handle),
                                 "ts": self.clock.now_ns})
         fb = BanditFeedback(prop.chosen, charged, prop.probs[prop.action_ids.index(prop.chosen)])
         if target is not state:
@@ -2893,7 +2894,8 @@ class FeedbackMixin:
             self.ledger.append({"kind": kind, "handle": handle,
                                 "router": credit["router"], "neutral": neutral,
                                 **({"status": credit["status"]} if "status" in credit else {}),
-                                "penalty": penalty, "reward": reward, "ts": now})
+                                "penalty": penalty, "reward": reward,
+                                "terms": self._abstention_price_terms(handle), "ts": now})
             fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
             learned = self._apply_router_round(drawer, handle, credit["p"], credit["executed"],
                                                fb)
@@ -2931,9 +2933,35 @@ class FeedbackMixin:
         # Each role's price is measured with the abstention scoped in that role (the
         # Wave 2 review, item 8b): a less-weighted role's floor and attribution are
         # that role's, never the role the window filed the abstention under.
-        penalty = held_sum(*(weight * self._penalty_for(role, handle, as_role=role)
-                             for role, weight in sorted(roles.items())))
+        abstaining = self._is_price_abstention(handle)
+        penalty = held_sum(*(weight * self._penalty_for(
+            role, handle, as_role=role, abstaining=abstaining,
+        ) for role, weight in sorted(roles.items())))
         return penalty
+
+    def _is_price_abstention(self, handle: str) -> bool:
+        """Only a NOOP or explicit decline can use held evidence (R16c-3)."""
+        try:
+            decision = self.queue.get(handle)
+            return (decision.propensity.chosen == NOOP or any(
+                row.definition_version == DECLINED_DEFINITION
+                for row in self.queue.history(handle)
+            ))
+        except KeyError:
+            return False
+
+    def _abstention_price_terms(self, handle: str) -> list[dict]:
+        """Price provenance retains each role's own menu weight and source window."""
+        origin = self.price_origins.get(handle, {}).get("origin")
+        window = self.price_windows.get(origin)
+        sample = window.decisions.get(handle) if window is not None else None
+        if sample is None:
+            return []
+        roles = sample.get("menu_roles") or {sample["role"]: 1.0}
+        return [dict(term, role=role, menu_weight=weight)
+                for role, weight in sorted(roles.items())
+                for term in self._penalty_terms(
+                    role, handle, as_role=role, abstaining=self._is_price_abstention(handle))]
 
     def _abstention_awaits_close(self, handle: str) -> bool:
         """Whether a round that delivered nothing waits for its origin window to close
