@@ -890,7 +890,6 @@ class FillCursor:
         self.incomplete_since_ns: int | None = None
         self.orders: dict[str, dict] = {}
         self.baseline_ns: int | None = None
-        self.legacy_boundary_ns: int | None = None
 
     def submitted(self, client_id: str, *, now_ns: int) -> None:
         """Retain unresolved submission evidence until exact venue quantities agree."""
@@ -1033,8 +1032,7 @@ class FillCursor:
                 self.incomplete_since_ns = self.reconciliation_ns or self.launch_ns
             self.recovery_span_ns = max(1, tick_ns, bound or 0,
                                         2 * self.recovery_span_ns)
-        complete = (matched and orders_complete and identified
-                    and self.legacy_boundary_ns is None)
+        complete = matched and orders_complete and identified
         self.ledger.append({"kind": "consequence.fill_reconciliation", "read_ns": now_ns,
                             "matched": matched, "reason": reason,
                             "reconciliation_ns": self.reconciliation_ns,
@@ -1117,9 +1115,6 @@ class FillCursor:
         for fill in sorted(fills, key=lambda f: f.ts_ns):
             if fill.ts_ns < read_start:
                 continue
-            if (self.legacy_boundary_ns is not None
-                    and fill.ts_ns <= self.legacy_boundary_ns):
-                continue  # Ambiguous legacy identity is UNKNOWN, never a second booking.
             payload = {
                 "order_id": fill.order_id,
                 "coin": fill.coin,

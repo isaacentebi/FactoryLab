@@ -978,7 +978,7 @@ _COMPONENT_FIELDS = (
                                "propagation_bound_ns", "observation_complete",
                                "reconciliation_ns", "expected_positions", "expected_cash",
                                "expected_fees", "recovery_span_ns", "incomplete_since_ns",
-                               "last_residual", "orders", "baseline_ns", "legacy_boundary_ns")),
+                               "last_residual", "orders", "baseline_ns")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
@@ -1154,8 +1154,7 @@ def _migrate_fill_cursor(saved, running) -> dict:
                 "observation_complete": True, "reconciliation_ns": None,
                 "expected_positions": None, "expected_cash": None, "expected_fees": None,
                 "recovery_span_ns": 0, "incomplete_since_ns": None,
-                "last_residual": None, "orders": {}, "baseline_ns": None,
-                "legacy_boundary_ns": None, **saved}
+                "last_residual": None, "orders": {}, "baseline_ns": None, **saved}
     for field in ("launch_ns", "since_ns", "read_ns", "through_ns", "propagation_bound_ns",
                   "reconciliation_ns", "recovery_span_ns", "incomplete_since_ns"):
         value = migrated[field]
@@ -1175,15 +1174,9 @@ def _migrate_fill_cursor(saved, running) -> dict:
         for key, count in seen.items()
     ):
         raise ResumeError("invalid fill cursor seen")
-    if migrated["measured"] and ("orders" not in saved or any(
-            len(key) != 3 or key[1] != "venue" for key in seen)):
-        migrated["legacy_boundary_ns"] = max((key[0] for key in seen),
-                                               default=migrated["since_ns"])
-        migrated["through_ns"] = None
-    for field in ("baseline_ns", "legacy_boundary_ns"):
-        value = migrated[field]
-        if value is not None and (type(value) is not int or value < 0):
-            raise ResumeError(f"invalid fill cursor {field}")
+    value = migrated["baseline_ns"]
+    if value is not None and (type(value) is not int or value < 0):
+        raise ResumeError("invalid fill cursor baseline_ns")
     if not isinstance(migrated["orders"], dict):
         raise ResumeError("invalid fill cursor orders")
     for client, order in migrated["orders"].items():
@@ -1323,6 +1316,14 @@ def restore_runtime(rt, state: dict) -> None:
     # assigned: a world does not continue with a seat's memory or a seat's
     # outcomes missing, and a refusal must leave this runtime untouched.
     components = decode(state["components"])
+    saved_fills = components.get("consequence_fills")
+    # Chapter II §II.b, §III.b: absent per-order evidence cannot be reconstructed
+    # by discarding executions. The authenticated adapter, not cursor flags, is live.
+    if (not saved_venue["deterministic"] and isinstance(saved_fills, dict)
+            and "orders" not in saved_fills):
+        raise ResumeError(
+            "this world's live fill cursor predates per-order accounting; start a new world",
+            code="legacy_live_cursor")
     components["consequence_fills"] = _migrate_fill_cursor(
         components.get("consequence_fills"), rt.consequence_fills)
     _check_artifacts(rt.artifacts,
