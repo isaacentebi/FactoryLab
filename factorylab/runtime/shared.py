@@ -74,6 +74,45 @@ class PredicateRunner:
 
         self.available = jail_available()
 
+    def run_batch(self, code: str, facts: list[dict]) -> list[bool | None]:
+        """One bounded jail resolves a batch; each item gets a fresh predicate namespace."""
+        from factorylab.cortex.sandbox import NoJail, run_python
+        from factorylab.runtime.observations import OBSERVATION_CPU_S, OBSERVATION_TIMEOUT_S
+
+        if not self.available:
+            return [None] * len(facts)
+        # §IV.c: process count is bounded by predicates, not decisions times predicates.
+        harness = '''
+import json, sys
+batch = json.load(sys.stdin)
+values = []
+for facts in batch['facts']:
+    try:
+        namespace = {}
+        exec(batch['code'], namespace)
+        value = namespace['resolve'](facts)
+        values.append(value if type(value) is bool else None)
+    except Exception:
+        values.append(None)
+print(json.dumps(values, allow_nan=False))
+'''
+        try:
+            result = run_python(harness, stdin=json.dumps({"code": code, "facts": facts},
+                                                          allow_nan=False),
+                                timeout_s=OBSERVATION_TIMEOUT_S, cpu_s=OBSERVATION_CPU_S,
+                                max_output_bytes=max(2000, len(facts) * 8 + 2))
+            if result.timed_out or result.returncode != 0:
+                return [None] * len(facts)
+            values = json.loads(result.stdout)
+            if (not isinstance(values, list) or len(values) != len(facts)
+                    or any(v is not None and type(v) is not bool for v in values)):
+                return [None] * len(facts)
+            return values
+        except NoJail:
+            return [None] * len(facts)
+        except Exception:
+            return [None] * len(facts)
+
     def run(self, code: str, facts: dict) -> tuple[bool | None, str | None]:
         """Only a JSON boolean is truth evidence; execution failures remain unsupported."""
         from factorylab.cortex.sandbox import NoJail, run_python

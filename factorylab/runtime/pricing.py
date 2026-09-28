@@ -1033,10 +1033,60 @@ class PricingMixin:
             return {}
         facts = window_facts(self.card_samples.windows[-1])
         out = {}
+        decision_facts = self._holdout_decision_facts()
+        handles = sorted(decision_facts)
+        batches = {}
+        for entry in dict.fromkeys(e for c in cards for e in c.holdout):
+            name, _, version = entry.partition("@")
+            predicate = self.predicates.get(name, int(version))
+            if predicate is None or predicate.code is None:
+                batches[entry] = (None, {})
+                continue
+            from factorylab.charter.holdout import behavioural_reads
+
+            try:
+                reads = behavioural_reads(predicate.code)
+            except ValueError:
+                batches[entry] = (None, {})
+                continue
+            supported = [h for h in handles
+                         if all(decision_facts[h].get(k) is not None for k in reads)]
+            batch = [facts, *(decision_facts[h] for h in supported)]
+            runner = self.predicate_runner
+            values = (runner.run_batch(predicate.code, batch) if hasattr(runner, "run_batch")
+                      else [self._resolve_holdout(entry, f) for f in batch])
+            batches[entry] = (values[0], dict(zip(supported, values[1:], strict=True)))
         for card in cards:
-            results = {entry: self._resolve_holdout(entry, facts) for entry in card.holdout}
-            out[card.id] = {"results": results, "violation": holdout_violation(
-                list(results.values()), self._resolution_step(card.id))}
+            results = {entry: batches[entry][0] for entry in card.holdout}
+            out[card.id] = {"results": results, "decision_results": {
+                entry: batches[entry][1] for entry in card.holdout},
+                "violation": holdout_violation(
+                    list(results.values()), self._resolution_step(card.id))}
+        return out
+
+    def _holdout_decision_facts(self) -> dict[str, dict]:
+        """Each decision's anonymous facts are built once from rows indexed by window/handle."""
+        from factorylab.charter.holdout import BEHAVIOURAL_FACTS
+        from factorylab.charter.measurement import scope_facts
+
+        samples, window = self.card_samples, self.window
+        indexes = []
+        for kind, observation in (("returns", "revision_rate"), ("forecasts", "forecast_skill")):
+            index = {}
+            for row in _rows(samples, kind, observation):
+                index.setdefault((row["window"], row["handle"]), []).append(row)
+            indexes.append(index)
+        out = {}
+        # Recorded contribution keys define support generically; missing contributions
+        # to a counter recorded elsewhere in this window are zero, not another's total.
+        keys = BEHAVIOURAL_FACTS.intersection(
+            key for sample in window.decisions.values() for key in sample)
+        for handle, sample in sorted(self._split_decisions(window).items()):
+            key = (window.index, handle)
+            facts = scope_facts([samples.windows[-1]], indexes[0].get(key, []),
+                                indexes[1].get(key, []))
+            facts.update({key: sample.get(key, 0) for key in sorted(keys)})
+            out[handle] = facts
         return out
 
     def _holdout_attribution(self, held: dict[str, dict]) -> dict[str, dict]:
@@ -1047,11 +1097,11 @@ class PricingMixin:
         redistributed. Facts without decision-level evidence are unresolved, not false.
         """
         from factorylab.charter.holdout import behavioural_reads
-        from factorylab.charter.measurement import scope_facts
 
         window = self.window
-        samples = self.card_samples
         cards = {card.id: card for card in self.charter.cards}
+        facts_by_handle = (self._holdout_decision_facts()
+                           if any("decision_results" not in e for e in held.values()) else {})
         out = {}
         for cid, evidence in held.items():
             card = cards[cid]
@@ -1072,20 +1122,14 @@ class PricingMixin:
                 predicate = self.predicates.get(name, int(version))
                 reads = behavioural_reads(predicate.code) if predicate and predicate.code else ()
                 results = {}
-                for handle, sample in sorted(eligible.items()):
-                    def own(rows, handle=handle):
-                        return [r for r in rows if r["window"] == window.index
-                                and r["handle"] == handle]
-
-                    facts = scope_facts(
-                        [samples.windows[-1]],
-                        own(_rows(samples, "returns", "revision_rate")),
-                        own(_rows(samples, "forecasts", "forecast_skill")))
-                    facts.update({key: sample.get(key, 0)
-                                  for key in ("registrations", "registration_rejections")})
-                    results[handle] = (self._resolve_holdout(entry, facts)
-                                       if reads and all(facts.get(k) is not None for k in reads)
-                                       else None)
+                for handle in sorted(eligible):
+                    if "decision_results" in evidence:
+                        results[handle] = evidence["decision_results"].get(entry, {}).get(handle)
+                    else:
+                        facts = facts_by_handle[handle]
+                        results[handle] = (self._resolve_holdout(entry, facts)
+                                           if reads and all(facts.get(k) is not None for k in reads)
+                                           else None)
                 attributees = sorted(h for h, value in results.items() if value is False)
                 step = self._resolution_step(cid)
                 predicates[entry] = {"results": results, "attributees": attributees,

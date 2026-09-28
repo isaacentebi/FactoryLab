@@ -128,3 +128,76 @@ def test_ownerless_holdout_reports_charged_pressure_below_controller_cap():
     assert row["at_cap"] is True
     assert row["violation"] == pytest.approx(1.01)
     assert row["charged_pressure"] == pytest.approx(state["charged_pressure"])
+
+
+def test_ten_predicates_five_hundred_decisions_use_ten_jails(monkeypatch):
+    import contextlib
+    import io
+    import json
+    import sys
+
+    from factorylab.cortex import sandbox
+    from factorylab.runtime.shared import PredicateRunner
+
+    rt = attribution_runtime(count=500)
+    runner = PredicateRunner()
+    runner.available = True
+    rt.predicate_runner = runner
+    calls = []
+
+    def jail(code, *, stdin, **kwargs):
+        calls.append(1)
+        stream = io.StringIO()
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdin", io.StringIO(stdin))
+            with contextlib.redirect_stdout(stream):
+                exec(code, {})  # noqa: S102 - deterministic jail boundary test
+        return SimpleNamespace(timed_out=False, returncode=0, stdout=stream.getvalue())
+
+    monkeypatch.setattr(sandbox, "run_python", jail)
+    rt.predicates._run = runner.run
+    entries = []
+    for i in range(10):
+        name = f"batch-{i}"
+        rt.predicates.register(name, "constraint",
+                               f"def resolve(facts):\n    return facts['notional_micro'] <= {i}\n",
+                               facts={"notional_micro": 0}, persist=lambda _: None)
+        entries.append(f"{name}@1")
+    rt.charter.cards = (replace(rt.charter.cards[0], holdout=tuple(entries)),)
+    rt.window.notional_micro = sum(range(1, 501))
+    rt.card_samples.windows.clear()
+    rt.card_samples.closed(rt.window)
+    calls.clear()
+    results = rt._holdout_results({"c": 0.8})
+    attribution = rt._holdout_attribution(results)["c"]
+    assert len(calls) <= 10
+    expected = {}
+    for i, entry in enumerate(entries):
+        failures = [str(j) for j in range(500) if j + 1 > i]
+        assert attribution["predicates"][entry]["attributees"] == sorted(failures)
+        for handle in failures:
+            expected[handle] = expected.get(handle, 0) + 1 / (10 * len(failures))
+    assert attribution["shares"] == pytest.approx(expected)
+    assert json.dumps(attribution, allow_nan=False)
+
+
+def test_batch_cannot_attribute_nonbehavioural_predicates():
+    rt = attribution_runtime()
+    rt.predicates.register("constant", "unsupported", "def resolve(facts):\n    return False\n",
+                           facts={}, persist=lambda _: None)
+    rt.charter.cards = (replace(rt.charter.cards[0], holdout=("constant@1",)),)
+    result = rt._holdout_results({"c": 0.8})
+    assert result["c"]["results"]["constant@1"] is None
+    assert rt._holdout_attribution(result)["c"]["violation"] == 0
+
+
+@pytest.mark.gate
+def test_predicate_batch_real_jail_five_hundred_facts():
+    from factorylab.runtime.shared import PredicateRunner
+
+    runner = PredicateRunner()
+    if not runner.available:
+        pytest.skip("no jail on this host")
+    facts = [{"notional_micro": i} for i in range(501)]
+    assert runner.run_batch("def resolve(facts):\n    return facts['notional_micro'] <= 250\n",
+                            facts) == [i <= 250 for i in range(501)]
