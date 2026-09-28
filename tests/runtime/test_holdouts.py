@@ -219,8 +219,8 @@ def test_a_behavioural_holdout_names_what_it_reads():
 @pytest.mark.parametrize("predicates", [
     ("facts['registrations'] == 0",),
     ("facts['registrations'] == 0", "facts['tool_calls'] > 0",
-     "facts['invocations'] <= 1", "facts['fills'] == 0"),
-    ("facts['invocations'] <= 1", "facts['fills'] == 0"),
+     "facts['invocations'] <= 1", "facts['max_position_notional_micro'] == 0"),
+    ("facts['invocations'] <= 1", "facts['max_position_notional_micro'] == 0"),
     ("facts['registrations'] >= 0",),
 ])
 def test_holdout_steps_follow_only_failing_decisions_and_survive_checkpoint(
@@ -248,7 +248,8 @@ def test_holdout_steps_follow_only_failing_decisions_and_survive_checkpoint(
         rt.predicates.register(name, "A behavioural constraint",
                                f"def resolve(facts):\n    return {expression}\n",
                                facts={"registrations": 1, "tool_calls": 0,
-                                      "invocations": 2, "fills": 1}, persist=lambda _p: None)
+                                      "invocations": 2, "max_position_notional_micro": 1},
+                               persist=lambda _p: None)
         entries.append(f"{name}@1")
     card = MetricCard("proxy", "care with scarce resources", "A proxy", "fraction",
                       MetricWindow("windows", 1, None), {"rule": "at least", "lo": 0.5},
@@ -273,7 +274,7 @@ def test_holdout_steps_follow_only_failing_decisions_and_survive_checkpoint(
     assert rt.window.decisions[handles[0]]["registrations"] == 1
     rt.window.ok = rt.window.invocations = rt.window.producer_returns = 3
     rt.window.revision_returns = revisions  # relief holds even when the pooled proxy fails
-    rt.window.fills = 1  # globally failing, but has no supported per-decision input
+    rt.window.max_position_notional_micro = 1  # A pool peak has no decision partition.
     rt.card_samples.windows.clear()
     rt._settle_priced(handles[0], channel="verdict", score=0.9,
                       definition_version="test", sampling_ref=None, cards="producer")
@@ -305,7 +306,7 @@ def test_holdout_steps_follow_only_failing_decisions_and_survive_checkpoint(
         if total else 0)
     if len(predicates) > 1:
         details = term["holdout_attributees"]
-        assert details[entries[-1]]["results"] == {h: None for h in handles[:2]}
+        assert details[entries[-1]]["results"] == {h: None for h in (*handles[:2], old)}
         assert details[entries[-2]]["attributees"] == []
     assert "closed_holdout_attribution" not in window_facts(rt.window)
     restored = decode(json.loads(json.dumps(encode(rt.window))))

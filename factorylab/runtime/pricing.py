@@ -224,10 +224,34 @@ class PricingMixin:
         """Every original decision has one contribution record per measurement window."""
         self.price_windows[self.window.index] = self.window
         self.price_origins.setdefault(handle, {"origin": self.window.index})
-        return self.window.decisions.setdefault(handle, {
+        sample = self.window.decisions.setdefault(handle, {
             "role": role, "cost": 0, "ok": 0, "invocations": 0, "tool_calls": 0,
             "notional_micro": 0,
         })
+        sample.pop("contribution_only", None)
+        return sample
+
+    def _record_behaviour(self, handle: str, *, supplemental: bool = False, **values) -> None:
+        """Known owners retain scalar or list evidence in the effect's window, once per call."""
+        # §II.b/§IV.a: ownership is evidence, never inferred from a window total.
+        contribution_only = (handle not in self.window.decisions
+                             or self.window.decisions[handle].get("contribution_only", False))
+        sample = self._contribution(handle, self._decision_role(handle))
+        if contribution_only:
+            sample["contribution_only"] = True
+        if supplemental:
+            sample = sample.setdefault("supplemental", {})
+        for key, value in values.items():
+            if isinstance(value, list):
+                sample.setdefault(key, []).extend(value)
+            elif key == "revised_decisions":
+                sample[key] = max(sample.get(key, 0), value)
+            else:
+                sample[key] = sample.get(key, 0) + value
+        self.ledger.append({"kind": "price.contribution", "handle": handle,
+                            "window": self.window.index,
+                            "role": self.window.decisions[handle]["role"], **values,
+                            **({"supplemental": True} if supplemental else {})})
 
     def _decision_role(self, handle: str) -> str:
         """The measurement scope a decision's return was, or would be, priced in."""
@@ -311,10 +335,10 @@ class PricingMixin:
             return
         notional = usd_to_micro(
             Decimal(str(payload["size"])) * Decimal(str(payload["px"])), rounding="nearest")
-        sample = self._contribution(handle, "producer")
-        self.ledger.append({"kind": "price.contribution", "handle": handle,
-                            "window": self.window.index, "notional_micro": notional})
-        sample["notional_micro"] += notional
+        self._contribution(handle, "producer")
+        self._record_behaviour(handle, notional_micro=notional, fills=1,
+                               realized_pnl_micro=usd_to_micro(
+                                   payload.get("realized_usd", "0"), rounding="nearest"))
         self.price_origins[handle]["turnover"] = self.window.index
 
     def _manage_reserve_window(self) -> None:
@@ -543,6 +567,7 @@ class PricingMixin:
             judges.setdefault(judge, []).append(float(ev.payload["verdict"]))
         elif ev.kind is EventKind.META_VERDICT:
             self.window.meta_verdicts.append(float(ev.payload["score"]))
+            self._record_behaviour(ev.payload["by"], meta_verdicts=[float(ev.payload["score"])])
         elif ev.kind is EventKind.MARKET_MID:
             self._observe_positions()
 
@@ -1074,18 +1099,33 @@ class PricingMixin:
         for kind, observation in (("returns", "revision_rate"), ("forecasts", "forecast_skill")):
             index = {}
             for row in _rows(samples, kind, observation):
-                index.setdefault((row["window"], row["handle"]), []).append(row)
+                owner = row.get("owner_handle") if kind == "forecasts" else row["handle"]
+                if owner is not None:
+                    index.setdefault((row["window"], owner), []).append(row)
             indexes.append(index)
         out = {}
-        # Recorded contribution keys define support generically; missing contributions
-        # to a counter recorded elsewhere in this window are zero, not another's total.
+        # These counters have owner-aware producers, including when no event occurred.
+        # Pool extrema have no such partition and retain scope_facts' unresolved value.
+        defaults = dict.fromkeys(("amendments_proposed", "amendments_activated",
+                                  "market_purchases", "registrations",
+                                  "registration_rejections", "fills", "notional_micro",
+                                  "realized_pnl_micro", "exposures_settled", "exposures_won"), 0)
+        defaults["meta_verdicts"] = []
         keys = BEHAVIOURAL_FACTS.intersection(
             key for sample in window.decisions.values() for key in sample)
-        for handle, sample in sorted(self._split_decisions(window).items()):
+        for handle, sample in sorted(self._holdout_decisions(window).items()):
             key = (window.index, handle)
             facts = scope_facts([samples.windows[-1]], indexes[0].get(key, []),
                                 indexes[1].get(key, []))
-            facts.update({key: sample.get(key, 0) for key in sorted(keys)})
+            facts.update({name: sample.get(name, value.copy() if isinstance(value, list) else value)
+                          for name, value in defaults.items()})
+            for name in sorted(keys):
+                if name == "revised_decisions":
+                    facts[name] = max(facts.get(name) or 0, sample.get(name, 0))
+                elif name not in defaults:
+                    facts[name] = sample.get(name, facts.get(name))
+            for name, value in sample.get("supplemental", {}).items():
+                facts[name] = (facts.get(name) or 0) + value
             out[handle] = facts
         return out
 
@@ -1106,10 +1146,11 @@ class PricingMixin:
         for cid, evidence in held.items():
             card = cards[cid]
             observation = normalise(card.observation)
-            eligible = {h: d for h, d in self._split_decisions(window).items()
-                        if (card.answers_for == "all" or
-                            (d.get("menu_roles") or {d["role"]: 1.0}).get(card.answers_for, 0) > 0)
-                        and self.price_origins.get(h, {}).get(
+            owners = {h: d for h, d in self._holdout_decisions(window).items()
+                      if (card.answers_for == "all" or
+                          (d.get("menu_roles") or {d["role"]: 1.0}).get(card.answers_for, 0) > 0)}
+            eligible = {h: d for h, d in owners.items()
+                        if self.price_origins.get(h, {}).get(
                             observation, self.price_origins.get(h, {}).get("origin"))
                         == window.index}
             predicates = {}
@@ -1122,7 +1163,7 @@ class PricingMixin:
                 predicate = self.predicates.get(name, int(version))
                 reads = behavioural_reads(predicate.code) if predicate and predicate.code else ()
                 results = {}
-                for handle in sorted(eligible):
+                for handle in sorted(owners):
                     if "decision_results" in evidence:
                         results[handle] = evidence["decision_results"].get(entry, {}).get(handle)
                     else:
@@ -1130,9 +1171,12 @@ class PricingMixin:
                         results[handle] = (self._resolve_holdout(entry, facts)
                                            if reads and all(facts.get(k) is not None for k in reads)
                                            else None)
-                attributees = sorted(h for h, value in results.items() if value is False)
+                known_owners = sorted(h for h, value in results.items() if value is False)
+                attributees = [h for h in known_owners if h in eligible]
                 step = self._resolution_step(cid)
                 predicates[entry] = {"results": results, "attributees": attributees,
+                                     "uncharged_owners": [h for h in known_owners
+                                                          if h not in eligible],
                                      "violation": step,
                                      "attributed_violation": step if attributees else 0.0}
                 if attributees:
@@ -1186,6 +1230,20 @@ class PricingMixin:
         reward of a decision, and there is no decision here to carry it).
         """
         window = self.window
+        for cid, attribution in window.closed_holdout_attribution.items():
+            for entry, evidence in attribution["predicates"].items():
+                if evidence["attributed_violation"] == 0 or evidence.get("uncharged_owners"):
+                    self.ledger.append({
+                        "kind": "price.unattributed", "card_id": cid,
+                        "predicate": entry, "window": window.index,
+                        "lambda": window.closed_prices.get(cid, 0.0),
+                        "violation": evidence["violation"],
+                        "attributed_violation": evidence["attributed_violation"],
+                        "reason": ("owner_outside_price_window" if evidence.get("uncharged_owners")
+                                   else "no_supported_owner"),
+                        "uncharged_owners": evidence.get("uncharged_owners", []),
+                        "ts": self.clock.now_ns,
+                    })
         for card in window.closed_cards:
             per = card.window.per
             price = window.closed_prices.get(card.id, 0.0)
@@ -1473,7 +1531,15 @@ class PricingMixin:
 
     def _split_decisions(self, window) -> dict[str, dict]:
         """The window's decisions a card's penalty is split across (``_in_split``)."""
-        return {h: d for h, d in window.decisions.items() if self._in_split(h, window)}
+        return {h: d for h, d in window.decisions.items()
+                if not d.get("contribution_only") and self._in_split(h, window)}
+
+    def _holdout_decisions(self, window) -> dict[str, dict]:
+        """Owner-only evidence participates in holdouts without diluting proxy denominators."""
+        owners = dict(self._split_decisions(window))
+        owners.update((h, d) for h, d in window.decisions.items()
+                      if d.get("contribution_only") and self._in_split(h, window))
+        return owners
 
     def _decision_share(self, window, handle, observation, role, region, value, *,
                         as_role: str | None = None) -> float:

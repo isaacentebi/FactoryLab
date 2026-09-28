@@ -2196,6 +2196,7 @@ class FeedbackMixin:
             self.stats.censored += 1
             self.window.outcomes += 1
             self.window.censored += 1
+            self._record_behaviour(rec.handle, supplemental=True, outcomes=1, censored=1)
             return
         self._settle_priced(rec.handle, channel=rec.channel, score=reward,
                             definition_version=DEF_EVALUATION, sampling_ref=rec.graded_by,
@@ -2249,6 +2250,7 @@ class FeedbackMixin:
                 self.stats.censored += 1
                 self.window.outcomes += 1
                 self.window.censored += 1
+                self._record_behaviour(handle, supplemental=True, outcomes=1, censored=1)
                 continue
             scored = [entry if isinstance(entry, list) else [None, entry] for entry in scores]
             consequences = [float(s) for _judge, s in scored]
@@ -2257,6 +2259,8 @@ class FeedbackMixin:
             self.ledger.append({"kind": "exposure.settled", "handle": handle, "score": score,
                                 "judge_consequences": consequences,
                                 "judge_ordinary": ordinary, "ts": self.clock.now_ns})
+            # §II.b/IV.a: retain the measured owner's facts before reward pricing.
+            self._record_behaviour(handle, exposures_settled=1, exposures_won=int(score > 0.5))
             self._settle_priced(handle, channel=CH_EXPOSURE, score=score,
                                 definition_version=DEF_EXPOSURE, sampling_ref=None,
                                 cards="antagonist")
@@ -2328,6 +2332,7 @@ class FeedbackMixin:
                 self.stats.censored += 1
                 self.window.outcomes += 1
                 self.window.censored += 1
+                self._record_behaviour(handle, supplemental=True, outcomes=1, censored=1)
                 continue
             score = counter_score(rec["q"], rec["judge_q"], y)
             seq = self.ledger.append({
@@ -2362,6 +2367,7 @@ class FeedbackMixin:
         self.stats.censored += 1
         self.window.outcomes += 1
         self.window.censored += 1
+        self._record_behaviour(handle, supplemental=True, outcomes=1, censored=1)
 
     def _tick_age(self, judgement: PendingJudgement) -> int:
         """World ticks consumed since this judgement opened."""
@@ -2545,6 +2551,7 @@ class FeedbackMixin:
                 self.stats.censored += 1
                 self.window.outcomes += 1
                 self.window.censored += 1
+                self._record_behaviour(p.handle, supplemental=True, outcomes=1, censored=1)
             del self.pending[p.handle]
 
     def _close_assembly_rounds(self) -> None:

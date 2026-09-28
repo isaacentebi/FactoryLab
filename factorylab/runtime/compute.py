@@ -914,6 +914,7 @@ class ComputeMixin:
             self.unresolved_x402[item["reservation_id"]] = dict(item)
         if item["kind"] == "observation.market_purchase":
             self.window.market_purchases += 1
+            self._record_behaviour(item["handle"], market_purchases=1)
 
     def _reconcile_x402(self) -> None:
         """Observe the reserve after uncertain debits without inventing payment attribution."""

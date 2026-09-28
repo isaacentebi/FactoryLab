@@ -64,6 +64,27 @@ def attribution_runtime(field="notional_micro", count=2):
     return rt
 
 
+@pytest.mark.parametrize("field", ["notional_micro", "amendments_proposed", "market_purchases"])
+def test_all_recorded_behavioural_contributions_are_attributed_once(field):
+    rt = attribution_runtime(field)
+    attribution = rt._holdout_attribution({"c": {"results": {"hold@1": False}}})["c"]
+    assert attribution["violation"] == 0.02
+    assert attribution["shares"] == {"0": 0.5, "1": 0.5}
+
+
+def test_unsupported_holdout_has_an_explicit_ownerless_ledger():
+    rt = attribution_runtime("max_position_notional_micro")
+    for sample in rt.window.decisions.values():
+        sample.pop("max_position_notional_micro")
+    rt.window.closed_holdout_attribution = rt._holdout_attribution(
+        {"c": {"results": {"hold@1": False}}})
+    rt._ledger_unattributed()
+    row, = rt.ledger._recovery_items()
+    assert row["kind"] == "price.unattributed"
+    assert row["predicate"] == "hold@1"
+    assert row["reason"] == "no_supported_owner"
+
+
 def test_mixed_menu_abstention_bears_each_role_holdout_at_ordinary_weights():
     rt = attribution_runtime(count=1)
     rt.window.decisions["0"].update(role="evaluator",
