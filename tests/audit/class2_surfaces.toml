@@ -633,6 +633,7 @@ sources = [
   "factorylab/world/exchange.py::FakeExchange.cancel",
   "factorylab/world/exchange.py::FakeExchange.class_transfer",
   "factorylab/world/exchange.py::FakeExchange.funding_history",
+  "factorylab/world/exchange.py::FakeExchange.order_book",
   "factorylab/world/exchange.py::FakeExchange.set_leverage",
   "factorylab/world/exchange.py::FakeExchange.vault_create",
   "factorylab/world/exchange.py::FakeExchange.vault_details",
