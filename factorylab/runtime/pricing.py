@@ -1332,7 +1332,9 @@ class PricingMixin:
             if card.id not in values:
                 fact = (self.card_held if window.closed_values is None
                         else window.closed_held).get(card.id)
-                if (not abstaining or fact is None
+                live_card = next((c for c in self.charter.cards if c.id == card.id), None)
+                if (not abstaining or fact is None or live_card is None
+                        or fact["identity"] != list(metric_identity(live_card))
                         or fact["identity"] != list(metric_identity(card))
                         or fact["source_window"] >= window.index):
                     continue

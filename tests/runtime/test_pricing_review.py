@@ -22,6 +22,7 @@ def test_held_raw_measurement_uses_current_region(old_floor, floor, expected, cl
             "region": asdict(CardRegion("c", "min", old_floor, None, 1.0)),
             "violation": max(0, old_floor - 0.8)}
     rt = PricingMixin()
+    rt.charter = SimpleNamespace(cards=(card,))
     rt.price_origins = {}
     rt.card_samples = SimpleNamespace(values={})
     rt.regions = {"c": CardRegion("c", "min", floor, None, 1.0)}
