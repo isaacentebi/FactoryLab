@@ -23,6 +23,11 @@ OTHER = FIXTURES / "live4-head.events.json"
 TICK = 10 * 10**9
 
 
+def test_default_world_is_the_tracked_rehearsal_manifest():
+    assert fastloop.DEFAULT_WORLD == WORLD
+    assert fastloop.DEFAULT_WORLD.is_file()
+
+
 def _short_tape(path, ticks, *, fees=False):
     """The fixture tape cut to its first ``ticks`` recorded ticks, written compact; with
     ``fees``, its venue states the account's fee rates at its first instant as a later

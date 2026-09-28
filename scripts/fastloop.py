@@ -96,7 +96,7 @@ from factorylab.world.scripted import (  # noqa: E402
 from factorylab.world.tape import Tape, TapeVenue  # noqa: E402
 from scripts import edition4_rehearsal as rehearsal  # noqa: E402
 
-DEFAULT_WORLD = ROOT / "work/population-pr121/world-edition4-rehearsal.toml"
+DEFAULT_WORLD = ROOT / "worlds/edition6-testnet-rehearsal.toml"
 DEFAULT_OUT = ROOT / "work/fastloop"
 
 
