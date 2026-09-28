@@ -43,7 +43,12 @@ from factorylab.cortex.request import (
 from factorylab.cortex.sandbox import MAX_PROGRAM_TIMEOUT_S
 from factorylab.kernel.artifacts import ArtifactError
 from factorylab.kernel.ledger import utf8_text
-from factorylab.world.metering import BillingUncertain, Infeasible, MeteredModel
+from factorylab.world.metering import (
+    BillingUncertain,
+    Infeasible,
+    MeteredModel,
+    provider_failure_diagnostic,
+)
 from factorylab.world.models import ModelRequest
 
 SEED_SYSTEM_PROMPT = (
@@ -245,11 +250,13 @@ class Assembly:
         except BillingUncertain as exc:
             # The call was made and may be billed: the provider was handed the request.
             return Return(req.handle, {"reason": str(exc)}, exc.cost, "failed",
-                          delivered=True)
+                          delivered=True, provider=provider_failure_diagnostic(exc))
         except Exception as exc:
             # Refused before any bill (unbilled, or raised before the meter ran the
-            # call): nothing consumed the request.
-            return Return(req.handle, {"reason": type(exc).__name__}, 0, "failed")
+            # call): nothing consumed the request. Chapter II §I.b keeps the operator
+            # diagnostic outside outputs, which cross contract boundaries.
+            return Return(req.handle, {"reason": type(exc).__name__}, 0, "failed",
+                          provider=provider_failure_diagnostic(exc))
         # From here the provider answered: every return below was delivered.
         resp = metered.result
         cost = metered.cost

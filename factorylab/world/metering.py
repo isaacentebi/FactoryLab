@@ -51,6 +51,24 @@ class VeniceError(ProviderVeniceError, UnbilledFailure):
     """An unbilled Venice failure retains its provider class name in invocations."""
 
 
+def provider_failure_diagnostic(exc: Exception) -> dict[str, Any]:
+    """Only adapter HTTP facts enter the operator diary, never seat-facing reasons."""
+    if isinstance(exc, BillingUncertain):
+        exc = exc.cause
+    if not isinstance(exc, (ProviderOpenRouterError, ProviderVeniceError)):
+        return {}
+    if hasattr(exc, "provider_diagnostic"):
+        return dict(exc.provider_diagnostic)
+    if type(exc.status) is not int:
+        return {}
+    diagnostic = {"http_status": exc.status}
+    body = getattr(exc, "body", None)
+    if isinstance(body, str):
+        diagnostic["provider_message"] = " ".join(
+            body.encode("utf-8", errors="replace").decode("utf-8").split())[:500]
+    return diagnostic
+
+
 def classify_provider_failure(exc: Exception) -> Exception:
     """Only definitive pre-dispatch evidence turns a provider error into an unbilled one."""
     if isinstance(exc, UnbilledFailure):
@@ -66,7 +84,10 @@ def classify_provider_failure(exc: Exception) -> Exception:
     if not (unsent or rejected):
         return exc
     cls = OpenRouterError if isinstance(exc, ProviderOpenRouterError) else VeniceError
-    return cls(exc.status, "Request failed before generation", sent=exc.sent)
+    failure = cls(exc.status, "Request failed before generation", sent=exc.sent)
+    # Chapter II §I.b: operator evidence stays separate from the seat's failure reason.
+    failure.provider_diagnostic = provider_failure_diagnostic(exc)
+    return failure
 
 
 class BillingUncertain(RuntimeError):

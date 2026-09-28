@@ -122,15 +122,17 @@ def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None,
 
 
 class VeniceError(Exception):
-    """Provider failures retain HTTP status but never transport bodies or credentials.
+    """Provider failures retain HTTP status and optional sanitized operator evidence.
 
     ``sent`` is False only with definitive evidence the request body never left this
     process; it stays True whenever the provider may already have billed the call.
     """
 
-    def __init__(self, status: int | None, message: str, *, sent: bool = True) -> None:
+    def __init__(self, status: int | None, message: str, *, sent: bool = True,
+                 body: str | None = None) -> None:
         self.status = status
         self.sent = sent
+        self.body = body
         super().__init__(f"Venice error ({status}): {message}")
 
 
@@ -168,6 +170,11 @@ class VeniceProvider:
         # The model ids whose manifest ``contract`` is ``json_schema`` (Chapter II §II.b).
         self._schema_models = frozenset(schema_models)
 
+    def _redact(self, body: str) -> str:
+        """Operator error evidence excludes either credential accepted by this adapter."""
+        return redact(body, (os.environ.get(self._key_env, ""),
+                             os.environ.get("RESERVE_PRIVATE_KEY", "")))
+
     def _default_transport(self, method: str, path: str, payload: dict | None) -> dict:
         key = os.environ.get(self._key_env)
         if key:
@@ -181,7 +188,8 @@ class VeniceProvider:
         response = http_request(method, self._base_url + path, payload, headers,
                                 timeout=self._call_timeout)
         if not 200 <= response.status < 300:
-            raise VeniceError(response.status, "HTTP request failed")
+            raise VeniceError(response.status, "HTTP request failed",
+                              body=self._redact(json.dumps(response.body, default=str)))
         return response.body
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
@@ -196,12 +204,19 @@ class VeniceProvider:
                     ),
                 )
             except error.HTTPError as exc:
-                exc.close()
-                raise VeniceError(exc.code, "HTTP request failed") from None
+                try:
+                    body = exc.read().decode("utf-8", errors="replace")
+                except Exception:
+                    body = "HTTP error body unavailable"
+                finally:
+                    exc.close()
+                raise VeniceError(exc.code, "HTTP request failed",
+                                  body=self._redact(body)) from None
             except VeniceError as exc:
                 # Even injected provider exceptions must not echo request credentials.
                 raise VeniceError(
-                    exc.status, "Request failed; check authentication and status", sent=exc.sent
+                    exc.status, "Request failed; check authentication and status", sent=exc.sent,
+                    body=self._redact(exc.body) if isinstance(exc.body, str) else None,
                 ) from None
             except (error.URLError, ConnectionError, TimeoutError) as exc:
                 if method != "GET" or attempt == 1:
