@@ -36,7 +36,7 @@ def fill(ts):
 
 def cursor(venue):
     result = FillCursor(Ledger(), start_ns=0, measured=True)
-    result.initialize(venue.account(), now_ns=0)
+    result.initialize(replace(venue.account(), observed_at_ns=0), now_ns=0)
     return result
 
 
@@ -266,21 +266,39 @@ def test_failed_baseline_retries_after_checkpoint_without_rebooking():
     saved = decode(encode({k: v for k, v in vars(c).items() if k != 'ledger'}))
     restored = object.__new__(FillCursor)
     vars(restored).update(saved, ledger=c.ledger)
-    venue.account = fresh
+    venue.account = lambda: replace(fresh(), observed_at_ns=200)
     assert restored.poll(venue, now_ns=200) == []
     assert restored.expected_positions == {'perp:BTC': '1'}
     assert restored.through_ns == 200
 
 
-def test_retry_baseline_keeps_pre_anchor_execution_delivery():
+def test_retry_baseline_absorbs_pre_anchor_nonfactory_execution():
     venue = Venue(fees=False)
     c = FillCursor(Ledger(), start_ns=0, measured=True)
+    fresh = venue.account
+    venue.account = lambda: (_ for _ in ()).throw(RuntimeError('offline'))
+    assert c.poll(venue, now_ns=50) == []
+    assert c.baseline_ns is None
+    assert c.through_ns is None
     venue.executed = [fill(100)]
+    venue.account = lambda: replace(fresh(), observed_at_ns=200)
     assert c.poll(venue, now_ns=200) == []
+    assert c.baseline_ns == 200
+    assert c.through_ns == 200
     venue.shown = venue.executed
-    assert [ts for ts, _ in c.poll(venue, now_ns=210)] == [100]
+    venue.account = lambda: replace(fresh(), observed_at_ns=210)
+    # The measured overlap encounters the delayed row; exhaustive preanchor discovery
+    # is not promised after the account anchor has absorbed outside exposure.
+    assert c.poll(venue, now_ns=210, tick_ns=100) == []
     assert c.expected_positions == {'perp:BTC': '1'}
-    assert c.poll(venue, now_ns=220) == []
+    assert c.through_ns == 210
+    venue.account = lambda: replace(fresh(), observed_at_ns=220)
+    assert c.poll(venue, now_ns=220, tick_ns=100) == []
+    absorbed = [r for r in c.ledger._recovery_items()
+                if r['kind'] == 'consequence.fill_absorbed']
+    assert len(absorbed) == 1
+    assert absorbed[0]['baseline_ns'] == 200
+    assert absorbed[0]['key'] == [100, 'venue', '100']
 
 
 def test_backward_poll_replays_identity_append_before_propagation():
@@ -293,7 +311,7 @@ def test_backward_poll_replays_identity_append_before_propagation():
     venue.account = lambda: replace(raw_account(), observed_at_ns=1000)
     ledger = Ledger(clock_ns=lambda: 0)
     c = FillCursor(ledger, start_ns=0, measured=True)
-    c.initialize(venue.account(), now_ns=0)
+    c.initialize(replace(venue.account(), observed_at_ns=0), now_ns=0)
     venue.shown = venue.executed = [fill(100)]
     c.poll(venue, now_ns=110)
     c.poll(venue, now_ns=200)

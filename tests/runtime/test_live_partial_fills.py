@@ -59,6 +59,7 @@ def test_an_order_filled_in_three_parts_is_booked_three_times_once_each(same, re
 def test_live_missing_baseline_stays_unknown_even_with_timed_fills():
     cursor = FillCursor(Ledger(), start_ns=0, measured=True)
     venue = PartialVenue()
+    venue.account = lambda: (_ for _ in ()).throw(RuntimeError('account unavailable'))
     venue.shown = [replace(_part(100, same=True), observed_at_ns=110)]
     assert len(cursor.poll(venue, now_ns=110)) == 1
     assert cursor.propagation_bound_ns == 10

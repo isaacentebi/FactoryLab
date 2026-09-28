@@ -935,6 +935,7 @@ class FillCursor:
 
     def initialize(self, account, *, now_ns: int) -> None:
         """Anchor accounting before executions; never infer a missing historical baseline."""
+        now_ns = self.observed_ns(account)
         positions, cash = self._account_facts(account)
         fees = (None if account.cumulative_fees_usd is None
                 else self._audit_micro(account.cumulative_fees_usd))
@@ -1051,7 +1052,8 @@ class FillCursor:
         # Chapter II §III.b: retained history cannot supply missing execution evidence;
         # exact independent order/position agreement can still close a truncated read.
         retention_unknown = not history_complete and (not orders_complete or not matched)
-        complete = matched and orders_complete and identified and not retention_unknown
+        complete = (matched and orders_complete and identified and not retention_unknown
+                    and self.baseline_ns is not None and now_ns >= self.baseline_ns)
         self.ledger.append({"kind": "consequence.fill_reconciliation", "read_ns": now_ns,
                             "matched": matched,
                             "reason": (reason or ("execution evidence unavailable or "
@@ -1099,7 +1101,7 @@ class FillCursor:
         if self.measured and self.expected_positions is None:
             try:
                 account = exchange.account()
-                self.initialize(account, now_ns=account.observed_at_ns or now_ns or self.launch_ns)
+                self.initialize(account, now_ns=now_ns if now_ns is not None else self.launch_ns)
             except (RuntimeError, ValueError, AttributeError, ArithmeticError):
                 pass
         read_start = self.since_ns
@@ -1107,7 +1109,7 @@ class FillCursor:
             floor = min((o["submitted_ns"] for o in self.orders.values()),
                         default=self.since_ns)
             if self.baseline_ns is not None and self.baseline_ns > self.launch_ns:
-                floor = self.launch_ns  # Pre-anchor executions still require delivery.
+                floor = self.launch_ns  # Pre-anchor observations remain auditable.
             if self.incomplete_since_ns is not None:
                 floor = min(floor, self.incomplete_since_ns)
             read_start = max(self.launch_ns, floor - (self.propagation_bound_ns or 0)
@@ -1164,6 +1166,14 @@ class FillCursor:
                             order.setdefault("identities", []).append(key)
                     self.ledger.append({"kind": "consequence.fill_identity", "key": list(key),
                                         "count": counts[key]})
+                if (self.measured and self.baseline_ns is not None
+                        and fill.ts_ns < self.baseline_ns
+                        and not any(o["oid"] == fill.order_id for o in self.orders.values())):
+                    # Chapter II §III.b: the anchor already owns this outside account fact;
+                    # its durable identity is evidence, not a second inventory movement.
+                    self.ledger.append({"kind": "consequence.fill_absorbed", "key": list(key),
+                                        "baseline_ns": self.baseline_ns, "fill": payload})
+                    continue
                 # Its own venue time, outside the cursor's identity key (R10-o).
                 result.append((fill.ts_ns, {**payload, "fill_ns": fill.ts_ns,
                                            "crossed": getattr(fill, "crossed", None)}))

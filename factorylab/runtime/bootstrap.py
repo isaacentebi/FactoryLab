@@ -419,9 +419,10 @@ class BootstrapMixin:
         if self.live:
             # Chapter II §III.b: an independent pre-execution account anchors fills.
             try:
-                self.consequence_fills.initialize(self.exchange.account(), now_ns=self.clock.now_ns)
+                account = self.exchange.account()
+                self.consequence_fills.initialize(account, now_ns=self.clock.now_ns)
             except (RuntimeError, ValueError, AttributeError, ArithmeticError):
-                pass  # FillCursor retries; pre-anchor executions remain deliverable.
+                pass  # FillCursor retries; venue writes await an account anchor.
         # Every answered venue read is kept for the rest of its tick, so an identical
         # seat read is answered without a request (``ComputeMixin._tick_answer``).
         self._tick_reads = None

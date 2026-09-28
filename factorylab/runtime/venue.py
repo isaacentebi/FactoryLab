@@ -1311,6 +1311,10 @@ class VenueMixin:
 
     def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
         """Every venue write has a durable intent and a stable identity before submission."""
+        # Chapter II §II.b: no execution can precede its independent accounting anchor.
+        cursor = self.consequence_fills
+        if operation != "venue.cancel" and cursor.measured and cursor.baseline_ns is None:
+            return self._refuse_order(handle, "fill account baseline unavailable")
         if self._class_transfer_pending() and operation != "venue.cancel":
             return self._refuse_order(handle, "class transfer awaiting receipt")
         if self._tape_ended():

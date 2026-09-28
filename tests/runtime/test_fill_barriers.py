@@ -68,10 +68,14 @@ def test_incomplete_history_is_audited_without_globally_blocking_barrier():
     rows = c.ledger._recovery_items()
     row = next(r for r in reversed(rows) if r['kind'] == 'consequence.fill_reconciliation')
     assert row['history_complete'] is False
+    assert row['retention_unknown'] is True
     assert row['reason'] == 'execution evidence unavailable or outside retained history'
     venue.lookup = lambda *a, **kw: status('o', size=1)
     c.poll(venue, now_ns=200)
     assert c.through_ns == 200
+    row = next(r for r in reversed(c.ledger._recovery_items())
+               if r['kind'] == 'consequence.fill_reconciliation')
+    assert row['retention_unknown'] is False
 
 
 def test_missing_observation_return_clock_is_replayed(monkeypatch):
@@ -104,3 +108,48 @@ def test_missing_observation_return_clock_is_replayed(monkeypatch):
     restored.poll(venue, now_ns=200)
     assert restored.through_ns == 200
     assert replay.peek() is None
+
+
+@pytest.mark.parametrize('operation', ['venue.place_market', 'venue.place_limit', 'venue.close'])
+def test_order_write_requires_live_account_anchor(operation):
+    from factorylab.runtime.venue import VenueMixin
+
+    c = FillCursor(Ledger(), start_ns=100, measured=True)
+    rt = SimpleNamespace(consequence_fills=c,
+                         _refuse_order=lambda h, reason: {'status': 'refused', 'reason': reason})
+    result = VenueMixin._venue_write(rt, 'h', operation, {}, slot='output')
+    assert result == {'status': 'refused', 'reason': 'fill account baseline unavailable'}
+
+
+@pytest.mark.parametrize('observed,expected', [(200, 200), (None, 250), (0, 0)])
+def test_baseline_uses_snapshot_or_actual_return(monkeypatch, observed, expected):
+    import time
+    monkeypatch.setattr(time, 'time_ns', lambda: 250)
+    c = FillCursor(Ledger(), start_ns=0, measured=True)
+    c.initialize(account(observed=observed), now_ns=100)
+    assert c.baseline_ns == expected
+
+
+def test_preanchor_nonfactory_execution_is_absorbed_once_not_delivered():
+    c = FillCursor(Ledger(), start_ns=0, measured=True)
+    c.initialize(account(observed=200, size=1), now_ns=100)
+    f = Fill('external', 'BTC', True, D(1), D(10), D(0), 150, venue_id='old')
+    venue = SimpleNamespace(fills=lambda start: [f], account=lambda: account(observed=300, size=1))
+    assert c.poll(venue, now_ns=199) == []
+    assert c.through_ns is None
+    assert c.poll(venue, now_ns=200) == []
+    assert c.through_ns == 200
+    assert c.poll(venue, now_ns=210) == []
+    absorbed = [r for r in c.ledger._recovery_items() if r['kind'] == 'consequence.fill_absorbed']
+    assert len(absorbed) == 1
+    assert absorbed[0]['baseline_ns'] == 200
+    assert c.expected_positions == {'perp:BTC': '1'}
+
+
+def test_execution_at_anchor_is_not_preanchor():
+    c = FillCursor(Ledger(), start_ns=0, measured=True)
+    c.initialize(account(observed=200, size=1), now_ns=100)
+    f = Fill('external', 'BTC', True, D(1), D(10), D(0), 200, venue_id='boundary')
+    venue = SimpleNamespace(fills=lambda start: [f], account=lambda: account(size=1))
+    assert [ts for ts, _ in c.poll(venue, now_ns=200)] == [200]
+    assert c.poll(venue, now_ns=200) == []
