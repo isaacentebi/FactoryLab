@@ -1368,12 +1368,20 @@ class HyperliquidExchange:
         # every caller already reads an unavailable price as unavailable, and a
         # stale mid in a dict is indistinguishable from a fresh one.
         raw = self._guarded("all_mids", self._info.all_mids)
+        try:
+            if not isinstance(raw, dict):
+                raise ValueError("invalid mids response")
+            mids = {c: Decimal(str(raw[self._wire_coin(c)]))
+                    for c in (*getattr(self, "_listed_coins", self.coins),
+                              *getattr(self, "_spot_names", {}))
+                    if self._wire_coin(c) in raw}
+            if any(not mid.is_finite() or mid <= 0 for mid in mids.values()):
+                raise ValueError("invalid mid")
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            raise VenueUnavailable("mids normalization failed") from exc
         self.__dict__["_last_mids_ns"] = time.time_ns()
-        self._last_mids = {c: Decimal(str(raw[self._wire_coin(c)]))
-                           for c in (*getattr(self, "_listed_coins", self.coins),
-                                     *getattr(self, "_spot_names", {}))
-                           if self._wire_coin(c) in raw}
-        return dict(self._last_mids)
+        self._last_mids = mids
+        return dict(mids)
 
     def funding(self) -> list[FundingEvent]:
         """The venue's current funding rates; raises VenueUnavailable when it did not answer.
@@ -1642,7 +1650,7 @@ class HyperliquidExchange:
                 rows[key] = f
                 try:
                     stamps.append(int(f["time"]))
-                except (KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError, ArithmeticError):
                     continue
             if len(page) < FILLS_PAGE:
                 break
@@ -1721,23 +1729,28 @@ class HyperliquidExchange:
         """Return at most depth levels per side, bids descending and asks ascending."""
         _check_count(depth, 20)
         raw = self._guarded("l2_snapshot", lambda: self._info.l2_snapshot(self._wire_coin(coin)))
-        sides = [
-            sorted(
-                [
-                    {"price": Decimal(str(level["px"])), "size": Decimal(str(level["sz"]))}
-                    for level in levels
-                ],
-                key=lambda level: level["price"],
-                reverse=index == 0,
-            )[:depth]
-            for index, levels in enumerate(raw["levels"])
-        ]
-        return {
-            "coin": coin,
-            "ts_ns": int(raw["time"]) * NS_PER_MS,
-            "bids": sides[0],
-            "asks": sides[1],
-        }
+        try:
+            if not isinstance(raw["levels"], list) or len(raw["levels"]) != 2:
+                raise ValueError("invalid book sides")
+            sides = []
+            for index, levels in enumerate(raw["levels"]):
+                if not isinstance(levels, list):
+                    raise ValueError("invalid book levels")
+                side = []
+                for level in levels:
+                    price, size = Decimal(str(level["px"])), Decimal(str(level["sz"]))
+                    if not price.is_finite() or not size.is_finite() or price <= 0 or size < 0:
+                        raise ValueError("invalid book level")
+                    side.append({"price": price, "size": size})
+                sides.append(sorted(side, key=lambda level: level["price"],
+                                    reverse=index == 0)[:depth])
+            stamp = int(raw["time"]) * NS_PER_MS
+            if stamp < 0:
+                raise ValueError("invalid book timestamp")
+            return {"coin": coin, "ts_ns": stamp, "bids": sides[0], "asks": sides[1]}
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            # Chapter II §II.b/§III.b: malformed liquidity is not a measured fact.
+            raise VenueUnavailable("book normalization failed") from exc
 
     def settled_funding_history(self, coin: str, since_ns: int,
                                 until_ns: int) -> list[FundingEvent]:
@@ -1759,11 +1772,15 @@ class HyperliquidExchange:
             if not isinstance(raw, list):
                 raise ValueError("invalid settled funding response")
             for row in raw:
-                stamp = int(row["time"]) * NS_PER_MS
-                rate = Decimal(str(row["fundingRate"]))
+                try:
+                    stamp = int(row["time"]) * NS_PER_MS
+                    rate = Decimal(str(row["fundingRate"]))
+                    if not rate.is_finite() or stamp < 0:
+                        raise ValueError("invalid settled funding boundary")
+                except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+                    # Chapter II §III.b: no partial batch can advance measured evidence.
+                    raise VenueUnavailable("settled funding normalization failed") from exc
                 boundary = stamp - stamp % interval
-                if not rate.is_finite() or stamp < 0:
-                    raise ValueError("invalid settled funding boundary")
                 if since_ns <= boundary <= until_ns:
                     previous = rows.get(boundary)
                     if previous is None or stamp >= previous.published_at_ns:

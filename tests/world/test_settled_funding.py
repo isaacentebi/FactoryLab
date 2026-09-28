@@ -7,7 +7,12 @@ import pytest
 from factorylab.runtime.feedback import FeedbackMixin
 from factorylab.runtime.grounded import advance_funding, funding_due, opportunity_cost
 from factorylab.runtime.live import LiveVenue
-from factorylab.world.exchange import NS_PER_HOUR, FundingEvent, HyperliquidExchange
+from factorylab.world.exchange import (
+    NS_PER_HOUR,
+    FundingEvent,
+    HyperliquidExchange,
+    VenueUnavailable,
+)
 
 H = NS_PER_HOUR
 
@@ -87,6 +92,136 @@ def test_live_named_outcome_waits_for_backdated_settled_rate(missing):
     # Chapter II §III.b: old evidence is still requested, independently of
     # forward reads and other exact-boundary gap retries.
     assert any(start <= H // 1_000_000 <= end for _, start, end in calls)
+
+
+@pytest.mark.parametrize("bad_row", [
+    {}, {"time": 0}, {"fundingRate": "0.001"},
+    {"time": None, "fundingRate": "0.001"},
+    {"time": [], "fundingRate": "0.001"},
+    {"time": 0, "fundingRate": {}},
+    {"time": "Infinity", "fundingRate": "0.001"},
+    None, [], "not a row",
+])
+def test_malformed_settlement_keeps_live_cursor_and_recovers(bad_row):
+    """Chapter II §III.b/§II.b: malformed evidence is not a settled outside fact."""
+    exchange = object.__new__(HyperliquidExchange)
+    exchange.name = "synthetic-live"
+    good = {"time": H // 1_000_000, "fundingRate": "0.001"}
+    published = [good, bad_row]
+    calls = []
+
+    def history(coin, start, end):
+        calls.append((start, end))
+        return published
+
+    exchange._info = SimpleNamespace(
+        funding_history=history,
+        l2_snapshot=lambda coin: {"time": 0, "levels": [[], []]})
+    exchange._guarded = lambda name, call: call()
+    exchange.mids = lambda: {"BTC": Decimal(100)}
+    exchange.funding = lambda: [FundingEvent("BTC", Decimal("0.09"), None, 2 * H)]
+    exchange.funding_payments = lambda since: []
+    venue = LiveVenue(exchange)
+    venue.through["settled:BTC"] = H
+    events = venue.on_tick(2 * H)
+    assert not any(event.payload.get("settled") for event in events)
+    assert venue.through["settled:BTC"] == H
+    assert venue.settled_emitted["BTC"] == {}
+    published = [good]
+    events = venue.on_tick(2 * H)
+    settled = [event for event in events if event.payload.get("settled")]
+    assert len(settled) == 1
+    assert settled[0].payload["rate"] == "0.001"
+    assert settled[0].payload["funding_ns"] == H
+    assert venue.through["settled:BTC"] == 2 * H
+    assert calls[0] == calls[1]
+
+
+@pytest.mark.parametrize("raw", [None, {}, {"levels": []},
+    {"time": 0, "levels": [[], []]},
+    {"time": 0, "levels": [[{}], []]},
+    {"time": 0, "levels": [[None], []]},
+    {"time": [], "levels": [[], []]},
+    {"time": 0, "levels": [[{"px": "NaN", "sz": "1"}], []]},
+])
+def test_book_parser_normalizes_malformed_response(raw):
+    exchange = object.__new__(HyperliquidExchange)
+    exchange._guarded = lambda name, call: raw
+    if raw == {"time": 0, "levels": [[], []]}:
+        assert exchange.order_book("BTC", 20)["bids"] == []
+    else:
+        with pytest.raises(VenueUnavailable):
+            exchange.order_book("BTC", 20)
+
+
+def test_malformed_book_does_not_abort_tick_or_block_settlement_retry():
+    exchange = object.__new__(HyperliquidExchange)
+    exchange.name = "synthetic-live"
+    book = {"levels": []}
+    exchange._info = SimpleNamespace(
+        l2_snapshot=lambda coin: book,
+        funding_history=lambda *args: [{"time": H // 1_000_000, "fundingRate": "0.001"}])
+    exchange._guarded = lambda name, call: call()
+    exchange.mids = lambda: {"BTC": Decimal(100)}
+    exchange.funding = lambda: [FundingEvent("BTC", Decimal("0.09"), None, H)]
+    exchange.funding_payments = lambda since: []
+    venue = LiveVenue(exchange)
+    assert any(event.payload.get("settled") for event in venue.on_tick(H))
+    book = {"time": H // 1_000_000, "levels": [[], []]}
+    venue.on_tick(H + 1)
+    assert exchange.order_book("BTC", 20)["ts_ns"] == H
+
+
+@pytest.mark.parametrize("raw", [None, [], {"BTC": None}, {"BTC": "NaN"}])
+def test_malformed_mids_do_not_refresh_cache(raw):
+    exchange = object.__new__(HyperliquidExchange)
+    exchange.coins = ("BTC",)
+    exchange._last_mids = {"BTC": Decimal(100)}
+    exchange._last_mids_ns = 1
+    exchange._info = SimpleNamespace(all_mids=lambda: raw)
+    exchange._guarded = lambda name, call: call()
+    with pytest.raises(VenueUnavailable):
+        exchange.mids()
+    assert exchange._last_mids == {"BTC": Decimal(100)}
+    assert exchange._last_mids_ns == 1
+
+
+@pytest.mark.parametrize("raw", [None, {}, [None], [{"time": float("inf")}],
+    [{"time": 0, "coin": [], "tid": 1}]])
+def test_malformed_fills_are_unavailable(raw):
+    exchange = object.__new__(HyperliquidExchange)
+    exchange._address = "synthetic"
+    exchange._guarded = lambda name, call: raw
+    with pytest.raises(VenueUnavailable):
+        exchange.fills(0)
+
+
+@pytest.mark.parametrize("raw", [None, [], {}, {"order": None, "status": "order"},
+    {"order": {"order": {}, "status": []}, "status": "order"}])
+def test_malformed_order_status_remains_uncertain(raw):
+    exchange = object.__new__(HyperliquidExchange)
+    exchange._address = "synthetic"
+    exchange._info = SimpleNamespace(query_order_by_oid=lambda *args: raw)
+    assert exchange.lookup("unused", order_id="1").status == "uncertain"
+
+
+@pytest.mark.parametrize("raw", [None, [], {}, {"userCrossRate": [], "userAddRate": "0"}])
+def test_malformed_user_fees_remain_unavailable(raw):
+    exchange = object.__new__(HyperliquidExchange)
+    exchange._address = "synthetic"
+    exchange._info = SimpleNamespace(user_fees=lambda *args: raw)
+    assert all(rate.get("fee_rates") == "unavailable"
+               for rate in exchange._read_fee_rates().values())
+
+
+@pytest.mark.parametrize("ctx", [None, [], {}, {"funding": "0.001", "oraclePx": {}},
+    {"funding": "0.001", "oraclePx": "NaN"}])
+def test_malformed_oracle_context_never_becomes_a_mark(ctx):
+    exchange = object.__new__(HyperliquidExchange)
+    exchange._info = SimpleNamespace(meta_and_asset_ctxs=lambda: [
+        {"universe": [{"name": "BTC"}]}, [ctx]])
+    exchange._guarded = lambda name, call: call()
+    assert all(row.mark is None for row in exchange.funding())
 
 
 def test_millisecond_publication_keeps_effective_boundary_and_exact_stamp():
