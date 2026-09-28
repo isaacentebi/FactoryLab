@@ -802,8 +802,6 @@ class PricingMixin:
                 self.card_held[card.id] = {
                     "identity": list(metric_identity(card)), "source_window": w.index,
                     "value": card_values[card.id],
-                    "region": asdict(self.regions[card.id]),
-                    "violation": violation(self.regions[card.id], card_values[card.id]),
                 }
         self.window.closed_held = {cid: dict(fact) for cid, fact in self.card_held.items()}
         self.window.closed_cards = tuple(self.charter.cards)
@@ -1217,9 +1215,13 @@ class PricingMixin:
                     continue
                 # Held evidence is not a new measurement. Shares belong to the
                 # refusing window, not to the authors of the supported source.
-                source_region = CardRegion(**fact["region"])
+                # §II.b: the current charter prices the raw supported fact.
+                region = self.regions.get(card.id)
+                if region is None:
+                    continue
+                excess = violation(region, fact["value"])
                 share = self._decision_share(
-                    window, handle, observation.id, card.answers_for, source_region,
+                    window, handle, observation.id, card.answers_for, region,
                     fact["value"], as_role=as_role,
                 ) if handle is not None else 1.0
                 if handle is not None and observation.id == "cost_per_return":
@@ -1228,11 +1230,11 @@ class PricingMixin:
                     "card_id": card.id, "observation": observation.id,
                     "window": window.index, "held": True,
                     "source_window": fact["source_window"],
-                    "violation": fact["violation"], "proxy_violation": fact["violation"],
+                    "violation": excess, "proxy_violation": excess,
                     "holdout_violation": 0.0, "attributed_holdout_violation": 0.0,
                     "proxy_share": share, "holdout_share": 0.0, "holdout_attributees": {},
                     "lambda": price,
-                    "weight": card_pressure(price, fact["violation"], self.m.prices.penalty_cap),
+                    "weight": card_pressure(price, excess, self.m.prices.penalty_cap),
                     "share": share,
                 })
                 continue
