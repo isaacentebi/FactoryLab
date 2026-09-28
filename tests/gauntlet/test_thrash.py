@@ -63,9 +63,9 @@ def test_th1b_negative_control_without_the_thrash_price_it_fails():
 
 @pytest.fixture(scope="module")
 def th1_sustained(shared_run):
-    # At v = 0.8 the unchanged 0.5 cap binds in windows 55–56, the first pair
-    # of capped updates: 228 events retain the actual anti-windup witness.
-    return shared_run("th1-sustained", lambda: P.run(*P.th1_sustained(), events=228,
+    # §II.b: retain actual successive capped updates, not a presumed stopping window.
+    # Changed refusal prices and durable sampling gaps alter ordinary router draws.
+    return shared_run("th1-sustained", lambda: P.run(*P.th1_sustained(), events=360,
                                                     instrument=False))
 
 

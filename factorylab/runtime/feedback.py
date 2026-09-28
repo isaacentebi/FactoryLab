@@ -2406,6 +2406,8 @@ class FeedbackMixin:
                             if getattr(self, "last_window_consequences", 0) else None),
         })
         gaps = self._sampling_gaps()
+        # §IV.b: a measured support loss survives recovery between actuator firings.
+        self.sampling_pending_gaps.update(gaps)
         k = self.m.immune.k
         del self.sampling_history[:-k]
         now, inner = self.ticks_consumed, self.cadence.consequence_period_events()
@@ -2423,7 +2425,9 @@ class FeedbackMixin:
         diverging = (verdict_slope is not None and outcome_slope is not None
                      and verdict_slope > 0 and outcome_slope < 0)
         # §IV.b: more evaluation draws, not merely a different standing blend.
-        self._sampling_rate(gaps, diverging, supported == k, verdict_slope, outcome_slope)
+        self._sampling_rate(self.sampling_pending_gaps, diverging, supported == k,
+                            verdict_slope, outcome_slope)
+        self.sampling_pending_gaps = {}
         if supported < k:
             self.sampling_blind = {"supported": supported, "needed": k,
                                    "window": self.stats.reserve_windows - 1}

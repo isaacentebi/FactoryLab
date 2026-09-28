@@ -21,7 +21,9 @@ def _world(mode, *, cap=0.7, base=0.3):
              *(P.judge(f"j{i}", judge) for i in range(4)),
              *(P.meta(f"m{i}", P.conformity(0.8)) for i in range(2))]
     cards = [P.UPTAKE, P.WELL_FORMED]
-    if mode != "divergence":
+    # A calm no-trigger control has no sparse verdict card: stochastic routing can
+    # leave a real support gap even when every invoked judge returns a verdict.
+    if mode not in {"divergence", "calm"}:
         cards.append(P.card("grade", "verdict_mean", "at least 0.5",
                             answers_for="evaluator"))
     manifest = P.world(seats, cards=cards, changes={

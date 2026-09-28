@@ -61,3 +61,38 @@ def test_s5_late_fill_abstention_waits_beyond_closed_origin(monkeypatch):
     assert rt._abstention_awaits_close(handle)
     rt._close_price_window()
     assert not rt._abstention_awaits_close(handle)
+
+
+def test_s7_gap_survives_recovery_and_checkpoint_until_sampling_fires(monkeypatch):
+    """A closed-window support loss remains actionable until consumed (§IV.b)."""
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    rt, card = _gap_runtime(monkeypatch)
+    clock_type = type(rt.clockwork)
+    monkeypatch.setattr(clock_type, "due", lambda *_a: False)
+    rt.stats.reserve_windows = 1
+    rt.card_samples.values[card.id] = 0.2
+    rt.card_unmeasured[card.id] = 0
+    rt._sampling_actuator()
+    rt.stats.reserve_windows = 2
+    rt.card_samples.values.clear()
+    rt.card_unmeasured[card.id] = 1
+    rt._sampling_actuator()  # Gap occurs between firings.
+    rt.stats.reserve_windows = 3
+    rt.card_samples.values[card.id] = 0.8
+    rt.card_unmeasured[card.id] = 0
+    rt._sampling_actuator()  # Recovery must not erase the earlier gap.
+    twin, _ = _gap_runtime(monkeypatch)
+    restore_runtime(twin, runtime_state(rt))
+    monkeypatch.setattr(clock_type, "due", lambda *_a: True)
+    for branch in (rt, twin):
+        before = branch.multi_judge_share
+        branch._sampling_actuator()
+        assert branch.multi_judge_share == pytest.approx(before + branch.ev.sampling_step)
+        raises = [r for r in branch.ledger._recovery_items()
+                  if r.get("kind") == "sampling.rate_raise"]
+        assert raises[-1]["gaps"][card.id] == {
+            "unmeasured_windows": 1, "last_measured_window": 0}
+        assert branch.sampling_pending_gaps == {}
+        branch._sampling_actuator()
+        assert branch.multi_judge_share == pytest.approx(before + branch.ev.sampling_step)

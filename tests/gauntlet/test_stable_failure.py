@@ -259,7 +259,12 @@ def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured
         gap = row["gaps"]["verdict-floor"]
         assert gap["unmeasured_windows"] > 0
         assert "verdict-floor" in windows[gap["last_measured_window"]]["values"]
-        assert "verdict-floor" not in windows[row["window"]]["values"]
+        # §IV.b: a historical gap can be consumed after measurement has recovered.
+        gap_start = gap["last_measured_window"] + 1
+        gap_end = gap_start + gap["unmeasured_windows"]
+        assert gap_end - 1 <= row["window"]
+        assert all("verdict-floor" not in windows[w]["values"]
+                   for w in range(gap_start, gap_end))
         assert row["rate_after"] > row["rate_before"]
     first = raises[0]
     assert any(r["seq"] > first["seq"]
@@ -336,7 +341,10 @@ def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(in
         close = closes[origin]
         assert origin % 2 == 0 and close["values"]["verdict-floor"] == pytest.approx(0.3)
         violation = (0.5 - 0.3) / 0.5
-        price = updates[close["window_end_event"]]["lambda_after"]
+        # A measured close need not fire the slower price controller (§IV.c).
+        price = max((update for event, update in updates.items()
+                     if event <= close["window_end_event"]),
+                    key=lambda update: update["window_end_event"])["lambda_after"]
         peers = {h for h, draw in draws.items() if origins[h] == origin and h not in niche
                  and draw["actor"] == "router:Tick"}
         share = 0.0 if handle in niche else max(run.manifest["prices"]["min_blame_share"],

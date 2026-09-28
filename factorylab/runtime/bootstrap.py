@@ -628,6 +628,7 @@ class BootstrapMixin:
         self.consequence_mix: float = self.ev.consequence_share
         self.multi_judge_share: float = self.ev.multi_judge_share
         self.sampling_card_support: dict[str, dict[str, Any]] = {}
+        self.sampling_pending_gaps: dict[str, dict[str, Any]] = {}
         # The consequence scores the last closed window issued, and whether the actuator
         # is blind for want of them (wave 16, ruling R-B).
         self.last_window_consequences: int = 0
