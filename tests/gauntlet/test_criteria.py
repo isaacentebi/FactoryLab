@@ -1200,10 +1200,11 @@ def test_of1a_a_pre_wave16_mark_without_income_is_unsupported_never_read_as_zero
     assert g.of1a_outside_the_loop(wrong, M).status == g.FAIL
 
 
-def _returned_event(handle, about, seq):
+def _returned_event(handle, about, seq, status="ok"):
     return {"kind": "event", "seq": seq, "event": {"id": f"producerreturn-{seq}",
                                                    "kind": "ProducerReturn",
-                                                   "payload": {"about_handle": about}}}
+                                                   "payload": {"about_handle": about,
+                                                               "status": status}}}
 
 
 def test_of3a_a_judge_is_drawn_only_after_the_return_it_reads():
@@ -1924,7 +1925,8 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
     # without it is malformed and fails, never a return on no handle.
     headless = g.of3a_sampling_behind_return([*ok, {"kind": "invocation", "seq": 15}], M)
     assert headless.status == g.FAIL and headless.evidence["malformed"]["field"] == "handle"
-    named = [{**stray[0], "event": {**stray[0]["event"], "payload": {"about_handle": "zz"}}},
+    named = [{**stray[0], "event": {**stray[0]["event"],
+                                    "payload": {"about_handle": "zz", "status": "ok"}}},
              *stray[1:]]
     # Codex on 3b5bb6a: a return no producer made (no invocation) is a failure,
     # never a draw that drops out of the count.
@@ -1936,7 +1938,7 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
 @pytest.mark.parametrize("status", ["ok", "refused", "malformed", "failed"])
 def test_of3a_the_producers_invocation_precedes_the_return(status):
     """Every published status needs its invocation ledgered before the ProducerReturn."""
-    event, draw = _returned_event("e", "p1", 2), {
+    event, draw = _returned_event("e", "p1", 2, status), {
         "kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}
     late = [event, draw, {"kind": "invocation", "handle": "p1", "seq": 4, "status": status}]
     result = g.of3a_sampling_behind_return(late, M)
@@ -1957,6 +1959,17 @@ def test_of3a_an_invocation_without_a_real_status_proves_no_return(status):
     result = g.of3a_sampling_behind_return([row, event, draw], M)
     assert result.status == g.FAIL, result.evidence
     assert result.evidence["malformed"]["field"] == "status"
+
+
+def test_of3a_a_published_status_must_match_its_invocation():
+    """Codex on #169: compute.py and loop.py write the same ret.status to the invocation
+    and the published payload, so a mismatched pair proves no return was made."""
+    event, draw = _returned_event("e", "p1", 2, "ok"), {
+        "kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}
+    mismatch = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "failed"},
+                event, draw]
+    result = g.of3a_sampling_behind_return(mismatch, M)
+    assert result.status == g.FAIL and result.evidence["unmade"][0]["return"] == "p1"
 
 
 def test_of3a_real_delivered_refusal_is_a_made_return():

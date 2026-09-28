@@ -2851,7 +2851,7 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     returns too; invocation rows do not record Return.delivered. Every draw is checked:
     a return with no invocation ledgered before publication fails, never drops out
     of the count."""
-    made: dict[str, list[int]] = defaultdict(list)
+    made: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for row in rows_of(events, "invocation"):
         handle = need(row, "handle")
         # A row the runtime could not emit (no status, or one outside Return.status)
@@ -2859,20 +2859,23 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
         if need(row, "status") not in RETURN_STATUSES:
             raise Malformed(row, "status")
         if isinstance(handle, str) and handle:
-            made[handle].append(need(row, "seq"))
-    # loop.py emits every ProducerReturn with its ``about_handle``.
+            made[handle].append((need(row, "seq"), need(row, "status")))
+    # loop.py emits every ProducerReturn with its ``about_handle`` and the same
+    # ``ret.status`` compute.py ledgers on the invocation (Codex on #169).
     published = unique_map(
         (row for row in rows_of(events, "event") if need(row, "event.kind") == "ProducerReturn"),
         lambda row: need(row, "event.id"),
-        lambda row: (need(row, "event.payload.about_handle"), need(row, "seq")))
+        lambda row: (need(row, "event.payload.about_handle"), need(row, "seq"),
+                     need(row, "event.payload.status")))
     checked, early, unmade = 0, [], []
     for row in rows_of(events, "decision.open"):
         # A draw on an event that is no ProducerReturn is not a draw on a return.
         if need(row, "event_id") not in published:
             continue
-        handle, event_seq = published[need(row, "event_id")]
+        handle, event_seq, status = published[need(row, "event_id")]
         checked += 1
-        if not any(seq < event_seq for seq in made.get(handle, ())):
+        if not any(seq < event_seq and made_status == status
+                   for seq, made_status in made.get(handle, ())):
             unmade.append({"draw": need(row, "handle"), "return": handle})
         elif need(row, "seq") <= event_seq:
             early.append(need(row, "handle"))
