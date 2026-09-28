@@ -436,7 +436,15 @@ class BootstrapMixin:
         self.venue = (
             LiveVenue(self.exchange, ledger=self.ledger,
                       last_funding_ns=self.clock.now_ns, markets=self._trading_markets,
-                      funding_needed=lambda coin, boundary: any(
+                      # Chapter II §III.b, §IV.b: cached marks open trades only over
+                      # their frozen horizon, with the same funding patience.
+                      funding_needed=lambda coin, boundary: (
+                          coin in self.venue_marks
+                          and self.venue_marks[coin][0] < boundary
+                          <= self.venue_marks[coin][0] + self._horizon_ns()
+                          and not self._funding_patience_over(
+                              {"open_ns": self.venue_marks[coin][0]})
+                      ) or any(
                           frozen.get("coin") == coin
                           and (frozen.get("funding") or {}).get("strict")
                           and frozen.get("open_ns") is not None

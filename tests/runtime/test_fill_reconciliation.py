@@ -16,9 +16,10 @@ class Venue:
         self.calls = []
         self.fees = fees
 
-    def fills(self, start):
+    def fills(self, start, *, until_ns=None):
         self.calls.append(start)
-        return [f for f in self.shown if f.ts_ns >= start]
+        return [f for f in self.shown if f.ts_ns >= start
+                and (until_ns is None or f.ts_ns <= until_ns)]
 
     def account(self):
         size = sum((f.size if f.is_buy else -f.size for f in self.executed), D(0))
@@ -130,11 +131,11 @@ def test_production_shaped_open_position_and_funding_cash_are_audit_only():
         query_order_by_oid=lambda address, oid: {'status': 'order', 'order': {
             'status': 'filled', 'order': {'oid': oid, 'origSz': '1', 'sz': '0'}}})
     c = cursor(exchange)
-    c.submitted('factory', now_ns=50)
+    c.submitted('factory', coin='BTC', now_ns=50)
     c.acknowledged('factory', {'order_id': '100', 'status': 'filled'})
     state['assetPositions'] = [{'position': {'coin': 'BTC', 'szi': '1', 'entryPx': '100'}}]
     state['marginSummary'].update(accountValue='999', totalRawUsd='899', totalMarginUsed='10')
-    exchange.fills = lambda start: [replace(fill(100), px=D(100), fee=D(1))]
+    exchange.fills = lambda start, **kw: [replace(fill(100), px=D(100), fee=D(1))]
     assert len(c.poll(exchange, now_ns=200)) == 1
     assert c.through_ns == 200
     state['marginSummary'].update(accountValue='998', totalRawUsd='898')
@@ -303,6 +304,82 @@ def test_retry_baseline_absorbs_pre_anchor_nonfactory_execution():
     assert absorbed[0]['key'] == [100, 'venue', '100']
 
 
+@pytest.mark.parametrize('fail_first', [False, True])
+def test_anchor_sweep_recovers_passed_timestamp_once_and_replays(fail_first):
+    from copy import deepcopy
+
+    from factorylab.runtime.resume import (
+        JournalProxy,
+        RecoveryJournal,
+        _migrate_fill_cursor,
+        decode,
+        encode,
+    )
+
+    venue = Venue(fees=False)
+    raw_account = venue.account
+    venue.account = lambda: (_ for _ in ()).throw(RuntimeError('offline'))
+    ledger = Ledger(clock_ns=lambda: 0)
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.active = True
+    proxy = JournalProxy(venue, journal, 'exchange')
+    c = FillCursor(journal, start_ns=0, measured=True)
+    assert c.poll(proxy, now_ns=150) == []
+    assert c.since_ns == 150
+    venue.executed = venue.shown = [fill(100)]
+    venue.account = lambda: replace(raw_account(), observed_at_ns=200)
+    calls = []
+    raw_fills = venue.fills
+
+    def fills(start, *, until_ns=None):
+        calls.append((start, until_ns))
+        if until_ns is not None and fail_first and calls.count((0, 200)) == 1:
+            raise RuntimeError('anchor read unavailable')
+        return raw_fills(start, until_ns=until_ns)
+
+    venue.fills = fills
+    c.propagation_bound_ns = 0
+    before = deepcopy({k: v for k, v in vars(c).items() if k != 'ledger'})
+    prefix = len(ledger._recovery_items())
+    assert c.poll(proxy, now_ns=200) == []
+    assert c.baseline_ns == 200
+    assert c.through_ns == 200  # Evidence retries do not revoke trading's account anchor.
+    if fail_first:
+        assert not c.baseline_fills_read
+        saved = decode(encode({k: v for k, v in vars(c).items() if k != 'ledger'}))
+        vars(c).update(_migrate_fill_cursor(saved, c))
+        assert c.poll(proxy, now_ns=200) == []
+    assert c.baseline_fills_read
+    assert calls.count((0, 200)) == 1 + int(fail_first)
+    # Force a later backward encounter after the ordinary identity cache has expired.
+    c.recovery_span_ns = 300
+    assert c.poll(proxy, now_ns=200) == []
+    absorbed = [r for r in ledger._recovery_items()
+                if r['kind'] == 'consequence.fill_absorbed_evidence']
+    assert len(absorbed) == 1
+    assert absorbed[0]['key'] == ['venue', '100']
+
+    replay = RecoveryJournal(ledger, lambda: 0)
+    replay.io_store = journal.io_store
+    replay.active = True
+    replay.tail = iter(ledger._recovery_items()[prefix:])
+    restored = object.__new__(FillCursor)
+    vars(restored).update(before, ledger=replay)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('replay must not call the venue')
+
+    venue.account = venue.fills = forbidden
+    replay_proxy = JournalProxy(venue, replay, 'exchange')
+    assert restored.poll(replay_proxy, now_ns=200) == []
+    if fail_first:
+        assert restored.poll(replay_proxy, now_ns=200) == []
+    restored.recovery_span_ns = 300
+    assert restored.poll(replay_proxy, now_ns=200) == []
+    assert replay.peek() is None
+    assert {k: v for k, v in vars(restored).items() if k != 'ledger'} == {
+        k: v for k, v in vars(c).items() if k != 'ledger'}
+
+
 def test_backward_poll_replays_identity_append_before_propagation():
     from copy import deepcopy
 
@@ -374,3 +451,267 @@ def test_reconciled_identity_memory_is_bounded(count):
             c = restored
     assert not sizes or max(sizes) - min(sizes) <= 100
     assert c.through_ns == count*10+10
+
+
+@pytest.mark.parametrize('provenance', ['oid', 'client', 'unresolved'])
+def test_anchor_evidence_skips_all_factory_provenance(provenance):
+    from types import SimpleNamespace
+
+    venue = Venue()
+    c = cursor(venue)
+    c.baseline_ns = 200
+    c.submitted('factory', coin='BTC', now_ns=100)
+    f = fill(100)
+    if provenance == 'oid':
+        c.acknowledged('factory', {'order_id': f.order_id})
+    elif provenance == 'client':
+        c.acknowledged('factory', {'order_id': 'other'})
+        f = SimpleNamespace(**vars(f), client_id='factory')
+    venue.shown = [f]
+    c._anchor_evidence(venue, now_ns=200, tick_ns=10)
+    assert not [r for r in c.ledger._recovery_items()
+                if r['kind'] == 'consequence.fill_absorbed_evidence']
+    assert c.seen == {} and c.orders['factory']['booked'] == '0'
+
+
+@pytest.mark.parametrize('released', ['oid', 'rejected', 'unknown'])
+def test_pending_identity_wait_is_local_and_release_recovers_old_fill(released):
+    from copy import deepcopy
+
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal, decode, encode
+
+    venue = Venue()
+    ledger = Ledger(clock_ns=lambda: 0)
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.active = True
+    c = FillCursor(journal, start_ns=0, measured=True)
+    c.initialize(replace(venue.account(), observed_at_ns=0), now_ns=0)
+    c.submitted('pending', now_ns=100, coin='BTC')
+    held = fill(100)
+    venue.shown = [held, replace(fill(101), coin='ETH'),
+                   replace(fill(102), liquidation=True), fill(99),
+                   replace(fill(103), order_id=''),
+                   replace(fill(104), coin='ETH', liquidation=True)]
+    venue.account = lambda: AccountState(D(1000), D(1000), (), D(0),
+                                         reconciliation_cash_usd=D(1000), observed_at_ns=2000)
+    venue.lookup = lambda *a, **kw: OrderResult('100', 'filled', D(1), None,
+                                               observed_at_ns=2000)
+    before = deepcopy({k: v for k, v in vars(c).items() if k != 'ledger'})
+    prefix = len(ledger._recovery_items())
+
+    def drive(target, proxy):
+        assert [ts for ts, _ in target.poll(proxy, now_ns=1000, tick_ns=10)] == [
+            99, 101, 102, 103, 104]
+        assert target.waiting_since_ns == 100
+        # Model a reconciled net-neutral account: the retry must not rely on residuals.
+        target.incomplete_since_ns = None
+        target.recovery_span_ns = 0
+        target.propagation_bound_ns = 0
+        if released == 'unknown':
+            target.resolution_terminal('pending')
+        else:
+            target.acknowledged('pending', {'status': 'rejected'} if released == 'rejected'
+                                else {'status': 'filled', 'order_id': '100'})
+        vars(target).update(decode(encode({k: v for k, v in vars(target).items()
+                                           if k != 'ledger'})))
+        assert [ts for ts, _ in target.poll(proxy, now_ns=1100)] == [100]
+        assert target.waiting_since_ns is None
+        assert target.poll(proxy, now_ns=1200) == []
+
+    drive(c, JournalProxy(venue, journal, 'exchange'))
+    rows = ledger._recovery_items()[prefix:]
+    identities = [r for r in rows if r['kind'] == 'consequence.fill_identity']
+    assert len(identities) == 6
+    replay = RecoveryJournal(ledger, lambda: 0)
+    replay.active = True
+    replay.io_store = journal.io_store
+    replay.tail = iter(rows)
+    restored = object.__new__(FillCursor)
+    vars(restored).update(before, ledger=replay)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('replay called venue')
+    venue.fills = venue.account = venue.lookup = forbidden
+    drive(restored, JournalProxy(venue, replay, 'exchange'))
+    assert replay.peek() is None
+    assert {k: v for k, v in vars(restored).items() if k != 'ledger'} == {
+        k: v for k, v in vars(c).items() if k != 'ledger'}
+
+
+@pytest.mark.parametrize('released', ['oid', 'rejected', 'unknown'])
+@pytest.mark.parametrize('anonymous', [False, True])
+def test_withheld_evidence_survives_partial_and_empty_reads_and_replays(released, anonymous):
+    from copy import deepcopy
+
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal, decode, encode
+
+    venue = Venue()
+    ledger = Ledger(clock_ns=lambda: 0)
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.active = True
+    c = FillCursor(journal, start_ns=0, measured=True)
+    c.initialize(replace(venue.account(), observed_at_ns=0), now_ns=0)
+    c.submitted('pending', now_ns=100, coin='BTC')
+    first = replace(fill(100), venue_id=None if anonymous else 'first', fee=D(0))
+    second = first if anonymous else replace(first, ts_ns=101, venue_id='second')
+    venue.account = lambda: AccountState(D(1000), D(1000), (), D(0),
+                                         reconciliation_cash_usd=D(1000), observed_at_ns=10000)
+    venue.lookup = lambda *a, **kw: OrderResult('100', 'filled', D(2), None,
+                                               observed_at_ns=10000)
+    before = deepcopy({k: v for k, v in vars(c).items() if k != 'ledger'})
+    prefix = len(ledger._recovery_items())
+
+    def drive(target, proxy):
+        delivered = []
+        pages = ([first, second], [], [first], [], [], [first], [], [first, second], [])
+        for i, page in enumerate(pages):
+            venue.shown = page
+            if i == 3:
+                if released == 'unknown':
+                    target.resolution_terminal('pending')
+                else:
+                    target.acknowledged('pending', {'status': 'rejected'} if released == 'rejected'
+                                        else {'status': 'filled', 'order_id': '100'})
+            delivered.extend(target.poll(proxy, now_ns=1000 + i * 100))
+            if i < 7:
+                assert target.waiting_identities
+                assert target.waiting_since_ns == (101 if i >= 5 and not anonymous else 100)
+                assert target.through_ns is None
+            if i in (2, 4, 6):
+                # Persistence must retain observations absent from this read's page.
+                vars(target).update(decode(encode({k: v for k, v in vars(target).items()
+                                                   if k != 'ledger'})))
+        assert len(delivered) == 2
+        assert not target.waiting_identities
+        assert target.waiting_since_ns is None
+        return delivered
+
+    expected = drive(c, JournalProxy(venue, journal, 'exchange'))
+    rows = ledger._recovery_items()[prefix:]
+    replay = RecoveryJournal(ledger, lambda: 0)
+    replay.active = True
+    replay.io_store = journal.io_store
+    replay.tail = iter(rows)
+    restored = object.__new__(FillCursor)
+    vars(restored).update(before, ledger=replay)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('replay called venue')
+    venue.fills = venue.account = venue.lookup = forbidden
+    assert drive(restored, JournalProxy(venue, replay, 'exchange')) == expected
+    assert replay.peek() is None
+    assert {k: v for k, v in vars(restored).items() if k != 'ledger'} == {
+        k: v for k, v in vars(c).items() if k != 'ledger'}
+
+
+@pytest.mark.parametrize('scenario', ['unbound', 'disjoint', 'anonymous', 'anonymous_single',
+                                     'late', 'ordinary_failure', 'strict_failure', 'unknown'])
+def test_evidence_is_independent_and_replays(scenario):
+    from copy import deepcopy
+
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal, decode, encode
+
+    ledger = Ledger(clock_ns=lambda: 0)
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.active = True
+    venue = Venue()
+    c = FillCursor(journal, start_ns=0, measured=True)
+    c.initialize(replace(venue.account(), observed_at_ns=200), now_ns=200)
+    c.propagation_bound_ns = None if scenario == 'unknown' else 100
+    c.since_ns = 500 if scenario == 'disjoint' else 0
+    if scenario == 'unbound':
+        c.submitted('factory', coin='BTC', now_ns=200)
+    before = deepcopy({k: v for k, v in vars(c).items() if k != 'ledger'})
+    prefix = len(ledger._recovery_items())
+    calls = []
+    current = [0]
+    f = fill(200 if scenario == 'unbound' else 100)
+    if scenario in ('anonymous', 'anonymous_single'):
+        f = replace(f, venue_id=None)
+
+    def fills(start, *, until_ns=None):
+        calls.append((current[0], start, until_ns))
+        if until_ns is not None:
+            if scenario == 'disjoint' and current[0] == 0:
+                raise RuntimeError('anchor unavailable')
+            observed = (replace(f, observed_at_ns=200 + current[0],
+                                history_complete=current[0] % 2 == 0,
+                                crossed=current[0] % 2 == 0,
+                                realized=D(current[0]))
+                        if scenario in ('anonymous', 'anonymous_single') else f)
+            if scenario == 'anonymous_single':
+                return [observed]
+            return [] if scenario == 'late' and current[0] == 0 else [observed, observed]
+        if scenario in ('ordinary_failure', 'strict_failure'):
+            raise RuntimeError('ordinary unavailable')
+        return [f] if scenario in ('anonymous', 'anonymous_single', 'unbound') else []
+
+    venue.fills = fills
+    venue.account = lambda: AccountState(D(1000), D(1000), (), D(0),
+                                         reconciliation_cash_usd=D(1000), observed_at_ns=2000)
+    venue.lookup = lambda *a, **kw: OrderResult(f.order_id, 'resting', D(1), None,
+                                               observed_at_ns=2000)
+    times = (600, 700, 800) if scenario == 'disjoint' else (200, 309, 310, 400)
+
+    def drive(target, proxy):
+        delivered = []
+        for i, now in enumerate(times):
+            current[0] = i
+            if scenario == 'unbound' and i == 1:
+                target.acknowledged('factory', {'order_id': f.order_id})
+            if scenario == 'strict_failure':
+                with pytest.raises(RuntimeError, match='external call failed'):
+                    target.poll(proxy, now_ns=now, tick_ns=10, strict=True)
+            else:
+                delivered.extend(target.poll(proxy, now_ns=now, tick_ns=10))
+            if i == 0 and scenario != 'disjoint':
+                assert not target.baseline_fills_read
+            if i == 1:
+                # Checkpoint encoding preserves the independently retryable phase.
+                state = decode(encode({k: v for k, v in vars(target).items() if k != 'ledger'}))
+                vars(target).update(state)
+        return delivered
+
+    delivered = drive(c, JournalProxy(venue, journal, 'exchange'))
+    rows = ledger._recovery_items()[prefix:]
+    evidence = [r for r in rows if r['kind'] == 'consequence.fill_absorbed_evidence']
+    identities = [r for r in rows if r['kind'] == 'consequence.fill_identity']
+    assert len(evidence) == (0 if scenario == 'unbound' else 2 if scenario == 'anonymous' else 1)
+    assert len(delivered) == (1 if scenario == 'unbound' else 0)
+    assert len(identities) == (1 if scenario in ('anonymous', 'anonymous_single', 'unbound') else 0)
+    assert all(r['count'] == 1 for r in identities)
+    if scenario == 'unbound':
+        assert c.orders['factory']['booked'] == '1'
+        assert not [r for r in rows if r['kind'] == 'consequence.fill_absorbed']
+    if scenario == 'disjoint':
+        assert [r['read_start_ns'] for r in rows
+                if r['kind'] == 'consequence.fill_reconciliation'] == [390, 380, 480]
+        assert c.through_ns == 800
+        assert c.seen == {}
+    closures = [r for r in rows if r['kind'] == 'consequence.fill_evidence_sweep_closed']
+    assert len(closures) == (0 if scenario == 'unknown' else 1)
+    if closures:
+        assert closures[0]['bound_ns'] == 100
+        assert closures[0]['read_ns'] == (700 if scenario == 'disjoint' else 310)
+        assert closures[0]['scope'] == 'empirical: later publications may exist'
+    if scenario == 'unknown':
+        assert not c.baseline_fills_read
+        assert len([call for call in calls if call[2] is not None]) == len(times)
+    elif scenario != 'unbound':
+        assert c.baseline_fills_read
+        assert len([call for call in calls if call[2] is not None]) == (
+            2 if scenario == 'disjoint' else 3)
+    if scenario in ('ordinary_failure', 'strict_failure'):
+        assert c.since_ns == 0 and c.through_ns is None and c.seen == {}
+
+    replay = RecoveryJournal(ledger, lambda: 0)
+    replay.io_store = journal.io_store
+    replay.active = True
+    replay.tail = iter(rows)
+    restored = object.__new__(FillCursor)
+    vars(restored).update(before, ledger=replay)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('replay called venue')
+    venue.fills = venue.account = venue.lookup = forbidden
+    assert drive(restored, JournalProxy(venue, replay, 'exchange')) == delivered
+    assert replay.peek() is None
+    assert {k: v for k, v in vars(restored).items() if k != 'ledger'} == {
+        k: v for k, v in vars(c).items() if k != 'ledger'}

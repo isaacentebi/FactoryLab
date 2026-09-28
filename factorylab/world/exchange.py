@@ -206,7 +206,7 @@ class Exchange(Protocol):
     def cancel(self, order_id: str, *, coin: str | None = None,
                client_id: str | None = None) -> dict | None: ...
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult: ...
-    def fills(self, since_ns: int) -> list[Fill]: ...
+    def fills(self, since_ns: int, *, until_ns: int | None = None) -> list[Fill]: ...
     def candles(self, coin: str, interval: str, n: int) -> list[dict]: ...
     def order_book(self, coin: str, depth: int) -> dict: ...
     def funding_history(self, coin: str, n: int) -> list[FundingEvent]: ...
@@ -516,8 +516,9 @@ class FakeExchange:
             return OrderResult(oid, "filled", size, avg)
         return result or OrderResult(oid, "uncertain", Decimal(0), None, "order not observed")
 
-    def fills(self, since_ns: int) -> list[Fill]:
-        return [f for f in self._fills if f.ts_ns >= since_ns]
+    def fills(self, since_ns: int, *, until_ns: int | None = None) -> list[Fill]:
+        return [f for f in self._fills if f.ts_ns >= since_ns
+                and (until_ns is None or f.ts_ns <= until_ns)]
 
     def drain_events(self) -> list[WorldEvent]:
         """Return and clear events produced by ``place`` (fills, rejections)."""
@@ -1619,7 +1620,7 @@ class HyperliquidExchange:
             start = latest
         return sorted(payments.values(), key=lambda p: (p.ts_ns, p.id))
 
-    def fills(self, since_ns: int) -> list[Fill]:
+    def fills(self, since_ns: int, *, until_ns: int | None = None) -> list[Fill]:
         """Return observed fills; an exhausted read raises instead of proving an empty set.
 
         Runtime polling may defer a failed read, while terminal reconciliation
@@ -1638,7 +1639,9 @@ class HyperliquidExchange:
         while True:
             page = self._guarded(
                 "user_fills_by_time",
-                lambda start=start: self._info.user_fills_by_time(self._address, start),
+                lambda start=start: self._info.user_fills_by_time(
+                    self._address, start,
+                    **({"end_time": until_ns // NS_PER_MS} if until_ns is not None else {})),
             )
             if not isinstance(page, list):
                 raise VenueUnavailable("invalid fill response")

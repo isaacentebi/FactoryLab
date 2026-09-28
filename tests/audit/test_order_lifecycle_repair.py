@@ -166,13 +166,36 @@ def test_an_uncertain_order_is_polled_on_a_bounded_schedule_then_left_unresolved
                         lambda *a, **kw: (lookups.append(a)
                                           or OrderResult(None, "uncertain", Decimal(0), None,
                                                          "order not observed")))
+    rt.consequence_fills.measured = True
+    rt.consequence_fills.baseline_ns = 0
     h = _producing_decision(rt)
     rt._venue_write(h, "venue.place_market", {"coin": "BTC", "side": "buy", "size": "0.001"},
                     slot="output")
+    client = next(iter(rt.order_intents))
+    assert rt.consequence_fills.orders[client]['coin'] == 'BTC'
+    rt.consequence_fills.waiting_since_ns = 0
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    rt.ledger.active = True
+    checkpoint = runtime_state(rt)
+    prefix = len(rt.ledger._recovery_items())
     for _ in range(50):
         rt._reconcile_orders()
+    expected = runtime_state(rt)
+    tail = rt.ledger._recovery_items()[prefix:]
+    restore_runtime(rt, checkpoint)
+    rt.ledger.tail = iter(tail)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('replay called the venue')
+    monkeypatch.setattr(exchange, 'lookup', forbidden)
+    for _ in range(50):
+        rt._reconcile_orders()
+    assert rt.ledger.peek() is None
+    assert runtime_state(rt) == expected
     uncertain = _order_rows(rt, "order.uncertain")
     unresolved = _order_rows(rt, "order.unresolved")
+    assert client not in rt.consequence_fills.orders
+    assert rt.consequence_fills.waiting_since_ns == 0
     assert len(uncertain) == UNCERTAIN_ORDER_POLLS
     assert len(unresolved) == 1 and unresolved[0]["handle"] == h
     assert len(uncertain) + len(unresolved) == UNCERTAIN_ORDER_POLLS + 1
