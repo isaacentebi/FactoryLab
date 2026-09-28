@@ -237,7 +237,7 @@ def _half_judge(view):
 
 @pytest.fixture(scope="module")
 def intermittent(shared_run):
-    """One live run supplies the actuator proof and the remaining ratchet limitation."""
+    """One live run supplies sampling, role-pricing and unsupported-attractor proofs."""
     seats = [P.producer("steady-a", P.hold), P.producer("steady-b", P.hold),
              *(P.judge(f"judge-{i}", _half_judge) for i in range(4)),
              *(P.meta(f"meta-{i}", P.conformity(0.8)) for i in range(2))]
@@ -285,15 +285,90 @@ def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured
         assert not row["flags"]["stable_failure"]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="sampling buys extra draws but all judges still decline on odd "
-                   "windows; R16b-10 requires a wholly measured tail, so no ratchet")
-def test_an_intermittently_measured_failure_is_still_ratcheted(intermittent):
-    """§II.b duration pricing remains unreachable under synchronized refusal gaps.
+def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(intermittent):
+    """§II.b preserves decline-credit accounting and ordinary producer violation prices.
 
-    Producers hold throughout: this is not producer produce/NOOP alternation. The
-    independent passing test proves the §IV.b rate response without weakening support
-    or interpreting a judge's refusal as a measurement.
+    Ledger completeness and the reward map remain independently enforced while the
+    positive abstention-charge requirement below is unresolved. R16b-10 still forbids
+    treating refusals as evidence of a failing attractor (§II.a, §IV.c).
     """
-    assert [r for r in intermittent.rows("immune.price_ratchet", "immune.price_ratchet_saturated")
-            if r.get("card_id") == "verdict-floor"]
+    run = intermittent
+    assert [(c["id"], c["answers_for"]) for c in run.manifest["charter"]["cards"]] == [
+        ("verdict-floor", "producer")]
+    window = 1
+    draws, origins = {}, {}
+    for row in run.events:
+        if row["kind"] == "price.window":
+            window = row["window"] + 1
+        elif row["kind"] == "decision.open":
+            draws[row["handle"]] = row
+            origins[row["handle"]] = window
+    declined_draws = {h for h, row in draws.items()
+                      if row["propensity"]["chosen"].startswith("judge-") and origins[h] % 2}
+    assert declined_draws
+    declined = run.rows("commission.declined")
+    credits = run.rows("router.decline_priced")
+    assert {r["handle"] for r in declined} == declined_draws
+    assert {r["handle"] for r in credits} == declined_draws
+    assert len(declined) == len(credits) == len(declined_draws)
+    contributions = {r["handle"]: r for r in run.rows("price.contribution")}
+    cap = run.manifest["prices"]["penalty_cap"]
+    for row in credits:
+        handle = row["handle"]
+        assert contributions[handle]["role"] == "evaluator"
+        assert contributions[handle]["window"] == origins[handle]
+        assert row["router"] == draws[handle]["actor"]
+        assert row["reward"] == pytest.approx(
+            (row["neutral"] + 2 * cap - row["penalty"]) / (1 + 2 * cap))
+
+    # §II.b: derive pressure and blame independently of the priced settlement terms.
+    niche = {r["handle"] for r in run.rows("price.contribution") if r.get("niche")}
+    closes = {r["window"]: r for r in run.rows("price.window")}
+    measured = {w for w, row in closes.items() if "verdict-floor" in row["values"]}
+    updates = {r["window_end_event"]: r for r in run.rows("price.update")
+               if r["card_id"] == "verdict-floor"}
+    producers = [r for r in run.rows("price.penalty")
+                 if draws[r["handle"]]["propensity"]["chosen"] in {"steady-a", "steady-b"}]
+    assert producers and {origins[r["handle"]] for r in producers} == measured
+    charged = []
+    for row in producers:
+        handle = row["handle"]
+        origin = origins[handle]
+        close = closes[origin]
+        assert origin % 2 == 0 and close["values"]["verdict-floor"] == pytest.approx(0.3)
+        violation = (0.5 - 0.3) / 0.5
+        price = updates[close["window_end_event"]]["lambda_after"]
+        peers = {h for h, draw in draws.items() if origins[h] == origin and h not in niche
+                 and draw["actor"] == "router:Tick"}
+        share = 0.0 if handle in niche else max(run.manifest["prices"]["min_blame_share"],
+                                               1 / len(peers))
+        expected = min(cap, price * violation) * share
+        assert row["penalty"] == pytest.approx(expected)
+        assert row["raw"] == pytest.approx(0.3)
+        assert row["effective"] == pytest.approx(max(0.0, 0.3 - expected))
+        if handle not in niche:
+            term, = row["terms"]
+            assert term["card_id"] == "verdict-floor" and term["window"] == origin
+            assert term["violation"] == pytest.approx(violation)
+            assert term["lambda"] == pytest.approx(price)
+            assert term["share"] == pytest.approx(share)
+            charged.append(expected)
+    assert charged and min(charged) > 0
+
+    assert not [r for r in run.rows("immune.price_ratchet", "immune.price_ratchet_saturated")
+                if r["card_id"] == "verdict-floor"]
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="R16c-1: every odd-window judge decline has zero abstention charge; "
+                   "the sole card answers for producers, leaving evaluators unpriced")
+def test_intermittent_every_declined_judge_draw_pays_an_abstention_charge(intermittent):
+    """§II.b: every declined judge draw must pay, not merely receive a ledger credit."""
+    contributions = {r["handle"]: r for r in intermittent.rows("price.contribution")}
+    declined = {r["handle"] for r in intermittent.rows("commission.declined")
+                if r["assembly_id"].startswith("judge-")
+                and contributions[r["handle"]]["window"] % 2}
+    credits = [r for r in intermittent.rows("router.decline_priced") if r["handle"] in declined]
+    assert declined and len(credits) == len(declined)
+    unpaid = [r["handle"] for r in credits if r["penalty"] <= 0]
+    assert not unpaid, f"{len(unpaid)}/{len(declined)} declined judge draws are unpriced: {unpaid}"
