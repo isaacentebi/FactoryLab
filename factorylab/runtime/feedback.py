@@ -2538,15 +2538,35 @@ class FeedbackMixin:
         })
         self.consequence_mix = after
 
+    def _reset_sampling_cards(self) -> None:
+        """Removed or redefined metrics retain no adaptive sampling evidence (§III/IV.a)."""
+        from factorylab.charter.measurement import metric_identity
+
+        current = {card.id: list(metric_identity(card)) for card in self.charter.cards}
+        known = self.card_meanings
+        support = self.sampling_card_support
+        tracked = (set(known) | set(support) | set(self.sampling_pending_gaps)
+                   | set(self.card_samples.values))
+        for cid in sorted(tracked):
+            meaning = current.get(cid)
+            previous = known.get(cid, meaning)
+            if isinstance(previous, str) and meaning is not None:
+                previous = [previous, *meaning[1:]]
+            supported = support.get(cid, {}).get("meaning", meaning)
+            if meaning is None or previous != meaning or supported != meaning:
+                support.pop(cid, None)
+                self.sampling_pending_gaps.pop(cid, None)
+                for samples in (self.card_samples.values, self.card_samples.scopes,
+                                self.card_samples.medians, self.card_samples.holdouts):
+                    samples.pop(cid, None)
+
     def _sampling_gaps(self) -> dict[str, dict]:
         """Only previously measured current metric identities can lose support."""
         from factorylab.charter.measurement import metric_identity
 
+        self._reset_sampling_cards()
         support = self.sampling_card_support
         current = {card.id: list(metric_identity(card)) for card in self.charter.cards}
-        for cid in list(support):
-            if current.get(cid) != support[cid]["meaning"]:
-                del support[cid]
         gaps = {}
         for cid, meaning in current.items():
             unmeasured = self.card_unmeasured.get(cid, 0)

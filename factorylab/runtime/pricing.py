@@ -591,6 +591,7 @@ class PricingMixin:
         known = getattr(self, "card_meanings", None)
         if known is None:
             known = self.card_meanings = {}
+        self._reset_sampling_cards()
         for card in self.charter.cards:
             # A list, not a tuple, so it compares equal after a checkpoint's JSON.
             meaning = list(metric_identity(card))
