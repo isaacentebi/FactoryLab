@@ -558,6 +558,8 @@ class FakeExchange:
         spread produces coincident prices, consistent with a frictionless fake.
         """
         _check_count(depth, 20)
+        if coin not in self._mids:
+            raise ValueError("unknown coin")
         mid = self._mids[coin]
         spread = mid * self.spread_bps / Decimal(10_000)
         return {
