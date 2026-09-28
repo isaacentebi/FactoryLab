@@ -94,6 +94,8 @@ class MeasureWindow:
     market_purchases: int = 0
     decisions: dict[str, dict] = field(default_factory=dict)
     closed_values: dict[str, float] | None = None
+    # R16c-3: the last supported facts available at this close, never future evidence.
+    closed_held: dict[str, dict] = field(default_factory=dict)
     # Per rate observation, frozen at the close: the decisions in its denominator and
     # in its numerator (wave 16, D5: who relieved a violation of the rate).
     closed_relief: dict[str, dict[str, list]] = field(default_factory=dict)
@@ -108,6 +110,9 @@ class MeasureWindow:
     closed_scopes: dict[str, dict[str, float]] = field(default_factory=dict)
     # Each measured card's holdout violation at the close (charter audit M3).
     closed_holdouts: dict[str, float] = field(default_factory=dict)
+    # §IV.a: each failed predicate owns its step and its failing decisions, independently
+    # of proxy relief. Unsupported or ownerless steps remain uncharged.
+    closed_holdout_attribution: dict[str, dict] = field(default_factory=dict)
     mids: list[dict] = field(default_factory=list)
     funding: list[dict] = field(default_factory=list)
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
@@ -215,14 +220,39 @@ class PricingMixin:
         self.price_windows: dict[int, MeasureWindow] = {}
         self.price_origins: dict[str, dict[str, int]] = {}
 
-    def _contribution(self, handle: str, role: str) -> dict:
-        """Every original decision has one contribution record per measurement window."""
+    def _contribution(self, handle: str, role: str, *, original: bool = True) -> dict:
+        """Only an original decision establishes a price origin; late evidence cannot reopen it."""
         self.price_windows[self.window.index] = self.window
-        self.price_origins.setdefault(handle, {"origin": self.window.index})
-        return self.window.decisions.setdefault(handle, {
+        if original:
+            self.price_origins.setdefault(handle, {"origin": self.window.index})
+        sample = self.window.decisions.setdefault(handle, {
             "role": role, "cost": 0, "ok": 0, "invocations": 0, "tool_calls": 0,
             "notional_micro": 0,
         })
+        sample.pop("contribution_only", None)
+        return sample
+
+    def _record_behaviour(self, handle: str, *, supplemental: bool = False, **values) -> None:
+        """Known owners retain scalar or list evidence in the effect's window, once per call."""
+        # §II.b/§IV.a: ownership is evidence, never inferred from a window total.
+        contribution_only = (handle not in self.window.decisions
+                             or self.window.decisions[handle].get("contribution_only", False))
+        sample = self._contribution(handle, self._decision_role(handle), original=False)
+        if contribution_only:
+            sample["contribution_only"] = True
+        if supplemental:
+            sample = sample.setdefault("supplemental", {})
+        for key, value in values.items():
+            if isinstance(value, list):
+                sample.setdefault(key, []).extend(value)
+            elif key == "revised_decisions":
+                sample[key] = max(sample.get(key, 0), value)
+            else:
+                sample[key] = sample.get(key, 0) + value
+        self.ledger.append({"kind": "price.contribution", "handle": handle,
+                            "window": self.window.index,
+                            "role": self.window.decisions[handle]["role"], **values,
+                            **({"supplemental": True} if supplemental else {})})
 
     def _decision_role(self, handle: str) -> str:
         """The measurement scope a decision's return was, or would be, priced in."""
@@ -306,11 +336,11 @@ class PricingMixin:
             return
         notional = usd_to_micro(
             Decimal(str(payload["size"])) * Decimal(str(payload["px"])), rounding="nearest")
-        sample = self._contribution(handle, "producer")
-        self.ledger.append({"kind": "price.contribution", "handle": handle,
-                            "window": self.window.index, "notional_micro": notional})
-        sample["notional_micro"] += notional
-        self.price_origins[handle]["turnover"] = self.window.index
+        self._record_behaviour(handle, notional_micro=notional, fills=1,
+                               realized_pnl_micro=usd_to_micro(
+                                   payload.get("realized_usd", "0"), rounding="nearest"))
+        if handle in self.price_origins:
+            self.price_origins[handle]["turnover"] = self.window.index
 
     def _manage_reserve_window(self) -> None:
         """Close the measurement window when the price loop is due, and open the next.
@@ -538,6 +568,7 @@ class PricingMixin:
             judges.setdefault(judge, []).append(float(ev.payload["verdict"]))
         elif ev.kind is EventKind.META_VERDICT:
             self.window.meta_verdicts.append(float(ev.payload["score"]))
+            self._record_behaviour(ev.payload["by"], meta_verdicts=[float(ev.payload["score"])])
         elif ev.kind is EventKind.MARKET_MID:
             self._observe_positions()
 
@@ -561,6 +592,7 @@ class PricingMixin:
         known = getattr(self, "card_meanings", None)
         if known is None:
             known = self.card_meanings = {}
+        self._reset_sampling_cards()
         for card in self.charter.cards:
             # A list, not a tuple, so it compares equal after a checkpoint's JSON.
             meaning = list(metric_identity(card))
@@ -575,7 +607,10 @@ class PricingMixin:
                     # controller-to-sample ratio from now (essay II.IV.c; T2).
                     self.card_clock[card.id] = self.ticks_consumed
                 self.card_unmeasured.pop(card.id, None)
+                self.card_held.pop(card.id, None)
             known[card.id] = meaning
+        self.card_held = {cid: fact for cid, fact in self.card_held.items()
+                          if cid in {card.id for card in self.charter.cards}}
 
     def _derive_regions(self) -> None:
         """Every readable card of the current edition holds a region; unreadable ones hold none.
@@ -733,6 +768,7 @@ class PricingMixin:
         held = self._holdout_results(card_values)
         holdouts = {cid: row["violation"] for cid, row in held.items()}
         self.window.closed_holdouts = dict(holdouts)
+        self.window.closed_holdout_attribution = self._holdout_attribution(held)
         self.card_samples.holdouts = dict(holdouts)
         self.ledger.append(
             {
@@ -743,7 +779,9 @@ class PricingMixin:
                 "observations": values,
                 "regions": {cid: asdict(region) for cid, region in self.regions.items()},
                 "charter_edition": self.charter.edition,
-                **({"holdouts": held} if held else {}),
+                **({"holdouts": held,
+                    "holdout_attribution": self.window.closed_holdout_attribution}
+                   if held else {}),
                 "ts": self.clock.now_ns,
             }
         )
@@ -767,7 +805,11 @@ class PricingMixin:
                                     holdout=holdouts.get(card_id, 0.0),
                                     anticipated=self._anticipated_violation(
                                         card_id, card_values[card_id]),
-                                    pressure=pressure.get(card_id))
+                                    pressure=pressure.get(card_id),
+                                    charged_violation=held_sum(
+                                        violation(self.regions[card_id], card_values[card_id]),
+                                        self.window.closed_holdout_attribution.get(
+                                            card_id, {}).get("violation", 0.0)))
             if self.controller.snapshot()["cards"][card_id]["updates"] > before:
                 self.card_clock[card_id] = now
                 self.stats.price_updates += 1
@@ -784,7 +826,16 @@ class PricingMixin:
         # that replaced it (docs/manifest.md, observation units and attribution). It is frozen
         # before the immune organ runs: a ratchet it issues prices the next window, never
         # the window whose failure it diagnosed.
-        self.window.closed_cards = tuple(c for c in self.charter.cards if c.id in card_values)
+        # §II.b soft casts; R10/D4 and R16c-3: refusal cannot erase a supported
+        # violation. Keep only its proxy fact, not old holdouts or their owners.
+        for card in self.charter.cards:
+            if card.id in card_values:
+                self.card_held[card.id] = {
+                    "identity": list(metric_identity(card)), "source_window": w.index,
+                    "value": card_values[card.id],
+                }
+        self.window.closed_held = {cid: dict(fact) for cid, fact in self.card_held.items()}
+        self.window.closed_cards = tuple(self.charter.cards)
         self.window.closed_prices = {c.id: self.controller.price(c.id)
                                      for c in self.window.closed_cards}
         self._ledger_unattributed()
@@ -794,10 +845,26 @@ class PricingMixin:
         self._settle_deferred(w.index)
         self._prune_price_evidence()
 
-    def _card_observed(self, card_id: str) -> dict[str, int]:
-        """A card's consecutive closed windows with no reading (``unmeasured_windows``;
-        wave 16, R10-f): 0 for a card measured at the last close or not yet closed."""
-        return {"unmeasured_windows": self.card_unmeasured.get(card_id, 0)}
+    def _card_observed(self, card_id: str) -> dict[str, int | float]:
+        """Support age and last measured window's full/charged pressures at current lambda."""
+        result = {"unmeasured_windows": self.card_unmeasured.get(card_id, 0)}
+        windows = [w for w in self.price_windows.values()
+                   if w.closed_values is not None and card_id in w.closed_values]
+        if windows:
+            window = max(windows, key=lambda w: w.index)
+            region = window.closed_regions.get(card_id)
+            if region is not None:
+                proxy = violation(region, window.closed_values[card_id])
+                attributed = window.closed_holdout_attribution.get(card_id, {}).get("violation", 0)
+                price = self.controller.price(card_id)
+                result.update({
+                    "pressure_window": window.index,
+                    "controller_pressure": card_pressure(price, held_sum(
+                        proxy, window.closed_holdouts.get(card_id, 0)), self.m.prices.penalty_cap),
+                    "charged_pressure": card_pressure(price, held_sum(proxy, attributed),
+                                                      self.m.prices.penalty_cap),
+                })
+        return result
 
     def _card_pressure(self, card_values: dict[str, float],
                        holdouts: dict[str, float]) -> dict[str, float]:
@@ -993,10 +1060,136 @@ class PricingMixin:
             return {}
         facts = window_facts(self.card_samples.windows[-1])
         out = {}
+        decision_facts = self._holdout_decision_facts()
+        handles = sorted(decision_facts)
+        batches = {}
+        for entry in dict.fromkeys(e for c in cards for e in c.holdout):
+            name, _, version = entry.partition("@")
+            predicate = self.predicates.get(name, int(version))
+            if predicate is None or predicate.code is None:
+                batches[entry] = (None, {})
+                continue
+            from factorylab.charter.holdout import behavioural_reads
+
+            try:
+                reads = behavioural_reads(predicate.code)
+            except ValueError:
+                batches[entry] = (None, {})
+                continue
+            supported = [h for h in handles
+                         if all(decision_facts[h].get(k) is not None for k in reads)]
+            # §I.a: attribution failure cannot change the independently measured fact.
+            aggregate = self._resolve_holdout(entry, facts)
+            batch = [decision_facts[h] for h in supported]
+            runner = self.predicate_runner
+            values = (runner.run_batch(predicate.code, batch) if hasattr(runner, "run_batch")
+                      else [self._resolve_holdout(entry, f) for f in batch])
+            batches[entry] = (aggregate, dict(zip(supported, values, strict=True)))
         for card in cards:
-            results = {entry: self._resolve_holdout(entry, facts) for entry in card.holdout}
-            out[card.id] = {"results": results, "violation": holdout_violation(
-                list(results.values()), self._resolution_step(card.id))}
+            results = {entry: batches[entry][0] for entry in card.holdout}
+            out[card.id] = {"results": results, "decision_results": {
+                entry: batches[entry][1] for entry in card.holdout},
+                "violation": holdout_violation(
+                    list(results.values()), self._resolution_step(card.id))}
+        return out
+
+    def _holdout_decision_facts(self) -> dict[str, dict]:
+        """Each decision's anonymous facts are built once from rows indexed by window/handle."""
+        from factorylab.charter.holdout import BEHAVIOURAL_FACTS
+        from factorylab.charter.measurement import scope_facts
+
+        samples, window = self.card_samples, self.window
+        indexes = []
+        for kind, observation in (("returns", "revision_rate"), ("forecasts", "forecast_skill")):
+            index = {}
+            for row in _rows(samples, kind, observation):
+                owner = row.get("owner_handle") if kind == "forecasts" else row["handle"]
+                if owner is not None:
+                    index.setdefault((row["window"], owner), []).append(row)
+            indexes.append(index)
+        out = {}
+        # These counters have owner-aware producers, including when no event occurred.
+        # Pool extrema have no such partition and retain scope_facts' unresolved value.
+        defaults = dict.fromkeys(("amendments_proposed", "amendments_activated",
+                                  "market_purchases", "registrations",
+                                  "registration_rejections", "fills", "notional_micro",
+                                  "realized_pnl_micro", "exposures_settled", "exposures_won",
+                                  "revised_decisions"), 0)
+        defaults["meta_verdicts"] = []
+        keys = BEHAVIOURAL_FACTS.intersection(
+            key for sample in window.decisions.values() for key in sample)
+        for handle, sample in sorted(self._holdout_decisions(window).items()):
+            key = (window.index, handle)
+            facts = scope_facts([samples.windows[-1]], indexes[0].get(key, []),
+                                indexes[1].get(key, []))
+            facts.update({name: sample.get(name, value.copy() if isinstance(value, list) else value)
+                          for name, value in defaults.items()})
+            for name in sorted(keys):
+                if name not in defaults:
+                    facts[name] = sample.get(name, facts.get(name))
+            for name, value in sample.get("supplemental", {}).items():
+                facts[name] = (facts.get(name) or 0) + value
+            out[handle] = facts
+        return out
+
+    def _holdout_attribution(self, held: dict[str, dict]) -> dict[str, dict]:
+        """Each failed predicate's step belongs only to its supported failing decisions.
+
+        §IV.a: proxy relief cannot erase a failed holdout. Each predicate divides its
+        own step equally among its failing contributions; an ownerless step is never
+        redistributed. Facts without decision-level evidence are unresolved, not false.
+        """
+        from factorylab.charter.holdout import behavioural_reads
+
+        window = self.window
+        cards = {card.id: card for card in self.charter.cards}
+        facts_by_handle = (self._holdout_decision_facts()
+                           if any("decision_results" not in e for e in held.values()) else {})
+        out = {}
+        for cid, evidence in held.items():
+            card = cards[cid]
+            observation = normalise(card.observation)
+            owners = {h: d for h, d in self._holdout_decisions(window).items()
+                      if (card.answers_for == "all" or
+                          (d.get("menu_roles") or {d["role"]: 1.0}).get(card.answers_for, 0) > 0)}
+            eligible = {h: d for h, d in owners.items()
+                        if self.price_origins.get(h, {}).get(
+                            observation, self.price_origins.get(h, {}).get("origin"))
+                        == window.index}
+            predicates = {}
+            contributions: dict[str, list[float]] = {}
+            steps = []
+            for entry, result in evidence["results"].items():
+                if result is not False:
+                    continue
+                name, _, version = entry.partition("@")
+                predicate = self.predicates.get(name, int(version))
+                reads = behavioural_reads(predicate.code) if predicate and predicate.code else ()
+                results = {}
+                for handle in sorted(owners):
+                    if "decision_results" in evidence:
+                        results[handle] = evidence["decision_results"].get(entry, {}).get(handle)
+                    else:
+                        facts = facts_by_handle[handle]
+                        results[handle] = (self._resolve_holdout(entry, facts)
+                                           if reads and all(facts.get(k) is not None for k in reads)
+                                           else None)
+                known_owners = sorted(h for h, value in results.items() if value is False)
+                attributees = [h for h in known_owners if h in eligible]
+                step = self._resolution_step(cid)
+                predicates[entry] = {"results": results, "attributees": attributees,
+                                     "uncharged_owners": [h for h in known_owners
+                                                          if h not in eligible],
+                                     "violation": step,
+                                     "attributed_violation": step if attributees else 0.0}
+                if attributees:
+                    steps.append(step)
+                    for handle in attributees:
+                        contributions.setdefault(handle, []).append(step / len(attributees))
+            amount = held_sum(*steps)
+            shares = {h: fsum(part(v, steps) for v in values)
+                      for h, values in contributions.items()} if amount else {}
+            out[cid] = {"predicates": predicates, "violation": amount, "shares": shares}
         return out
 
     def _resolution_step(self, card_id: str) -> float:
@@ -1040,6 +1233,20 @@ class PricingMixin:
         reward of a decision, and there is no decision here to carry it).
         """
         window = self.window
+        for cid, attribution in window.closed_holdout_attribution.items():
+            for entry, evidence in attribution["predicates"].items():
+                if evidence["attributed_violation"] == 0 or evidence.get("uncharged_owners"):
+                    self.ledger.append({
+                        "kind": "price.unattributed", "card_id": cid,
+                        "predicate": entry, "window": window.index,
+                        "lambda": window.closed_prices.get(cid, 0.0),
+                        "violation": evidence["violation"],
+                        "attributed_violation": evidence["attributed_violation"],
+                        "reason": ("owner_outside_price_window" if evidence.get("uncharged_owners")
+                                   else "no_supported_owner"),
+                        "uncharged_owners": evidence.get("uncharged_owners", []),
+                        "ts": self.clock.now_ns,
+                    })
         for card in window.closed_cards:
             per = card.window.per
             price = window.closed_prices.get(card.id, 0.0)
@@ -1092,7 +1299,7 @@ class PricingMixin:
         priced: list[tuple] = []
         seen: set[str] = set()
         for window in windows:
-            closed = window.closed_values is not None and bool(window.closed_cards)
+            closed = window.closed_values is not None
             for card in (window.closed_cards if closed else self.charter.cards):
                 observation = book.get(card.observation)
                 if card.id in seen or observation is None:
@@ -1106,7 +1313,7 @@ class PricingMixin:
         return priced
 
     def _penalty_terms(self, cards: str, handle: str | None, *,
-                       as_role: str | None = None) -> list[dict]:
+                       as_role: str | None = None, abstaining: bool = False) -> list[dict]:
         """Late decisions keep their own windows; current windows use observed causal prefixes.
 
         ``as_role`` scopes ``handle`` in that role wherever a share is measured by role,
@@ -1123,12 +1330,50 @@ class PricingMixin:
                       else window.closed_values)
             regions = self.regions if window.closed_values is None else window.closed_regions
             region = regions.get(card.id)
-            if region is None or card.id not in values:
+            if region is None:
+                continue
+            if card.id not in values:
+                fact = (self.card_held if window.closed_values is None
+                        else window.closed_held).get(card.id)
+                live_card = next((c for c in self.charter.cards if c.id == card.id), None)
+                if (not abstaining or fact is None or live_card is None
+                        or fact["identity"] != list(metric_identity(live_card))
+                        or fact["identity"] != list(metric_identity(card))
+                        or fact["source_window"] >= window.index):
+                    continue
+                # Held evidence is not a new measurement. Shares belong to the
+                # refusing window, not to the authors of the supported source.
+                # §II.b: the current charter prices the raw supported fact.
+                region = self.regions.get(card.id)
+                if region is None:
+                    continue
+                excess = violation(region, fact["value"])
+                share = self._decision_share(
+                    window, handle, observation.id, card.answers_for, region,
+                    fact["value"], as_role=as_role,
+                ) if handle is not None else 1.0
+                if handle is not None and observation.id == "cost_per_return":
+                    share = self._cost_share(card, window, handle, share)
+                terms.append({
+                    "card_id": card.id, "observation": observation.id,
+                    "window": window.index, "held": True,
+                    "source_window": fact["source_window"],
+                    "violation": excess, "proxy_violation": excess,
+                    "holdout_violation": 0.0, "attributed_holdout_violation": 0.0,
+                    "proxy_share": share, "holdout_share": 0.0, "holdout_attributees": {},
+                    "lambda": price,
+                    "weight": card_pressure(price, excess, self.m.prices.penalty_cap),
+                    "share": share,
+                })
                 continue
             holdouts = (self.card_samples.holdouts if window.closed_values is None
                         else window.closed_holdouts)
-            amount = held_sum(violation(region, values[card.id]), holdouts.get(card.id, 0.0))
-            weight = card_pressure(price, amount, self.m.prices.penalty_cap)
+            proxy = violation(region, values[card.id])
+            attribution = window.closed_holdout_attribution.get(card.id, {})
+            holdout = attribution.get("violation", 0.0)
+            amount = held_sum(proxy, holdouts.get(card.id, 0.0))
+            charged = held_sum(proxy, holdout)
+            weight = card_pressure(price, charged, self.m.prices.penalty_cap)
             owner = None
             share = 1.0 if handle is None else self._decision_share(
                 window, handle, observation.id, card.answers_for, region, values[card.id],
@@ -1149,8 +1394,19 @@ class PricingMixin:
                                                     as_role=as_role)
                 if attributed is not None:
                     share, owner = attributed
+            proxy_share = share
+            holdout_share = (1.0 if handle is None else
+                             attribution.get("shares", {}).get(handle, 0.0))
+            if holdout > 0:
+                share = (part(proxy, (proxy, holdout)) * proxy_share
+                         + part(holdout, (proxy, holdout)) * holdout_share)
             term = {"card_id": card.id, "observation": observation.id,
                     "window": window.index, "violation": amount,
+                    "proxy_violation": proxy,
+                    "holdout_violation": holdouts.get(card.id, 0.0),
+                    "attributed_holdout_violation": holdout,
+                    "proxy_share": proxy_share, "holdout_share": holdout_share,
+                    "holdout_attributees": attribution.get("predicates", {}),
                     "lambda": price, "weight": weight,
                     "share": share}
             if owner is not None:
@@ -1280,7 +1536,21 @@ class PricingMixin:
 
     def _split_decisions(self, window) -> dict[str, dict]:
         """The window's decisions a card's penalty is split across (``_in_split``)."""
-        return {h: d for h, d in window.decisions.items() if self._in_split(h, window)}
+        return {h: d for h, d in window.decisions.items()
+                if not d.get("contribution_only") and self._in_split(h, window)}
+
+    def _holdout_decisions(self, window) -> dict[str, dict]:
+        """Owner-only evidence participates in holdouts without diluting proxy denominators."""
+        owners = dict(self._split_decisions(window))
+        owners.update((h, d) for h, d in window.decisions.items()
+                      if d.get("contribution_only") and self._in_split(h, window))
+        # §IV.a: settled forecasts retain their known owner even without a new invocation.
+        for row in _rows(self.card_samples, "forecasts", "forecast_skill"):
+            handle = row.get("owner_handle")
+            if (row["window"] == window.index and handle is not None
+                    and self._in_split(handle, window) and not self._is_niche(handle)):
+                owners.setdefault(handle, {"role": row["role"], "contribution_only": True})
+        return owners
 
     def _decision_share(self, window, handle, observation, role, region, value, *,
                         as_role: str | None = None) -> float:
@@ -1355,7 +1625,7 @@ class PricingMixin:
         return hits if floor else members - hits
 
     def _penalty_for(self, cards: str, handle: str | None = None, *,
-                     as_role: str | None = None) -> float:
+                     as_role: str | None = None, abstaining: bool = False) -> float:
         """Cap the total pressure, then allocate its penalty-weighted contribution share.
 
         A decision taken in the unhistoried niche bears no penalty (wave 16, R-E as
@@ -1365,7 +1635,7 @@ class PricingMixin:
         """
         if not self._in_split(handle):
             return 0.0
-        terms = self._penalty_terms(cards, handle, as_role=as_role)
+        terms = self._penalty_terms(cards, handle, as_role=as_role, abstaining=abstaining)
         total = held_sum(*(t["weight"] for t in terms))
         if total <= 0:
             return 0.0
@@ -1387,19 +1657,30 @@ class PricingMixin:
         if handle is None:
             return False
         origins = self.price_origins.get(handle, {})
-        window = self.price_windows.get(origins.get("origin"))
-        if window is None or window.closed_values is not None:
+        if not self._in_split(handle):  # the origin window's record (Sol F3)
             return False
-        if not self._in_split(handle, window):  # the origin window's record (Sol F3)
-            return False
-        return any(card.answers_for in (cards, "all") and card.id in self.regions
-                   and observation.id not in _EXACT_SHARES and w is window
-                   for card, observation, w, _price in self._priced_cards(origins))
+        return bool(self._pending_price_windows(cards, origins))
+
+    def _pending_price_windows(self, cards: str, origins: dict[str, int]) -> list[int]:
+        """Every open attributed window whose card share is not yet fixed."""
+        return sorted({window.index for card, observation, window, _price
+                       in self._priced_cards(origins)
+                       if window.closed_values is None
+                       and card.answers_for in (cards, "all") and card.id in self.regions
+                       and (observation.id not in _EXACT_SHARES or card.holdout)})
+
+    def _deferred_windows(self, handle: str, row: dict) -> list[int]:
+        """The windows a deferred row waits for. A row checkpointed before wave 16c
+        names none: it waited for its origin window alone, as it did (Codex on #161)."""
+        if "windows" in row:
+            return row["windows"]
+        origin = self.price_origins.get(handle, {}).get("origin")
+        return [] if origin is None else [origin]
 
     def _settle_deferred(self, index: int) -> None:
         """Settle every decision whose penalty waited for window ``index`` to close."""
-        for handle in sorted(h for h in self.deferred_settlements
-                             if self.price_origins.get(h, {}).get("origin") == index):
+        for handle in sorted(h for h, row in self.deferred_settlements.items()
+                             if index in self._deferred_windows(h, row)):
             row = self.deferred_settlements.pop(handle)
             if self.queue.get(handle).status not in (SettleStatus.PENDING,
                                                      SettleStatus.TIMED_OUT):
@@ -1448,9 +1729,11 @@ class PricingMixin:
                 "sampling_ref": sampling_ref, "cards": cards, "unresolved": list(unresolved),
                 # R16b-1: the world fixed this score now. Its settle loop closes here;
                 # the wait for the price close is the outer loop's own phase (II.IV.c).
-                "ready_tick": self.ticks_consumed}
+                "ready_tick": self.ticks_consumed if ready_tick is None else ready_tick,
+                "windows": self._pending_price_windows(cards, self.price_origins[handle])}
             self.ledger.append({"kind": "price.deferred", "handle": handle,
                                 "window": self.price_origins[handle]["origin"],
+                                "windows": self.deferred_settlements[handle]["windows"],
                                 "ts": self.clock.now_ns})
             return
         penalty = self._penalty_for(cards, handle)

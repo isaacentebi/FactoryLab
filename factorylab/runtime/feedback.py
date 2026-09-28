@@ -2279,6 +2279,7 @@ class FeedbackMixin:
             self.stats.censored += 1
             self.window.outcomes += 1
             self.window.censored += 1
+            self._record_behaviour(rec.handle, supplemental=True, outcomes=1, censored=1)
             return
         self._settle_priced(rec.handle, channel=rec.channel, score=reward,
                             definition_version=DEF_EVALUATION, sampling_ref=rec.graded_by,
@@ -2332,6 +2333,7 @@ class FeedbackMixin:
                 self.stats.censored += 1
                 self.window.outcomes += 1
                 self.window.censored += 1
+                self._record_behaviour(handle, supplemental=True, outcomes=1, censored=1)
                 continue
             scored = [entry if isinstance(entry, list) else [None, entry] for entry in scores]
             consequences = [float(s) for _judge, s in scored]
@@ -2340,6 +2342,8 @@ class FeedbackMixin:
             self.ledger.append({"kind": "exposure.settled", "handle": handle, "score": score,
                                 "judge_consequences": consequences,
                                 "judge_ordinary": ordinary, "ts": self.clock.now_ns})
+            # §II.b/IV.a: retain the measured owner's facts before reward pricing.
+            self._record_behaviour(handle, exposures_settled=1, exposures_won=int(score > 0.5))
             self._settle_priced(handle, channel=CH_EXPOSURE, score=score,
                                 definition_version=DEF_EXPOSURE, sampling_ref=None,
                                 cards="antagonist")
@@ -2413,6 +2417,7 @@ class FeedbackMixin:
                 self.stats.censored += 1
                 self.window.outcomes += 1
                 self.window.censored += 1
+                self._record_behaviour(handle, supplemental=True, outcomes=1, censored=1)
                 continue
             score = counter_score(rec["q"], rec["judge_q"], y)
             seq = self.ledger.append({
@@ -2447,13 +2452,18 @@ class FeedbackMixin:
         self.stats.censored += 1
         self.window.outcomes += 1
         self.window.censored += 1
+        self._record_behaviour(handle, supplemental=True, outcomes=1, censored=1)
 
     def _tick_age(self, judgement: PendingJudgement) -> int:
         """World ticks consumed since this judgement opened."""
         return self.ticks_consumed - (judgement.opened_at_tick or 0)
 
     def _sampling_actuator(self) -> None:
-        """The live sampling-rate actuator (essay II.IV.b: increase the sampling rate).
+        """The paid evaluation rate and standing mix adapt on their settled loop (§IV.b).
+
+        Additional-judge probability rises on measured divergence or loss of a
+        previously measured card's support; it never falls while consequence-blind.
+        Initial warm-up and never-measured cards supply no support-gap trigger.
 
         When the evaluator role's verdict mean rises while its payoff skill falls
         over the last ``immune.k`` closed windows (the offline overfitting
@@ -2486,6 +2496,9 @@ class FeedbackMixin:
             "consequence": (self._evaluator_skill()
                             if getattr(self, "last_window_consequences", 0) else None),
         })
+        gaps = self._sampling_gaps()
+        # §IV.b: a measured support loss survives recovery between actuator firings.
+        self.sampling_pending_gaps.update(gaps)
         k = self.m.immune.k
         del self.sampling_history[:-k]
         now, inner = self.ticks_consumed, self.cadence.consequence_period_events()
@@ -2496,6 +2509,16 @@ class FeedbackMixin:
         base, step, cap = self.ev.consequence_share, self.ev.sampling_step, self.ev.sampling_cap
         before = self.consequence_mix
         supported = sum(1 for w in self.sampling_history if w["consequence"] is not None)
+        verdict_slope = outcome_slope = None
+        if supported == k:
+            verdict_slope = slope([w["verdict"] for w in self.sampling_history])
+            outcome_slope = slope([w["consequence"] for w in self.sampling_history])
+        diverging = (verdict_slope is not None and outcome_slope is not None
+                     and verdict_slope > 0 and outcome_slope < 0)
+        # §IV.b: more evaluation draws, not merely a different standing blend.
+        self._sampling_rate(self.sampling_pending_gaps, diverging, supported == k,
+                            verdict_slope, outcome_slope)
+        self.sampling_pending_gaps = {}
         if supported < k:
             self.sampling_blind = {"supported": supported, "needed": k,
                                    "window": self.stats.reserve_windows - 1}
@@ -2503,12 +2526,6 @@ class FeedbackMixin:
                                 "mix": before, "ts": self.clock.now_ns})
             return
         self.sampling_blind = None
-        verdict_slope = outcome_slope = None
-        if len(self.sampling_history) == k:
-            verdict_slope = slope([w["verdict"] for w in self.sampling_history])
-            outcome_slope = slope([w["consequence"] for w in self.sampling_history])
-        diverging = (verdict_slope is not None and outcome_slope is not None
-                     and verdict_slope > 0 and outcome_slope < 0)
         after = min(cap, before + step) if diverging else max(base, before - step)
         after = round(after, 12)
         if after == before:
@@ -2520,6 +2537,71 @@ class FeedbackMixin:
             "ts": self.clock.now_ns,
         })
         self.consequence_mix = after
+
+    def _reset_sampling_cards(self) -> None:
+        """Removed or redefined metrics retain no adaptive sampling evidence (§III/IV.a)."""
+        from factorylab.charter.measurement import metric_identity
+
+        current = {card.id: list(metric_identity(card)) for card in self.charter.cards}
+        known = self.card_meanings
+        support = self.sampling_card_support
+        tracked = (set(known) | set(support) | set(self.sampling_pending_gaps)
+                   | set(self.card_samples.values))
+        for cid in sorted(tracked):
+            meaning = current.get(cid)
+            previous = known.get(cid, meaning)
+            if isinstance(previous, str) and meaning is not None:
+                previous = [previous, *meaning[1:]]
+            supported = support.get(cid, {}).get("meaning", meaning)
+            if meaning is None or previous != meaning or supported != meaning:
+                support.pop(cid, None)
+                self.sampling_pending_gaps.pop(cid, None)
+                for samples in (self.card_samples.values, self.card_samples.scopes,
+                                self.card_samples.medians, self.card_samples.holdouts):
+                    samples.pop(cid, None)
+
+    def _sampling_gaps(self) -> dict[str, dict]:
+        """Only previously measured current metric identities can lose support."""
+        from factorylab.charter.measurement import metric_identity
+
+        self._reset_sampling_cards()
+        support = self.sampling_card_support
+        current = {card.id: list(metric_identity(card)) for card in self.charter.cards}
+        gaps = {}
+        for cid, meaning in current.items():
+            unmeasured = self.card_unmeasured.get(cid, 0)
+            if not unmeasured and cid in self.card_samples.values:
+                support[cid] = {"meaning": meaning,
+                                "window": self.stats.reserve_windows - 1}
+            elif unmeasured and cid in support:
+                gaps[cid] = {"unmeasured_windows": unmeasured,
+                             "last_measured_window": support[cid]["window"]}
+        return gaps
+
+    def _sampling_rate(self, gaps: dict, diverging: bool, supported: bool,
+                       verdict_slope: float | None, outcome_slope: float | None) -> None:
+        """Additional paid draws rise on evidence; blindness never lowers their rate."""
+        base, cap = self.ev.multi_judge_share, self.ev.sampling_cap
+        before = self.multi_judge_share
+        if base >= cap:
+            return  # Existing manifests may already buy more draws than the adaptive cap.
+        if gaps or diverging:
+            after = min(cap, before + self.ev.sampling_step)
+        elif supported:
+            after = max(base, before - self.ev.sampling_step)
+        else:
+            return
+        after = round(after, 12)
+        if after == before:
+            return
+        self.ledger.append({
+            "kind": "sampling.rate_raise" if after > before else "sampling.rate_lower",
+            "window": self.stats.reserve_windows - 1,
+            "rate_before": before, "rate_after": after,
+            "verdict_slope": verdict_slope, "outcome_slope": outcome_slope,
+            "gaps": gaps, "ts": self.clock.now_ns,
+        })
+        self.multi_judge_share = after
 
     def _evaluator_skill(self) -> float | None:
         """The evaluators' mean consequence skill, forecasts and scored verdicts pooled
@@ -2574,6 +2656,7 @@ class FeedbackMixin:
                 self.stats.censored += 1
                 self.window.outcomes += 1
                 self.window.censored += 1
+                self._record_behaviour(p.handle, supplemental=True, outcomes=1, censored=1)
             del self.pending[p.handle]
 
     def _close_assembly_rounds(self) -> None:
@@ -2766,6 +2849,7 @@ class FeedbackMixin:
                                 "handle": lr.handle, "router": state.learner.id,
                                 "status": str(lr.status), "neutral": raw,
                                 "penalty": penalty, "reward": charged,
+                                "terms": self._abstention_price_terms(lr.handle),
                                 "ts": self.clock.now_ns})
         fb = BanditFeedback(prop.chosen, charged, prop.probs[prop.action_ids.index(prop.chosen)])
         if target is not state:
@@ -2926,7 +3010,8 @@ class FeedbackMixin:
             self.ledger.append({"kind": kind, "handle": handle,
                                 "router": credit["router"], "neutral": neutral,
                                 **({"status": credit["status"]} if "status" in credit else {}),
-                                "penalty": penalty, "reward": reward, "ts": now})
+                                "penalty": penalty, "reward": reward,
+                                "terms": self._abstention_price_terms(handle), "ts": now})
             fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
             learned = self._apply_router_round(drawer, handle, credit["p"], credit["executed"],
                                                fb)
@@ -2964,18 +3049,44 @@ class FeedbackMixin:
         # Each role's price is measured with the abstention scoped in that role (the
         # Wave 2 review, item 8b): a less-weighted role's floor and attribution are
         # that role's, never the role the window filed the abstention under.
-        penalty = held_sum(*(weight * self._penalty_for(role, handle, as_role=role)
-                             for role, weight in sorted(roles.items())))
+        abstaining = self._is_price_abstention(handle)
+        penalty = held_sum(*(weight * self._penalty_for(
+            role, handle, as_role=role, abstaining=abstaining,
+        ) for role, weight in sorted(roles.items())))
         return penalty
 
-    def _abstention_awaits_close(self, handle: str) -> bool:
-        """Whether a round that delivered nothing waits for its origin window to close
-        before it is priced: any role its draw could have filled has a card whose share
-        is a count of that window's decisions (``PricingMixin._awaits_close``)."""
+    def _is_price_abstention(self, handle: str) -> bool:
+        """Neutral abstention imputations bear identical held prices (§II.b; D4/R16c-3)."""
+        try:
+            decision = self.queue.get(handle)
+            return (decision.propensity.chosen == NOOP or decision.status in
+                    (SettleStatus.CENSORED, SettleStatus.TIMED_OUT) or any(
+                row.definition_version == DECLINED_DEFINITION
+                or row.status in (SettleStatus.CENSORED, SettleStatus.TIMED_OUT)
+                for row in self.queue.history(handle)
+            ))
+        except KeyError:
+            return False
+
+    def _abstention_price_terms(self, handle: str) -> list[dict]:
+        """Price provenance retains each role's own menu weight and source window."""
         origin = self.price_origins.get(handle, {}).get("origin")
         window = self.price_windows.get(origin)
         sample = window.decisions.get(handle) if window is not None else None
-        if sample is None or window.closed_values is not None:
+        if sample is None:
+            return []
+        roles = sample.get("menu_roles") or {sample["role"]: 1.0}
+        return [dict(term, role=role, menu_weight=weight)
+                for role, weight in sorted(roles.items())
+                for term in self._penalty_terms(
+                    role, handle, as_role=role, abstaining=self._is_price_abstention(handle))]
+
+    def _abstention_awaits_close(self, handle: str) -> bool:
+        """Neutral credit waits for every attributed price window to freeze (§IV.c)."""
+        origins = self.price_origins.get(handle, {})
+        window = self.price_windows.get(origins.get("origin"))
+        sample = window.decisions.get(handle) if window is not None else None
+        if sample is None:
             return False
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
         return any(self._awaits_close(role, handle) for role in sorted(roles))

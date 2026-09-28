@@ -2873,8 +2873,12 @@ def of2c_holdout_bites(events: list[Mapping], manifest: Mapping, *, card: str,
                 continue  # no measured region violation to subtract: missing evidence
             checked += 1
             extra = need(term, "violation") - region_violation[reference]
-            if extra > 1e-12 and need(term, "share") > 0:
-                bitten.append({"handle": handle, "window": need(term, "window"), "holdout": extra})
+            # §IV.a: global pressure is not evidence that its attributee bore a charge.
+            attributed = term.get("attributed_holdout_violation", 0.0)
+            holdout_share = term.get("holdout_share", 0.0)
+            if extra > 1e-12 and attributed > 0 and holdout_share > 0:
+                bitten.append({"handle": handle, "window": need(term, "window"),
+                               "holdout": attributed, "holdout_share": holdout_share})
     if not checked:
         return _unsupported("OF-2c", "no decision of the seats was priced after activation")
     return _result("OF-2c", bool(bitten), checked=checked, bitten=bitten[:5])

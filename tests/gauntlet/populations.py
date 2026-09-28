@@ -574,6 +574,24 @@ def sf1(*, hold_a: Arm = hold, hold_b: Arm = investigate, hold_c: Arm = decline,
     return world(seats, cards=[UPTAKE, WELL_FORMED]), Population(seats, record=record)
 
 
+def intermittent() -> tuple[Any, Population]:
+    """Synchronized judge refusals leave the producer verdict card intermittently measured."""
+    def half_judge(view: View) -> dict:
+        return verdict(0.3)(view) if view.window % 2 == 0 else decline(view)
+
+    seats = [producer("steady-a", hold), producer("steady-b", hold),
+             *(judge(f"judge-{i}", half_judge) for i in range(4)),
+             *(meta(f"meta-{i}", conformity(0.8)) for i in range(2))]
+    # §IV.a: these are the adversarial population's metrics, not a kernel refusal tax.
+    cards = [card("verdict-floor", "verdict_mean", "at least 0.5", answers_for="producer",
+                  norm="useful inquiry"),
+             card("conformity-floor", "meta_verdict_mean", "at least 0.9",
+                  answers_for="evaluator", norm="truthful commitments")]
+    # §IV.b: H = 9s / min_ratio lets the ordinary actuator respond without a forced clock.
+    return (world(seats, cards=cards, changes={"timing": {"world_repricing": "9s"}}),
+            Population(seats))
+
+
 def flip_arm(*, until_window: int) -> Arm:
     """Well formed on even windows, malformed on odd ones, until ``until_window``."""
     def arm(view: View) -> dict:
@@ -591,6 +609,18 @@ def th1(*, until_window: int = 50, record: bool = False) -> tuple[Any, Populatio
     cards = [card("well-formed-floor", "well_formed_rate", "at least 0.9",
                   norm="truthful commitments")]
     return world(seats, cards=cards), Population(seats, record=record)
+
+
+def th1_sustained() -> tuple[Any, Population]:
+    """TH-1b: both producers sustain oscillation throughout the cap-freeze witness."""
+    # Chapter II §II.b prices thrash's duration. Both arms oscillate so router
+    # selection cannot replace the period-2 signal with a steady producer; unlike
+    # th1's release population, neither stops before the cap-freeze witness.
+    seats = [producer("flip-a", flip_arm(until_window=91)),
+             producer("flip-b", flip_arm(until_window=91)), *honest_panel()]
+    cards = [card("well-formed-floor", "well_formed_rate", "at least 0.9",
+                  norm="truthful commitments")]
+    return world(seats, cards=cards), Population(seats)
 
 
 def iid_arm(p_malformed: float, salt: str) -> Arm:

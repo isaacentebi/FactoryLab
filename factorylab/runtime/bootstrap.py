@@ -221,6 +221,8 @@ class BootstrapMixin:
         # a dark card is published to governance, never coerced.
         self.card_unmeasured: dict[str, int] = {}
         self.card_meanings: dict[str, list] = {}
+        # §II.b, R10/D4, R16c-3: supported facts price abstentions across gaps.
+        self.card_held: dict[str, dict] = {}
         # Whether a governance tier fits between the slowest loop and the world (T7).
         self.governance_viable = True
         # event kind -> the tick a grown menu started waiting for its epoch (T6).
@@ -639,7 +641,10 @@ class BootstrapMixin:
         self.advance_through_ns: int | None = None
         self.tick_through_ns: int | None = None
         self.last_tick_ns: int | None = None
-        self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
+        self.consequence_mix: float = self.ev.consequence_share
+        self.multi_judge_share: float = self.ev.multi_judge_share
+        self.sampling_card_support: dict[str, dict[str, Any]] = {}
+        self.sampling_pending_gaps: dict[str, dict[str, Any]] = {}
         # The consequence scores the last closed window issued, and whether the actuator
         # is blind for want of them (wave 16, ruling R-B).
         self.last_window_consequences: int = 0

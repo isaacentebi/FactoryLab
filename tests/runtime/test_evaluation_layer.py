@@ -90,7 +90,7 @@ def test_an_evaluator_monoculture_is_refused_and_a_provider_change_does_not_help
         manifest_from_dict(raw)
 
 
-def test_too_few_judge_families_for_two_judges_a_return_is_refused_only_with_a_share():
+def test_s8_judge_families_cover_positive_adaptive_cap_even_at_zero_initial_share():
     raw = _edition6()
     for seat in raw["assemblies"]:
         if seat["id"] in ("judge-fidelity", "judge-mechanics"):
@@ -99,7 +99,31 @@ def test_too_few_judge_families_for_two_judges_a_return_is_refused_only_with_a_s
                                          "on 1 families other than its own"):
         manifest_from_dict(raw)
     raw["evaluation"]["multi_judge_share"] = 0.0
+    with pytest.raises(ValueError, match="multi_judge_count needs 2"):
+        manifest_from_dict(raw)
+    raw["evaluation"]["sampling_cap"] = 0.0
+    raw["evaluation"]["consequence_share"] = 0.0
     assert manifest_from_dict(raw).evaluation.multi_judge_share == 0.0
+
+
+def test_r7_zero_initial_share_and_sampling_step_accept_one_judge_family():
+    raw = _edition6()
+    for seat in raw["assemblies"]:
+        if seat["id"] in ("judge-fidelity", "judge-mechanics"):
+            seat["model_id"] = "openai/gpt-6-luna"
+    raw["evaluation"]["multi_judge_share"] = 0.0
+    raw["evaluation"]["sampling_step"] = 0.0
+    assert raw["evaluation"].get("sampling_cap", 0.7) > 0
+
+    manifest = manifest_from_dict(raw)
+
+    assert manifest.evaluation.multi_judge_share == 0.0
+    assert manifest.evaluation.sampling_step == 0.0
+    assert manifest.evaluator_population_problems() == []
+
+    raw["evaluation"]["multi_judge_share"] = 0.3
+    with pytest.raises(ValueError, match="multi_judge_count needs 2"):
+        manifest_from_dict(raw)
 
 
 def test_a_world_that_seeds_no_judging_is_not_bound():

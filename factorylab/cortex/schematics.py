@@ -1937,6 +1937,7 @@ class SchematicsMixin:
             # Whether the sampling actuator holds the mix for want of consequence
             # readings (wave 16, R-B): {supported, needed, window}, or None.
             "sampling_blind": getattr(self, "sampling_blind", None),
+            "multi_judge_share": getattr(self, "multi_judge_share", self.ev.multi_judge_share),
             # The thrash price in force (world.mechanics.thrash_price): it moves each window.
             "thrash_price": {"lambda": thrash.get("lambda", 0.0),
                              "penalty": thrash.get("penalty", 0.0),
@@ -2282,7 +2283,29 @@ class SchematicsMixin:
                 "filled, or would have filled, bears in the window it was drawn in (a NOOP "
                 "weighs each role by the odds its draw gave that role's seats); before the "
                 "router's first settled round r is the published prior "
-                f"{NEUTRAL_REWARD}. A seat's own learner is credited the same"
+                f"{NEUTRAL_REWARD}. A seat's own learner is credited the same. "
+                "A NOOP, decline, censoring or timeout receiving neutral credit in an "
+                "unmeasured role-card window uses the last "
+                "supported raw measurement of that same metric identity, recomputing its "
+                "violation against the currently active region even after a gap window closes, "
+                "while keeping the refusing window's frozen denominator and evidence, "
+                "at the refusing "
+                "window's price and decision share. Without a supported predecessor the "
+                "held charge is zero. Held terms record held=true and source_window; "
+                "old holdouts are not carried forward. Ordinary acts have no held fallback; "
+                "niche exemptions, menu-role weights and penalty caps are unchanged"
+            ),
+            "evaluation_sampling": (
+                f"Additional-judge probability starts at {ev.multi_judge_share}; its live "
+                "value is world.adaptive_scoring.multi_judge_share. On the sampling loop, "
+                "measured verdict-up/skill-down divergence or a previously measured current "
+                "metric identity losing support raises it "
+                f"by {ev.sampling_step}, capped at {ev.sampling_cap}; a starting probability "
+                "at or above that cap stays fixed. Initial warm-up and never-measured cards "
+                "are not support gaps. Without either trigger it steps toward its starting "
+                "value only with supported consequence readings; blindness never lowers it. "
+                "Additional draws retain ordinary provider bills, compute limits, family "
+                "exclusions and the router's option to wake nobody."
             ),
             "consequence_standing": (
                 "0.5 + skill, clipped to [0, 1] and capped at 0.5 below minimum coverage; "
@@ -2302,8 +2325,13 @@ class SchematicsMixin:
             ),
             "card_penalty": (
                 "v_j = distance outside card j's inclusive region / observation.scale, plus "
-                "the violation its failed holdouts add; p_j = min(lambda_j * v_j, "
-                "penalty_cap), 0 while v_j is 0; S = sum(p_j) over cards for the "
+                "the attributable violation its failed holdouts add; p_j = min(lambda_j * v_j, "
+                "penalty_cap), 0 while v_j is 0. PID bounds and saturation retain the full "
+                "violation, including ownerless holdouts. card_prices publishes "
+                "controller_pressure and charged_pressure separately beside lambda, using "
+                "the last measured pressure_window and current price; a lambda at its "
+                "controller bound need not impose penalty_cap on attributed rewards. "
+                "S = sum(p_j) over cards for the "
                 "settlement's role or all; each role's cards use their declared typed "
                 f"windows. penalty = min(S, {self.m.prices.penalty_cap}) * share; "
                 "share = sum(p_j * share_j) / S (zero when S = 0). "
@@ -2329,6 +2357,31 @@ class SchematicsMixin:
                 "money spent. Every count is the window's when it closed: a "
                 "decision settling while its window is open settles at the close "
                 "(price.deferred). "
+                "These observation shares are proxy shares. Each globally failed holdout "
+                "predicate resolves separately on anonymous decision-attributed facts; "
+                "owner-known scalar and list contributions are recorded in the effect window. "
+                "Direct counters replace matching row facts; supplemental outcomes and revisions "
+                "add only evidence absent from rows. Forecast rows retain their owning decision. "
+                "Supported event counters are zero (or empty lists) when no event occurred. "
+                "Pool peak position notional remains unresolved; pooled PnL adjustments are not "
+                "assigned to decisions. Contribution-only owners do not dilute proxy splits. "
+                "Unsupported inputs never become failures. Known owners outside the card's "
+                "price window are disclosed as uncharged_owners, with price.unattributed reason "
+                "owner_outside_price_window, separately from no_supported_owner. Such later "
+                "effects do not reopen settled rewards or change the proxy's original window. "
+                "Its resolution step is "
+                "split equally among the non-niche decisions of the card's role whose facts "
+                "fail it. A mixed-menu abstention participates in each positive-weight menu role; "
+                "ordinary abstention pricing applies that role's menu weight once. "
+                "A step with no failing decision is uncharged, not redistributed. "
+                "The holdout share is the decision's attributed steps over all attributable "
+                "steps. The card share is the violation-weighted mean of its proxy and "
+                "holdout shares; proxy relief changes only the proxy share. A card with "
+                "holdouts waits for its decision window to close even for exact proxy "
+                "shares. Holdout attribution is frozen at that close. Each predicate runs once "
+                "per window in a bounded jail batch over whole-window and supported decision "
+                "facts; each item has a fresh namespace, and batch resource failure leaves "
+                "its evidence unresolved. "
                 "Closed decision windows retain their observations; open windows use the last "
                 "closed observations with current contribution totals. "
                 "score = clip(raw_score - penalty, 0, 1), as published; every learner, the "

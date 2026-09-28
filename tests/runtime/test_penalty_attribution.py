@@ -267,7 +267,10 @@ def test_a_card_with_no_readings_for_n_windows_publishes_unmeasured_windows_n(mo
     assert public[HOLDS.id]["unmeasured_windows"] == 4
     _producer(rt, "seed-decider", "hold")
     rt._close_price_window()
-    assert rt._card_observed(HOLDS.id) == {"unmeasured_windows": 0}
+    observed = rt._card_observed(HOLDS.id)
+    assert observed["unmeasured_windows"] == 0
+    assert observed["pressure_window"] == rt.window.index
+    assert observed["charged_pressure"] == observed["controller_pressure"]
 
 
 # --- an unbounded adopted price never overflows (R-E) -----------------------------------

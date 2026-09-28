@@ -29,9 +29,11 @@ COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                      "closed_prices", "closed_scopes", "closed_holdouts", "series_discarded",
+                      "closed_prices", "closed_scopes", "closed_holdouts", "closed_held",
+                      "series_discarded",
                       # Wave 16, D5: who relieved a rate, by decision handle.
-                      "closed_relief", "paid_off_settled", "paid_off_handles",
+                      "closed_relief", "closed_holdout_attribution",
+                      "paid_off_settled", "paid_off_handles",
                       # The price loop's own schedule is the clock's, not an observation.
                       "opened_tick", "due_tick")
 FORECAST_OBSERVATIONS = frozenset({
@@ -501,7 +503,7 @@ class CardSamples:
     def resolved_forecast(
         self, *, forecast, role: str, window: int, skill: float | None,
         y: int | None, status: str, source: dict, subject: dict,
-        excluded: str | None = None,
+        excluded: str | None = None, owner_handle: str | None = None,
     ) -> None:
         """Resolved rows retain separate forecaster and judged-return identities.
 
@@ -511,6 +513,7 @@ class CardSamples:
         """
         self.forecasts.append({
             "handle": forecast.handle, "assembly": forecast.evaluator_id, "role": role,
+            "owner_handle": owner_handle if owner_handle is not None else source.get("handle"),
             "subject_handle": forecast.about_handle,
             "subject_assembly": subject.get("assembly"), "subject_role": subject.get("role"),
             "window": window, "skill": skill, "predicate": forecast.predicate_id,
@@ -631,6 +634,7 @@ def record_card_forecasts(runtime, pending, baseline) -> None:
             forecast=forecast, role=role, window=runtime.window.index, skill=skill,
             y=row["y"], status=row["status"], source=source, subject=subject,
             excluded=row.get("excluded") or _excluded(runtime, row["handle"]),
+            owner_handle=parent,
         )
 
 

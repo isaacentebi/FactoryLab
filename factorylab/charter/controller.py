@@ -524,7 +524,7 @@ class PriceController:
 
     def observe(self, card_id: str, value: float, window_end_event: int, *,
                 holdout: float = 0.0, anticipated: float | None = None,
-                pressure: float | None = None) -> None:
+                pressure: float | None = None, charged_violation: float | None = None) -> None:
         """Ledger each accepted update or skipped window before any state/clock changes.
 
         Nonnegative event indices double as logical nanosecond timestamps for
@@ -542,6 +542,11 @@ class PriceController:
         integrator freezes on the card's own bound only (anti-windup, rulings R-E,
         R10-e). Without it the card's own ``lambda * v`` is the pressure.
         """
+        # §I.b: attributed reward pressure is disclosed, never substituted into PID.
+        if charged_violation is not None:
+            charged_violation = _number(charged_violation, "charged_violation")
+            if charged_violation < 0:
+                raise ValueError("charged violation must be nonnegative")
         holdout = _number(holdout, "holdout")
         if anticipated is not None:
             anticipated = _number(anticipated, "anticipated")
@@ -620,6 +625,8 @@ class PriceController:
             "bound": bound,
             "at_cap": at_bound,
             "integrator_frozen": frozen,
+            **({"charged_pressure": _pressure(price, charged_violation, self.__cap)}
+               if charged_violation is not None else {}),
             **({"pressure": pressure} if pressure is not None else {}),
             **terms,
             **({"holdout": holdout} if holdout else {}),

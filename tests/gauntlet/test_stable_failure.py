@@ -25,7 +25,8 @@ UPTAKE = P.UPTAKE["id"]
 
 @pytest.fixture(scope="module")
 def sf1(shared_run):
-    return shared_run("sf1", lambda: P.run(*P.sf1(), events=300))
+    # §II.b: retain two organ opportunities after the Tick gain reaches its cap.
+    return shared_run("sf1", lambda: P.run(*P.sf1(), events=228))
 
 
 def _transient_world():
@@ -38,7 +39,7 @@ def _transient_world():
 
 @pytest.fixture(scope="module")
 def transient(shared_run):
-    return shared_run("sf1-transient", lambda: P.run(*_transient_world(), events=300))
+    return shared_run("sf1-transient", lambda: P.run(*_transient_world(), events=250))
 
 
 # --- SF-1: unrelievable failure --------------------------------------------------------
@@ -69,7 +70,7 @@ def _ratchet_resets_duration(original):
 
 def test_sf1b_negative_control_a_duration_reset_no_op_fails():
     manifest, population = P.sf1()
-    mutant = P.run(manifest, population, events=300, patches=[
+    mutant = P.run(manifest, population, events=228, patches=[
         (PriceController, "ratchet", _ratchet_resets_duration(PriceController.ratchet))])
     result = g.sf1b_ratchet_cadence(mutant.events, mutant.manifest)
     assert result.status == g.FAIL
@@ -78,7 +79,7 @@ def test_sf1b_negative_control_a_duration_reset_no_op_fails():
 
 def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
     manifest, population = P.sf1()
-    mutant = P.run(manifest, population, events=300,
+    mutant = P.run(manifest, population, events=228,
                    patches=[(PriceController, "ratchet", lambda self, *a, **k: None)])
     assert g.sf1b_ratchet_cadence(mutant.events, mutant.manifest).status != g.PASS
 
@@ -86,13 +87,18 @@ def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
 def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     """Astra M-6's control: when the card is briefly satisfied the flag clears at an
     acting window, the duration ends, and the next ratchet starts again from one."""
-    assert transient.rows("immune.price_ratchet_ended")
+    ended = [r for r in transient.rows("immune.price_ratchet_ended")
+             if r["card_id"] == UPTAKE]
+    assert ended
+    assert any(r["card_id"] == UPTAKE and r["duration"] == 1
+               and r["window"] > ended[0]["window"]
+               for r in transient.rows("immune.price_ratchet"))
     result = g.sf1b_ratchet_cadence(transient.events, transient.manifest)
     assert result.ok, result.evidence
 
 
 def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
-    mutant = P.run(*_transient_world(), events=300, patches=[
+    mutant = P.run(*_transient_world(), events=250, patches=[
         (PriceController, "end_failure", lambda self, card_id, *, window: None)])
     result = g.sf1b_ratchet_cadence(mutant.events, mutant.manifest)
     assert result.status == g.FAIL
@@ -112,11 +118,11 @@ def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
 # The Tick router's loop counts every round it learned, from its opening to its first
 # terminal tick (R16b-2; Astra on #157): a scored round deferred to its window's close
 # is sampled at score ready, no longer lost at the close, so the loop is short enough
-# that its gain bound lies within a 300-event world.
+# that its gain bound lies within the shortened world.
 def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
     """No router unwound while flagged or missed a bound the run covered, and the Tick
     router, whose own loop is the organ's, reached gamma_max. The judges' routers step on
-    a 12-window loop, so their bounds (1 + 9 × 12 windows) lie beyond a 300-event world:
+    a 12-window loop, so their bounds (1 + 9 × 12 windows) lie beyond this world:
     SF-1e reads them as unsupported, never as a pass."""
     result = g.sf1e_gain(sf1.events, sf1.manifest)
     assert result.status != g.FAIL, result.evidence
@@ -186,7 +192,7 @@ SF2_UPTAKE = P.card("independent-uptake", "revision_rate", "at least 0.9")
 
 @pytest.fixture(scope="module")
 def sf2_low(shared_run):
-    return shared_run("sf2-low", lambda: P.run(*_sf2(0.1), events=200))
+    return shared_run("sf2-low", lambda: P.run(*_sf2(0.1), events=100))
 
 
 def test_sf2_no_force_the_kernel_never_draws_for_the_reliever(sf2_low):
@@ -220,32 +226,208 @@ def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):
     assert reliever and holder and max(reliever) < min(p for p in holder if p > 0)
 
 
-# --- future work (R16b-10) ---------------------------------------------------------------
+# --- intermittent support (R16b-10, wave 16c) --------------------------------------------
 
 
-def _half_judge(view):
-    """A judge that answers 0.3 (under the 0.5 floor) on even windows and declines on odd
-    ones: the card is violated whenever measured, and measured every other window."""
-    return P.verdict(0.3)(view) if view.window % 2 == 0 else P.decline(view)
+@pytest.fixture(scope="module")
+def intermittent(shared_run):
+    """One live run supplies sampling, role-pricing and unsupported-attractor proofs."""
+    # Keep the bounded shared run; the sampling test asserts full immune-horizon coverage.
+    def make_run():
+        run = P.run(*P.intermittent(), events=220, instrument=False)
+        credited = {r["handle"] for r in run.rows("router.decline_priced")}
+        owed = {r["handle"] for r in run.rows("commission.declined")} - credited
+        # §IV.c: retain every final open-window liability, not an early neutral credit.
+        assert owed
+        assert owed <= run.rt.noop_credits.keys()
+        assert all(run.rt._abstention_awaits_close(h) for h in owed)
+        return run
+    return shared_run("sf-intermittent", make_run)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="intermittent measurement escapes the ratchet; answered by "
-                   "sampling rate, next wave")
-def test_an_intermittently_measured_failure_is_still_ratcheted():
-    """R16b-10's one support rule enters a card into the failing attractor only over a
-    wholly measured tail. A population that measures its violating card only every
-    other window (the judges alternate a low verdict and a decline, by window) is never
-    entered, so the duration price never reaches it. The answer is the sampling rate
-    (enough samples per window), not a weaker support rule."""
-    seats = [P.producer("steady-a", P.hold), P.producer("steady-b", P.hold),
-             *(P.judge(f"judge-{i}", _half_judge) for i in range(4)),
-             *(P.meta(f"meta-{i}", P.conformity(0.8)) for i in range(2))]
-    cards = [P.card("verdict-floor", "verdict_mean", "at least 0.5", answers_for="producer",
-                    norm="useful inquiry")]
-    run = P.run(P.world(seats, cards=cards), P.Population(seats), events=300)
+def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured(intermittent):
+    """Extra real draws cannot manufacture the fully measured tail R16b-10 requires."""
+    run = intermittent
+    windows = {r["window"]: r for r in run.rows("price.window")}
+    immune = run.rows("immune.window")
+    assert len(immune) >= run.physics.H
     violated = g.card_violations(run.events, "verdict-floor")
-    assert violated and all(v > 0 for v in violated.values())  # violated when measured
-    assert [r for r in run.events
-            if r.get("kind") in ("immune.price_ratchet", "immune.price_ratchet_saturated")
-            and r.get("card_id") == "verdict-floor"]
+    assert violated and all(v == pytest.approx(0.4) for v in violated.values())
+    raises = run.rows("sampling.rate_raise")
+    assert raises  # Sampling must respond independently of the held-liability price.
+    for row in raises:
+        gap = row["gaps"]["verdict-floor"]
+        assert gap["unmeasured_windows"] > 0
+        assert "verdict-floor" in windows[gap["last_measured_window"]]["values"]
+        # §IV.b: a historical gap can be consumed after measurement has recovered.
+        gap_start = gap["last_measured_window"] + 1
+        gap_end = gap_start + gap["unmeasured_windows"]
+        assert gap_end - 1 <= row["window"]
+        assert all("verdict-floor" not in windows[w]["values"]
+                   for w in range(gap_start, gap_end))
+        assert row["rate_after"] > row["rate_before"]
+    first = raises[0]
+    assert any(r["seq"] > first["seq"]
+               and first["rate_before"] <= r["sample"] < r["share"]
+               and r["share"] > first["rate_before"]
+               for r in run.rows("route.multi_judge"))
+    after = [r for r in immune if r["window"] > first["window"]]
+    assert any(r["gap"] is not None and r["gap"] >= run.physics.gap_threshold for r in after)
+    assert any(r["window"] % 2 for r in after)
+    for row in immune:
+        measured = row["profile"]["card:verdict-floor"]
+        if row["window"] % 2:
+            assert measured is None
+        else:
+            assert measured == pytest.approx(0.3)
+        assert "card:verdict-floor" not in row["violated_cards"]
+        assert not row["flags"]["stable_failure"]
+
+
+def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(intermittent):
+    """§II.b preserves decline-credit accounting and ordinary producer violation prices.
+
+    The population owns both role-specific cards (§IV.a); without an evaluator card,
+    zero evaluator pressure is correct. R16b-10 still forbids treating refusals as
+    evidence of a failing producer attractor (§II.a, §IV.c).
+    """
+    run = intermittent
+    assert [(c["id"], c["answers_for"]) for c in run.manifest["charter"]["cards"]] == [
+        ("verdict-floor", "producer"), ("conformity-floor", "evaluator")]
+    window = 1
+    draws, origins = {}, {}
+    for row in run.events:
+        if row["kind"] == "price.window":
+            window = row["window"] + 1
+        elif row["kind"] == "decision.open":
+            draws[row["handle"]] = row
+            origins[row["handle"]] = window
+    declined_draws = {h for h, row in draws.items()
+                      if row["propensity"]["chosen"].startswith("judge-") and origins[h] % 2}
+    assert declined_draws
+    declined = run.rows("commission.declined")
+    credits = run.rows("router.decline_priced")
+    assert {r["handle"] for r in declined} == declined_draws
+    closed_windows = {r["window"] for r in run.rows("price.window")}
+    eligible = {h for h in declined_draws if origins[h] in closed_windows}
+    pending = declined_draws - eligible
+    assert pending and {origins[h] for h in pending} == {max(closed_windows) + 1}
+    assert {r["handle"] for r in credits} == eligible
+    assert len(credits) == len(eligible)  # exactly once for every closed-window decline
+    assert len(declined) == len(declined_draws)
+    contributions = {r["handle"]: r for r in run.rows("price.contribution")}
+    cap = run.manifest["prices"]["penalty_cap"]
+    for row in credits:
+        handle = row["handle"]
+        assert contributions[handle]["role"] == "evaluator"
+        assert contributions[handle]["window"] == origins[handle]
+        assert row["router"] == draws[handle]["actor"]
+        assert row["reward"] == pytest.approx(
+            (row["neutral"] + 2 * cap - row["penalty"]) / (1 + 2 * cap))
+
+    # §II.b: derive pressure and blame independently of the priced settlement terms.
+    niche = {r["handle"] for r in run.rows("price.contribution") if r.get("niche")}
+    closes = {r["window"]: r for r in run.rows("price.window")}
+    measured = {w for w, row in closes.items() if "verdict-floor" in row["values"]}
+    updates = {r["window_end_event"]: r for r in run.rows("price.update")
+               if r["card_id"] == "verdict-floor"}
+    producers = [r for r in run.rows("price.penalty")
+                 if draws[r["handle"]]["propensity"]["chosen"] in {"steady-a", "steady-b"}]
+    assert producers and {origins[r["handle"]] for r in producers} == measured
+    charged = []
+    for row in producers:
+        handle = row["handle"]
+        origin = origins[handle]
+        close = closes[origin]
+        assert origin % 2 == 0 and close["values"]["verdict-floor"] == pytest.approx(0.3)
+        violation = (0.5 - 0.3) / 0.5
+        # A measured close need not fire the slower price controller (§IV.c).
+        price = max((update for event, update in updates.items()
+                     if event <= close["window_end_event"]),
+                    key=lambda update: update["window_end_event"])["lambda_after"]
+        peers = {h for h, draw in draws.items() if origins[h] == origin and h not in niche
+                 and draw["actor"] == "router:Tick"}
+        share = 0.0 if handle in niche else max(run.manifest["prices"]["min_blame_share"],
+                                               1 / len(peers))
+        expected = min(cap, price * violation) * share
+        assert row["penalty"] == pytest.approx(expected)
+        assert row["raw"] == pytest.approx(0.3)
+        assert row["effective"] == pytest.approx(max(0.0, 0.3 - expected))
+        if handle not in niche:
+            term, = row["terms"]
+            assert term["card_id"] == "verdict-floor" and term["window"] == origin
+            assert not term.get("held", False)
+            assert term["violation"] == pytest.approx(violation)
+            assert term["lambda"] == pytest.approx(price)
+            assert term["share"] == pytest.approx(share)
+            charged.append(expected)
+    assert charged and min(charged) > 0
+
+    assert not [r for r in run.rows("immune.price_ratchet", "immune.price_ratchet_saturated")
+                if r["card_id"] == "verdict-floor"]
+
+
+def test_intermittent_declines_pay_held_violation_after_support_not_during_warmup(intermittent):
+    """§II.b/R16c-3: refusal retains supported liability, not invented measurements.
+
+    The same-identity conformity card supplies the held fact. Warm-up and the
+    unhistoried niche remain exempt; neither sampling support nor the cap changes.
+    """
+    run = intermittent
+    card = "conformity-floor"
+    contributions = {r["handle"]: r for r in run.rows("price.contribution")}
+    declined = {r["handle"] for r in run.rows("commission.declined")
+                if r["assembly_id"].startswith("judge-")
+                and contributions[r["handle"]]["window"] % 2}
+    credits = [r for r in run.rows("router.decline_priced") if r["handle"] in declined]
+    closes = {r["window"]: r for r in run.rows("price.window")}
+    eligible = {h for h in declined if contributions[h]["window"] in closes}
+    pending = declined - eligible
+    assert pending and {contributions[h]["window"] for h in pending} == {max(closes) + 1}
+    assert eligible and {r["handle"] for r in credits} == eligible
+    assert len(credits) == len(eligible)
+    updates = [r for r in run.rows("price.update") if r["card_id"] == card]
+    # The ceded evaluator card really measures delivered conformity, independently
+    # of the refusal ledger and its computed price terms (§IV.a).
+    assert updates and all(r["value"] == pytest.approx(0.8) for r in updates)
+    supported = [close for close in closes.values() if card in close["values"]]
+    assert supported and all(close["values"][card] == pytest.approx(0.8)
+                             for close in supported)
+    cap = run.manifest["prices"]["penalty_cap"]
+    warmup, niche, charged = [], [], []
+    for row in credits:
+        own = contributions[row["handle"]]
+        close = closes[own["window"]]
+        assert card not in close["values"]
+        prior = [source for source in supported if source["window"] < own["window"]]
+        if not prior:
+            assert row["penalty"] == 0.0
+            warmup.append(row["handle"])
+        if own.get("niche"):
+            assert row["penalty"] == 0.0
+            niche.append(row["handle"])
+            continue
+        # Count-based liability waits for its origin close; no later fact or price enters.
+        assert close["seq"] < row["seq"]
+        source = prior[-1] if prior else None
+        violation = 0.0 if source is None else (0.9 - source["values"][card]) / 0.9
+        prices = [r for r in updates if r["window_end_event"] <= close["window_end_event"]
+                  and r["seq"] < row["seq"]]
+        price = prices[-1]["lambda_after"] if prices else 0.0
+        peers = [r for r in contributions.values() if r["window"] == own["window"]
+                 and r["role"] == "evaluator" and not r.get("niche")]
+        share = max(run.manifest["prices"]["min_blame_share"], 1 / len(peers))
+        expected = min(cap, price * violation) * share
+        assert row["penalty"] == pytest.approx(expected)
+        if source is not None:
+            term, = row["terms"]
+            assert term["card_id"] == card and term["window"] == own["window"]
+            assert term["held"] is True and term["source_window"] == source["window"]
+            assert term["violation"] == pytest.approx(violation)
+            assert term["lambda"] == pytest.approx(price)
+            assert term["share"] == pytest.approx(share)
+            assert expected > 0
+            charged.append(row["handle"])
+    assert warmup, "the shared world must witness unmeasured warm-up"
+    assert niche, "the shared world must witness protected declines"
+    assert charged, "supported liability must reach at least one unprotected decline"

@@ -718,7 +718,8 @@ _RUNTIME_FIELDS = (
     # Vault writes by client id, the vaults this world's seats created or hold, and
     # the cursor of the venue's vault ledger rows already read.
     "vault_intents", "vault_book", "vault_ledger_cursor_ns", "vault_ledger_seen",
-    "consequence_mix", "sampling_history",
+    "consequence_mix", "sampling_history", "multi_judge_share", "sampling_card_support",
+    "sampling_pending_gaps",
     # Wave 16 (R-B): the last closed window's consequence count and the actuator's
     # blindness. An older checkpoint has neither: no reading, not blind yet.
     "last_window_consequences", "sampling_blind",
@@ -844,7 +845,7 @@ _RUNTIME_FIELDS = (
     "card_unmeasured",
     # Codex on #152: each card's metric identity as last derived, so a redefinition under
     # the same id is recognised across a resume.
-    "card_meanings",
+    "card_meanings", "card_held",
     # Wave 17b: each seat's ballot cursor over its own deliveries, the committee
     # eligibility tally and the evidence it counted, and released decisions' order
     # intents as counts. An older checkpoint has none: its seats have read nothing, its
