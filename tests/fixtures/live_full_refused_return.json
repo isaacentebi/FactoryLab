@@ -1,0 +1,186 @@
+[
+  {
+    "assembly_id": "constructor",
+    "cost": 3511,
+    "finish_reason": "stop",
+    "handle": "decision-18",
+    "hash": "41681e742f8b1fb46ff7657017b4b1a46955f654b4b10c830fd89e22cacc1dd8",
+    "kind": "invocation",
+    "outputs": "{\"status\": \"cannot\", \"reason\": \"No order action admitted: the venue listing states null taker_fee_rate and null maker_fee_rate for both BTC and ETH perp markets, so market orders are refused (market_orders_refused) and limit orders that would cross are refused; limit orders that rest are refused (limit_orders_refused) until a fee rate is recorded. With no executable order type and no spot market listed, there is no concrete trade to declare under the order branch of the outcome schema. Returning a ProducerReturn with action 'order' would be refused at execution, and returning a non-order action (e.g. 'hold', 'investigate') is not a value the outcome schema admits for this event. The request cannot be completed under the admitted schema.\", \"counterfactual\": {\"coin\": \"BTC\", \"side\": \"buy\"}}",
+    "prev_hash": "f55b68387f313f8a00d1751cf6d62f4bef27a067795ff295f10e3b2f82652e0b",
+    "prompt_cache": {
+      "effective_leading_messages_sha256": "43a1ba6b7d4e8c74eae9117f5e047975c1c311c7d7274b30b29129c06090ca7c",
+      "stable_prefix_sha256": "6722de92c577154943742af0ad70d8082f05f0feb9e97c45160eac32bf878198"
+    },
+    "role": "producer",
+    "sections": {
+      "completion_criterion": 64,
+      "inputs": 13249,
+      "outcome_contract": 485,
+      "outcome_schema": 5809,
+      "request": 876,
+      "stable_prefix": 19943,
+      "total": 48318,
+      "world_update": 4118,
+      "you": 3774
+    },
+    "seq": 910,
+    "served_by": "minimax/minimax-m3",
+    "status": "refused",
+    "stop_reason": "stop",
+    "ts": 1790278364254287084,
+    "usage": {
+      "cached_tokens": 128,
+      "input_tokens": 11989,
+      "max_tokens": 512000,
+      "output_tokens": 166,
+      "reasoning_tokens": 0
+    }
+  },
+  {
+    "assembly_id": "constructor",
+    "handle": "decision-18",
+    "hash": "e7699222775564da9e43c8f5c04bafdc35f463533fa4f12b0fb2c9ed800ebf6c",
+    "kind": "commission.declined",
+    "prev_hash": "8e21db5d32c2e212787f96fa245bc9310eccefde1e8e6d84e7fb2fc328fff3c0",
+    "reason": "No order action admitted: the venue listing states null taker_fee_rate and null maker_fee_rate for both BTC and ETH perp markets, so market orders are refused (market_orders_refused) and limit orders ",
+    "seq": 912,
+    "ts": 1790278364254287084
+  },
+  {
+    "assembly_id": "constructor",
+    "handle": "decision-18",
+    "hash": "acdb47ed7cfc2641b4ac5d593fc70ffc11cbd315e251d94474980c64f66fba8e",
+    "kind": "fold.offered",
+    "prev_hash": "6031fafec7751ed5f27e3021172e39e1b3ec2f094e555e23395218e11bc60615",
+    "seq": 914,
+    "status": "refused",
+    "ts": 1790278364254287084
+  },
+  {
+    "event": {
+      "id": "producerreturn-41",
+      "kind": "ProducerReturn",
+      "payload": {
+        "about_handle": "decision-18",
+        "cost": 3511,
+        "description": "Respond to event WorldUpdate on runtime.",
+        "executed_operations": [],
+        "inputs": {
+          "kind": "WorldUpdate",
+          "payload": {
+            "since_you_last_woke": {
+              "coins": {
+                "BTC": {
+                  "first": "84905.5",
+                  "first_t_s": 1790278294,
+                  "high": "84905.5",
+                  "last": "84900.5",
+                  "last_t_s": 1790278364,
+                  "low": "84900.5",
+                  "prints": 5
+                },
+                "ETH": {
+                  "first": "2680.25",
+                  "first_t_s": 1790278294,
+                  "high": "2680.25",
+                  "last": "2680.15",
+                  "last_t_s": 1790278364,
+                  "low": "2680.15",
+                  "prints": 5
+                },
+                "HYPE/USDC": {
+                  "first": "30.109",
+                  "first_t_s": 1790278294,
+                  "high": "30.3235",
+                  "last": "30.3235",
+                  "last_t_s": 1790278364,
+                  "low": "29.4565",
+                  "prints": 5
+                },
+                "PURR/USDC": {
+                  "first": "4.60235",
+                  "first_t_s": 1790278294,
+                  "high": "4.60235",
+                  "last": "4.60235",
+                  "last_t_s": 1790278364,
+                  "low": "4.60235",
+                  "prints": 5
+                }
+              },
+              "events": {
+                "MarketMid": 20,
+                "Tick": 5
+              },
+              "from_tick": 1,
+              "funding": {},
+              "prints": 20,
+              "to_tick": 5
+            },
+            "tick": 5
+          }
+        },
+        "outputs": {
+          "counterfactual": {
+            "coin": "BTC",
+            "side": "buy"
+          },
+          "reason": "No order action admitted: the venue listing states null taker_fee_rate and null maker_fee_rate for both BTC and ETH perp markets, so market orders are refused (market_orders_refused) and limit orders that would cross are refused; limit orders that rest are refused (limit_orders_refused) until a fee rate is recorded. With no executable order type and no spot market listed, there is no concrete trade to declare under the order branch of the outcome schema. Returning a ProducerReturn with action 'order' would be refused at execution, and returning a non-order action (e.g. 'hold', 'investigate') is not a value the outcome schema admits for this event. The request cannot be completed under the admitted schema.",
+          "status": "cannot"
+        },
+        "propensity": {
+          "chosen": "declined",
+          "over": {
+            "declined": 1.0
+          },
+          "source": "declared"
+        },
+        "status": "refused"
+      },
+      "source": "runtime",
+      "ts_ns": 1790278364254287084
+    },
+    "hash": "dba7fd5651e9dff26652119f07680add35ccba63159ee2636ce10b2cae910097",
+    "kind": "event",
+    "prev_hash": "d41fe5d592a5e4531f6d148d3669cb946aefe417be8aa28938f8f0bf301b8dda",
+    "seq": 922,
+    "ts": 1790278364254287084
+  },
+  {
+    "actor": "router:ProducerReturn",
+    "channel": "conformity",
+    "cost_ceiling": 119980525,
+    "deadline_ns": 1790280912443610834,
+    "event_id": "producerreturn-41",
+    "handle": "decision-19",
+    "hash": "166292d0fe3d0f1c8b37d6955249ea4a4c4d9587a81e469bfd08deb0bd7c527d",
+    "kind": "decision.open",
+    "opened_ns": 1790278364254287084,
+    "parent_handle": null,
+    "prev_hash": "867aeb14c8fe6df7e077c5d5632866cd51e588fba365ad40ba9660641e62de99",
+    "propensity": {
+      "action_ids": [
+        "judge-base-rate",
+        "judge-consequence",
+        "judge-fidelity",
+        "judge-mechanics",
+        "NOOP"
+      ],
+      "chosen": "judge-fidelity",
+      "learner_id": "router:ProducerReturn",
+      "learner_state_hash": "7a614b48e60f23be4a6eba456e3145e29822a575c1d1776b9df1a9681f53dd17",
+      "probs": [
+        0.215,
+        0.215,
+        0.215,
+        0.215,
+        0.14
+      ],
+      "rng_seed": 320176265161251214824400703565121332420,
+      "source": "sampled"
+    },
+    "seq": 933,
+    "status": "pending",
+    "ts": 1790278364254287084
+  }
+]
