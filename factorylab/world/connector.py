@@ -48,15 +48,23 @@ RAIL_URLS = (
 DEFAULT_DENYLIST = tuple(dict.fromkeys(h for h in map(url_host, RAIL_URLS) if h))
 
 
+# Chapter II §I.b: public limits and their enforcement share the same values.
+MAX_ORIGIN_CHARS = 260
+MAX_HOST_LABEL_CHARS = 63
+MAX_PATH_CHARS = 8192
+ORIGIN_HOST_PATTERN = r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?"
+
+
 def origin_host(origin: str) -> str:
     """Accept only a canonical HTTPS origin with a hostname and no other URL components."""
-    if not isinstance(origin, str) or len(origin) > 260:
+    if not isinstance(origin, str) or len(origin) > MAX_ORIGIN_CHARS:
         raise ConnectorRefused("origin must be https://<host>")
     parts = urlsplit(origin)
     host = parts.hostname
     if (not host or parts.scheme != "https" or origin != f"https://{host}"
-            or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", host)
-            or any(not label or len(label) > 63 or label.startswith("-") or label.endswith("-")
+            or not re.fullmatch(ORIGIN_HOST_PATTERN, host)
+            or any(not label or len(label) > MAX_HOST_LABEL_CHARS
+                   or label.startswith("-") or label.endswith("-")
                    for label in host.split("."))):
         raise ConnectorRefused("origin must be https://<host> without credentials, port or path")
     return host
@@ -114,7 +122,7 @@ def check_host(host: str, denylist: tuple[str, ...]) -> None:
 def validate_path(path: str) -> None:
     """A relative absolute-path reference cannot change origin or inject request headers."""
     if (not isinstance(path, str) or not path.startswith("/") or path.startswith("//")
-            or "\\" in path or "#" in path or len(path) > 8192
+            or "\\" in path or "#" in path or len(path) > MAX_PATH_CHARS
             or any(ord(c) <= 32 or ord(c) >= 127 for c in path)):
         raise ConnectorRefused("path must start with one / and contain no fragment or whitespace")
 

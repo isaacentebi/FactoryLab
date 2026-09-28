@@ -18,7 +18,25 @@ from typing import Any
 
 from factorylab.cortex.sandbox import jail_available
 
-SLUG = re.compile(r"^[a-z][a-z0-9-]{1,47}$")
+# Chapter II §I.b: the public identifier contract shares the parser's pattern.
+SLUG_PATTERN = r"^[a-z][a-z0-9-]{1,47}$"
+SLUG_MIN_CHARS = 2
+SLUG_MAX_CHARS = 48
+SLUG = re.compile(SLUG_PATTERN)
+SLUG_RULE = (f"id must match {SLUG_PATTERN} (lowercase letters, digits, hyphen; "
+             f"{SLUG_MIN_CHARS}-{SLUG_MAX_CHARS} characters)")
+MAX_MODEL_ID_CHARS = 128
+MAX_MARKET_NAME_CHARS = 128
+MAX_PROGRAM_CODE_CHARS = 16_000
+MAX_PROGRAM_TIMEOUT_S = 10
+MAX_TOOL_CODE_CHARS = 8000
+MAX_TOOL_TIMEOUT_S = 5
+MIN_ASSEMBLY_TOKENS = 16
+MAX_UNIT_CHARS = 64
+MAX_CARD_ID_CHARS = 64
+MAX_REPLACEMENT_TEXT_CHARS = 512
+EFFORTS = ("low", "medium", "high")
+STATE_POLICIES = ("none", "private")
 MAX_PROMPT_CHARS = 4000
 #: A contract's public self-description: an assembly's, and a tool's.
 MAX_CONTRACT_DESCRIPTION_CHARS = 500
@@ -283,7 +301,7 @@ def _challenge(item: dict[str, Any]) -> ChallengeProposal:
     if set(item) != required:
         raise ValueError("challenge needs exactly card_id, evidence, replacement, trial_windows")
     card_id = item["card_id"]
-    if not isinstance(card_id, str) or not card_id.strip() or len(card_id) > 64:
+    if not isinstance(card_id, str) or not card_id.strip() or len(card_id) > MAX_CARD_ID_CHARS:
         raise ValueError("card_id must name a current card")
     evidence = item["evidence"]
     if not isinstance(evidence, str) or not evidence.strip():
@@ -303,7 +321,7 @@ def _challenge(item: dict[str, Any]) -> ChallengeProposal:
     for key in ("observation", "description", "units", "answers_for"):
         text = replacement.get(key)
         if key in replacement and (not isinstance(text, str) or not text.strip()
-                                   or len(text) > 512):
+                                   or len(text) > MAX_REPLACEMENT_TEXT_CHARS):
             raise ValueError(f"replacement.{key} must be a nonempty string")
     if replacement["rule"] not in CHALLENGE_RULES:
         raise ValueError(f"replacement.rule must be one of {', '.join(CHALLENGE_RULES)}")
@@ -332,7 +350,7 @@ def _service(item: dict[str, Any], known_tools: frozenset[str]) -> ServicePropos
         raise ValueError("service fields are kind, program_id, price_micro, description")
     program_id = item["program_id"]
     if not isinstance(program_id, str) or not SLUG.fullmatch(program_id):
-        raise ValueError("program_id must be a slug of 2-48 chars")
+        raise ValueError("program_" + SLUG_RULE)
     if program_id not in known_tools:
         raise ValueError("program_id must name a registered population tool")
     price = item["price_micro"]
@@ -341,7 +359,7 @@ def _service(item: dict[str, Any], known_tools: frozenset[str]) -> ServicePropos
     description = item["description"]
     if not isinstance(description, str) or not description.strip():
         raise ValueError("description is required")
-    if len(description) > 500:
+    if len(description) > MAX_CONTRACT_DESCRIPTION_CHARS:
         raise ValueError("description exceeds 500 chars")
     return ServiceProposal(program_id, price, description.strip())
 
@@ -350,7 +368,7 @@ def _market(item: dict[str, Any]) -> MarketProposal:
     if set(item) not in ({"kind", "coin"}, {"kind", "pair"}):
         raise ValueError("market requires exactly one coin or pair")
     value = item.get("coin", item.get("pair"))
-    if (not isinstance(value, str) or not value or len(value) > 128
+    if (not isinstance(value, str) or not value or len(value) > MAX_MARKET_NAME_CHARS
             or any(c.isspace() or not c.isprintable() for c in value)):
         raise ValueError("market must name a coin or pair")
     if "pair" in item and (value.count("/") != 1 or not value.endswith("/USDC")):
@@ -369,9 +387,9 @@ def _connector(item: dict[str, Any]) -> ConnectorProposal:
     if not required <= set(item) or set(item) - required - optional:
         raise ValueError("invalid connector fields")
     if not isinstance(item["id"], str) or not SLUG.fullmatch(item["id"]):
-        raise ValueError("connector id must be a slug")
+        raise ValueError("connector " + SLUG_RULE)
     if (not isinstance(item["description"], str) or not item["description"].strip()
-            or len(item["description"]) > 500):
+            or len(item["description"]) > MAX_CONTRACT_DESCRIPTION_CHARS):
         raise ValueError("connector description must contain 1..500 characters")
     origin_host(item["origin"])
     path = item.get("preflight_path", "/")
@@ -557,7 +575,7 @@ def _program_alias(item: dict[str, Any]) -> dict[str, Any]:
 
 def _model(item: dict[str, Any]) -> ModelProposal:
     oid = item.get("openrouter_id")
-    if not isinstance(oid, str) or "/" not in oid or len(oid) > 128 or " " in oid:
+    if not isinstance(oid, str) or "/" not in oid or len(oid) > MAX_MODEL_ID_CHARS or " " in oid:
         raise ValueError("openrouter_id must look like vendor/model")
     if oid.count("@") > 1:
         raise ValueError("at most one @reasoning-level suffix")
@@ -575,13 +593,13 @@ def _assembly(
 ) -> AssemblyProposal:
     aid = item.get("id")
     if not isinstance(aid, str) or not SLUG.match(aid):
-        raise ValueError("id must be a slug of 2-48 chars")
+        raise ValueError(SLUG_RULE)
     if aid in known_assemblies or aid == "NOOP":
         raise ValueError("id already registered")
     # A display name only: measurement and settlement both follow ``emits``.
     role = item.get("role", "producer")
     if not isinstance(role, str) or not SLUG.fullmatch(role):
-        raise ValueError("role must be a descriptive slug")
+        raise ValueError(SLUG_RULE.replace("id must", "role must", 1))
     model_id = item.get("model_id")
     # ``program`` is not a registered model: the seat's executor is its own code.
     program = model_id == "program"
@@ -593,13 +611,13 @@ def _assembly(
         code = item.get("code")
         if not isinstance(code, str) or not code.strip():
             raise ValueError("a program seat needs code")
-        if len(code) > 16_000:
+        if len(code) > MAX_PROGRAM_CODE_CHARS:
             raise ValueError("code exceeds 16000 chars")
         timeout_s = item.get("timeout_s", 10)
-        if type(timeout_s) is not int or not 1 <= timeout_s <= 10:
+        if type(timeout_s) is not int or not 1 <= timeout_s <= MAX_PROGRAM_TIMEOUT_S:
             raise ValueError("timeout_s must be an int in [1, 10]")
         state_policy = item.get("state_policy", "none")
-        if state_policy not in ("none", "private"):
+        if state_policy not in STATE_POLICIES:
             raise ValueError("state_policy must be none or private")
         if "trigger" in item:
             from factorylab.runtime.subscriptions import validate_trigger
@@ -625,10 +643,10 @@ def _assembly(
     emits, schemas = output_contracts(item.get("emits", seed_emits(role)),
                                       item.get("schemas", {}))
     max_tokens = item.get("max_tokens")
-    if max_tokens is not None and (type(max_tokens) is not int or max_tokens < 16):
+    if max_tokens is not None and (type(max_tokens) is not int or max_tokens < MIN_ASSEMBLY_TOKENS):
         raise ValueError("max_tokens must be null or an int of at least 16")
     effort = item.get("effort", "low")
-    if effort not in ("low", "medium", "high"):
+    if effort not in EFFORTS:
         raise ValueError("effort must be low, medium or high")
     if "reward_shapes" in item and not isinstance(item["reward_shapes"], dict):
         raise ValueError("reward_shapes must map declared emits kinds to reward shapes")
@@ -673,7 +691,7 @@ def _tool(
 ) -> ToolProposal:
     tid = item.get("id")
     if not isinstance(tid, str) or not SLUG.fullmatch(tid):
-        raise ValueError("id must be a slug of 2-48 chars")
+        raise ValueError(SLUG_RULE)
     if tid in known_tools:
         raise ValueError("id already registered")
     description = item.get("description")
@@ -691,10 +709,10 @@ def _tool(
     code = item.get("code")
     if not isinstance(code, str):
         raise ValueError("code must be a string")
-    if len(code) > 8000:
+    if len(code) > MAX_TOOL_CODE_CHARS:
         raise ValueError("code exceeds 8000 chars")
     timeout_s = item.get("timeout_s")
-    if type(timeout_s) is not int or not 1 <= timeout_s <= 5:
+    if type(timeout_s) is not int or not 1 <= timeout_s <= MAX_TOOL_TIMEOUT_S:
         raise ValueError("timeout_s must be an int in [1, 5]")
     returns = item.get("returns_schema")
     if returns is not None:
@@ -747,7 +765,7 @@ def _observation(
 
     oid = item.get("id")
     if not isinstance(oid, str) or not SLUG.fullmatch(normalise(oid)):
-        raise ValueError("id must be a slug of 2-48 chars")
+        raise ValueError(SLUG_RULE)
     oid = normalise(oid)
     if oid in seed_observations:
         raise ValueError("seed observation ids cannot be redefined")
@@ -757,7 +775,7 @@ def _observation(
     if len(description) > MAX_OBSERVATION_DESCRIPTION_CHARS:
         raise ValueError(f"description exceeds {MAX_OBSERVATION_DESCRIPTION_CHARS} chars")
     unit = item.get("unit")
-    if not isinstance(unit, str) or not unit.strip() or len(unit) > 64:
+    if not isinstance(unit, str) or not unit.strip() or len(unit) > MAX_UNIT_CHARS:
         raise ValueError("unit is required and is at most 64 chars")
     unit_range = item.get("range")
     if not isinstance(unit_range, list | tuple) or len(unit_range) != 2:

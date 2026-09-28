@@ -57,6 +57,9 @@ from factorylab.world.x402 import X402Error
 BALLOT_EVIDENCE_CHARS = 2000
 BALLOT_SERIES_WINDOWS = 24
 BALLOT_SERIES_SCOPES = 8
+# Chapter II §I.b: the published admission limits share the enforcement values.
+MODEL_BASE_MAX_CHARS = 4096
+MODEL_REASONING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
 @dataclass(frozen=True)
@@ -827,17 +830,9 @@ class GovernanceMixin:
                 )
                 return
             base, _, effort = prop.openrouter_id.partition("@")
-            if not base or len(base) > 4096 or any(c.isspace() for c in base):
+            if not base or len(base) > MODEL_BASE_MAX_CHARS or any(c.isspace() for c in base):
                 raise ValueError("invalid model id")
-            if effort and effort not in (
-                "none",
-                "minimal",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max",
-            ):
+            if effort and effort not in MODEL_REASONING_LEVELS:
                 raise ValueError("reasoning level must be none|minimal|low|medium|high|xhigh|max")
             if base in self.prices.prices:
                 price = self.prices.price(base)

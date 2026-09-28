@@ -2,6 +2,7 @@ import pytest
 
 from factorylab.cortex.assembly import validate_proposal
 from factorylab.cortex.registration import (
+    SLUG_RULE,
     AssemblyProposal,
     ModelProposal,
     RouterProposal,
@@ -150,7 +151,7 @@ def test_rejections_carry_reasons_and_cap_is_enforced() -> None:
     assert acc == []
     reasons = [r.reason for r in rej]
     assert "id already registered" in reasons
-    assert "id must be a slug of 2-48 chars" in reasons
+    assert SLUG_RULE in reasons
     assert "model_id must name a registered model" in reasons
     assert "accepts must be a non-empty list of event kinds" in reasons
     assert any("exceeds" in r for r in reasons)

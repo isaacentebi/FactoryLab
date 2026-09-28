@@ -977,7 +977,10 @@ class BootstrapMixin:
             "kind": "outcome",
         }
         examples["outcome.list"] = [{"after": 0, "limit": 8}]
-        from factorylab.cortex.schematics import INSTITUTION_SECTIONS
+        from factorylab.cortex.schematics import (
+            INSTITUTION_SECTIONS,
+            RETRIEVABLE_ADMISSION_SECTIONS,
+        )
 
         self.tool_specs["world.read"] = {
             "id": "world.read",
@@ -987,7 +990,8 @@ class BootstrapMixin:
             "args_schema": {
                 "type": "object",
                 "properties": {"section": {"type": "string",
-                                            "enum": sorted(INSTITUTION_SECTIONS)}},
+                                            "enum": sorted(INSTITUTION_SECTIONS |
+                                                           RETRIEVABLE_ADMISSION_SECTIONS)}},
                 "required": ["section"], "additionalProperties": False,
             },
             "price_micro_per_call": 0, "kind": "institution",

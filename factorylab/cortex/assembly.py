@@ -86,7 +86,7 @@ class AssemblySpec:
     description: str = ""
 
     def __post_init__(self) -> None:
-        if self.memory_policy not in ("none", "handle-scoped"):
+        if self.memory_policy not in ASSEMBLY_MEMORY_POLICIES:
             raise ValueError("unknown memory policy")
         if not isinstance(self.role, str) or not self.role.strip():
             raise ValueError("assembly role must be a nonempty label")
@@ -353,6 +353,11 @@ PROGRAM_MODEL_ID = "program"
 MAX_PROGRAM_CODE_CHARS = 16_000
 MAX_PROGRAM_STATE_BYTES = 65_536
 PROGRAM_STATE_POLICIES = ("none", "private")
+ASSEMBLY_MEMORY_POLICIES = ("none", "handle-scoped")
+FORECAST_HORIZON_MAX_EVENTS = 200
+PROPOSAL_MIN_GAMMA = 1e-300
+PROPOSAL_MIN_MAX_TOKENS = 16
+CHILD_AUTHOR_FIELDS = ("author", "author_id", "requester", "lineage")
 
 
 @dataclass(frozen=True)
@@ -872,7 +877,8 @@ def reserved_return_fields(*, max_children: int | None = None,
             "predicate": {"type": "string"},
             "q": {"type": "number", "minimum": 0, "maximum": 1},
             "params": {"type": "object", "properties": {
-                "horizon_events": {"type": "integer", "minimum": 1, "maximum": 200}}}},
+                "horizon_events": {"type": "integer", "minimum": 1,
+                                   "maximum": FORECAST_HORIZON_MAX_EVENTS}}}},
             "required": ["predicate", "q", "params"]}},
     })
     if max_children is not None:
@@ -964,7 +970,12 @@ def judging_contract(kind: str, *, propensity: dict, register: dict,
     return {"anyOf": [answer, deepcopy(DECLINE_FORM)]}
 
 
-_CHILD_SCHEMA_TYPES = ["object", "array", "string", "boolean", "integer", "number", "null"]
+_CHILD_SCHEMA_TYPES = ("object", "array", "string", "boolean", "integer", "number", "null")
+CHILD_SCHEMA_KEYWORDS = frozenset({
+    "type", "properties", "required", "enum", "minimum", "maximum", "minItems",
+    "maxItems", "additionalProperties", "items", "description", "title", "default",
+    "anyOf", "exclusiveMinimum", "exclusiveMaximum",
+})
 #: Where the wire defines a child outcome schema, which refers to itself.
 CHILD_SCHEMA_DEF = "child_outcome_schema"
 CHILD_SCHEMA_REF = f"#/$defs/{CHILD_SCHEMA_DEF}"
@@ -1428,7 +1439,7 @@ def _check_child(child: dict) -> None:
     """
     if not child["target"] or not child["description"].strip():
         raise ValueError("child needs target and description")
-    if any(k in child["inputs"] for k in ("author", "author_id", "requester", "lineage")):
+    if any(k in child["inputs"] for k in CHILD_AUTHOR_FIELDS):
         raise ValueError("child inputs contain author metadata")
     _schema_definition(child["outcome_schema"])
     if "propensity" in child:
@@ -1858,6 +1869,30 @@ def _open(schema: Any) -> Any:
     return out
 
 
+def proposal_field_schema() -> dict:
+    """The generic proposal field constraints, shared by admission and publication."""
+    fields = {k: {"type": "string"} for k in (
+        "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
+        "event_kind", "learner", "description", "code", "tick_interval",
+        "unit", "assembly_id", "state_policy")}
+    # A tool's timeout stays within [1, 5] (checked where tools are parsed); a
+    # program seat's may reach MAX_PROGRAM_TIMEOUT_S.
+    fields.update({"gamma": {"type": "number", "minimum": PROPOSAL_MIN_GAMMA, "maximum": 1},
+                   "max_tokens": {"type": ["integer", "null"], "minimum": PROPOSAL_MIN_MAX_TOKENS},
+                   "timeout_s": {"type": "integer", "minimum": 1,
+                                 "maximum": MAX_PROGRAM_TIMEOUT_S},
+                   "accepts": {"type": "array", "items": {"type": "string"}},
+                   "emits": {"type": "array", "items": {"type": "string"}},
+                   "schemas": {"type": "object"},
+                   "trigger": {"type": "object"},
+                   "endowment_micro": {"type": "integer", "minimum": 1},
+                   "range": {"type": "array", "items": {"type": "number"}},
+                   "actions": {"type": "array", "items": {"type": "string"}},
+                   "args_schema": {"type": "object"},
+                   "returns_schema": {"type": "object"}})
+    return {"type": "object", "properties": fields, "required": ["kind"]}
+
+
 def validate_proposal(proposal: dict) -> None:
     """Reject malformed proposal fields before any registration effect.
 
@@ -1871,26 +1906,7 @@ def validate_proposal(proposal: dict) -> None:
         forms = proposal_schemas().get(proposal["kind"])
         if forms:
             validate_schema(proposal, forms[0] if len(forms) == 1 else {"anyOf": forms})
-    fields = {k: {"type": "string"} for k in (
-        "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
-        "event_kind", "learner", "description", "code", "tick_interval",
-        "unit", "assembly_id", "state_policy")}
-    # A tool's timeout stays within [1, 5] (checked where tools are parsed); a
-    # program seat's may reach MAX_PROGRAM_TIMEOUT_S.
-    fields.update({"gamma": {"type": "number", "minimum": 1e-300, "maximum": 1},
-                   "max_tokens": {"type": ["integer", "null"], "minimum": 16},
-                   "timeout_s": {"type": "integer", "minimum": 1,
-                                 "maximum": MAX_PROGRAM_TIMEOUT_S},
-                   "accepts": {"type": "array", "items": {"type": "string"}},
-                   "emits": {"type": "array", "items": {"type": "string"}},
-                   "schemas": {"type": "object"},
-                   "trigger": {"type": "object"},
-                   "endowment_micro": {"type": "integer", "minimum": 1},
-                   "range": {"type": "array", "items": {"type": "number"}},
-                   "actions": {"type": "array", "items": {"type": "string"}},
-                   "args_schema": {"type": "object"},
-                   "returns_schema": {"type": "object"}})
-    validate_schema(proposal, {"type": "object", "properties": fields, "required": ["kind"]})
+    validate_schema(proposal, proposal_field_schema())
     if proposal["kind"] == "router" and "add" in proposal:
         add = proposal["add"]
         if not isinstance(add, bool) and not (isinstance(add, str)
@@ -1937,14 +1953,9 @@ def _schema_definition(schema: Any, *, answer: bool = True) -> None:
     """
     if not isinstance(schema, dict):
         raise ValueError("schema must be an object")
-    allowed = {"type", "properties", "required", "enum", "minimum", "maximum", "minItems",
-               "maxItems", "additionalProperties", "items", "description", "title", "default",
-               "anyOf", "exclusiveMinimum", "exclusiveMaximum"}
-    if schema.keys() - allowed:
+    if schema.keys() - CHILD_SCHEMA_KEYWORDS:
         raise ValueError("unsupported child outcome schema keyword")
-    if "type" in schema and schema["type"] not in (
-        "object", "array", "string", "boolean", "integer", "number", "null"
-    ):
+    if "type" in schema and schema["type"] not in _CHILD_SCHEMA_TYPES:
         raise ValueError("unsupported schema type")
     for key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
         if key in schema and type(schema[key]) not in (int, float):

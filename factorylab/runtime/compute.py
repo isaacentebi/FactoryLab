@@ -2036,6 +2036,9 @@ class ComputeMixin:
                     # Agent cards (essay II.I): a contract is found by what it does.
                     "assemblies": self._assembly_search(needle, limit),
                     "proposal_shapes": self._proposal_shape_search(needle),
+                    "proposal_admission": {
+                        kind: facts for kind, facts in self._proposal_admission().items()
+                        if kind in self._proposal_shape_search(needle)},
                 }
             if spec["kind"] == "market":
                 return {
