@@ -153,6 +153,8 @@ extra_body = { provider = { require_parameters = true } }
 
 [[models]]
 id = "qwen/qwen3.8-flash"
+# first public availability (upper bound on training data, no dated official release was found): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
+training_cutoff = "2026-08-26"
 provider = "openrouter"
 input_usd_per_mtok = "0.15"
 output_usd_per_mtok = "0.47"
@@ -183,8 +185,10 @@ extra_body = { provider = { require_parameters = true } }
 # Qwen 3.8 flash's, so it keeps one seat, and a seat may move back to it by model proposal.
 [[models]]
 id = "minimax/minimax-m3"
-# release date (upper bound on training data): https://www.minimax.io/blog/minimax-m3
-training_cutoff = "2026-06-01"
+# first public availability (upper bound on training data): listed on OpenRouter on
+# 2026-05-31, a day before the release post (https://www.minimax.io/blog/minimax-m3), so the
+# earlier date bounds it: https://openrouter.ai/api/v1/models (`created`, read 2026-09-27)
+training_cutoff = "2026-05-31"
 provider = "openrouter"
 input_usd_per_mtok = "0.30"
 output_usd_per_mtok = "1.20"
@@ -216,6 +220,8 @@ extra_body = { provider = { require_parameters = true } }
 # decoder looped on whitespace (docs/manifest.md, `contract`).
 [[models]]
 id = "xiaomi/mimo-v2.6-flash"
+# first public availability (upper bound on training data, no dated official release was found): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
+training_cutoff = "2026-09-21"
 provider = "openrouter"
 input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.28"
@@ -271,6 +277,8 @@ reasoning = { enabled = false }
 
 [[models]]
 id = "venice:qwen-3-8-flash"
+# first public availability (upper bound on training data, the base model's date): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
+training_cutoff = "2026-08-26"
 provider = "venice"
 input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.49"

@@ -67,7 +67,9 @@ def test_a_release_date_bound_refuses_a_tape_on_release_day_even_with_a_waiver()
         on_release_day.validate()
     after_release_day = replace(manifest, exchange=replace(
         manifest.exchange, tape=replace(manifest.exchange.tape, start_ns=end)))
-    after_release_day.validate()
+    # Other roster models are bounded later (mimo is listed 2026-09-21), so only this
+    # model's own guard is read at the day after its release.
+    assert after_release_day.look_ahead_refusal(model_id) is None
 
 
 def test_an_unknown_cutoff_is_refused_unless_the_operator_admits_it_on_the_record():
@@ -122,8 +124,8 @@ def test_a_live_event_market_reader_is_refused_on_a_tape():
 def test_the_harness_turns_the_web_off_and_records_the_admission(tmp_path):
     from scripts import fastloop
 
-    with pytest.raises(ValueError, match="states no training_cutoff"):
-        fastloop.simulation_manifest(WORLD, 1, tape=TAPE)
+    # Every rehearsal model states a cutoff before the tape, so no waiver is needed.
+    fastloop.simulation_manifest(WORLD, 1, tape=TAPE).validate()
     manifest = fastloop.simulation_manifest(WORLD, 1, tape=TAPE, allow_unknown_cutoff=True)
     assert manifest.web.search_model is None
     assert not [m for m in manifest.models if m.id.endswith(":online") or m.web]
@@ -134,17 +136,16 @@ def test_the_harness_turns_the_web_off_and_records_the_admission(tmp_path):
         "manifest": manifest_as_launched(manifest)}}}]
     card = fastloop.tape_card(events)
     assert card["web"] == "off" and card["allow_unknown_cutoff"] is True
-    assert card["unknown_cutoffs"] == sorted([
-        "qwen/qwen3.8-flash",
-        "xiaomi/mimo-v2.6-flash",
-        "venice:qwen-3-8-flash",
-    ])
+    assert card["unknown_cutoffs"] == []
     assert {m.id: m.training_cutoff for m in manifest.models if m.training_cutoff} == {
         "deepseek/deepseek-v4.1-flash": "2026-09-10",
         "venice:deepseek-v4-1-flash": "2026-09-10",
         "z-ai/glm-5.3-flash": "2026-08-26",
         "venice:z-ai-glm-5-3-flash": "2026-08-26",
-        "minimax/minimax-m3": "2026-06-01",
+        "minimax/minimax-m3": "2026-05-31",
+        "qwen/qwen3.8-flash": "2026-08-26",
+        "venice:qwen-3-8-flash": "2026-08-26",
+        "xiaomi/mimo-v2.6-flash": "2026-09-21",
         "openai/gpt-5.6-sol": "2026-02-16",
         "openai/gpt-6-luna": "2026-05-18",
         "openai/gpt-6-sol": "2026-04-20",
