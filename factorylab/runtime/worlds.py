@@ -1073,7 +1073,10 @@ class WorldManifest:
         judges = {kind: [a for a in self.assemblies if kind in a.accepts
                          and shapes[a.id].get("Verdict") == "forecast"]
                   for kind in sorted({k for s in shapes.values() for k in s})}
-        need = self.evaluation.multi_judge_count if self.evaluation.multi_judge_share > 0 else 1
+        # §III, §IV.b: the roster covers reachable adaptive sampling, not only genesis.
+        need = (self.evaluation.multi_judge_count
+                if max(self.evaluation.multi_judge_share, self.evaluation.sampling_cap) > 0
+                else 1)
         verdict_chains: set[tuple[str, str]] = set()
         for author in producers:
             for kind, shape in shapes[author.id].items():

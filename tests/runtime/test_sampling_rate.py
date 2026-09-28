@@ -33,6 +33,36 @@ def _world(mode, *, cap=0.7, base=0.3):
                  instrument=False)
 
 
+def test_s8_zero_initial_minimal_roster_buys_second_family_after_raise():
+    """Adaptive capacity is executable, with real provider bills (§III, §IV.b)."""
+    seats = [P.producer("p", P.hold),
+             P.judge("j0", P.rising_verdict(0.55, 0.95, 80)),
+             P.judge("j1", P.rising_verdict(0.55, 0.95, 80)),
+             P.meta("m", P.conformity(0.8))]
+    manifest = P.world(seats, cards=[P.UPTAKE, P.WELL_FORMED], changes={
+        "timing": {"world_repricing": "9s"},
+        "evaluation": {"multi_judge_share": 0.0, "sampling_cap": 0.7}})
+    run = P.run(manifest, P.Population(seats), events=100, instrument=False)
+    raises = run.rows("sampling.rate_raise")
+    assert raises and raises[0]["rate_before"] == 0.0
+    paid = []
+    for route in run.rows("route.multi_judge"):
+        if route["seq"] <= raises[0]["seq"] or not route["first"]:
+            continue
+        first_families = {run.rt._family(seat) for seat in route["first"]}
+        for decision in run.rows("decision.open"):
+            chosen = decision["propensity"]["chosen"]
+            if (decision.get("event_id") != route["event_id"]
+                    or decision["seq"] <= route["seq"] or chosen not in {"j0", "j1"}):
+                continue
+            assert run.rt._family(chosen) not in first_families
+            paid.extend(row for row in run.rows("wallet.commit")
+                        if row["handle"] == decision["handle"]
+                        and row["reason"] == f"model:fake-{chosen}")
+    assert paid
+    assert all(row["amount"] == 500 for row in paid)
+
+
 @pytest.fixture(scope="module")
 def divergence():
     return _world("divergence")
