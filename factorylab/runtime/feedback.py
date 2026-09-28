@@ -3089,7 +3089,7 @@ class FeedbackMixin:
         if sample is None:
             return False
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
-        return any(self._pending_price_windows(role, origins) for role in sorted(roles))
+        return any(self._awaits_close(role, handle) for role in sorted(roles))
 
     def _thrash_charge(self, handle: str) -> float:
         """The thrash charge a router's round bears, taken once: ``c``, unmapped.

@@ -77,3 +77,27 @@ def test_r5_obsolete_gap_cannot_raise_sampling_after_identity_change(
         assert card.id in rt.sampling_card_support
         rt.card_unmeasured[card.id] = 1
         assert card.id in rt._sampling_gaps()
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "decline"])
+def test_r6_niche_neutral_credit_does_not_wait_for_window_close(monkeypatch, outcome):
+    """Protected exploration learns without waiting for a price it cannot bear (§IV.c)."""
+    rt, _ = _gap_runtime(monkeypatch)
+    state, _ = _router(rt)
+    handle = _drawn(rt, state, "eval-a")
+    rt._contribution(handle, "evaluator")
+    rt.window.decisions[handle]["niche"] = True
+    if outcome == "timeout":
+        rt.queue.expire(10**19)
+    else:
+        rt._settle_declined(handle, "declined")
+    rt._learn_router_return(state, rt.queue.history(handle)[0])
+    assert rt.window.closed_values is None
+    assert not rt._awaits_close("evaluator", handle)
+    assert handle not in rt.noop_credits
+    rows = [row for row in rt.ledger._recovery_items()
+            if row.get("kind") == "router.learned" and row["handle"] == handle]
+    row, = rows
+    assert row["scored"] is False
+    assert rt._priced_abstention(handle) == 0
+    assert not rt._abstention_awaits_close(handle)
