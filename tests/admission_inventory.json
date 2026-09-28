@@ -86,12 +86,12 @@
       "published": "factorylab/cortex/admission_registration.py"
     },
     {
-      "id": "registration.register.accepted_per_return",
-      "rule": "register.accepted_per_return",
+      "id": "registration.register.considered_positions",
+      "rule": "register.considered_positions",
       "surface": "registration",
       "path": [
         "register",
-        "accepted_per_return"
+        "considered_positions"
       ],
       "value": 3,
       "enforced": [
@@ -107,7 +107,7 @@
         "register",
         "ordering"
       ],
-      "value": "Accepted proposals count towards the cap in order; rejected items do not. Runtime amendment handling is described separately.",
+      "value": "Only the first considered_positions list positions are admitted for validation; every later item is refused, whether or not an earlier item was accepted. Runtime amendment handling is described separately.",
       "enforced": [
         1
       ],
@@ -756,6 +756,20 @@
       "published": "factorylab/cortex/admission_registration.py"
     },
     {
+      "id": "registration.model.x402_max_id_characters",
+      "rule": "model.x402_max_id_characters",
+      "surface": "registration",
+      "path": [
+        "model",
+        "x402_max_id_characters"
+      ],
+      "value": 4096,
+      "enforced": [
+        4
+      ],
+      "published": "factorylab/cortex/admission_registration.py"
+    },
+    {
       "id": "registration.model.syntax",
       "rule": "model.syntax",
       "surface": "registration",
@@ -763,7 +777,7 @@
         "model",
         "syntax"
       ],
-      "value": "openrouter_id is a string containing /, no literal space, and at most one @. Provider admission adds its own checks.",
+      "value": "openrouter_id is a string containing /, no literal space, and at most one @, at most max_id_characters long. An id beginning x402: or venice: is namespaced and skips that syntax: an x402: id is at most x402_max_id_characters long; each namespace's provider adds its own checks.",
       "enforced": [
         4
       ],

@@ -98,6 +98,11 @@ def seller_root(seller_url: str) -> str:
     return seller_url.rstrip("/").removesuffix("/chat/completions").removesuffix("/v1")
 
 
+#: The longest x402 capability id a seller-backed model may carry (published in
+#: cortex/admission_registration.py).
+X402_MAX_MODEL_ID_CHARS = 4096
+
+
 def split_model_id(model_id: str) -> tuple[str, str]:
     """An x402 capability identifies exactly one seller root and one opaque model id."""
     if not isinstance(model_id, str) or not model_id.startswith("x402:"):
@@ -105,8 +110,8 @@ def split_model_id(model_id: str) -> tuple[str, str]:
     seller, sep, model = model_id[5:].partition("#")
     if not sep or not model or "#" in model or any(c.isspace() for c in model):
         raise X402Error("Model id must be x402:<seller_url>#<model>")
-    if len(model_id) > 4096:
-        raise X402Error("x402 model id exceeds 4096 characters")
+    if len(model_id) > X402_MAX_MODEL_ID_CHARS:
+        raise X402Error(f"x402 model id exceeds {X402_MAX_MODEL_ID_CHARS} characters")
     return seller_root(seller), model
 
 

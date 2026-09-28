@@ -1,6 +1,7 @@
 """Retrievable registration facts; Chapter II §I.b, without new admission policy."""
 
 from factorylab.cortex import registration as r
+from factorylab.world.market import X402_MAX_MODEL_ID_CHARS
 
 
 def registration_admission_schematics() -> dict:
@@ -23,9 +24,10 @@ def registration_admission_schematics() -> dict:
         },
         "register": {
             "type": "list of objects; absent or null means no proposals",
-            "accepted_per_return": r.MAX_PROPOSALS_PER_RETURN,
-            "ordering": "Accepted proposals count towards the cap in order; rejected "
-            "items do not. Runtime amendment handling is described separately.",
+            "considered_positions": r.MAX_PROPOSALS_PER_RETURN,
+            "ordering": "Only the first considered_positions list positions are admitted "
+            "for validation; every later item is refused, whether or not an earlier item "
+            "was accepted. Runtime amendment handling is described separately.",
             "forms": r.proposal_schemas(),
             "unknown_kind": "refused",
         },
@@ -44,8 +46,11 @@ def registration_admission_schematics() -> dict:
         },
         "model": {
             "max_id_characters": r.MAX_MODEL_ID_CHARS,
+            "x402_max_id_characters": X402_MAX_MODEL_ID_CHARS,
             "syntax": "openrouter_id is a string containing /, no literal space, "
-            "and at most one @. Provider admission adds its own checks.",
+            "and at most one @, at most max_id_characters long. An id beginning x402: or "
+            "venice: is namespaced and skips that syntax: an x402: id is at most "
+            "x402_max_id_characters long; each namespace's provider adds its own checks.",
         },
         "assembly": {
             "identity": "id is not already live and is not NOOP. Retired ids can be "
