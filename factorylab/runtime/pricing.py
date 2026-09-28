@@ -1669,10 +1669,18 @@ class PricingMixin:
                        and card.answers_for in (cards, "all") and card.id in self.regions
                        and (observation.id not in _EXACT_SHARES or card.holdout)})
 
+    def _deferred_windows(self, handle: str, row: dict) -> list[int]:
+        """The windows a deferred row waits for. A row checkpointed before wave 16c
+        names none: it waited for its origin window alone, as it did (Codex on #161)."""
+        if "windows" in row:
+            return row["windows"]
+        origin = self.price_origins.get(handle, {}).get("origin")
+        return [] if origin is None else [origin]
+
     def _settle_deferred(self, index: int) -> None:
         """Settle every decision whose penalty waited for window ``index`` to close."""
         for handle in sorted(h for h, row in self.deferred_settlements.items()
-                             if index in row["windows"]):
+                             if index in self._deferred_windows(h, row)):
             row = self.deferred_settlements.pop(handle)
             if self.queue.get(handle).status not in (SettleStatus.PENDING,
                                                      SettleStatus.TIMED_OUT):

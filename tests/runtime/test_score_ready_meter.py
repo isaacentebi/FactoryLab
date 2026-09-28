@@ -152,3 +152,16 @@ def test_a_subject_awaiting_only_its_price_share_is_finished_evidence(monkeypatc
     assert not rt._cascade_evidence_complete(verdict(open_question))
     rt._close_price_window()  # the share lands; the evidence was already complete
     assert rt._cascade_evidence_complete(verdict(fixed))
+
+
+def test_a_deferral_checkpointed_before_16c_settles_at_its_origin_close(monkeypatch):
+    """Codex on #161: a deferred row written before wave 16c names no ``windows``; it
+    waited for its origin window alone, so it settles at that close instead of raising."""
+    rt = _runtime(monkeypatch)
+    handle = _deferred_at(rt, opened=10, ready=13)
+    rt.deferred_settlements = decode(encode(rt.deferred_settlements))  # a checkpoint
+    del rt.deferred_settlements[handle]["windows"]  # written before wave 16c
+    rt.ticks_consumed = 20
+    rt._close_price_window()
+    assert rt.queue.get(handle).status is SettleStatus.SETTLED
+    assert handle not in rt.deferred_settlements
