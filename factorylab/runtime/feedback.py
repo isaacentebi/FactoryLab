@@ -2965,16 +2965,14 @@ class FeedbackMixin:
                     role, handle, as_role=role, abstaining=self._is_price_abstention(handle))]
 
     def _abstention_awaits_close(self, handle: str) -> bool:
-        """Whether a round that delivered nothing waits for its origin window to close
-        before it is priced: any role its draw could have filled has a card whose share
-        is a count of that window's decisions (``PricingMixin._awaits_close``)."""
-        origin = self.price_origins.get(handle, {}).get("origin")
-        window = self.price_windows.get(origin)
+        """Neutral credit waits for every attributed price window to freeze (§IV.c)."""
+        origins = self.price_origins.get(handle, {})
+        window = self.price_windows.get(origins.get("origin"))
         sample = window.decisions.get(handle) if window is not None else None
-        if sample is None or window.closed_values is not None:
+        if sample is None:
             return False
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
-        return any(self._awaits_close(role, handle) for role in sorted(roles))
+        return any(self._pending_price_windows(role, origins) for role in sorted(roles))
 
     def _thrash_charge(self, handle: str) -> float:
         """The thrash charge a router's round bears, taken once: ``c``, unmapped.

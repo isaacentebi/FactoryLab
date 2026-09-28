@@ -233,8 +233,16 @@ def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):
 def intermittent(shared_run):
     """One live run supplies sampling, role-pricing and unsupported-attractor proofs."""
     # Keep the bounded shared run; the sampling test asserts full immune-horizon coverage.
-    return shared_run("sf-intermittent", lambda: P.run(
-        *P.intermittent(), events=220, instrument=False))
+    def make_run():
+        run = P.run(*P.intermittent(), events=220, instrument=False)
+        credited = {r["handle"] for r in run.rows("router.decline_priced")}
+        owed = {r["handle"] for r in run.rows("commission.declined")} - credited
+        # §IV.c: retain every final open-window liability, not an early neutral credit.
+        assert owed
+        assert owed <= run.rt.noop_credits.keys()
+        assert all(run.rt._abstention_awaits_close(h) for h in owed)
+        return run
+    return shared_run("sf-intermittent", make_run)
 
 
 def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured(intermittent):
@@ -295,8 +303,13 @@ def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(in
     declined = run.rows("commission.declined")
     credits = run.rows("router.decline_priced")
     assert {r["handle"] for r in declined} == declined_draws
-    assert {r["handle"] for r in credits} == declined_draws
-    assert len(declined) == len(credits) == len(declined_draws)
+    closed_windows = {r["window"] for r in run.rows("price.window")}
+    eligible = {h for h in declined_draws if origins[h] in closed_windows}
+    pending = declined_draws - eligible
+    assert pending and {origins[h] for h in pending} == {max(closed_windows) + 1}
+    assert {r["handle"] for r in credits} == eligible
+    assert len(credits) == len(eligible)  # exactly once for every closed-window decline
+    assert len(declined) == len(declined_draws)
     contributions = {r["handle"]: r for r in run.rows("price.contribution")}
     cap = run.manifest["prices"]["penalty_cap"]
     for row in credits:
@@ -359,8 +372,12 @@ def test_intermittent_declines_pay_held_violation_after_support_not_during_warmu
                 if r["assembly_id"].startswith("judge-")
                 and contributions[r["handle"]]["window"] % 2}
     credits = [r for r in run.rows("router.decline_priced") if r["handle"] in declined]
-    assert declined and len(credits) == len(declined)
     closes = {r["window"]: r for r in run.rows("price.window")}
+    eligible = {h for h in declined if contributions[h]["window"] in closes}
+    pending = declined - eligible
+    assert pending and {contributions[h]["window"] for h in pending} == {max(closes) + 1}
+    assert eligible and {r["handle"] for r in credits} == eligible
+    assert len(credits) == len(eligible)
     updates = [r for r in run.rows("price.update") if r["card_id"] == card]
     # The ceded evaluator card really measures delivered conformity, independently
     # of the refusal ledger and its computed price terms (§IV.a).
