@@ -1,6 +1,6 @@
 """R3-D: evaluation and time. The plan's acceptance, one test per clause.
 
-``docs/plans/edition3-r3.md``, R3-D: "no producer return exists for an empty
+Historical R3-D acceptance: "no producer return exists for an empty
 draw; a forecast at a 0.99 base rate moves no standing; three simultaneous
 arrivals do not trigger a tier", plus a declined commission costs only the call
 (§6.B). The unmeasured answer, the fidelity objection and the charter-window

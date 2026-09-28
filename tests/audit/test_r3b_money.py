@@ -1,6 +1,6 @@
 """R3-B acceptance: three quantities, typed custody, and no fabricated facts.
 
-`docs/plans/edition3-r3.md`, R3-B, from GPT-6 Pro's third reading §2 and §3. Five
+Historical R3-B acceptance, from GPT-6 Pro's third reading §2 and §3. Five
 acceptance sentences, one section each:
 
 * a venue loss leaves the compute authority untouched and provider inventory unchanged;

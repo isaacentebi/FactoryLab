@@ -81,9 +81,8 @@ ACCOUNTING_FACTS: tuple[str, ...] = (
     "No trade, forecast, registration, amendment or novelty quota applies.",
 )
 
-#: GPT-6's third reading, §8 (``docs/audits/v6/gpt6-third/prompts.md``): the wrapper
-#: the five fixed norms are read inside, in two halves, because the norms
-#: themselves come from the charter object between them — so a ratified edition
+#: Chapter II §I.b: public schematics wrap the five fixed norms in two halves
+#: because the norms come from the charter object between them — so a ratified edition
 #: renders its own definitions and this text never becomes a second, staler copy
 #: of the charter a population actually voted. For the same reason it no longer
 #: restates the fidelity norm (smuggling audit D2); what stays is measurement

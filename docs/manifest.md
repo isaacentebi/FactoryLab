@@ -1861,7 +1861,7 @@ inactive tick (time audit T5), records
 launch. Testnet seeds `["PURR/USDC", "HYPE/USDC"]` (`HYPE/USDC` is `@1035`
 there), the funded draft `edition1-example` seeds `["HYPE/USDC"]`, and scripted
 seeds `["BTC/USDC"]`; `HYPE/USDC` is seeded as the physics of the exit route
-(docs/launch-decisions.md, "Self-serve gas"), one spot market and one
+(historical launch decision, "Self-serve gas"), one spot market and one
 `MarketMid` per tick.
 The mainnet re-draft uses `UBTC/USDC` and `UETH/USDC` for those base assets.
 Live pairs must exist verbatim in SDK spot metadata; unavailable pairs fail launch.
@@ -2765,8 +2765,8 @@ claim the same way.
 
 ## Edition 2: endowment, machinery, challenge, income, release identity
 
-The edition 2 contracts (`docs/plans/edition2.md`, from the cold audit in
-`docs/audits/v4/gpt6-triage.md`) add no objective for the population. They
+The edition 2 contracts described below, from the historical edition 2 cold
+audit, add no objective for the population (Chapter II §I.a). They
 add a locked endowment released on a schedule and a pause instead of a death
 between releases, seats that are programs, an archive of what a seat keeps, a
 route for changing a card's measurement without the old card vetoing it, a
@@ -2810,7 +2810,7 @@ backed, grants, to_unallocated}`; a tranche the pool does not fully hold
 (shared spending ran it down) refills the pool before any seat is endowed.
 On `main` that split counts seat ids, so a lineage that registered more
 children takes more of every tranche (reviewer P2-07). The R2-B economy change
-(`docs/audits/v5/gpt6-second-reading-triage.md`) splits a release per lineage
+(historical second-reading triage) splits a release per lineage
 and pays each lineage's share to its root seat; landing in the R2-B economy PR,
 not merged at the time of writing.
 
@@ -3400,8 +3400,8 @@ decision's handle, and to no other seat (information audit C5). The world block'
 
 ## Edition 3 R3-B: typed custody, and what may move the compute wallet
 
-From GPT-6 Pro's third reading §2 and §3 (`docs/audits/v6/gpt6-third/reading.md`)
-and `docs/plans/edition3-r3.md`. Three quantities are kept apart and never
+From GPT-6 Pro's historical third reading §2 and §3 and the R3 plan, under
+Chapter II §II.b's enforced physics. Three quantities are kept apart and never
 conflated: the **learning score** (evidence for a rule), the **seat entitlement**
 (permission to spend inside the compute budget) and the **assets and credits**
 held by a custodian, which change only by a verified transaction, a provider
@@ -3572,7 +3572,7 @@ Bootstrap reads carry exact argument schemas; complete return contracts and othe
 reference sections are reached through `world.read`, and proposal shapes through
 `catalogue.search`. The directory names every omitted section. Nothing is replaced
 with a generated summary or made inaccessible. `Request.section_bytes` measures
-actual rendered bytes; the offline comparison is in `docs/audits/edition4-context/`.
+actual rendered bytes; the historical offline comparison is not retained in this tree.
 
 Own working state stays inline through 4,096 UTF-8 bytes. Larger state retains its
 exact artifact address and `artifact.get` route; storage limits do not change. The inbox carries eight typed indices, not eight full bodies. `outcome.list`

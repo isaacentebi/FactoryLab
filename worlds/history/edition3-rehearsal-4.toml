@@ -1,9 +1,8 @@
-# Edition 3 testnet manifest (docs/plans/edition3.md, C5; GPT-6 Pro's architect reading,
-# docs/audits/v6/gpt6/architect-review.md §10-§13). The nine-seat roster of §10.3 with the
+# Edition 3 testnet manifest (C5; GPT-6 Pro's architect reading §10-§13). The nine-seat roster of §10.3 with the
 # seed lenses of §11 verbatim, live Hyperliquid testnet, fake-USD accounting, real prepaid
 # inference. Rehearsal only; no real money moves. Never name a copy of this `funded`.
 #
-# The charter below is the edition 2 ratified charter (docs/charter/edition2-ratified.toml),
+# The charter below is the edition 2 ratified charter,
 # carried so this world can be rehearsed before edition 3's charter exists. W3 drafts the
 # edition 3 charter (C3) and the coordinator ratifies it on this roster; only then does the
 # roster digest belong here. `roster_sha256` is deliberately absent until that vote: the
@@ -13,7 +12,7 @@ seed = 3
 # $300 of inference backing, precommitted whole (GPT-6 §12.1). $120 is released at genesis
 # and the remaining $180 in three weekly tranches below.
 initial_balance_usd = "300"
-# Ten-minute tick (docs/launch-decisions.md, kept from edition 2): one coalesced world
+# Ten-minute tick (kept from edition 2): one coalesced world
 # update per seat per tick (C2), not one request per price print.
 tick_interval = "120s"
 
@@ -309,16 +308,14 @@ max_transfer_fee_usd = "2"
 # population's own Core gas.
 spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 
-# Edition 3 charter as ratified on 15 September 2026 (docs/charter/edition3-ratified.toml,
-# draft docs/charter/edition3-draft.toml, decisions docs/plans/edition3.md C3): five norms
+# Edition 3 charter as ratified on 15 September 2026 under C3: five norms
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
 # Ratified 16 September 2026 by the seeded five-seat committee of this roster (GLM on Venice,
 # Luna on OpenRouter; every seat prompt opens with the JSON and refusal contract; GLM seats at
-# 4,096 output tokens after run 3's length cut-offs; earlier ballots under docs/charter/history/):
-# docs/charter/edition3-ratification.json. The first ballot, on the roster GPT-6 proposed, is
-# under docs/charter/history/ (roster 488c62ef…).
+# 4,096 output tokens after run 3's length cut-offs).
+# The first ballot used the roster GPT-6 proposed (roster 488c62ef…).
 ratified_sha256 = "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712"
 roster_sha256 = "fc5a7f24a71a1821ecab8bd73c15739d60dd8d544ea40009d65f6a7bdb33a291"
 norms = [

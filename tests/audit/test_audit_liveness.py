@@ -1,6 +1,6 @@
 """Cold audit, seat 4: liveness under unbounded input and unbounded time.
 
-Each test reproduces one finding in docs/audits/v2/defects-fable.md and fails on the
+Each test reproduces one finding in the historical round-two cold audit and fails on the
 audited commit.
 """
 

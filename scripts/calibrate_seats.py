@@ -696,7 +696,7 @@ def calibrate(manifest: WorldManifest, candidates: list[str], *, provider: Any,
 
 # --- the bounded case gate (edition 3, C5) -----------------------------------------------
 
-#: The gate ``docs/plans/edition3.md`` C5 puts before ratification, in one place so it can
+#: The C5 pre-ratification gate, in one place so it can
 #: be read without reading the harness: at least forty bounded cases per candidate route,
 #: every accounting and refusal case passing, and at least 95% of returns well formed. It is
 #: an initial screen and not a reliability certificate: fourteen successes never established
