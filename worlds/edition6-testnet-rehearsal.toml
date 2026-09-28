@@ -126,6 +126,9 @@ extra_body = { provider = { require_parameters = true } }
 
 [[models]]
 id = "openai/gpt-5.6-sol"
+# Published knowledge cutoff.
+# https://developers.openai.com/api/docs/models/gpt-5.6-sol
+training_cutoff = "2026-02-16"
 provider = "openrouter"
 input_usd_per_mtok = "2.00"
 output_usd_per_mtok = "10.00"
@@ -161,6 +164,8 @@ contract = "json_schema"
 # GPT-6 §10.3: the cheap route the local screen scored 100% on.
 [[models]]
 id = "openai/gpt-6-luna"
+# Published knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-6-luna
+training_cutoff = "2026-05-18"
 provider = "openrouter"
 input_usd_per_mtok = "0.10"
 output_usd_per_mtok = "0.50"
@@ -185,6 +190,8 @@ contract = "json_schema"
 # times per few hundred ticks, so frontier judgement where it has the most leverage.
 [[models]]
 id = "openai/gpt-6-sol"
+# Published knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-6-sol
+training_cutoff = "2026-04-20"
 provider = "openrouter"
 input_usd_per_mtok = "2.00"
 output_usd_per_mtok = "10.00"
@@ -210,6 +217,8 @@ extra_body = { provider = { order = ["xiaomi"], require_parameters = true } }
 
 [[models]]
 id = "openai/gpt-5.6-luna"
+# Published knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-5.6-luna
+training_cutoff = "2026-02-16"
 provider = "openrouter"
 input_usd_per_mtok = "0.20"
 output_usd_per_mtok = "1.20"
@@ -223,6 +232,9 @@ extra_body = { provider = { require_parameters = true } }
 # cost of the one completion `web.search` buys.
 [[models]]
 id = "openai/gpt-5.6-luna:online"
+# Base-model knowledge cutoff only; this does not bound web retrieval.
+# https://developers.openai.com/api/docs/models/gpt-5.6-luna
+training_cutoff = "2026-02-16"
 provider = "openrouter"
 input_usd_per_mtok = "0.20"
 output_usd_per_mtok = "1.20"
@@ -259,6 +271,8 @@ reasoning = { enabled = false }
 # without changing what it thinks with.
 [[models]]
 id = "venice:openai-gpt-6-luna"
+# Base-model knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-6-luna
+training_cutoff = "2026-05-18"
 provider = "venice"
 input_usd_per_mtok = "0.125"
 output_usd_per_mtok = "0.625"

@@ -116,7 +116,23 @@ def test_the_harness_turns_the_web_off_and_records_the_admission(tmp_path):
         "manifest": manifest_as_launched(manifest)}}}]
     card = fastloop.tape_card(events)
     assert card["web"] == "off" and card["allow_unknown_cutoff"] is True
-    assert card["unknown_cutoffs"] == sorted(m.id for m in manifest.models)
+    assert card["unknown_cutoffs"] == sorted([
+        "deepseek/deepseek-v4.1-flash",
+        "z-ai/glm-5.3-flash",
+        "qwen/qwen3.8-flash",
+        "minimax/minimax-m3",
+        "xiaomi/mimo-v2.6-flash",
+        "venice:z-ai-glm-5-3-flash",
+        "venice:qwen-3-8-flash",
+        "venice:deepseek-v4-1-flash",
+    ])
+    assert {m.id: m.training_cutoff for m in manifest.models if m.training_cutoff} == {
+        "openai/gpt-5.6-sol": "2026-02-16",
+        "openai/gpt-6-luna": "2026-05-18",
+        "openai/gpt-6-sol": "2026-04-20",
+        "openai/gpt-5.6-luna": "2026-02-16",
+        "venice:openai-gpt-6-luna": "2026-05-18",
+    }
 
 
 def manifest_as_launched(manifest):

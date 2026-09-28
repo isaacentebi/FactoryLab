@@ -101,6 +101,19 @@ def test_the_charter_is_the_populations_own_and_claims_no_pin_for_a_changed_rost
                     charter_roster_sha256="0" * 64)
     with pytest.raises(ValueError, match="roster differs"):
         stale._validate_funded_admission()
-    assert roster_hash(six) == roster_hash(load_manifest(
-        "worlds/edition6-capital-loop.toml"))
+    # Replay provenance is recorded only on the rehearsal; every other roster field
+    # still matches the capital-loop copy. Cutoffs remain part of the real roster hash.
+    assert {m.id: m.training_cutoff for m in six.models if m.training_cutoff} == {
+        "openai/gpt-5.6-sol": "2026-02-16",
+        "openai/gpt-6-luna": "2026-05-18",
+        "openai/gpt-6-sol": "2026-04-20",
+        "openai/gpt-5.6-luna": "2026-02-16",
+        "openai/gpt-5.6-luna:online": "2026-02-16",
+        "venice:openai-gpt-6-luna": "2026-05-18",
+    }
+    without_cutoffs = replace(six, models=tuple(
+        replace(m, training_cutoff=None) for m in six.models))
+    capital = load_manifest("worlds/edition6-capital-loop.toml")
+    assert roster_hash(six) != roster_hash(capital)
+    assert roster_hash(without_cutoffs) == roster_hash(capital)
 
