@@ -52,6 +52,24 @@ def test_a_tape_must_postdate_every_models_training_cutoff():
     assert cutoff_end_ns("2026-09-24") == 1790294400 * 10**9 > TAPE.start_ns
 
 
+def test_a_release_date_bound_refuses_a_tape_on_release_day_even_with_a_waiver():
+    from scripts import fastloop
+
+    manifest = fastloop.simulation_manifest(WORLD, 1, tape=TAPE, allow_unknown_cutoff=True)
+    model_id = "deepseek/deepseek-v4.1-flash"
+    cutoff = next(m.training_cutoff for m in manifest.models if m.id == model_id)
+    assert cutoff == "2026-09-10"
+    assert manifest.look_ahead_refusal(model_id) is None
+    end = cutoff_end_ns(cutoff)
+    on_release_day = replace(manifest, exchange=replace(
+        manifest.exchange, tape=replace(manifest.exchange.tape, start_ns=end - 1)))
+    with pytest.raises(ValueError, match=f"look_ahead: model '{model_id}' was trained"):
+        on_release_day.validate()
+    after_release_day = replace(manifest, exchange=replace(
+        manifest.exchange, tape=replace(manifest.exchange.tape, start_ns=end)))
+    after_release_day.validate()
+
+
 def test_an_unknown_cutoff_is_refused_unless_the_operator_admits_it_on_the_record():
     with pytest.raises(ValueError, match="states no training_cutoff"):
         _taped().validate()
@@ -117,16 +135,16 @@ def test_the_harness_turns_the_web_off_and_records_the_admission(tmp_path):
     card = fastloop.tape_card(events)
     assert card["web"] == "off" and card["allow_unknown_cutoff"] is True
     assert card["unknown_cutoffs"] == sorted([
-        "deepseek/deepseek-v4.1-flash",
-        "z-ai/glm-5.3-flash",
         "qwen/qwen3.8-flash",
-        "minimax/minimax-m3",
         "xiaomi/mimo-v2.6-flash",
-        "venice:z-ai-glm-5-3-flash",
         "venice:qwen-3-8-flash",
-        "venice:deepseek-v4-1-flash",
     ])
     assert {m.id: m.training_cutoff for m in manifest.models if m.training_cutoff} == {
+        "deepseek/deepseek-v4.1-flash": "2026-09-10",
+        "venice:deepseek-v4-1-flash": "2026-09-10",
+        "z-ai/glm-5.3-flash": "2026-08-26",
+        "venice:z-ai-glm-5-3-flash": "2026-08-26",
+        "minimax/minimax-m3": "2026-06-01",
         "openai/gpt-5.6-sol": "2026-02-16",
         "openai/gpt-6-luna": "2026-05-18",
         "openai/gpt-6-sol": "2026-04-20",

@@ -104,6 +104,11 @@ def test_the_charter_is_the_populations_own_and_claims_no_pin_for_a_changed_rost
     # Replay provenance is recorded only on the rehearsal; every other roster field
     # still matches the capital-loop copy. Cutoffs remain part of the real roster hash.
     assert {m.id: m.training_cutoff for m in six.models if m.training_cutoff} == {
+        "deepseek/deepseek-v4.1-flash": "2026-09-10",
+        "venice:deepseek-v4-1-flash": "2026-09-10",
+        "z-ai/glm-5.3-flash": "2026-08-26",
+        "venice:z-ai-glm-5-3-flash": "2026-08-26",
+        "minimax/minimax-m3": "2026-06-01",
         "openai/gpt-5.6-sol": "2026-02-16",
         "openai/gpt-6-luna": "2026-05-18",
         "openai/gpt-6-sol": "2026-04-20",
