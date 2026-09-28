@@ -1031,8 +1031,8 @@ class WorldManifest:
           a common foundation model is "a global forcing function"; a provider change
           is not a model change, ``runtime.families``);
         * every judged kind a seed emits is accepted by judges off its author's
-          family, and while ``evaluation.multi_judge_share`` is positive by judges on
-          at least ``multi_judge_count`` such families (rulings §2, Evaluations);
+          family, and when initial or adaptive multi-judge sampling is reachable by
+          judges on at least ``multi_judge_count`` such families (rulings §2, Evaluations);
         * every chain a seeded tier can be asked to grade has a seeded reader: each
           (judge, producer) pair of families a Verdict can carry is read by a meta
           on neither, and, when any seed reads MetaVerdicts, each (grader, graded)
@@ -1075,7 +1075,8 @@ class WorldManifest:
                   for kind in sorted({k for s in shapes.values() for k in s})}
         # §III, §IV.b: the roster covers reachable adaptive sampling, not only genesis.
         need = (self.evaluation.multi_judge_count
-                if max(self.evaluation.multi_judge_share, self.evaluation.sampling_cap) > 0
+                if (self.evaluation.multi_judge_share > 0
+                    or (self.evaluation.sampling_step > 0 and self.evaluation.sampling_cap > 0))
                 else 1)
         verdict_chains: set[tuple[str, str]] = set()
         for author in producers:

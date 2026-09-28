@@ -106,6 +106,26 @@ def test_s8_judge_families_cover_positive_adaptive_cap_even_at_zero_initial_shar
     assert manifest_from_dict(raw).evaluation.multi_judge_share == 0.0
 
 
+def test_r7_zero_initial_share_and_sampling_step_accept_one_judge_family():
+    raw = _edition6()
+    for seat in raw["assemblies"]:
+        if seat["id"] in ("judge-fidelity", "judge-mechanics"):
+            seat["model_id"] = "openai/gpt-6-luna"
+    raw["evaluation"]["multi_judge_share"] = 0.0
+    raw["evaluation"]["sampling_step"] = 0.0
+    assert raw["evaluation"].get("sampling_cap", 0.7) > 0
+
+    manifest = manifest_from_dict(raw)
+
+    assert manifest.evaluation.multi_judge_share == 0.0
+    assert manifest.evaluation.sampling_step == 0.0
+    assert manifest.evaluator_population_problems() == []
+
+    raw["evaluation"]["multi_judge_share"] = 0.3
+    with pytest.raises(ValueError, match="multi_judge_count needs 2"):
+        manifest_from_dict(raw)
+
+
 def test_a_world_that_seeds_no_judging_is_not_bound():
     raw = _edition6()
     raw["assemblies"] = [a for a in raw["assemblies"] if a["role"] == "producer"]
