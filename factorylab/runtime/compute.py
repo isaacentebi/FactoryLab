@@ -2633,6 +2633,13 @@ class ComputeMixin:
         # Handle-scoped model memory is another durable surface: retain parsed outcomes only.
         for assembly in self.assemblies.values():
             assembly.memory = self.ledger.without_connector_bodies(assembly.memory)
+        # Chapter II §II.b / §I.b: HTTP evidence is an operator fact, not a request
+        # instruction. Remove it before continuity, retained returns or rewards see it.
+        diagnostic_keys = {"http_status", "provider_message"}
+        diagnostic = ({key: value for key, value in ret.provider.items()
+                       if key in diagnostic_keys} if ret.status == "failed" else {})
+        ret = replace(ret, provider={key: value for key, value in ret.provider.items()
+                                     if key not in diagnostic_keys})
         self.stats.invocations += 1
         self.stats.invocation_status[ret.status] = (
             self.stats.invocation_status.get(ret.status, 0) + 1
@@ -2654,6 +2661,7 @@ class ComputeMixin:
                 "stop_reason": sr,
                 "served_by": ret.served_by,
                 "finish_reason": ret.provider.get("finish_reason"),
+                **diagnostic,
                 "usage": {
                     key: ret.provider.get(key)
                     for key in ("input_tokens", "output_tokens", "reasoning_tokens", "max_tokens")

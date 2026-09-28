@@ -458,7 +458,9 @@ class RecoveryJournal:
                                           status=item.get("status"),
                                           unbilled=item.get("unbilled", False),
                                           carry=item.get("carry"),
-                                          expired=item.get("expired", False))
+                                          expired=item.get("expired", False),
+                                          http_status=item.get("http_status"),
+                                          provider_message=item.get("provider_message"))
                 return result
             if name in ("exchange.place", "exchange.close", "exchange.cancel",
                         "exchange.vault_create", "exchange.vault_transfer"):
@@ -500,7 +502,11 @@ class RecoveryJournal:
             encoded_result = encode(result)
         except Exception as exc:
             from factorylab.world.evm import Pending, RailError
-            from factorylab.world.metering import UnbilledFailure, classify_provider_failure
+            from factorylab.world.metering import (
+                UnbilledFailure,
+                classify_provider_failure,
+                provider_failure_diagnostic,
+            )
             from factorylab.world.openrouter import OpenRouterError
             from factorylab.world.venice import VeniceError
 
@@ -509,7 +515,8 @@ class RecoveryJournal:
                 # A used-nonce rejection after a lost acknowledgement cannot prove failure.
                 failure = Pending("replayed submission requires receipt reconciliation")
 
-            # Client exceptions can contain credentials. Preserve only a safe exception class.
+            # Chapter II §I.b: only adapter-sanitized HTTP evidence joins the sealed
+            # operator diary; arbitrary client exception text can contain credentials.
             error = type(failure).__name__
             # RailError messages are locally generated bounded reasons, never provider bodies.
             reason = str(failure) if isinstance(failure, RailError) else None
@@ -521,7 +528,8 @@ class RecoveryJournal:
                 status = failure.status if type(failure.status) is int else None
                 billing = {"status": status,
                            "unbilled": isinstance(classify_provider_failure(failure),
-                                                  UnbilledFailure)}
+                                                  UnbilledFailure),
+                           **provider_failure_diagnostic(failure)}
 
             from factorylab.world.openai_wire import CALL_EXPIRED
 
@@ -601,7 +609,9 @@ def _read_only(name: str) -> bool:
 
 def _recorded_error(name: str, reason: str | None = None, *,
                     status: int | None = None, unbilled: bool = False,
-                    carry: dict | None = None, expired: bool = False) -> Exception:
+                    carry: dict | None = None, expired: bool = False,
+                    http_status: int | None = None,
+                    provider_message: str | None = None) -> Exception:
     from factorylab.world.evm import Pending, RailError
     from factorylab.world.exchange import VenueUnavailable
     from factorylab.world.market import PaymentOutcomeUnknown
@@ -624,8 +634,15 @@ def _recorded_error(name: str, reason: str | None = None, *,
             # runtime reads that from the recorded outcome, so a replay reads it too.
             from factorylab.world.openai_wire import CALL_EXPIRED
 
-            return cls(status, CALL_EXPIRED)
-        return cls(status, "Provider request failed")
+            failure = cls(status, CALL_EXPIRED)
+        else:
+            failure = cls(status, "Provider request failed")
+        # Old journals have no diagnostic fields; replay must not invent any.
+        failure.provider_diagnostic = (
+            {"http_status": http_status,
+             **({"provider_message": provider_message} if provider_message is not None else {})}
+            if http_status is not None else {})
+        return failure
     if name == "Pending":
         return Pending(reason or "treasury rail unavailable", carry=carry)
     if expired:

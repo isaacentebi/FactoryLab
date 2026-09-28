@@ -760,7 +760,8 @@ class Return:
     tool_calls: tuple[dict[str, Any], ...] = ()
     # What the provider reported about the completion: finish_reason, input_tokens,
     # output_tokens, reasoning_tokens, cached_tokens (None when unreported) and the
-    # max_tokens sent.
+    # max_tokens sent. Failed HTTP calls may carry operator diagnostics here;
+    # the runtime removes those after extracting the failed invocation diary fields.
     provider: dict[str, Any] = field(default_factory=dict)
     # Optional sections of the reply that did not validate and were dropped while
     # the answer stood: ``{"section", "reason"[, "index"]}`` each, in section order.

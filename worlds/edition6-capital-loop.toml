@@ -179,8 +179,9 @@ input_usd_per_mtok = "0.15"
 output_usd_per_mtok = "0.47"
 reasoning = { enabled = false }
 extra_body = { provider = { require_parameters = true } }
-# json_schema: 10/10 kernel-valid vs 6/10 json_object (Alibaba), 23 Sept 2026 probe.
-contract = "json_schema"
+# Chapter II §I.a I/O conformance: 2026-09-27 host refusal of json_schema:
+# When the schema contains the fields "patternProperties" or "propertyNames", the type should not be "object".
+contract = "json_object"
 
 # The nine seats of GPT-6 §10.3, on the kernel's seed system prompt (see the header).
 # Each lens is seeded once into `initial_state` as {lens, open_questions,
