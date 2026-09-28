@@ -138,8 +138,6 @@ def test_the_harness_turns_the_web_off_and_records_the_admission(tmp_path):
     assert card["web"] == "off" and card["allow_unknown_cutoff"] is True
     assert card["unknown_cutoffs"] == []
     assert {m.id: m.training_cutoff for m in manifest.models if m.training_cutoff} == {
-        "z-ai/glm-5.3-flash": "2026-08-26",
-        "venice:z-ai-glm-5-3-flash": "2026-08-26",
         "google/gemini-3.8-flash": "2026-09-02",
         "qwen/qwen3.8-flash": "2026-08-26",
         "venice:qwen-3-8-flash": "2026-08-26",

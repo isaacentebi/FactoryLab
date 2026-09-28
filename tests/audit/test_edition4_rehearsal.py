@@ -26,10 +26,8 @@ class StubProvider:
         """Expose explicit fixture metadata for every model in the rehearsal roster."""
         rows = (
             ("openai/gpt-5.6-sol", "0.00000200", "0.00001000", 128_000),
-            ("venice:z-ai-glm-5-3-flash", "0.00000015", "0.00000050", 131_072),
             ("venice:qwen-3-8-flash", "0.00000014", "0.00000049", 131_072),
             # Edition 6's OpenRouter routes of the same two models.
-            ("z-ai/glm-5.3-flash", "0.00000015", "0.00000050", 131_072),
             ("qwen/qwen3.8-flash", "0.00000015", "0.00000047", 131_072),
             ("openai/gpt-5.6-luna", "0.00000020", "0.00000120", 128_000),
             ("openai/gpt-5.6-luna:online", "0.00000020", "0.00000120", 128_000),

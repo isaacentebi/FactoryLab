@@ -84,8 +84,8 @@ def test_an_evaluator_monoculture_is_refused_and_a_provider_change_does_not_help
     raw = _edition6()
     for seat in raw["assemblies"]:
         if seat["role"] in ("evaluator", "meta", "adversary"):
-            seat["model_id"] = ("venice:z-ai-glm-5-3-flash" if seat["id"].endswith("a")
-                                else "z-ai/glm-5.3-flash")
+            seat["model_id"] = ("venice:qwen-3-8-flash" if seat["id"].endswith("a")
+                                else "qwen/qwen3.8-flash")
     with pytest.raises(ValueError, match="1 model families serve the evaluator tier"):
         manifest_from_dict(raw)
 
