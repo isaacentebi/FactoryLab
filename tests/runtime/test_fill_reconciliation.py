@@ -289,6 +289,8 @@ def test_backward_poll_replays_identity_append_before_propagation():
     from factorylab.runtime.resume import RecoveryJournal
 
     venue = Venue()
+    raw_account = venue.account
+    venue.account = lambda: replace(raw_account(), observed_at_ns=1000)
     ledger = Ledger(clock_ns=lambda: 0)
     c = FillCursor(ledger, start_ns=0, measured=True)
     c.initialize(venue.account(), now_ns=0)

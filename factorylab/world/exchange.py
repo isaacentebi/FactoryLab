@@ -107,6 +107,7 @@ class OrderResult:
     filled_size: Decimal
     avg_px: Decimal | None
     error: str | None = None
+    observed_at_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1826,10 +1827,13 @@ class HyperliquidExchange:
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
         """Unknown or unavailable order status is uncertainty, never a negative acknowledgement."""
+        import time
+
         try:
             response = (self._info.query_order_by_oid(self._address, int(order_id))
                         if order_id is not None else
                         self._info.query_order_by_cloid(self._address, self.client_id(client_id)))
+            observed_at_ns = time.time_ns()
             if response.get("status") != "order":
                 return OrderResult(order_id, "uncertain", Decimal(0), None, "order not observed")
             detail = response["order"]
@@ -1848,12 +1852,14 @@ class HyperliquidExchange:
             if not size.is_finite() or not remaining.is_finite() or not 0 <= remaining <= size:
                 raise ValueError("invalid order quantity")
             if status == "open":
-                return OrderResult(oid, "resting", size - remaining, None)
+                return OrderResult(oid, "resting", size - remaining, None,
+                                   observed_at_ns=observed_at_ns)
             if status == "filled":
                 # Order status does not provide an execution price; fills supply accounting.
-                return OrderResult(oid, "filled", size, None)
+                return OrderResult(oid, "filled", size, None, observed_at_ns=observed_at_ns)
             if status == "canceled" or status.endswith("Canceled"):
-                return OrderResult(oid, "cancelled", size - remaining, None)
+                return OrderResult(oid, "cancelled", size - remaining, None,
+                                   observed_at_ns=observed_at_ns)
             if status == "rejected" or status.endswith("Rejected"):
                 return OrderResult(oid, "rejected", Decimal(0), None, "venue rejected order")
         except Exception as exc:

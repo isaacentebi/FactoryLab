@@ -947,7 +947,19 @@ class FillCursor:
         self.expected_fees = fees
         self.reconciliation_ns = now_ns
 
-    def _reconcile(self, exchange, result, *, now_ns, read_start, tick_ns, bound, identified):
+    def observed_ns(self, observation) -> int:
+        """Missing venue observation times use a replayable clock sampled after the read."""
+        observed = getattr(observation, "observed_at_ns", None)
+        if observed is not None:
+            return observed
+        import time
+
+        call = getattr(self.ledger, "call", None)
+        return (call("wall.now_ns", time.time_ns, (), {}) if call is not None
+                else time.time_ns())
+
+    def _reconcile(self, exchange, result, *, now_ns, read_start, tick_ns, bound, identified,
+                   history_complete):
         # Chapter II §III.b: independent account facts, not response counts or an
         # empirical latency maximum, decide whether the observed net changes agree.
         for ts, fill in result:
@@ -984,13 +996,15 @@ class FillCursor:
             try:
                 status = exchange.lookup(client, **({"order_id": order["oid"]}
                                                     if order["oid"] else {}))
+                observed = self.observed_ns(status)
                 if status.order_id is not None and order["oid"] is None:
                     order["oid"] = str(status.order_id)
-                equal = (str(status.order_id) == order["oid"]
+                equal = (observed >= now_ns and str(status.order_id) == order["oid"]
                          and status.status in ("filled", "cancelled", "resting")
                          and status.filled_size == Decimal(order["booked"]))
                 self.ledger.append({"kind": "consequence.fill_order", "client_id": client,
                                     "order_id": order["oid"], "read_ns": now_ns,
+                                    "observed_at_ns": observed,
                                     "status": status.status, "booked_size": order["booked"],
                                     "reported_size": str(status.filled_size), "matched": equal})
                 orders_complete &= equal
@@ -999,9 +1013,11 @@ class FillCursor:
             except (RuntimeError, ValueError, AttributeError, ArithmeticError):
                 orders_complete = False
         reason, positions, cash, fees = None, None, None, None
+        account_observed = None
         try:
             account = exchange.account()
-            if account.observed_at_ns is not None and account.observed_at_ns < now_ns:
+            account_observed = self.observed_ns(account)
+            if account_observed < now_ns:
                 raise ValueError("positions observed before reconciliation target")
             positions, cash = self._account_facts(account)
             if account.cumulative_fees_usd is not None:
@@ -1032,9 +1048,18 @@ class FillCursor:
                 self.incomplete_since_ns = self.reconciliation_ns or self.launch_ns
             self.recovery_span_ns = max(1, tick_ns, bound or 0,
                                         2 * self.recovery_span_ns)
-        complete = matched and orders_complete and identified
+        # Chapter II §III.b: retained history cannot supply missing execution evidence;
+        # exact independent order/position agreement can still close a truncated read.
+        retention_unknown = not history_complete and (not orders_complete or not matched)
+        complete = matched and orders_complete and identified and not retention_unknown
         self.ledger.append({"kind": "consequence.fill_reconciliation", "read_ns": now_ns,
-                            "matched": matched, "reason": reason,
+                            "matched": matched,
+                            "reason": (reason or ("execution evidence unavailable or "
+                                       "outside retained history"
+                                       if not complete and not history_complete else None)),
+                            "history_complete": history_complete,
+                            "retention_unknown": retention_unknown,
+                            "positions_observed_at_ns": account_observed,
                             "reconciliation_ns": self.reconciliation_ns,
                             "read_start_ns": read_start,
                             "position_delta": position_delta, "cash_delta_micro_usd": cash_delta,
@@ -1161,7 +1186,8 @@ class FillCursor:
         if self.measured and now_ns is not None:
             self._reconcile(exchange, result, now_ns=now_ns, read_start=read_start,
                             tick_ns=tick_ns, bound=bound,
-                            identified=all(getattr(f, "venue_id", None) for f in fills))
+                            identified=all(getattr(f, "venue_id", None) for f in fills),
+                            history_complete=history_complete)
         if result or (self.measured and now_ns is not None):
             latest = (max(self.launch_ns, (now_ns or self.launch_ns)
                           - (bound or 0) - tick_ns) if self.measured
