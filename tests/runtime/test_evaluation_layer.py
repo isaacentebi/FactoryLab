@@ -84,8 +84,8 @@ def test_an_evaluator_monoculture_is_refused_and_a_provider_change_does_not_help
     raw = _edition6()
     for seat in raw["assemblies"]:
         if seat["role"] in ("evaluator", "meta", "adversary"):
-            seat["model_id"] = ("venice:z-ai-glm-5-3-flash" if seat["id"].endswith("a")
-                                else "z-ai/glm-5.3-flash")
+            seat["model_id"] = ("venice:qwen-3-8-flash" if seat["id"].endswith("a")
+                                else "qwen/qwen3.8-flash")
     with pytest.raises(ValueError, match="1 model families serve the evaluator tier"):
         manifest_from_dict(raw)
 
@@ -794,8 +794,8 @@ def test_a_roster_whose_metas_cannot_read_a_chain_is_refused():
         if seat["role"] == "meta":
             seat["model_id"] = "openai/gpt-6-luna"
     raw["assemblies"].append({**next(a for a in raw["assemblies"] if a["id"] == "meta-audit"),
-                              "id": "meta-extra", "model_id": "xiaomi/mimo-v2.6-flash"})
-    with pytest.raises(ValueError, match="no meta reads a Verdict by a xiaomi judge on a "
+                              "id": "meta-extra", "model_id": "google/gemini-3.8-flash"})
+    with pytest.raises(ValueError, match="no meta reads a Verdict by a gemini judge on a "
                                          "gpt return off both families"):
         manifest_from_dict(raw)
 

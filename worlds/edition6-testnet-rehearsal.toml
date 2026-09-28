@@ -31,6 +31,10 @@
 #    holds "healthy mixes of mean-based and swap-based learners").
 # Fourteen seats: eight evaluators, six producers (antagonists included). The kernel
 # requires a strict evaluator majority, and no seat reads a chain on its own family.
+# On 28 September 2026 the three least format-reliable models (DeepSeek v4.1 flash,
+# MiniMax M3, MiMo v2.6 flash, all over the 5% malformed bar in the first real-model
+# run) left the roster: their seats are on Gemini 3.8 Flash, Qwen 3.8 flash and
+# Claude Sonnet 5.5 (see the model entries for the measurements).
 #
 # THE ROSTER IS UNRATIFIED. The roster digest hashes every seat's system_prompt and
 # initial_state, so this roster is not the one edition 5's charter was ratified on.
@@ -109,24 +113,6 @@ start_cash_usd = "120"
 # ceiling. Sol's route currently advertises a promotion; it is not a price promise, and the
 # ceiling here is the undiscounted list price on purpose.
 [[models]]
-id = "deepseek/deepseek-v4.1-flash"
-# release date (upper bound on training data): https://api-docs.deepseek.com/news/news260910/
-training_cutoff = "2026-09-10"
-provider = "openrouter"
-# Ceilings at or above the route's list price (OpenRouter, 23 September 2026: $0.04 in,
-# $0.64 out); metering charges what the provider reports.
-input_usd_per_mtok = "0.15"
-output_usd_per_mtok = "0.70"
-reasoning = { enabled = false }
-# Never silently authorize a more expensive fallback than the route that was validated
-# (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
-extra_body = { provider = { require_parameters = true } }
-# json_object. Under json_schema a 23 September 2026 probe of toy prompts was 10/10
-# kernel-valid, but in the first live capital-loop rehearsal that day its hosts returned 9
-# of 11 real contracts malformed (`"emits":","`, required fields absent), against about 1%
-# on json_object in the A/B batches before.
-
-[[models]]
 id = "openai/gpt-5.6-sol"
 # Published knowledge cutoff.
 # https://developers.openai.com/api/docs/models/gpt-5.6-sol
@@ -140,17 +126,18 @@ extra_body = { provider = { require_parameters = true } }
 # R2 substitutes the two Venice routes with the exact current OpenRouter catalogue ids.
 # Prices were read from OpenRouter on 19 September 2026. require_parameters prevents a
 # fallback provider from silently ignoring the declared reasoning controls.
-[[models]]
-id = "z-ai/glm-5.3-flash"
-# Named-model release; the provider also mentions an earlier undated anonymous preview.
-# release date (upper bound on training data): https://z.ai/blog/glm-5.3-flash
-training_cutoff = "2026-08-26"
-provider = "openrouter"
-input_usd_per_mtok = "0.09"
-output_usd_per_mtok = "0.30"
-reasoning = { effort = "low" }
-extra_body = { provider = { require_parameters = true } }
-
+# Seated 2026-09-28 on judge-fidelity as well as antagonist-core. GLM-5.3-Flash held that
+# seat first, but its measured latency on 8 real seat requests that day (53 s mean, one
+# call at 313 s) would stall a world that ticks every 10 s on synchronous invocations
+# (Codex review of #170; essay II.IV.c: the control apparatus may not be slower than its
+# environment). Qwen is its own family, so the judges of producer returns still span three
+# families (gemini, qwen, gpt) and each return finds two off its author's. The first
+# real-model run (live-20260928-084241-s1) measured it on antagonist-core: 4.9% of 123
+# replies malformed, within the 5% bar. Its latency, read from the wall-clock readings
+# around each provider.complete in that diary: mean 6.0 s, p90 8.1 s (max 10.1 s) over the
+# 27 calls with no other I/O in the bracket; over all 127 brackets, which also hold venue
+# and treasury polling, mean 7.9 s and p90 15.2 s (GPT-6 Luna seats read p90 3.8 s and
+# 9.1 s the same two ways).
 [[models]]
 id = "qwen/qwen3.8-flash"
 # first public availability (upper bound on training data, no dated official release was found): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
@@ -180,26 +167,33 @@ output_usd_per_mtok = "0.50"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
-# A fifth family, on the constructor producer seat. The seed roster is chosen on cost,
-# latency and conformance to the I/O contract, never on what seats decide (AGENTS.md,
-# rule 2): in the last live batch 11 of the 15 answers the contract could not parse were
-# Qwen 3.8 flash's, so it keeps one seat, and a seat may move back to it by model proposal.
+# Seated 2026-09-28 on six seats that DeepSeek v4.1 flash, MiniMax M3 and MiMo v2.6 flash
+# held. The seed roster is chosen on cost, latency and conformance to the I/O contract,
+# never on what seats decide (AGENTS.md, rule 2). The first real-model run
+# (live-20260928-084241-s1) put the answers the contract could not parse at 15.3% of 118
+# for MiniMax M3, 10.3% of 301 for DeepSeek and 6.2% of 320 for MiMo, against a bar of 5%.
+# On 16 real seat requests captured from a scripted tape replay (producer, evaluator, meta
+# and adversary), 2026-09-28, this route answered 16 of 16 kernel-valid, at $0.0073 a call
+# and 2.9 s mean (4.8 s max). The other candidates, same requests: Cohere Command A Plus
+# failed 8 of 8 (host 422, invalid tool generation); Mistral Small 2603 was 1 of 8
+# malformed and then rate-limited upstream on all 24 top-up calls, so it never showed 5%;
+# GLM-5.3-Flash was 0 of 8 at effort low but 53 s mean with a 313 s
+# call, and 1 of 16 malformed at effort minimal. Its host refuses reasoning off
+# ("Reasoning is mandatory for this endpoint"), so it carries effort low.
 [[models]]
-id = "minimax/minimax-m3"
-# first public availability (upper bound on training data): listed on OpenRouter on
-# 2026-05-31, a day before the release post (https://www.minimax.io/blog/minimax-m3), so the
-# earlier date bounds it: https://openrouter.ai/api/v1/models (`created`, read 2026-09-27)
-training_cutoff = "2026-05-31"
+id = "google/gemini-3.8-flash"
+# No knowledge cutoff is published (https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash,
+# read 2026-09-28). first public availability (upper bound on training data): released and
+# listed on OpenRouter the same day, https://openrouter.ai/api/v1/models (`created`, read
+# 2026-09-28); https://9to5google.com/2026/09/02/gemini-3-8-flash-launch/
+training_cutoff = "2026-09-02"
 provider = "openrouter"
-input_usd_per_mtok = "0.30"
-output_usd_per_mtok = "1.20"
-reasoning = { enabled = false }
+# OpenRouter list price on 28 September 2026: $0.75 in, $3.75 out (introductory; Google has
+# announced $1.50 and $7.50 from 1 January 2027, when this ceiling must rise).
+input_usd_per_mtok = "0.75"
+output_usd_per_mtok = "3.75"
+reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
-# Chapter II §I.a I/O conformance: on 2026-09-28, 43 of a live tape probe's constructor
-# calls were refused by an llguidance host: "response_format json_schema cannot be
-# compiled by the llguidance backend: Unimplemented keys: ["propertyNames"]". Every wire
-# schema carries propertyNames, so the route asks for JSON syntax alone, as every other
-# roster route does; the kernel still validates each reply against the whole contract.
 contract = "json_object"
 
 # The one frontier seat: tier-3 meta-audit, which grades the metas and fires a handful of
@@ -214,24 +208,23 @@ output_usd_per_mtok = "10.00"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
-# A sixth family, Xiaomi's MiMo v2.6 flash (OpenRouter, 21 September 2026: $0.14 in, $0.28
-# out), seated on two judges and the calibration meta. Chosen on cost, latency and I/O
-# conformance (AGENTS.md, rule 2) in a live A/B against MiniMax M3 in the same three seats,
-# 23 September 2026, 40 ticks x 4 seeds: $0.00068 against $0.00153 a call, 1/104 answers
-# the contract could not parse against 5/104, and no more stalls over 20 s than the
-# control. Its route prefers Xiaomi's own host: DeepInfra failed 8 of 20 timed calls, and
-# its retries were the 45-146 s stalls of an unpinned run. The other host stays a fallback
-# at the same price. The contract travels as json_object: under json_schema DeepInfra's
-# decoder looped on whitespace (docs/manifest.md, `contract`).
+# The calibration meta, at the owner's request, on a family of its own. It served 8 of 8 real
+# meta requests kernel-valid on 2026-09-28 (captured from a scripted tape replay), at
+# $0.0266 a call and 3.9 s mean (5.5 s max), so it conforms to the I/O contract (AGENTS.md,
+# rule 2). Its host refuses reasoning off ("Reasoning is mandatory for this endpoint"), so
+# it carries effort low.
 [[models]]
-id = "xiaomi/mimo-v2.6-flash"
-# first public availability (upper bound on training data, no dated official release was found): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
-training_cutoff = "2026-09-21"
+id = "anthropic/claude-sonnet-5.5"
+# Published training data cutoff "Jun 2026", read as its last day:
+# https://platform.claude.com/docs/en/about-claude/models/overview (read 2026-09-28)
+training_cutoff = "2026-06-30"
 provider = "openrouter"
-input_usd_per_mtok = "0.14"
-output_usd_per_mtok = "0.28"
-reasoning = { enabled = false }
-extra_body = { provider = { order = ["xiaomi"], require_parameters = true } }
+# OpenRouter list price on 28 September 2026: $2 in, $10 out.
+input_usd_per_mtok = "2.00"
+output_usd_per_mtok = "10.00"
+reasoning = { effort = "low" }
+extra_body = { provider = { require_parameters = true } }
+contract = "json_object"
 
 [[models]]
 id = "openai/gpt-5.6-luna"
@@ -271,16 +264,6 @@ max_call_usd = "0.05"
 # spending authority now, and it is only spendable on a Venice route. These are on the
 # menu so a seat may move onto the credit it bought (a model proposal re-routes it).
 [[models]]
-id = "venice:z-ai-glm-5-3-flash"
-# Base model GLM-5.3-Flash named release, not the Venice route's availability date.
-# release date (upper bound on training data): https://z.ai/blog/glm-5.3-flash
-training_cutoff = "2026-08-26"
-provider = "venice"
-input_usd_per_mtok = "0.15"
-output_usd_per_mtok = "0.50"
-reasoning = { enabled = false }
-
-[[models]]
 id = "venice:qwen-3-8-flash"
 # first public availability (upper bound on training data, the base model's date): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
 training_cutoff = "2026-08-26"
@@ -301,21 +284,10 @@ input_usd_per_mtok = "0.125"
 output_usd_per_mtok = "0.625"
 reasoning = { effort = "low" }
 
-[[models]]
-id = "venice:deepseek-v4-1-flash"
-# Base model DeepSeek-V4.1-Flash, not the Venice route's availability date.
-# release date (upper bound on training data): https://api-docs.deepseek.com/news/news260910/
-training_cutoff = "2026-09-10"
-provider = "venice"
-input_usd_per_mtok = "0.375"
-output_usd_per_mtok = "1.50"
-reasoning = { enabled = false }
-
-
 [[assemblies]]
 id = "mechanism"
 role = "producer"
-model_id = "deepseek/deepseek-v4.1-flash"
+model_id = "google/gemini-3.8-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -336,7 +308,7 @@ initial_state = { lens = "Your starting prior is that an observed pattern is wea
 [[assemblies]]
 id = "constructor"
 role = "producer"
-model_id = "minimax/minimax-m3"
+model_id = "google/gemini-3.8-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -357,7 +329,7 @@ initial_state = { lens = "Your starting prior is that the value of any use of re
 [[assemblies]]
 id = "judge-consequence"
 role = "evaluator"
-model_id = "deepseek/deepseek-v4.1-flash"
+model_id = "google/gemini-3.8-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -367,7 +339,7 @@ initial_state = { lens = "Your starting prior is that an outcome is noisy eviden
 [[assemblies]]
 id = "judge-fidelity"
 role = "evaluator"
-model_id = "xiaomi/mimo-v2.6-flash"
+model_id = "qwen/qwen3.8-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -378,7 +350,7 @@ initial_state = { lens = "Your starting prior is that a favourable measurement c
 [[assemblies]]
 id = "judge-mechanics"
 role = "evaluator"
-model_id = "xiaomi/mimo-v2.6-flash"
+model_id = "google/gemini-3.8-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -398,7 +370,7 @@ initial_state = { lens = "Your starting prior is that most outcomes in a quiet m
 [[assemblies]]
 id = "meta-calibration"
 role = "meta"
-model_id = "xiaomi/mimo-v2.6-flash"
+model_id = "anthropic/claude-sonnet-5.5"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -408,7 +380,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator skill i
 [[assemblies]]
 id = "meta-countercase"
 role = "meta"
-model_id = "deepseek/deepseek-v4.1-flash"
+model_id = "google/gemini-3.8-flash"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -432,7 +404,7 @@ initial_state = { lens = "Your starting prior is that a grade of a grade inherit
 [[assemblies]]
 id = "judge-adversary"
 role = "adversary"
-model_id = "deepseek/deepseek-v4.1-flash"
+model_id = "google/gemini-3.8-flash"
 accepts = ["Verdict"]
 max_tokens = "provider"
 effort = "low"
