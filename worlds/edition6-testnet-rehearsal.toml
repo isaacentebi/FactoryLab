@@ -110,6 +110,8 @@ start_cash_usd = "120"
 # ceiling here is the undiscounted list price on purpose.
 [[models]]
 id = "deepseek/deepseek-v4.1-flash"
+# release date (upper bound on training data): https://api-docs.deepseek.com/news/news260910/
+training_cutoff = "2026-09-10"
 provider = "openrouter"
 # Ceilings at or above the route's list price (OpenRouter, 23 September 2026: $0.04 in,
 # $0.64 out); metering charges what the provider reports.
@@ -126,6 +128,9 @@ extra_body = { provider = { require_parameters = true } }
 
 [[models]]
 id = "openai/gpt-5.6-sol"
+# Published knowledge cutoff.
+# https://developers.openai.com/api/docs/models/gpt-5.6-sol
+training_cutoff = "2026-02-16"
 provider = "openrouter"
 input_usd_per_mtok = "2.00"
 output_usd_per_mtok = "10.00"
@@ -137,6 +142,9 @@ extra_body = { provider = { require_parameters = true } }
 # fallback provider from silently ignoring the declared reasoning controls.
 [[models]]
 id = "z-ai/glm-5.3-flash"
+# Named-model release; the provider also mentions an earlier undated anonymous preview.
+# release date (upper bound on training data): https://z.ai/blog/glm-5.3-flash
+training_cutoff = "2026-08-26"
 provider = "openrouter"
 input_usd_per_mtok = "0.09"
 output_usd_per_mtok = "0.30"
@@ -145,6 +153,8 @@ extra_body = { provider = { require_parameters = true } }
 
 [[models]]
 id = "qwen/qwen3.8-flash"
+# first public availability (upper bound on training data, no dated official release was found): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
+training_cutoff = "2026-08-26"
 provider = "openrouter"
 input_usd_per_mtok = "0.15"
 output_usd_per_mtok = "0.47"
@@ -161,6 +171,8 @@ contract = "json_schema"
 # GPT-6 §10.3: the cheap route the local screen scored 100% on.
 [[models]]
 id = "openai/gpt-6-luna"
+# Published knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-6-luna
+training_cutoff = "2026-05-18"
 provider = "openrouter"
 input_usd_per_mtok = "0.10"
 output_usd_per_mtok = "0.50"
@@ -173,6 +185,10 @@ extra_body = { provider = { require_parameters = true } }
 # Qwen 3.8 flash's, so it keeps one seat, and a seat may move back to it by model proposal.
 [[models]]
 id = "minimax/minimax-m3"
+# first public availability (upper bound on training data): listed on OpenRouter on
+# 2026-05-31, a day before the release post (https://www.minimax.io/blog/minimax-m3), so the
+# earlier date bounds it: https://openrouter.ai/api/v1/models (`created`, read 2026-09-27)
+training_cutoff = "2026-05-31"
 provider = "openrouter"
 input_usd_per_mtok = "0.30"
 output_usd_per_mtok = "1.20"
@@ -185,6 +201,8 @@ contract = "json_schema"
 # times per few hundred ticks, so frontier judgement where it has the most leverage.
 [[models]]
 id = "openai/gpt-6-sol"
+# Published knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-6-sol
+training_cutoff = "2026-04-20"
 provider = "openrouter"
 input_usd_per_mtok = "2.00"
 output_usd_per_mtok = "10.00"
@@ -202,6 +220,8 @@ extra_body = { provider = { require_parameters = true } }
 # decoder looped on whitespace (docs/manifest.md, `contract`).
 [[models]]
 id = "xiaomi/mimo-v2.6-flash"
+# first public availability (upper bound on training data, no dated official release was found): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
+training_cutoff = "2026-09-21"
 provider = "openrouter"
 input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.28"
@@ -210,6 +230,8 @@ extra_body = { provider = { order = ["xiaomi"], require_parameters = true } }
 
 [[models]]
 id = "openai/gpt-5.6-luna"
+# Published knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-5.6-luna
+training_cutoff = "2026-02-16"
 provider = "openrouter"
 input_usd_per_mtok = "0.20"
 output_usd_per_mtok = "1.20"
@@ -223,6 +245,9 @@ extra_body = { provider = { require_parameters = true } }
 # cost of the one completion `web.search` buys.
 [[models]]
 id = "openai/gpt-5.6-luna:online"
+# Base-model knowledge cutoff only; this does not bound web retrieval.
+# https://developers.openai.com/api/docs/models/gpt-5.6-luna
+training_cutoff = "2026-02-16"
 provider = "openrouter"
 input_usd_per_mtok = "0.20"
 output_usd_per_mtok = "1.20"
@@ -242,6 +267,9 @@ max_call_usd = "0.05"
 # menu so a seat may move onto the credit it bought (a model proposal re-routes it).
 [[models]]
 id = "venice:z-ai-glm-5-3-flash"
+# Base model GLM-5.3-Flash named release, not the Venice route's availability date.
+# release date (upper bound on training data): https://z.ai/blog/glm-5.3-flash
+training_cutoff = "2026-08-26"
 provider = "venice"
 input_usd_per_mtok = "0.15"
 output_usd_per_mtok = "0.50"
@@ -249,6 +277,8 @@ reasoning = { enabled = false }
 
 [[models]]
 id = "venice:qwen-3-8-flash"
+# first public availability (upper bound on training data, the base model's date): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
+training_cutoff = "2026-08-26"
 provider = "venice"
 input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.49"
@@ -259,6 +289,8 @@ reasoning = { enabled = false }
 # without changing what it thinks with.
 [[models]]
 id = "venice:openai-gpt-6-luna"
+# Base-model knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-6-luna
+training_cutoff = "2026-05-18"
 provider = "venice"
 input_usd_per_mtok = "0.125"
 output_usd_per_mtok = "0.625"
@@ -266,6 +298,9 @@ reasoning = { effort = "low" }
 
 [[models]]
 id = "venice:deepseek-v4-1-flash"
+# Base model DeepSeek-V4.1-Flash, not the Venice route's availability date.
+# release date (upper bound on training data): https://api-docs.deepseek.com/news/news260910/
+training_cutoff = "2026-09-10"
 provider = "venice"
 input_usd_per_mtok = "0.375"
 output_usd_per_mtok = "1.50"

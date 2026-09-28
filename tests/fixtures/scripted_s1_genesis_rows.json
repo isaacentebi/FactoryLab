@@ -1,0 +1,53 @@
+[
+  {
+    "contract": {
+      "description": "openrouter model deepseek/deepseek-v4.1-flash",
+      "id": "model:deepseek/deepseek-v4.1-flash",
+      "input_schema": {"type": "object"},
+      "kind": "model",
+      "output_schema": {"type": "object"},
+      "permissions": ["model.complete"],
+      "price": {"units": {"input_token": 0, "output_token": 0}},
+      "provenance": "seed",
+      "resource_bounds": {
+        "max_duration_ns": null,
+        "max_input_tokens": null,
+        "max_memory_bytes": null,
+        "max_output_tokens": null
+      },
+      "version": 1
+    },
+    "handle": null,
+    "hash": "2fc65eee557e2e6b4eb1f847d10883d751211b3551a86b0df88ebc73843d7ea4",
+    "kind": "registry.register",
+    "prev_hash": "4778e7c1441297b46fdf303defef8e6a365059bf3196b9d37a336556b9c2c4e4",
+    "reservation_id": null,
+    "seq": 4,
+    "ts": 1790278293502468000
+  },
+  {
+    "actor": "router:Tick",
+    "channel": "exposure",
+    "cost_ceiling": 119600000,
+    "deadline_ns": 1790280433536302625,
+    "event_id": "ev-1",
+    "handle": "decision-0",
+    "hash": "ba601fa0c924f4abdfabfbee84e3a9ded15434610ce1f49123f61f36119bc3c4",
+    "kind": "decision.open",
+    "opened_ns": 1790278293536302625,
+    "parent_handle": null,
+    "prev_hash": "9783f4a018c04b81cad71bcf56ba9e58f53c24394f679b43506e0ecf74ca708d",
+    "propensity": {
+      "action_ids": ["antagonist-core", "NOOP"],
+      "chosen": "NOOP",
+      "learner_id": "router:Tick",
+      "learner_state_hash": "a3c0866503a12fa444a764e6849190a0be0cf2b75641d568f8a3e041e5040180",
+      "probs": [0.15, 0.85],
+      "rng_seed": 40125655066622386354123033417875897284,
+      "source": "sampled"
+    },
+    "seq": 165,
+    "status": "pending",
+    "ts": 1790278293536302625
+  }
+]

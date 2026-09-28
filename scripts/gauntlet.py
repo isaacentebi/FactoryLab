@@ -1056,7 +1056,9 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
       card's duration fell back (or the card went unratcheted in between): the
       duration price stopped ratcheting while the attractor held;
     * **missed reset** — an acting window was not flagged (a transient resolution)
-      and the card's next ratchet did not start again at 1.
+      and the card's next ratchet did not start again at 1. A card explicitly carried
+      in ``unmeasured_held`` instead pauses its duration while no ratchet is due,
+      whatever the global flags: missing evidence is not a resolution.
 
     Every ratchet sits in an acting window flagged on its own card, and every card the
     controller knew (``price.register``, not ``price.removed``) that such a window names
@@ -1074,6 +1076,9 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     closes = windows(events)
     acting = [need(w, "window") for w in closes if need(w, "acts")]
     thrash = set(flagged(events, "thrash"))
+    unmeasured = unique_map(
+        closes, lambda w: need(w, "window"),
+        lambda w: {c.removeprefix("card:") for c in w.get("unmeasured_held", ())})
     # One prefix removed, as the organ does (CARD_PREFIXED; immune.py:359).
     holding = unique_map(
         (w for w in closes if need(w, "flags.stable_failure")
@@ -1115,6 +1120,12 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
         for window in acting:
             held = window in attractor
             duration = at.get((cid, window))
+            # §II.b, §IV.c: missing evidence ends no failure. The organ preserves
+            # unmeasured_held even under cleared/thrash flags (immune.close_window),
+            # but a flagged known card still owes its ratchet, unmeasured or not.
+            if (duration is None and cid in unmeasured.get(window, ())
+                    and cid not in holding.get(window, ())):
+                continue
             if duration is not None and held and duration != previous + 1:
                 kind = "missed_reset" if duration > previous + 1 else "duration_reset"
                 problems.append({"card": cid, "window": window, kind: [previous, duration]})
@@ -1846,7 +1857,15 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
     ``tool.call`` of that handle, no later than the invocation, is one of the write tools
     that ledgers this kind (``ACT_TOOLS``). A later invocation alone, a failed or
     malformed one before it, a read-only or unrelated tool call, or an act naming no
-    opened decision does not trace."""
+    opened decision does not trace. A null-handle seed registration made while the world
+    boots, before its first delivered world event, is genesis, not an act, and is
+    omitted."""
+    # Chapter II §I.a: the architect's seed roster is genesis, not a seat's act. Genesis
+    # ends at the first delivered world event (the first ``event`` row), which comes
+    # before any decision opens; any decision opening ends it too (Codex on #162: a
+    # seed-shaped registration after boot must not escape the audit).
+    first_decision = next((i for i, row in enumerate(events)
+                           if row.get("kind") in ("event", "decision.open")), len(events))
     opened: dict[str, int] = {}
     invoked: dict[str, tuple[int, Any]] = {}
     tool_calls: dict[str, list[tuple[int, Any]]] = defaultdict(list)
@@ -1866,6 +1885,11 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
     out = []
     for i, row in enumerate(events):
         if row.get("kind") not in kinds:
+            continue
+        if (i < first_decision and row.get("kind") == "registry.register"
+                and "handle" in row and row.get("handle") is None
+                and isinstance(row.get("contract"), Mapping)
+                and row.get("contract").get("provenance") == "seed"):
             continue
         handle = row.get(kinds[need(row, "kind")])
         entry: dict[str, Any] = {"kind": need(row, "kind"), "handle": handle}
@@ -2939,8 +2963,9 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
     ``Random(rng_seed).choices(action_ids, weights=probs)[0] == chosen`` for every
     sampled ``decision.open`` (``learners.router.Router.route``), the logged
     distribution sums to 1, and every act row (``ACT_KINDS``) names, in its handle
-    field, a decision a seat returned on. No act row is skipped: one with no handle, or
-    a handle that is not a returned decision, is an act the kernel took for a seat.
+    field, a decision a seat returned on. Null-handle seed registrations before the
+    first decision opens are genesis, not acts (§I.a). No act row is skipped: one with
+    no handle, or a handle that is not a returned decision, is a kernel act for a seat.
     """
     bad, checked, malformed = [], 0, []
     for row in rows_of(events, "decision.open"):
