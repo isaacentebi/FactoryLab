@@ -322,6 +322,55 @@ def test_empty_settled_capability_is_recorded_without_publications(tmp_path):
     assert venue._cash == Decimal(1000)
 
 
+@pytest.mark.parametrize("published", [False, True], ids=["empty-settled", "published-settled"])
+def test_opened_diary_preserves_funding_regimes_and_cash(tmp_path, published):
+    # Chapter II §III.b: changing diary packaging cannot invent measured consequence.
+    _settled_tape(tmp_path, oracle="120")
+    path = tmp_path / "settled.json"
+    items = json.loads(path.read_text())
+    if not published:
+        items = [item for item in items if item.get("event", {}).get("kind") != "Funding"]
+    items[0]["event"]["payload"]["manifest"]["exchange"]["coins"].append("ETH")
+    for coin, regime in (("BTC", "settled"), ("ETH", "legacy")):
+        items.extend([
+            {"kind": "funding.regime", "market": coin, "regime": regime},
+            {"kind": "event", "event": {"kind": "MarketMid", "ts_ns": NS_PER_HOUR - 10,
+             "payload": {"coin": coin, "mid": "100"}}},
+            {"kind": "event", "event": {"kind": "Funding", "ts_ns": NS_PER_HOUR - 10,
+             "payload": {"coin": coin, "rate": "0.01", "paid_usd": "0"}}},
+        ])
+    path.write_text(json.dumps(items))
+    # Materialize the opened diary's per-kind layout from the same source rows;
+    # both representations reach the real public cut API, without a mocked reader.
+    opened = tmp_path / "opened"
+    opened.mkdir()
+    for item in items:
+        kind = item["kind"]
+        if kind == "event":
+            kind = f"event_{item['event']['kind']}"
+        with (opened / f"{kind}.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(item) + "\n")
+    assert (opened / "funding.regime.jsonl").is_file()
+
+    tapes = [Tape.from_data(cut(source)) for source in (path, opened)]
+    replays = []
+    for tape in tapes:
+        venue = TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
+        for coin in venue.coins:
+            venue._positions[coin] = Position(coin, Decimal(2), Decimal(100))
+        events = [event for stamp in tape.data["ticks"] for event in venue.advance(stamp)
+                  if event.kind == "Funding"]
+        replays.append(([(event.ts_ns, event.payload) for event in events], venue._cash))
+    assert replays[0] == replays[1]
+    assert tapes[0].data["funding_regime"] == tapes[1].data["funding_regime"] == {
+        "BTC": "settled", "ETH": "legacy"}
+    events, cash = replays[0]
+    assert [(payload["coin"], Decimal(payload["paid_usd"])) for _, payload in events] == (
+        [("ETH", Decimal(2)), ("BTC", Decimal("2.4"))] if published
+        else [("ETH", Decimal(2))])
+    assert cash == (Decimal("995.6") if published else Decimal(998))
+
+
 def test_fee_refresh_journals_failure_separately_from_cached_rates(tmp_path):
     now = [T]
     ledger = Ledger(clock_ns=lambda: now[0])

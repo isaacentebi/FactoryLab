@@ -151,8 +151,10 @@ def _split_items(directory: Path) -> Iterator[dict]:
     ``io.result.jsonl`` runs to hundreds of megabytes of recorded answers; only the
     answers to the venue reads a tape keeps are parsed.
     """
+    # Chapter II §III.b: an empty settled history cannot become predicted cash
+    # merely because the same measured diary was split into per-kind files.
     for name in ("event_Launch", "event_Tick", "event_MarketMid", "event_Funding",
-                 "event_Fill", "order.intent", "order.acknowledged"):
+                 "event_Fill", "funding.regime", "order.intent", "order.acknowledged"):
         path = directory / f"{name}.jsonl"
         if path.exists():
             with open(path, encoding="utf-8") as handle:
