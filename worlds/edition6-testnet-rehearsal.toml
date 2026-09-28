@@ -195,8 +195,12 @@ input_usd_per_mtok = "0.30"
 output_usd_per_mtok = "1.20"
 reasoning = { enabled = false }
 extra_body = { provider = { require_parameters = true } }
-# json_schema: 9/10 kernel-valid vs 8/10 json_object (Together, CoreWeave), 23 Sept 2026 probe.
-contract = "json_schema"
+# Chapter II §I.a I/O conformance: on 2026-09-28, 43 of a live tape probe's constructor
+# calls were refused by an llguidance host: "response_format json_schema cannot be
+# compiled by the llguidance backend: Unimplemented keys: ["propertyNames"]". Every wire
+# schema carries propertyNames, so the route asks for JSON syntax alone, as every other
+# roster route does; the kernel still validates each reply against the whole contract.
+contract = "json_object"
 
 # The one frontier seat: tier-3 meta-audit, which grades the metas and fires a handful of
 # times per few hundred ticks, so frontier judgement where it has the most leverage.

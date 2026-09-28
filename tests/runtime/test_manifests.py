@@ -480,8 +480,9 @@ def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
 
 def test_the_edition6_worlds_carry_the_schema_on_the_probed_routes_alone():
     # Chapter II §I.a I/O conformance: DeepSeek left json_schema after the first live
-    # rehearsal; Qwen left after the 2026-09-27 host schema refusal. MiniMax keeps it.
-    expected = frozenset({"minimax/minimax-m3"})
+    # rehearsal; Qwen after the 2026-09-27 host schema refusal; MiniMax after the
+    # 2026-09-28 llguidance refusal of propertyNames. No edition-6 route carries it now.
+    expected = frozenset()
     for world in ("edition6-testnet-rehearsal", "edition6-capital-loop"):
         manifest = load_manifest(world)
         assert manifest.schema_contract_models() == expected
