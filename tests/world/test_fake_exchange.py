@@ -93,6 +93,19 @@ def test_funding_charges_longs_hourly() -> None:
     assert not [e for e in evs if e.kind is WorldEventKind.FUNDING]
 
 
+def test_unknown_market_book_is_unavailable_without_changing_supported_books() -> None:
+    import pytest
+
+    ex = _ex(coins=("BTC",), start_prices={"BTC": Decimal("60000")})
+    before = ex.order_book("BTC", 20)
+    # Chapter II §III.b: an unsupported market supplies no liquidity observation.
+    for coin in ("ETH", "PURR/USDC"):
+        with pytest.raises(ValueError, match="^unknown coin$"):
+            ex.order_book(coin, 20)
+    assert ex.order_book("BTC", 20) == before
+    assert ex.mids().keys() == {"BTC"}
+
+
 def test_time_cannot_go_backwards() -> None:
     import pytest
 

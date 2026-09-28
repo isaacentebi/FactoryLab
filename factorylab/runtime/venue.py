@@ -210,7 +210,8 @@ def read_wind_down_fills(rt, report: dict | None = None) -> None:
     errors, reads = [], 0
     for _attempt in range(ROUNDS_PER_KILL):
         try:
-            fills = rt.consequence_fills.poll(exchange, strict=True, now_ns=rt.clock.now_ns)
+            fills = rt.consequence_fills.poll(exchange, strict=True, now_ns=rt.clock.now_ns,
+                                              tick_ns=rt.wall.tick_ns())
         except Exception as exc:  # noqa: BLE001 - an unanswered read is retried, then noted
             errors.append(type(exc).__name__)
             continue
@@ -468,7 +469,8 @@ class VenueMixin:
             self._reconcile_orders(final=True)
             try:
                 fills = self.consequence_fills.poll(self.exchange, strict=True,
-                                                    now_ns=self.clock.now_ns)
+                                                    now_ns=self.clock.now_ns,
+                                                    tick_ns=self.wall.tick_ns())
             except Exception as exc:
                 # A failed read cannot turn into evidence of an empty fill set.
                 report["fill_read_error"] = type(exc).__name__
@@ -590,6 +592,14 @@ class VenueMixin:
         """Advance a fake or recorded venue to ``ts_ns``: every fact it holds through
         that instant is delivered by the call, so every stream is delivered through it
         (``advance_through_ns``; ruling R10-o)."""
+        boundaries = getattr(self.exchange, "funding_boundaries", None)
+        if boundaries is not None:
+            # Chapter II §III.b: tape settles all crossed boundaries before arrivals.
+            # Retain only ownership with a future publication, never a lifetime fill log.
+            for coin, boundary in boundaries(ts_ns):
+                self.consequences.ledger.append({"kind": "consequence.funding_boundary",
+                                                 "coin": coin, "boundary_ns": boundary})
+                self.consequences.table = self.consequences.table.capture_funding(coin, boundary)
         events = self.exchange.advance(ts_ns)
         self.advance_through_ns = max(getattr(self, "advance_through_ns", None) or ts_ns,
                                       ts_ns)
@@ -599,8 +609,8 @@ class VenueMixin:
         """The instant one fact stream (``lots.FACT_STREAMS``) is delivered through, or
         None when this runtime keeps no watermark for it (Codex on #152, R10-o).
 
-        Guarantees, for Hyperliquid, what ``_stream_through`` states (a live read's
-        request instant, or the time a fake or recorded venue was advanced to); for
+        Guarantees, for Hyperliquid, what ``_stream_through`` states (including the
+        measured live fill delay, or the exact fake/recorded advance time); for
         Polymarket, the instant its events feed and each token's book were last read
         successfully (``PolymarketSurface.through``: a simulated venue's advance time,
         or a live read's instant before it), and minus infinity for one never read. A
@@ -625,12 +635,11 @@ class VenueMixin:
         """The earliest instant through which the venue has delivered every fact of
         ``streams``, or None when this runtime keeps no venue watermark (ruling R10-o).
 
-        Guarantees, for a live venue, the instant before the request time of the latest
-        successful read of each polled stream (``LiveVenue.through``; fills from the fill
-        cursor), and
-        minus infinity for a stream never read successfully (nothing waits on an
-        unread stream as if it were empty); for a fake or recorded venue, the time it
-        was last advanced to (``advance_through_ns``), every stream alike.
+        Live fills require exact per-factory-order filled sizes and position agreement.
+        A net-account recovery checkpoint or measured publication delay alone never
+        proves completeness. Other polled streams use ``LiveVenue.through``. An unmeasured
+        or unread stream is minus infinity; fake and recorded venues keep their exact
+        ``advance_through_ns``, every stream alike.
         """
         venue = getattr(self, "venue", None)
         if venue is None:
@@ -991,7 +1000,8 @@ class VenueMixin:
                         and we.payload.get("rate") is not None):
                     self._observe_funding(str(we.payload["coin"]),
                                           funding_instant(we.payload, we.ts_ns),
-                                          str(we.payload["rate"]), we.payload.get("mark"))
+                                          str(we.payload["rate"]), we.payload.get("mark"),
+                                          settled=we.payload.get("settled", False))
         for we in evs:
             if id(we) in refused:
                 self.internal.append(self._kernel_event(we))
@@ -1301,6 +1311,10 @@ class VenueMixin:
 
     def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
         """Every venue write has a durable intent and a stable identity before submission."""
+        # Chapter II §II.b: no execution can precede its independent accounting anchor.
+        cursor = self.consequence_fills
+        if operation != "venue.cancel" and cursor.measured and cursor.baseline_ns is None:
+            return self._refuse_order(handle, "fill account baseline unavailable")
         if self._class_transfer_pending() and operation != "venue.cancel":
             return self._refuse_order(handle, "class transfer awaiting receipt")
         if self._tape_ended():
@@ -1333,6 +1347,8 @@ class VenueMixin:
                   "args": dict(args), "result": {"status": "uncertain"}}
         self.ledger.append({"kind": "order.intent", **intent})
         self.order_intents[client_id] = intent
+        if operation != "venue.cancel":
+            self.consequence_fills.submitted(client_id, now_ns=self.clock.now_ns)
         self.consequences.order_intent(client_id, handle, args["coin"])
         # Submitted or lost, a write is the venue possibly moving: nothing observed
         # before it describes the account an order is weighed against afterwards.
@@ -1435,6 +1451,7 @@ class VenueMixin:
                             "handle": intent["handle"], "result": result,
                             **({"poll": polls} if uncertain else {})})
         self.order_intents[client_id] = {**intent, "result": dict(result), "polls": polls}
+        self.consequence_fills.acknowledged(client_id, result)
         if result["status"] != "uncertain":
             if intent["operation"] == "venue.cancel":
                 if result["status"] == "cancelled":

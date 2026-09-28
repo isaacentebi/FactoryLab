@@ -8,6 +8,7 @@ that kept the deleted live-venue fill fields restores with them ignored.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -53,6 +54,19 @@ def test_an_order_filled_in_three_parts_is_booked_three_times_once_each(same, re
     assert [ts for ts, _ in first] == [10 * MS, 20 * MS]
     assert [ts for ts, _ in second] == [30 * MS]
     assert all(payload["order_id"] == "order-1" for _ts, payload in first + second)
+
+
+def test_live_missing_baseline_stays_unknown_even_with_timed_fills():
+    cursor = FillCursor(Ledger(), start_ns=0, measured=True)
+    venue = PartialVenue()
+    venue.account = lambda: (_ for _ in ()).throw(RuntimeError('account unavailable'))
+    venue.shown = [replace(_part(100, same=True), observed_at_ns=110)]
+    assert len(cursor.poll(venue, now_ns=110)) == 1
+    assert cursor.propagation_bound_ns == 10
+    assert cursor.through_ns is None
+    venue.shown += [replace(_part(150, same=True), observed_at_ns=210)]
+    assert len(cursor.poll(venue, now_ns=210)) == 1
+    assert cursor.through_ns is None
 
 
 def test_a_checkpoint_with_the_retired_venue_fill_fields_restores_without_them():

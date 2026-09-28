@@ -107,6 +107,7 @@ class OrderResult:
     filled_size: Decimal
     avg_px: Decimal | None
     error: str | None = None
+    observed_at_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,10 @@ class Fill:
     liquidation: bool = False
     market: str = "perp"
     inventory_size: Decimal | None = None
+    observed_at_ns: int | None = None
+    crossed: bool | None = None
+    history_complete: bool = True
+    venue_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -129,7 +134,9 @@ class FundingEvent:
     coin: str
     rate: Decimal  # per funding interval, signed
     premium: Decimal | None
-    ts_ns: int
+    ts_ns: int  # effective boundary for settled history
+    mark: Decimal | None = None
+    published_at_ns: int | None = None  # exact venue stamp, not local observation time
 
 
 @dataclass(frozen=True)
@@ -178,6 +185,10 @@ class AccountState:
     # them at a guessed price is invented, and one unpriceable token must not make
     # the whole account unreadable.
     unpriced: tuple[str, ...] = ()
+    # Raw settled collateral, unlike withdrawable or marked equity. None means the
+    # venue supplied no independent cash evidence (Chapter II §III.b).
+    reconciliation_cash_usd: Decimal | None = None
+    cumulative_fees_usd: Decimal | None = None
 
 
 class Exchange(Protocol):
@@ -210,8 +221,14 @@ class Exchange(Protocol):
 # --------------------------------------------------------------------------- fake
 
 
+# Official info endpoint, heading "Retrieve a user's fills by time":
+# https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
+# "Returns at most 2000 fills per response and only the 10000 most recent fills are available".
+# Counts control pagination only, NEVER completeness (Chapter II §III.b).
 #: The most fills Hyperliquid's ``userFillsByTime`` answers in one read.
 FILLS_PAGE = 2000
+#: The endpoint exposes only the most recent 10,000 fills, across time pages.
+FILLS_HISTORY = 10_000
 
 
 def _venue_fill_id(row: dict) -> str:
@@ -541,6 +558,8 @@ class FakeExchange:
         spread produces coincident prices, consistent with a frictionless fake.
         """
         _check_count(depth, 20)
+        if coin not in self._mids:
+            raise ValueError("unknown coin")
         mid = self._mids[coin]
         spread = mid * self.spread_bps / Decimal(10_000)
         return {
@@ -1136,6 +1155,7 @@ class HyperliquidExchange:
     #: hour. A fact about the venue, read by the price of a named road not taken
     #: (wave 16, D1), never a setting.
     funding_interval_ns = NS_PER_HOUR
+    settled_funding = True
 
     def __init__(
         self,
@@ -1207,26 +1227,36 @@ class HyperliquidExchange:
                 reason = "the venue's userFees answer did not state them"
             except Exception as exc:  # noqa: BLE001 - an unread rate is unavailable
                 reason = f"the venue's userFees read failed: {type(exc).__name__}"
+        self._fee_answer = answer if isinstance(answer, dict) else {}
         rates: dict[str, dict[str, str]] = {}
         for market, (taker, maker) in self.FEE_FIELDS.items():
             try:
-                rates[market] = {"taker_fee_rate": str(Decimal(str(answer[taker]))),
-                                 "maker_fee_rate": str(Decimal(str(answer[maker]))),
+                pair = Decimal(str(answer[taker])), Decimal(str(answer[maker]))
+                if not all(value.is_finite() for value in pair):
+                    raise ValueError("nonfinite fee rate")
+                rates[market] = {"taker_fee_rate": str(pair[0]),
+                                 "maker_fee_rate": str(pair[1]),
                                  "fee_basis": "fraction of notional, the venue's userFees "
                                               "for this account"}
             except (KeyError, TypeError, ArithmeticError, ValueError):
                 rates[market] = {"fee_rates": "unavailable", "reason": reason}
         return rates
 
-    def refresh_fee_rates(self) -> None:
-        """Read this account's fee rates again, keeping a market's last stated rates when
-        the venue does not state them now (wave 16, D1: the schedule a named road not
-        taken is priced at is re-read once per world repricing). Nothing is written."""
+    def refresh_fee_rates(self) -> dict:
+        """Return fresh answer/status/markets, retaining last stated rates only in cache.
+
+        An unanswered read reports unavailable, never the previous answer.
+        The journal retains this outside fact at the existing repricing cadence
+        (Chapter II §III.b), independently of the cached instrument listing.
+        """
         fresh = self._read_fee_rates()
         previous = getattr(self, "_fee_rates", None) or {}
         self._fee_rates = {market: (row if "taker_fee_rate" in row
                                     else previous.get(market, row))
                            for market, row in fresh.items()}
+        markets = sorted(market for market, row in fresh.items() if "taker_fee_rate" in row)
+        return {"status": "ok" if markets else "unavailable",
+                "answer": dict(self._fee_answer), "markets": markets}
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
@@ -1340,12 +1370,20 @@ class HyperliquidExchange:
         # every caller already reads an unavailable price as unavailable, and a
         # stale mid in a dict is indistinguishable from a fresh one.
         raw = self._guarded("all_mids", self._info.all_mids)
+        try:
+            if not isinstance(raw, dict):
+                raise ValueError("invalid mids response")
+            mids = {c: Decimal(str(raw[self._wire_coin(c)]))
+                    for c in (*getattr(self, "_listed_coins", self.coins),
+                              *getattr(self, "_spot_names", {}))
+                    if self._wire_coin(c) in raw}
+            if any(not mid.is_finite() or mid <= 0 for mid in mids.values()):
+                raise ValueError("invalid mid")
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            raise VenueUnavailable("mids normalization failed") from exc
         self.__dict__["_last_mids_ns"] = time.time_ns()
-        self._last_mids = {c: Decimal(str(raw[self._wire_coin(c)]))
-                           for c in (*getattr(self, "_listed_coins", self.coins),
-                                     *getattr(self, "_spot_names", {}))
-                           if self._wire_coin(c) in raw}
-        return dict(self._last_mids)
+        self._last_mids = mids
+        return dict(mids)
 
     def funding(self) -> list[FundingEvent]:
         """The venue's current funding rates; raises VenueUnavailable when it did not answer.
@@ -1374,7 +1412,11 @@ class HyperliquidExchange:
                 premium = Decimal(str(ctx["premium"])) if ctx.get("premium") is not None else None
                 if not rate.is_finite() or premium is not None and not premium.is_finite():
                     continue
-                out.append(FundingEvent(name, rate, premium, now_ns))
+                mark = (Decimal(str(ctx["oraclePx"]))
+                        if ctx.get("oraclePx") is not None else None)
+                if mark is not None and (not mark.is_finite() or mark <= 0):
+                    mark = None
+                out.append(FundingEvent(name, rate, premium, now_ns, mark))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
                 continue
         return out
@@ -1446,6 +1488,8 @@ class HyperliquidExchange:
             spot_balances=tuple(balances),
             observed_at_ns=observed_at,
             unpriced=tuple(unpriced),
+            reconciliation_cash_usd=(Decimal(str(summary["totalRawUsd"]))
+                                     if summary.get("totalRawUsd") is not None else None),
         )
         return self._last_account
 
@@ -1580,11 +1624,12 @@ class HyperliquidExchange:
 
         Runtime polling may defer a failed read, while terminal reconciliation
         reports that failure explicitly. Neither advances the inclusive cursor.
-        Guarantees every fill at or after ``since_ns`` the venue holds: the venue
-        answers at most ``FILLS_PAGE`` rows per read, so a full page is followed by the
-        next from its latest millisecond (reread, and deduplicated by trade id), until
-        a short page proves the rest delivered (Codex on #152: a caller's watermark
-        may pass only what was read). A full page that does not advance fails closed.
+        Contract: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
+        Time pages contain at most 2,000 rows, within the endpoint's most recent
+        10,000 fills (Hyperliquid info endpoint, userFillsByTime). Inclusive pages
+        deduplicate trade ids. Neither short nor saturated responses prove execution
+        completeness: every returned fill states history_complete=False. Independent
+        account reconciliation is required. A stalled full page fails closed.
         """
         if not self._address:
             raise RuntimeError("fills() needs an address or a private key")
@@ -1607,7 +1652,7 @@ class HyperliquidExchange:
                 rows[key] = f
                 try:
                     stamps.append(int(f["time"]))
-                except (KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError, ArithmeticError):
                     continue
             if len(page) < FILLS_PAGE:
                 break
@@ -1636,7 +1681,7 @@ class HyperliquidExchange:
                         or size <= 0 or px <= 0 or stamp < 0
                         or f["side"] not in ("B", "A")
                         or not isinstance(f["coin"], str) or not f["coin"]):
-                    continue
+                    raise ValueError("invalid execution values")
                 out.append(Fill(
                     order_id=str(f["oid"]), coin=pair,
                     is_buy=f["side"] == "B",
@@ -1644,10 +1689,21 @@ class HyperliquidExchange:
                     liquidation=bool(f.get("liquidation")),
                     market=market,
                     inventory_size=size,
+                    crossed=f.get("crossed") if type(f.get("crossed")) is bool else None,
+                    venue_id=_venue_fill_id(f) if f.get("tid") is not None else None,
                 ))
-            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
-                continue
-        return out
+            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError) as exc:
+                # Chapter II §III.b: omitted executions are not evidence of absence.
+                raise VenueUnavailable("fill normalization failed") from exc
+        # Chapter II §III.b: response observation is a measured outside fact. The
+        # journal records it with the fills, so replay never consults a fresh clock.
+        import time
+
+        observed_at_ns = time.time_ns()
+        # Chapter II §III.b: the history cap cannot become a completeness assertion.
+        history_complete = False  # Counts never certify delivery, even at the inclusive boundary.
+        return [replace(fill, observed_at_ns=observed_at_ns,
+                        history_complete=history_complete) for fill in out]
 
     def candles(self, coin: str, interval: str, n: int) -> list[dict]:
         """Return up to n recent OHLCV buckets in increasing nanosecond timestamp order."""
@@ -1674,24 +1730,69 @@ class HyperliquidExchange:
     def order_book(self, coin: str, depth: int) -> dict:
         """Return at most depth levels per side, bids descending and asks ascending."""
         _check_count(depth, 20)
-        raw = self._guarded("l2_snapshot", lambda: self._info.l2_snapshot(self._wire_coin(coin)))
-        sides = [
-            sorted(
-                [
-                    {"price": Decimal(str(level["px"])), "size": Decimal(str(level["sz"]))}
-                    for level in levels
-                ],
-                key=lambda level: level["price"],
-                reverse=index == 0,
-            )[:depth]
-            for index, levels in enumerate(raw["levels"])
-        ]
-        return {
-            "coin": coin,
-            "ts_ns": int(raw["time"]) * NS_PER_MS,
-            "bids": sides[0],
-            "asks": sides[1],
-        }
+        try:
+            # Chapter II §II.b/§III.b: the SDK's market lookup is part of the
+            # evidence boundary too; an unknown market supplies no liquidity fact.
+            raw = self._guarded(
+                "l2_snapshot", lambda: self._info.l2_snapshot(self._wire_coin(coin)))
+            if not isinstance(raw["levels"], list) or len(raw["levels"]) != 2:
+                raise ValueError("invalid book sides")
+            sides = []
+            for index, levels in enumerate(raw["levels"]):
+                if not isinstance(levels, list):
+                    raise ValueError("invalid book levels")
+                side = []
+                for level in levels:
+                    price, size = Decimal(str(level["px"])), Decimal(str(level["sz"]))
+                    if not price.is_finite() or not size.is_finite() or price <= 0 or size < 0:
+                        raise ValueError("invalid book level")
+                    side.append({"price": price, "size": size})
+                sides.append(sorted(side, key=lambda level: level["price"],
+                                    reverse=index == 0)[:depth])
+            stamp = int(raw["time"]) * NS_PER_MS
+            if stamp < 0:
+                raise ValueError("invalid book timestamp")
+            return {"coin": coin, "ts_ns": stamp, "bids": sides[0], "asks": sides[1]}
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            # Chapter II §II.b/§III.b: malformed liquidity is not a measured fact.
+            raise VenueUnavailable("book normalization failed") from exc
+
+    def settled_funding_history(self, coin: str, since_ns: int,
+                                until_ns: int) -> list[FundingEvent]:
+        """Settled public rates in the inclusive effective-boundary range, never predictions.
+
+        Each request covers at most 100 hourly boundaries, below the venue's page
+        limit. Missing publications remain absent and are retried by the live cursor.
+        """
+        interval = self.funding_interval_ns
+        rows: dict[int, FundingEvent] = {}
+        start = since_ns // NS_PER_MS
+        # Chapter II §III.b: query publication time for the entire effective period,
+        # including an exact-boundary retry; local observation time stays separate.
+        end = (until_ns - until_ns % interval + interval - 1) // NS_PER_MS
+        while start <= end:
+            stop = min(end, start + 99 * NS_PER_HOUR // NS_PER_MS)
+            raw = self._guarded("funding_history", lambda start=start, stop=stop:
+                                self._info.funding_history(coin, start, stop))
+            if not isinstance(raw, list):
+                raise ValueError("invalid settled funding response")
+            for row in raw:
+                try:
+                    stamp = int(row["time"]) * NS_PER_MS
+                    rate = Decimal(str(row["fundingRate"]))
+                    if not rate.is_finite() or stamp < 0:
+                        raise ValueError("invalid settled funding boundary")
+                except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+                    # Chapter II §III.b: no partial batch can advance measured evidence.
+                    raise VenueUnavailable("settled funding normalization failed") from exc
+                boundary = stamp - stamp % interval
+                if since_ns <= boundary <= until_ns:
+                    previous = rows.get(boundary)
+                    if previous is None or stamp >= previous.published_at_ns:
+                        rows[boundary] = FundingEvent(
+                            coin, rate, None, boundary, published_at_ns=stamp)
+            start = stop + 1
+        return [rows[stamp] for stamp in sorted(rows)]
 
     def funding_history(self, coin: str, n: int) -> list[FundingEvent]:
         """Return up to n recent hourly funding observations, oldest first."""
@@ -1707,6 +1808,7 @@ class HyperliquidExchange:
                 Decimal(str(f["fundingRate"])),
                 Decimal(str(f["premium"])) if f.get("premium") is not None else None,
                 int(f["time"]) * NS_PER_MS,
+                published_at_ns=int(f["time"]) * NS_PER_MS,
             )
             for f in sorted(raw, key=lambda f: int(f["time"]))[-n:]
         ]
@@ -1747,10 +1849,13 @@ class HyperliquidExchange:
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
         """Unknown or unavailable order status is uncertainty, never a negative acknowledgement."""
+        import time
+
         try:
             response = (self._info.query_order_by_oid(self._address, int(order_id))
                         if order_id is not None else
                         self._info.query_order_by_cloid(self._address, self.client_id(client_id)))
+            observed_at_ns = time.time_ns()
             if response.get("status") != "order":
                 return OrderResult(order_id, "uncertain", Decimal(0), None, "order not observed")
             detail = response["order"]
@@ -1769,12 +1874,14 @@ class HyperliquidExchange:
             if not size.is_finite() or not remaining.is_finite() or not 0 <= remaining <= size:
                 raise ValueError("invalid order quantity")
             if status == "open":
-                return OrderResult(oid, "resting", size - remaining, None)
+                return OrderResult(oid, "resting", size - remaining, None,
+                                   observed_at_ns=observed_at_ns)
             if status == "filled":
                 # Order status does not provide an execution price; fills supply accounting.
-                return OrderResult(oid, "filled", size, None)
+                return OrderResult(oid, "filled", size, None, observed_at_ns=observed_at_ns)
             if status == "canceled" or status.endswith("Canceled"):
-                return OrderResult(oid, "cancelled", size - remaining, None)
+                return OrderResult(oid, "cancelled", size - remaining, None,
+                                   observed_at_ns=observed_at_ns)
             if status == "rejected" or status.endswith("Rejected"):
                 return OrderResult(oid, "rejected", Decimal(0), None, "venue rejected order")
         except Exception as exc:

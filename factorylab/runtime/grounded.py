@@ -169,7 +169,8 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
             "_net": net}
 
 
-def advance_funding(state: dict, ts_ns: int, rate: str, mark: str | None = None) -> None:
+def advance_funding(state: dict, ts_ns: int, rate: str, mark: str | None = None,
+                    *, settled: bool = False) -> None:
     """Assign the rate in force at every funding time a venue rate print has passed.
 
     ``state`` is ``{"interval", "cursor", "rate", "rates", "marks"}``: the venue's
@@ -182,12 +183,33 @@ def advance_funding(state: dict, ts_ns: int, rate: str, mark: str | None = None)
     otherwise (None when the world had read none: an unread rate is never a number).
     ``mark`` is the price the venue states this print's payment used, at its own
     funding time ``ts_ns``: it is that time's price, over any mid (D7).
+    Strict live states instead accept only explicitly settled boundary prints and
+    retain their timestamps as evidence independently of provisional rate rows.
     """
     interval = int(state["interval"])
-    tau = (int(state["cursor"]) // interval + 1) * interval
-    while tau <= ts_ns:
-        state["rates"].append([tau, str(rate) if tau == ts_ns else state["rate"]])
-        tau += interval
+    # Chapter II §III.b: live predictions are not measured payments. Exact fake/tape
+    # prints retain interpolation; live boundaries need their own settled print.
+    if state.get("strict"):
+        if not settled:
+            return
+        if ts_ns % interval:
+            return
+        settled_times = state.setdefault("settled_times", [])
+        if ts_ns not in settled_times:
+            settled_times.append(ts_ns)
+    else:
+        tau = (int(state["cursor"]) // interval + 1) * interval
+        while tau <= ts_ns:
+            state["rates"].append([tau, str(rate) if tau == ts_ns else state["rate"]])
+            tau += interval
+    if ts_ns % interval == 0 and (settled or ts_ns > int(state["cursor"])):
+        for row in state["rates"]:
+            if row[0] == ts_ns:
+                row[1] = str(rate)
+                break
+        else:
+            state["rates"].append([ts_ns, str(rate)])
+        state["rates"].sort(key=lambda row: row[0])
     if mark is not None and ts_ns % interval == 0:
         _set_mark(state, int(ts_ns), str(mark), int(ts_ns), stated=True)
     if ts_ns >= int(state["cursor"]):
@@ -220,7 +242,7 @@ def funding_mark(state: dict | None, open_ns: int | None, due_ns: int | None, ts
     the funding times in ``(open_ns, due_ns]``: at most one per funding time of the
     trade's own window, so what a trade keeps is bounded by its lifetime.
     """
-    if state is None or open_ns is None or due_ns is None:
+    if state is None or open_ns is None or due_ns is None or state.get("strict"):
         return
     interval = int(state["interval"])
     tau = (int(open_ns) // interval + 1) * interval
@@ -254,9 +276,17 @@ def funding_due(state: dict | None, open_ns: int, due_ns: int
     if last > open_ns and last > int(state["cursor"]):
         return FUNDING_PENDING
     rates = [(tau, rate) for tau, rate in state["rates"] if open_ns < tau <= due_ns]
+    if state.get("strict"):
+        required = range((open_ns // interval + 1) * interval, last + 1, interval)
+        assigned = {tau for tau, rate in rates if rate is not None
+                    and tau in state.get("settled_times", [])}
+        if any(tau not in assigned for tau in required):
+            return FUNDING_PENDING
     if any(rate is None for _tau, rate in rates):
         return None
-    marks = {row[0]: row[1] for row in state.get("marks") or []}
+    # §III.b: live funding uses the observed venue oracle, never a substituted mid.
+    marks = {row[0]: row[1] for row in state.get("marks") or []
+             if not state.get("strict") or row[2]}
     if any(tau not in marks for tau, _rate in rates):
         return FUNDING_PENDING
     return [(rate, marks[tau]) for tau, rate in rates]

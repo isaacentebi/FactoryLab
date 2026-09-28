@@ -2,6 +2,7 @@
 
 from collections import Counter
 from dataclasses import asdict
+from decimal import Decimal
 from fractions import Fraction
 
 from factorylab.kernel.ledger import Ledger
@@ -395,7 +396,10 @@ class ReturnConsequences:
             at = payload.get("ts_ns", self._now_ns())
             if at is not None:
                 self._saw_fact(int(at))
-            table = self.table.funding(payload["coin"], str(payload["paid_usd"]))
+            table = self.table.funding(
+                payload["coin"], str(payload["paid_usd"]),
+                boundary=payload.get("allocation_boundary_ns"),
+                final=payload.get("allocation_final", False))
             # Funding at its funding time: charged to the lots of the returns holding
             # them then; a funding time after a return's H is late money (R10-m).
             self._record_effects(at, str(payload["coin"]), self.table, table)
@@ -855,44 +859,293 @@ class FillCursor:
     """Inclusive fill polls preserve partial fills and repeated identical executions once each.
 
     Timestamp plus all Fill fields and their multiplicity distinguish observations,
-    never the order id alone (an order filled in parts is several fills); only the
-    latest timestamp's counts need retaining because the next poll includes that
-    timestamp. It is the one fill path: every fill the runtime books is read here.
+    never the order id alone. Exact venues retain the latest timestamp's counts.
+    Live discovery retains unresolved submissions plus measured overlap.
+    Recent identities stay in memory; Durable identities support backward recovery;
+    an empirical delay maximum never certifies completeness.
     """
 
-    def __init__(self, ledger: Ledger, *, start_ns: int) -> None:
+    def __init__(self, ledger: Ledger, *, start_ns: int, measured: bool = False) -> None:
         """Exclude pre-launch executions, persisting the initial inclusive boundary."""
         if type(start_ns) is not int or start_ns < 0:
             raise ValueError("start_ns must be nonnegative integer nanoseconds")
         ledger.append({"kind": "consequence.fill_cursor", "since_ns": start_ns, "seen": []})
         self.ledger = ledger
+        self.launch_ns = start_ns
         self.since_ns = start_ns
         self.seen: dict[tuple, int] = {}
-        # Ruling R10-o: the request time of the latest successful fills read, the
-        # instant every execution at or before it has been delivered through.
+        self.measured = measured
+        self.propagation_bound_ns: int | None = None
+        self.observation_complete = True
+        # Chapter II §III.b: live completeness is an observation, not a request-time
+        # assertion. Until a timed execution is observed there is no measured bound.
         self.through_ns: int | None = None
+        self.read_ns: int | None = None
+        self.reconciliation_ns: int | None = None
+        self.expected_positions: dict[str, str] | None = None
+        self.expected_cash: dict[str, int | None] | None = None
+        self.expected_fees: int | None = None
+        self.last_residual: dict | None = None
+        self.recovery_span_ns = 0
+        self.incomplete_since_ns: int | None = None
+        self.orders: dict[str, dict] = {}
+        self.baseline_ns: int | None = None
+
+    def submitted(self, client_id: str, *, now_ns: int) -> None:
+        """Retain unresolved submission evidence until exact venue quantities agree."""
+        if self.measured and client_id not in self.orders:
+            self.orders[client_id] = {"submitted_ns": now_ns, "oid": None, "booked": "0",
+                                      "identities": []}
+
+    def acknowledged(self, client_id: str, result: dict) -> None:
+        """Bind a submission to its venue identity without treating an ACK as delivery."""
+        if client_id in self.orders:
+            if result.get("order_id") is not None:
+                self.orders[client_id]["oid"] = str(result["order_id"])
+            if result.get("status") == "rejected":
+                del self.orders[client_id]
+
+    @staticmethod
+    def _micro(value) -> int:
+        amount = Decimal(value) * 1_000_000
+        if not amount.is_finite() or amount != amount.to_integral_value():
+            raise ValueError("cash is not exact micro-USD")
+        return int(amount)
+
+    @classmethod
+    def _audit_micro(cls, value):
+        """Unrepresentable audit cash is unavailable, never a position-proof failure."""
+        try:
+            return None if value is None else cls._micro(value)
+        except (ValueError, ArithmeticError, TypeError):
+            return None
+
+    @classmethod
+    def _account_facts(cls, account):
+        if account.stale:
+            raise ValueError("fresh positions unavailable")
+        positions = {"perp:" + p.coin: str(p.size) for p in account.positions if p.size}
+        cash = {"perp": cls._audit_micro(account.reconciliation_cash_usd), "spot": 0}
+        for balance in account.spot_balances:
+            if balance.coin == "USDC":
+                cash["spot"] = cls._audit_micro(balance.total)
+            elif balance.total:
+                positions["spot:" + balance.coin] = str(balance.total)
+        return positions, cash
+
+    def initialize(self, account, *, now_ns: int) -> None:
+        """Anchor accounting before executions; never infer a missing historical baseline."""
+        now_ns = self.observed_ns(account)
+        positions, cash = self._account_facts(account)
+        fees = (None if account.cumulative_fees_usd is None
+                else self._audit_micro(account.cumulative_fees_usd))
+        self.ledger.append({"kind": "consequence.fill_baseline", "read_ns": now_ns,
+                            "positions": positions, "cash_micro_usd": cash,
+                            "cumulative_fees_micro_usd": fees,
+                            "cash_usd_exact": str(account.reconciliation_cash_usd)})
+        self.expected_positions, self.expected_cash = positions, cash
+        self.baseline_ns = now_ns
+        self.expected_fees = fees
+        self.reconciliation_ns = now_ns
+
+    def observed_ns(self, observation) -> int:
+        """Missing venue observation times use a replayable clock sampled after the read."""
+        observed = getattr(observation, "observed_at_ns", None)
+        if observed is not None:
+            return observed
+        import time
+
+        call = getattr(self.ledger, "call", None)
+        return (call("wall.now_ns", time.time_ns, (), {}) if call is not None
+                else time.time_ns())
+
+    def _reconcile(self, exchange, result, *, now_ns, read_start, tick_ns, bound, identified,
+                   history_complete):
+        # Chapter II §III.b: independent account facts, not response counts or an
+        # empirical latency maximum, decide whether the observed net changes agree.
+        for ts, fill in result:
+            for order in self.orders.values():
+                if order["oid"] == fill["order_id"]:
+                    order["booked"] = str(Decimal(order["booked"]) + Decimal(fill["size"]))
+            if self.expected_positions is None or (self.baseline_ns is not None
+                                                   and ts <= self.baseline_ns):
+                continue
+            market = fill["market"]
+            coin = fill["coin"].split("/")[0] if market == "spot" else fill["coin"]
+            key = market + ":" + coin
+            signed = Decimal(fill["inventory_size"]) * (1 if fill["is_buy"] else -1)
+            size = Decimal(self.expected_positions.get(key, "0")) + signed
+            if size:
+                self.expected_positions[key] = str(size)
+            else:
+                self.expected_positions.pop(key, None)
+            cash_change = (Decimal(fill["realized_usd"]) if market == "perp"
+                           else -signed * Decimal(fill["px"])) - Decimal(fill["fee_usd"])
+            change = self._audit_micro(cash_change)
+            expected = self.expected_cash[market]
+            self.expected_cash[market] = (None if change is None or expected is None
+                                          else expected + change)
+            fee = self._audit_micro(fill["fee_usd"])
+            self.expected_fees = (None if fee is None or self.expected_fees is None
+                                  else self.expected_fees + fee)
+        orders_complete = True
+        for client, order in list(self.orders.items()):
+            if order["oid"] is None:
+                # Runtime's bounded uncertain-intent reconciliation owns identity lookup.
+                orders_complete = False
+                continue
+            try:
+                status = exchange.lookup(client, **({"order_id": order["oid"]}
+                                                    if order["oid"] else {}))
+                observed = self.observed_ns(status)
+                if status.order_id is not None and order["oid"] is None:
+                    order["oid"] = str(status.order_id)
+                equal = (observed >= now_ns and str(status.order_id) == order["oid"]
+                         and status.status in ("filled", "cancelled", "resting")
+                         and status.filled_size == Decimal(order["booked"]))
+                self.ledger.append({"kind": "consequence.fill_order", "client_id": client,
+                                    "order_id": order["oid"], "read_ns": now_ns,
+                                    "observed_at_ns": observed,
+                                    "status": status.status, "booked_size": order["booked"],
+                                    "reported_size": str(status.filled_size), "matched": equal})
+                orders_complete &= equal
+                if equal and status.status in ("filled", "cancelled"):
+                    del self.orders[client]
+                elif equal:
+                    # Chapter II §III.b: accounted quantity closes discovery through this
+                    # read, even while the remainder rests. Older identities are durable.
+                    order["submitted_ns"] = max(order["submitted_ns"], now_ns)
+                    floor = order["submitted_ns"] - (bound or 0) - tick_ns
+                    order["identities"] = [key for key in order.get("identities", ())
+                                           if key[0] >= floor]
+            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
+                orders_complete = False
+        reason, positions, cash, fees = None, None, None, None
+        account_observed = None
+        try:
+            account = exchange.account()
+            account_observed = self.observed_ns(account)
+            if account_observed < now_ns:
+                raise ValueError("positions observed before reconciliation target")
+            positions, cash = self._account_facts(account)
+            if account.cumulative_fees_usd is not None:
+                fees = self._audit_micro(account.cumulative_fees_usd)
+        except (RuntimeError, ValueError, AttributeError, ArithmeticError) as exc:
+            reason = str(exc)
+        if self.expected_positions is None:
+            reason = "initial account baseline unavailable"
+        position_delta, cash_delta = {}, {}
+        if reason is None:
+            position_delta = {key: str(Decimal(positions.get(key, "0"))
+                                      - Decimal(self.expected_positions.get(key, "0")))
+                              for key in positions.keys() | self.expected_positions.keys()
+                              if Decimal(positions.get(key, "0"))
+                              != Decimal(self.expected_positions.get(key, "0"))}
+            cash_delta = {key: cash[key] - self.expected_cash[key] for key in cash
+                          if cash[key] is not None and self.expected_cash[key] is not None
+                          and cash[key] != self.expected_cash[key]}
+        fee_verified = fees is not None and self.expected_fees is not None
+        fee_delta = fees - self.expected_fees if fee_verified else None
+        matched = reason is None and not position_delta
+        if matched:
+            self.reconciliation_ns = now_ns
+            self.recovery_span_ns = 0
+            self.incomplete_since_ns = None
+        else:
+            if self.incomplete_since_ns is None:
+                self.incomplete_since_ns = self.reconciliation_ns or self.launch_ns
+            self.recovery_span_ns = max(1, tick_ns, bound or 0,
+                                        2 * self.recovery_span_ns)
+        # Chapter II §III.b: retained history cannot supply missing execution evidence;
+        # exact independent order/position agreement can still close a truncated read.
+        retention_unknown = not history_complete and (not orders_complete or not matched)
+        complete = (matched and orders_complete and identified and not retention_unknown
+                    and self.baseline_ns is not None and now_ns >= self.baseline_ns)
+        self.ledger.append({"kind": "consequence.fill_reconciliation", "read_ns": now_ns,
+                            "matched": matched,
+                            "reason": (reason or ("execution evidence unavailable or "
+                                       "outside retained history"
+                                       if not complete and not history_complete else None)),
+                            "history_complete": history_complete,
+                            "retention_unknown": retention_unknown,
+                            "positions_observed_at_ns": account_observed,
+                            "reconciliation_ns": self.reconciliation_ns,
+                            "read_start_ns": read_start,
+                            "position_delta": position_delta, "cash_delta_micro_usd": cash_delta,
+                            "cash_usd_exact": (str(account.reconciliation_cash_usd)
+                                               if reason is None else None),
+                            "independent_fee_verification": ("available" if fee_verified
+                                                             else "unavailable"),
+                            "fee_delta_micro_usd": fee_delta, "complete": complete,
+                            "scope": "exact factory order sizes and positions; cash is audit only",
+                            "incomplete_since_ns": self.incomplete_since_ns})
+        residual = {"start_ns": self.incomplete_since_ns,
+                    "position_delta": position_delta, "cash_delta_micro_usd": cash_delta}
+        if not matched and reason is None and read_start == self.launch_ns:
+            if residual != self.last_residual:
+                self.ledger.append({"kind": "consequence.fill_unattributed", **residual,
+                                    "end_ns": now_ns,
+                                    "accounting": "annotation; account custody is truth",
+                                    "history": "incomplete; unavailable or not yet published"})
+                self.last_residual = residual
+        elif matched:
+            self.last_residual = None
+        self.through_ns = now_ns if complete else None
+        self.observation_complete = complete
 
     def poll(self, exchange, *, strict: bool = False,
-             now_ns: int | None = None) -> list[tuple[int, dict]]:
+             now_ns: int | None = None, tick_ns: int = 0) -> list[tuple[int, dict]]:
         """Return unseen executions in timestamp order, persisting the cursor before advance.
 
-        Guarantees each execution's payload states its own venue time (``fill_ns``),
-        and that a successful read made at ``now_ns`` advances ``through_ns`` to it; a
-        failed read advances nothing (ruling R10-o).
+        Exact venues advance through now. Live polls reconcile each response against
+        fresh positions and exact per-order executed quantities; absent evidence is
+        UNKNOWN. Cash and fees are audit facts, not proof. Delay bounds optimize overlap
+        only. Position mismatches widen recovery; unresolved submissions retain their
+        discovery floor independently of the account reconciliation checkpoint.
         """
+        if type(tick_ns) is not int or tick_ns < 0:
+            raise ValueError("tick_ns must be nonnegative integer nanoseconds")
+        if self.measured and self.expected_positions is None:
+            try:
+                account = exchange.account()
+                self.initialize(account, now_ns=now_ns if now_ns is not None else self.launch_ns)
+            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
+                pass
+        read_start = self.since_ns
+        if self.measured:
+            floor = min((o["submitted_ns"] for o in self.orders.values()),
+                        default=self.since_ns)
+            if self.incomplete_since_ns is not None:
+                floor = min(floor, self.incomplete_since_ns)
+            read_start = max(self.launch_ns, floor - (self.propagation_bound_ns or 0)
+                             - tick_ns - self.recovery_span_ns)
         try:
-            fills = exchange.fills(self.since_ns)
+            fills = exchange.fills(read_start)
         except RuntimeError:  # read-only venue without an account
             if strict:
                 raise
             return []
-        if now_ns is not None:
-            self.through_ns = now_ns if self.through_ns is None else max(self.through_ns,
-                                                                          now_ns)
+        prior = dict(self.seen)
+        if self.measured and read_start < self.since_ns:
+            # Exceptional recovery scans durable identities without retaining the
+            # lifetime index in RAM. Normal polling touches only its overlap.
+            candidate_ids = {(fill.ts_ns, "venue", fill.venue_id) for fill in fills
+                             if getattr(fill, "venue_id", None) and fill.ts_ns < self.since_ns
+                             and (fill.ts_ns, "venue", fill.venue_id) not in prior}
+            candidate_times = {fill.ts_ns for fill in fills
+                               if not getattr(fill, "venue_id", None)}
+            rows = self.ledger._iter_items() if candidate_ids or candidate_times else ()
+            for row in rows:
+                if row.get("kind") == "consequence.fill_identity":
+                    key = tuple(row["key"])
+                    if (read_start <= key[0] < self.since_ns
+                            and (key in candidate_ids or key[0] in candidate_times)):
+                        prior[key] = max(prior.get(key, 0), row["count"])
         counts = Counter()
         result = []
+        observations = []
         for fill in sorted(fills, key=lambda f: f.ts_ns):
-            if fill.ts_ns < self.since_ns:
+            if fill.ts_ns < read_start:
                 continue
             payload = {
                 "order_id": fill.order_id,
@@ -906,14 +1159,60 @@ class FillCursor:
                 "market": getattr(fill, "market", "perp"),
                 "inventory_size": str(getattr(fill, "inventory_size", None) or fill.size),
             }
-            key = (fill.ts_ns, *payload.values())
+            identity = getattr(fill, "venue_id", None)
+            key = (fill.ts_ns, "venue", identity) if identity else (fill.ts_ns, *payload.values())
+            if identity and key in counts:
+                continue
             counts[key] += 1
-            if counts[key] > self.seen.get(key, 0):
+            if counts[key] > prior.get(key, 0):
+                if self.measured:
+                    for order in self.orders.values():
+                        if order["oid"] == fill.order_id:
+                            order.setdefault("identities", []).append(key)
+                    self.ledger.append({"kind": "consequence.fill_identity", "key": list(key),
+                                        "count": counts[key]})
+                if (self.measured and self.baseline_ns is not None
+                        and fill.ts_ns < self.baseline_ns
+                        and not any(o["oid"] == fill.order_id for o in self.orders.values())):
+                    # Chapter II §III.b: the anchor already owns this outside account fact;
+                    # its durable identity is evidence, not a second inventory movement.
+                    self.ledger.append({"kind": "consequence.fill_absorbed", "key": list(key),
+                                        "baseline_ns": self.baseline_ns, "fill": payload})
+                    continue
                 # Its own venue time, outside the cursor's identity key (R10-o).
-                result.append((fill.ts_ns, {**payload, "fill_ns": fill.ts_ns}))
-        if result:
-            latest = max(ts for ts, _ in result)
-            seen = {key: count for key, count in counts.items() if key[0] == latest}
+                result.append((fill.ts_ns, {**payload, "fill_ns": fill.ts_ns,
+                                           "crossed": getattr(fill, "crossed", None)}))
+                observed = getattr(fill, "observed_at_ns", None)
+                if self.measured and observed is not None:
+                    observations.append((fill.ts_ns, observed))
+        bound = self.propagation_bound_ns
+        if observations:
+            bound = max(bound or 0, *(max(0, seen - ts) for ts, seen in observations))
+        history_complete = all(getattr(fill, "history_complete", True) for fill in fills)
+        if self.measured and now_ns is not None:
+            self.ledger.append({"kind": "consequence.fill_propagation", "read_ns": now_ns,
+                                "bound_ns": bound, "read_start_ns": read_start,
+                                "history_complete": history_complete,
+                                "observations": [[ts, seen] for ts, seen in observations]})
+        elif now_ns is not None:
+            self.through_ns = max(self.through_ns or now_ns, now_ns)
+        self.propagation_bound_ns = bound
+        self.read_ns = now_ns
+        if self.measured and now_ns is not None:
+            self._reconcile(exchange, result, now_ns=now_ns, read_start=read_start,
+                            tick_ns=tick_ns, bound=bound,
+                            identified=all(getattr(f, "venue_id", None) for f in fills),
+                            history_complete=history_complete)
+        if result or (self.measured and now_ns is not None):
+            latest = (max(self.launch_ns, (now_ns or self.launch_ns)
+                          - (bound or 0) - tick_ns) if self.measured
+                      else max(ts for ts, _ in result))
+            retained = {tuple(key) for order in self.orders.values()
+                        for key in order.get("identities", ())}
+            seen = ({key: max(prior.get(key, 0), counts.get(key, 0))
+                     for key in prior | counts if key[0] >= latest or key in retained}
+                    if self.measured else
+                    {key: count for key, count in counts.items() if key[0] == latest})
             self.ledger.append(
                 {
                     "kind": "consequence.fill_cursor",
