@@ -8,6 +8,7 @@ import json
 import math
 import re
 from decimal import Decimal
+from pathlib import Path
 from random import Random
 
 import pytest
@@ -1925,7 +1926,7 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
     assert headless.status == g.FAIL and headless.evidence["malformed"]["field"] == "handle"
     named = [{**stray[0], "event": {**stray[0]["event"], "payload": {"about_handle": "zz"}}},
              *stray[1:]]
-    # Codex on 3b5bb6a: a return no producer made (no ok invocation) is a failure,
+    # Codex on 3b5bb6a: a return no producer made (no ok/refused invocation) is a failure,
     # never a draw that drops out of the count.
     result = g.of3a_sampling_behind_return(ok + named, M)
     assert result.status == g.FAIL and result.evidence["draws"] == 2, result.evidence
@@ -1945,6 +1946,41 @@ def test_of3a_the_producers_ok_invocation_precedes_the_return():
     assert g.of3a_sampling_behind_return(failed, M).status == g.FAIL
     made = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "ok"}, event, draw]
     assert g.of3a_sampling_behind_return(made, M).ok
+
+
+def test_of3a_real_delivered_refusal_is_a_made_return():
+    """A delivered refusal precedes its publication and draw, just like an ok return."""
+    # Chapter II §III.b: refusals are judged too. Exact rows from live-20260928-084241-s1
+    # events.json: constructor decision-18 (910), decline/fold (912/914), publication
+    # (922), and judge-fidelity decision-19's draw (933), with original ledger seqs.
+    rows = json.loads((Path(__file__).parents[1] / "fixtures" /
+                       "live_full_refused_return.json").read_text())
+    result = g.of3a_sampling_behind_return(rows, M)
+    assert result.ok, result.evidence
+    assert result.evidence == {"draws": 1, "early": [], "unmade": []}
+
+
+@pytest.mark.parametrize("mutation", ["missing", "late", "equal", "failed", "early_draw"])
+def test_of3a_real_refusal_still_requires_a_prior_invocation(mutation):
+    """A refusal cannot excuse missing delivery or either broken ordering boundary."""
+    rows = json.loads((Path(__file__).parents[1] / "fixtures" /
+                       "live_full_refused_return.json").read_text())
+    invocation, _, _, event, draw = rows
+    if mutation == "missing":
+        rows.remove(invocation)
+    elif mutation in ("late", "equal"):
+        invocation["seq"] = event["seq"] + (mutation == "late")
+    elif mutation == "failed":
+        invocation["status"] = "failed"
+    else:
+        draw["seq"] = event["seq"]
+    result = g.of3a_sampling_behind_return(rows, M)
+    assert result.status == g.FAIL, result.evidence
+    assert result.evidence["draws"] == 1
+    if mutation == "early_draw":
+        assert result.evidence["early"] == ["decision-19"]
+    else:
+        assert result.evidence["unmade"] == [{"draw": "decision-19", "return": "decision-18"}]
 
 
 def test_g1_sf1e_reads_gamma_as_the_kernel_does_and_any_base_unwinding_fails():
