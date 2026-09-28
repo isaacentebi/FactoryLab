@@ -2841,15 +2841,16 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     decision stays behind the return, so no seat can alias a sampler it cannot predict.
 
     A draw on a ``ProducerReturn`` event (its own ledger row, carried with its
-    ``about_handle``) comes after that event, and the event after an ``ok`` or
-    ``refused`` invocation of the producer that made it. Chapter II §III.b: a delivered
-    refusal is still a return for judges, not an unmade action. Every draw is checked:
-    a return with neither status ledgered before publication fails, never drops out
+    ``about_handle``) comes after that event, and the event after the invocation of
+    the producer that made it, regardless of status. Chapter II §III.b: unsuccessful
+    outputs are still returns for judges. compute.py explicitly publishes failed
+    returns too; invocation rows do not record Return.delivered. Every draw is checked:
+    a return with no invocation ledgered before publication fails, never drops out
     of the count."""
     made: dict[str, list[int]] = defaultdict(list)
     for row in rows_of(events, "invocation"):
         handle = need(row, "handle")
-        if isinstance(handle, str) and handle and need(row, "status") in ("ok", "refused"):
+        if isinstance(handle, str) and handle:
             made[handle].append(need(row, "seq"))
     # loop.py emits every ProducerReturn with its ``about_handle``.
     published = unique_map(

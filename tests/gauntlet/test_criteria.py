@@ -1926,25 +1926,22 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
     assert headless.status == g.FAIL and headless.evidence["malformed"]["field"] == "handle"
     named = [{**stray[0], "event": {**stray[0]["event"], "payload": {"about_handle": "zz"}}},
              *stray[1:]]
-    # Codex on 3b5bb6a: a return no producer made (no ok/refused invocation) is a failure,
+    # Codex on 3b5bb6a: a return no producer made (no invocation) is a failure,
     # never a draw that drops out of the count.
     result = g.of3a_sampling_behind_return(ok + named, M)
     assert result.status == g.FAIL and result.evidence["draws"] == 2, result.evidence
     assert result.evidence["unmade"] == [{"draw": "j2", "return": "zz"}]
 
 
-def test_of3a_the_producers_ok_invocation_precedes_the_return():
-    """Codex on 3b5bb6a: an ok invocation ledgered after the ProducerReturn, or only a
-    failed one before it, backs no draw on that return: OF-3a fails."""
+@pytest.mark.parametrize("status", ["ok", "refused", "malformed", "failed"])
+def test_of3a_the_producers_invocation_precedes_the_return(status):
+    """Every published status needs its invocation ledgered before the ProducerReturn."""
     event, draw = _returned_event("e", "p1", 2), {
         "kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}
-    late = [event, draw, {"kind": "invocation", "handle": "p1", "seq": 4, "status": "ok"}]
+    late = [event, draw, {"kind": "invocation", "handle": "p1", "seq": 4, "status": status}]
     result = g.of3a_sampling_behind_return(late, M)
     assert result.status == g.FAIL and result.evidence["unmade"][0]["return"] == "p1"
-    failed = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "error"},
-              event, draw]
-    assert g.of3a_sampling_behind_return(failed, M).status == g.FAIL
-    made = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "ok"}, event, draw]
+    made = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": status}, event, draw]
     assert g.of3a_sampling_behind_return(made, M).ok
 
 
@@ -1960,7 +1957,7 @@ def test_of3a_real_delivered_refusal_is_a_made_return():
     assert result.evidence == {"draws": 1, "early": [], "unmade": []}
 
 
-@pytest.mark.parametrize("mutation", ["missing", "late", "equal", "failed", "early_draw"])
+@pytest.mark.parametrize("mutation", ["missing", "late", "equal", "wrong_handle", "early_draw"])
 def test_of3a_real_refusal_still_requires_a_prior_invocation(mutation):
     """A refusal cannot excuse missing delivery or either broken ordering boundary."""
     rows = json.loads((Path(__file__).parents[1] / "fixtures" /
@@ -1970,8 +1967,8 @@ def test_of3a_real_refusal_still_requires_a_prior_invocation(mutation):
         rows.remove(invocation)
     elif mutation in ("late", "equal"):
         invocation["seq"] = event["seq"] + (mutation == "late")
-    elif mutation == "failed":
-        invocation["status"] = "failed"
+    elif mutation == "wrong_handle":
+        invocation["handle"] = "unrelated"
     else:
         draw["seq"] = event["seq"]
     result = g.of3a_sampling_behind_return(rows, M)
@@ -1981,6 +1978,49 @@ def test_of3a_real_refusal_still_requires_a_prior_invocation(mutation):
         assert result.evidence["early"] == ["decision-19"]
     else:
         assert result.evidence["unmade"] == [{"draw": "decision-19", "return": "decision-18"}]
+
+
+@pytest.mark.parametrize("status,seqs", [
+    ("malformed", (1568, 1582, 1593)),
+    ("failed", (37763, 37774, 37784)),
+])
+def test_of3a_real_malformed_and_failed_returns_are_made(status, seqs):
+    """Every delivered status published by the runtime can back a judge draw."""
+    # Chapter II §III.b: exact invocation/publication/draw rows from
+    # live-20260928-084241-s1/events.json, retaining their original ledger seqs.
+    rows = json.loads((Path(__file__).parents[1] / "fixtures" /
+                       "live_full_malformed_failed_returns.json").read_text())
+    rows = [row for row in rows if row["seq"] in seqs]
+    assert rows[0]["status"] == rows[1]["event"]["payload"]["status"] == status
+    result = g.of3a_sampling_behind_return(rows, M)
+    assert result.ok, result.evidence
+    assert result.evidence == {"draws": 1, "early": [], "unmade": []}
+
+
+@pytest.mark.parametrize("status", ["malformed", "failed"])
+@pytest.mark.parametrize("mutation", ["missing", "late", "equal", "wrong_handle", "early_draw"])
+def test_of3a_real_unsuccessful_return_still_requires_causal_order(status, mutation):
+    """An unsuccessful output cannot excuse an unmade return or a premature draw."""
+    rows = json.loads((Path(__file__).parents[1] / "fixtures" /
+                       "live_full_malformed_failed_returns.json").read_text())
+    invocation, event, draw = rows[:3] if status == "malformed" else rows[3:]
+    rows = [invocation, event, draw]
+    if mutation == "missing":
+        rows.remove(invocation)
+    elif mutation in ("late", "equal"):
+        invocation["seq"] = event["seq"] + (mutation == "late")
+    elif mutation == "wrong_handle":
+        invocation["handle"] = "unrelated"
+    else:
+        draw["seq"] = event["seq"]
+    result = g.of3a_sampling_behind_return(rows, M)
+    assert result.status == g.FAIL, result.evidence
+    assert result.evidence["draws"] == 1
+    if mutation == "early_draw":
+        assert result.evidence["early"] == [draw["handle"]]
+    else:
+        assert result.evidence["unmade"] == [
+            {"draw": draw["handle"], "return": event["event"]["payload"]["about_handle"]}]
 
 
 def test_g1_sf1e_reads_gamma_as_the_kernel_does_and_any_base_unwinding_fails():

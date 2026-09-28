@@ -1,0 +1,340 @@
+[
+  {
+    "assembly_id": "constructor",
+    "cost": 9319,
+    "finish_reason": "stop",
+    "handle": "decision-36",
+    "hash": "8e1e93456b7a90454bb9f4c0b333177db140458c2797d4a18e81e1bc1561f93a",
+    "kind": "invocation",
+    "outputs": "{\"raw\": \"{\\\"status\\\":\\\"defer\\\",\\\"reason\\\":\\\"Routine WorldUpdate with no safety triggers and no actionable deltas; deferring through routine ticks per subscription cadence.\\\"}\", \"validation_error\": \"status: field is outside enum\", \"rejected_sections\": []}",
+    "prev_hash": "08032773b03faaad818dc2e0e13a1305f03e4feae3d8f3e335fb641a25584cfc",
+    "prompt_cache": {
+      "effective_leading_messages_sha256": "43a1ba6b7d4e8c74eae9117f5e047975c1c311c7d7274b30b29129c06090ca7c",
+      "stable_prefix_sha256": "6722de92c577154943742af0ad70d8082f05f0feb9e97c45160eac32bf878198"
+    },
+    "role": "producer",
+    "sections": {
+      "completion_criterion": 64,
+      "inputs": 13494,
+      "outcome_contract": 485,
+      "outcome_schema": 5809,
+      "request": 876,
+      "stable_prefix": 19943,
+      "total": 49497,
+      "world_update": 4190,
+      "you": 4636
+    },
+    "seq": 1568,
+    "served_by": "minimax/minimax-m3",
+    "status": "malformed",
+    "stop_reason": "stop",
+    "ts": 1790278456802386584,
+    "usage": {
+      "cached_tokens": 128,
+      "input_tokens": 12399,
+      "max_tokens": 512000,
+      "output_tokens": 32,
+      "reasoning_tokens": 0
+    }
+  },
+  {
+    "event": {
+      "id": "producerreturn-78",
+      "kind": "ProducerReturn",
+      "payload": {
+        "about_handle": "decision-36",
+        "cost": 9319,
+        "description": "Respond to event WorldUpdate on runtime.",
+        "executed_operations": [],
+        "inputs": {
+          "kind": "WorldUpdate",
+          "payload": {
+            "since_you_last_woke": {
+              "coins": {
+                "BTC": {
+                  "first": "84905.5",
+                  "first_t_s": 1790278294,
+                  "high": "84905.5",
+                  "last": "84889.0",
+                  "last_t_s": 1790278456,
+                  "low": "84867.0",
+                  "prints": 9
+                },
+                "ETH": {
+                  "first": "2680.25",
+                  "first_t_s": 1790278294,
+                  "high": "2680.25",
+                  "last": "2680.2",
+                  "last_t_s": 1790278456,
+                  "low": "2679.05",
+                  "prints": 9
+                },
+                "HYPE/USDC": {
+                  "first": "30.109",
+                  "first_t_s": 1790278294,
+                  "high": "30.3235",
+                  "last": "29.2905",
+                  "last_t_s": 1790278456,
+                  "low": "27.3125",
+                  "prints": 9
+                },
+                "PURR/USDC": {
+                  "first": "4.60235",
+                  "first_t_s": 1790278294,
+                  "high": "4.60235",
+                  "last": "4.60235",
+                  "last_t_s": 1790278456,
+                  "low": "4.60235",
+                  "prints": 9
+                }
+              },
+              "events": {
+                "MarketMid": 36,
+                "Tick": 10
+              },
+              "from_tick": 1,
+              "funding": {},
+              "prints": 36,
+              "to_tick": 10
+            },
+            "tick": 10
+          }
+        },
+        "outputs": {
+          "rejected_sections": [],
+          "validation_error": "status: field is outside enum"
+        },
+        "propensity": {
+          "chosen": "malformed",
+          "over": {
+            "malformed": 1.0
+          },
+          "source": "declared"
+        },
+        "status": "malformed"
+      },
+      "source": "runtime",
+      "ts_ns": 1790278456802386584
+    },
+    "hash": "ffa0e4afbe1da80e650f229838a53fe716e77c86caa1215ea360f19ffb190d10",
+    "kind": "event",
+    "prev_hash": "cfbaa9e031e8107b19bb9fff10932f53702c9d78bafe1b307f02bb2ca9dc07d1",
+    "seq": 1582,
+    "ts": 1790278456802386584
+  },
+  {
+    "actor": "router:ProducerReturn",
+    "channel": "conformity",
+    "cost_ceiling": 119961483,
+    "deadline_ns": 1790281029000340195,
+    "event_id": "producerreturn-78",
+    "handle": "decision-37",
+    "hash": "1ea9dea00d242ac105faec9e398caaf0f244f28f3ef80c19817a7adf468bcf74",
+    "kind": "decision.open",
+    "opened_ns": 1790278456802386584,
+    "parent_handle": null,
+    "prev_hash": "a808c24a17b35321b99b6529bda7b3b121cb566b82457deae1ef47c6248c5e11",
+    "propensity": {
+      "action_ids": [
+        "judge-base-rate",
+        "judge-consequence",
+        "judge-fidelity",
+        "judge-mechanics",
+        "NOOP"
+      ],
+      "chosen": "judge-fidelity",
+      "learner_id": "router:ProducerReturn",
+      "learner_state_hash": "8b1186f14b3b9eef15c56eacb2ed2aa87cad07bc02f98dd39afa6b79c4a6775d",
+      "probs": [
+        0.21320501912746714,
+        0.21320501912746714,
+        0.22217992349013138,
+        0.21320501912746714,
+        0.13820501912746716
+      ],
+      "rng_seed": 124113245004764360018968489075673012410,
+      "source": "sampled"
+    },
+    "seq": 1593,
+    "status": "pending",
+    "ts": 1790278456802386584
+  },
+  {
+    "assembly_id": "mechanism",
+    "cost": 10411,
+    "finish_reason": null,
+    "handle": "decision-922",
+    "hash": "f53f4426d1d41267b422cba38b34585b08853a7d450eb6748fd53b5c8f24f29e",
+    "kind": "invocation",
+    "outputs": "{\"reason\": \"billing uncertain (OpenRouterError)\"}",
+    "prev_hash": "76c7338078f7c19ce6fbfddeb82dbdeba738583cf622cf9f426dbc9d27b3fa05",
+    "prompt_cache": {
+      "effective_leading_messages_sha256": "43a1ba6b7d4e8c74eae9117f5e047975c1c311c7d7274b30b29129c06090ca7c",
+      "stable_prefix_sha256": "6722de92c577154943742af0ad70d8082f05f0feb9e97c45160eac32bf878198"
+    },
+    "role": "producer",
+    "sections": {
+      "completion_criterion": 64,
+      "inputs": 14730,
+      "outcome_contract": 485,
+      "outcome_schema": 5809,
+      "request": 876,
+      "stable_prefix": 19943,
+      "total": 54124,
+      "world_update": 4338,
+      "you": 7879
+    },
+    "seq": 37763,
+    "served_by": null,
+    "status": "failed",
+    "stop_reason": "none",
+    "ts": 1790285002391114877,
+    "usage": {
+      "input_tokens": null,
+      "max_tokens": null,
+      "output_tokens": null,
+      "reasoning_tokens": null
+    }
+  },
+  {
+    "event": {
+      "id": "producerreturn-1726",
+      "kind": "ProducerReturn",
+      "payload": {
+        "about_handle": "decision-922",
+        "cost": 10411,
+        "description": "Respond to event WorldUpdate on runtime.",
+        "executed_operations": [],
+        "inputs": {
+          "kind": "WorldUpdate",
+          "payload": {
+            "since_you_last_woke": {
+              "coins": {
+                "BTC": {
+                  "first": "84905.5",
+                  "first_t_s": 1790278294,
+                  "high": "85001.5",
+                  "last": "84980.0",
+                  "last_t_s": 1790285002,
+                  "low": "84529.5",
+                  "prints": 210
+                },
+                "ETH": {
+                  "first": "2680.25",
+                  "first_t_s": 1790278294,
+                  "high": "2690.45",
+                  "last": "2679.3",
+                  "last_t_s": 1790285002,
+                  "low": "2665.25",
+                  "prints": 210
+                },
+                "HYPE/USDC": {
+                  "first": "30.109",
+                  "first_t_s": 1790278294,
+                  "high": "30.371",
+                  "last": "28.3215",
+                  "last_t_s": 1790285002,
+                  "low": "26.7815",
+                  "prints": 210
+                },
+                "PURR/USDC": {
+                  "first": "4.60235",
+                  "first_t_s": 1790278294,
+                  "high": "4.60235",
+                  "last": "4.60235",
+                  "last_t_s": 1790285002,
+                  "low": "4.60235",
+                  "prints": 210
+                }
+              },
+              "events": {
+                "Funding": 4,
+                "MarketMid": 840,
+                "Tick": 218
+              },
+              "from_tick": 1,
+              "funding": {
+                "BTC": [
+                  {
+                    "rate": "0.0003020226",
+                    "t_s": 1790280000
+                  },
+                  {
+                    "rate": "0.0004282339",
+                    "t_s": 1790283600
+                  }
+                ],
+                "ETH": [
+                  {
+                    "rate": "-0.0006066257",
+                    "t_s": 1790280000
+                  },
+                  {
+                    "rate": "-0.0005705091",
+                    "t_s": 1790283600
+                  }
+                ]
+              },
+              "prints": 840,
+              "to_tick": 218
+            },
+            "tick": 218
+          }
+        },
+        "outputs": {
+          "reason": "billing uncertain (OpenRouterError)"
+        },
+        "propensity": {
+          "chosen": "malformed",
+          "over": {
+            "malformed": 1.0
+          },
+          "source": "declared"
+        },
+        "status": "failed"
+      },
+      "source": "runtime",
+      "ts_ns": 1790285002391114877
+    },
+    "hash": "c46cf44a948d0c64b85e86de6e0309127455ee854aa57f805e116210be104843",
+    "kind": "event",
+    "prev_hash": "6ad5eeeeabdd20ab73bafec587581f86e796d002da850a0991298977e07ab83b",
+    "seq": 37774,
+    "ts": 1790285002391114877
+  },
+  {
+    "actor": "router:ProducerReturn",
+    "channel": "conformity",
+    "cost_ceiling": 106410315,
+    "deadline_ns": 1790288939872154001,
+    "event_id": "producerreturn-1726",
+    "handle": "decision-923",
+    "hash": "a10069f9b242cb85324f40119af182dd385e8c78be0061d06fa8ca7c3361827c",
+    "kind": "decision.open",
+    "opened_ns": 1790285002391114877,
+    "parent_handle": null,
+    "prev_hash": "e3dc0308716280afeb6f8f8d96230f6bedeb0352f245761d067e1079f4db0967",
+    "propensity": {
+      "action_ids": [
+        "judge-base-rate",
+        "judge-fidelity",
+        "judge-mechanics",
+        "NOOP"
+      ],
+      "chosen": "NOOP",
+      "learner_id": "router:ProducerReturn",
+      "learner_state_hash": "3633930e2905c0a4fb6ac86dbecb266af96b0a6f9172ba366891bf911399788f",
+      "probs": [
+        0.16419744074787823,
+        0.27131610426490177,
+        0.2412711904075672,
+        0.32321526457965283
+      ],
+      "rng_seed": 25187435810710342046227958786672793325,
+      "source": "sampled"
+    },
+    "seq": 37784,
+    "status": "pending",
+    "ts": 1790285002391114877
+  }
+]
