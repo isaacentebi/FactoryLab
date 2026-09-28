@@ -1846,7 +1846,12 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
     ``tool.call`` of that handle, no later than the invocation, is one of the write tools
     that ledgers this kind (``ACT_TOOLS``). A later invocation alone, a failed or
     malformed one before it, a read-only or unrelated tool call, or an act naming no
-    opened decision does not trace."""
+    opened decision does not trace. A null-handle seed registration before the first
+    decision opens is genesis, not an act, and is omitted."""
+    # Chapter II §I.a: the architect's seed roster is genesis, not a seat's act.
+    # Any decision opening ends genesis, even if that decision is malformed.
+    first_decision = next((i for i, row in enumerate(events)
+                           if row.get("kind") == "decision.open"), len(events))
     opened: dict[str, int] = {}
     invoked: dict[str, tuple[int, Any]] = {}
     tool_calls: dict[str, list[tuple[int, Any]]] = defaultdict(list)
@@ -1866,6 +1871,11 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
     out = []
     for i, row in enumerate(events):
         if row.get("kind") not in kinds:
+            continue
+        if (i < first_decision and row.get("kind") == "registry.register"
+                and "handle" in row and row.get("handle") is None
+                and isinstance(row.get("contract"), Mapping)
+                and row.get("contract").get("provenance") == "seed"):
             continue
         handle = row.get(kinds[need(row, "kind")])
         entry: dict[str, Any] = {"kind": need(row, "kind"), "handle": handle}
@@ -2935,8 +2945,9 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
     ``Random(rng_seed).choices(action_ids, weights=probs)[0] == chosen`` for every
     sampled ``decision.open`` (``learners.router.Router.route``), the logged
     distribution sums to 1, and every act row (``ACT_KINDS``) names, in its handle
-    field, a decision a seat returned on. No act row is skipped: one with no handle, or
-    a handle that is not a returned decision, is an act the kernel took for a seat.
+    field, a decision a seat returned on. Null-handle seed registrations before the
+    first decision opens are genesis, not acts (§I.a). No act row is skipped: one with
+    no handle, or a handle that is not a returned decision, is a kernel act for a seat.
     """
     bad, checked, malformed = [], 0, []
     for row in rows_of(events, "decision.open"):
