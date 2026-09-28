@@ -81,7 +81,10 @@ def test_genuine_three_field_legacy_cursor_keeps_simulated_constructor_defaults(
                                          ("measured", 1), ("propagation_bound_ns", -1),
                                          ("expected_positions", {"perp:BTC": "NaN"}),
                                          ("expected_cash", {"perp": 1.5}),
-                                         ("expected_fees", "1"), ("recovery_span_ns", -1)])
+                                         ("expected_fees", "1"), ("recovery_span_ns", -1),
+                                         ("waiting_since_ns", -1), ("waiting_since_ns", True),
+                                         ("waiting_identities", []),
+                                         ("waiting_identities", {(100, 'venue', 'x'): 0})])
 def test_invalid_fill_component_refuses_before_any_runtime_mutation(field, value):
     source = make_runtime(live=True)
     source.clock.now_ns += 123

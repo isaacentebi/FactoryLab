@@ -1348,7 +1348,7 @@ class VenueMixin:
         self.ledger.append({"kind": "order.intent", **intent})
         self.order_intents[client_id] = intent
         if operation != "venue.cancel":
-            self.consequence_fills.submitted(client_id, now_ns=self.clock.now_ns)
+            self.consequence_fills.submitted(client_id, now_ns=self.clock.now_ns, coin=args["coin"])
         self.consequences.order_intent(client_id, handle, args["coin"])
         # Submitted or lost, a write is the venue possibly moving: nothing observed
         # before it describes the account an order is weighed against afterwards.
@@ -1526,6 +1526,7 @@ class VenueMixin:
                             "operation": intent["operation"], "polls": int(intent.get("polls", 0)),
                             "result": dict(intent["result"])})
         self.order_intents[client_id] = {**intent, "unresolved": True}
+        self.consequence_fills.resolution_terminal(client_id)
         before = self.consequences.table
         self._replay_deferred(self.consequences.release_unresolved(client_id, self.n), before)
 

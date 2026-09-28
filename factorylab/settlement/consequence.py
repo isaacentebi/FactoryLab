@@ -891,12 +891,14 @@ class FillCursor:
         self.orders: dict[str, dict] = {}
         self.baseline_ns: int | None = None
         self.baseline_fills_read = False
+        self.waiting_since_ns: int | None = None
+        self.waiting_identities: dict[tuple, int] = {}
 
-    def submitted(self, client_id: str, *, now_ns: int) -> None:
+    def submitted(self, client_id: str, *, now_ns: int, coin: str | None = None) -> None:
         """Retain unresolved submission evidence until exact venue quantities agree."""
         if self.measured and client_id not in self.orders:
             self.orders[client_id] = {"submitted_ns": now_ns, "oid": None, "booked": "0",
-                                      "identities": []}
+                                      "coin": coin, "identities": []}
 
     def acknowledged(self, client_id: str, result: dict) -> None:
         """Bind a submission to its venue identity without treating an ACK as delivery."""
@@ -904,7 +906,20 @@ class FillCursor:
             if result.get("order_id") is not None:
                 self.orders[client_id]["oid"] = str(result["order_id"])
             if result.get("status") == "rejected":
-                del self.orders[client_id]
+                self.resolution_terminal(client_id)
+
+    def resolution_terminal(self, client_id: str) -> None:
+        """Retire identity discovery without discarding withheld executions' retry floor."""
+        self.orders.pop(client_id, None)
+
+    def _awaits_identity(self, fill) -> bool:
+        # Chapter II §III.b: only a still-pending compatible submission can own this
+        # execution. Liquidations and explicit non-order provenance cannot be it.
+        if (not self.measured or fill.liquidation or not fill.order_id
+                or any(o["oid"] == fill.order_id for o in self.orders.values())):
+            return False
+        return any(o["oid"] is None and o.get("coin") == fill.coin
+                   and fill.ts_ns >= o["submitted_ns"] for o in self.orders.values())
 
     @staticmethod
     def _micro(value) -> int:
@@ -1106,18 +1121,25 @@ class FillCursor:
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             return
         candidates = {}
+        occurrences = Counter()
         for fill in fills:
             if not self.launch_ns <= fill.ts_ns < self.baseline_ns:
                 continue
             if (getattr(fill, "client_id", None) in self.orders
                     or fill.order_id in self.orders
-                    or any(o["oid"] is None or o["oid"] == fill.order_id
-                           for o in self.orders.values())):
+                    or self._awaits_identity(fill)
+                    or any(o["oid"] == fill.order_id for o in self.orders.values())):
                 continue
             payload = {name: str(value) if isinstance(value, Decimal) else value
                        for name, value in vars(fill).items()}
             identity = getattr(fill, "venue_id", None)
-            key = (("venue", identity) if identity else tuple(payload.items()))
+            if identity:
+                key = ("venue", identity)
+            else:
+                stable = (fill.coin, fill.is_buy, str(fill.px), str(fill.size),
+                          fill.ts_ns, fill.order_id, str(fill.fee))
+                occurrences[stable] += 1
+                key = ("anonymous", *stable, occurrences[stable])
             candidates[key] = payload
         if candidates:
             for row in self.ledger._iter_items():
@@ -1136,6 +1158,10 @@ class FillCursor:
         self.ledger.append({"kind": "consequence.fill_baseline_read",
                             "start_ns": self.launch_ns, "end_ns": self.baseline_ns,
                             "read_ns": now_ns, "done": done})
+        if done:
+            self.ledger.append({"kind": "consequence.fill_evidence_sweep_closed",
+                                "bound_ns": bound, "read_ns": now_ns,
+                                "scope": "empirical: later publications may exist"})
         self.baseline_fills_read = done
 
     def poll(self, exchange, *, strict: bool = False,
@@ -1162,6 +1188,8 @@ class FillCursor:
                         default=self.since_ns)
             if self.incomplete_since_ns is not None:
                 floor = min(floor, self.incomplete_since_ns)
+            if self.waiting_since_ns is not None:
+                floor = min(floor, self.waiting_since_ns)
             read_start = max(self.launch_ns, floor - (self.propagation_bound_ns or 0)
                              - tick_ns - self.recovery_span_ns)
         try:
@@ -1190,13 +1218,9 @@ class FillCursor:
         counts = Counter()
         result = []
         observations = []
+        waiting_counts = Counter()
         for fill in sorted(fills, key=lambda f: f.ts_ns):
             if fill.ts_ns < read_start:
-                continue
-            # Chapter II §III.b: an unresolved submission cannot yet attribute its
-            # execution. Keep discovery open without consuming a delivery identity.
-            if (self.measured and any(o["oid"] is None for o in self.orders.values())
-                    and not any(o["oid"] == fill.order_id for o in self.orders.values())):
                 continue
             payload = {
                 "order_id": fill.order_id,
@@ -1212,9 +1236,18 @@ class FillCursor:
             }
             identity = getattr(fill, "venue_id", None)
             key = (fill.ts_ns, "venue", identity) if identity else (fill.ts_ns, *payload.values())
+            # Chapter II §III.b: absence from a later page cannot erase an execution
+            # already observed. Keep each withheld multiplicity until it is processed.
+            if self._awaits_identity(fill):
+                waiting_counts[key] = 1 if identity else waiting_counts[key] + 1
+                self.waiting_identities[key] = max(self.waiting_identities.get(key, 0),
+                                                   waiting_counts[key])
+                continue
             if identity and key in counts:
                 continue
             counts[key] += 1
+            if counts[key] >= self.waiting_identities.get(key, 0):
+                self.waiting_identities.pop(key, None)
             if counts[key] > prior.get(key, 0):
                 if self.measured:
                     for order in self.orders.values():
@@ -1236,6 +1269,7 @@ class FillCursor:
                 observed = getattr(fill, "observed_at_ns", None)
                 if self.measured and observed is not None:
                     observations.append((fill.ts_ns, observed))
+        self.waiting_since_ns = min((key[0] for key in self.waiting_identities), default=None)
         bound = self.propagation_bound_ns
         if observations:
             bound = max(bound or 0, *(max(0, seen - ts) for ts, seen in observations))
@@ -1253,7 +1287,8 @@ class FillCursor:
         if self.measured and now_ns is not None:
             self._reconcile(exchange, result, now_ns=now_ns, read_start=read_start,
                             tick_ns=tick_ns, bound=bound,
-                            identified=all(getattr(f, "venue_id", None) for f in fills),
+                            identified=(not self.waiting_identities
+                                        and all(getattr(f, "venue_id", None) for f in fills)),
                             history_complete=history_complete)
         if result or (self.measured and now_ns is not None):
             latest = (max(self.launch_ns, (now_ns or self.launch_ns)
