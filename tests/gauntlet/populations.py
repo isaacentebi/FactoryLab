@@ -574,6 +574,24 @@ def sf1(*, hold_a: Arm = hold, hold_b: Arm = investigate, hold_c: Arm = decline,
     return world(seats, cards=[UPTAKE, WELL_FORMED]), Population(seats, record=record)
 
 
+def intermittent() -> tuple[Any, Population]:
+    """Synchronized judge refusals leave the producer verdict card intermittently measured."""
+    def half_judge(view: View) -> dict:
+        return verdict(0.3)(view) if view.window % 2 == 0 else decline(view)
+
+    seats = [producer("steady-a", hold), producer("steady-b", hold),
+             *(judge(f"judge-{i}", half_judge) for i in range(4)),
+             *(meta(f"meta-{i}", conformity(0.8)) for i in range(2))]
+    # §IV.a: these are the adversarial population's metrics, not a kernel refusal tax.
+    cards = [card("verdict-floor", "verdict_mean", "at least 0.5", answers_for="producer",
+                  norm="useful inquiry"),
+             card("conformity-floor", "meta_verdict_mean", "at least 0.9",
+                  answers_for="evaluator", norm="truthful commitments")]
+    # §IV.b: H = 9s / min_ratio lets the ordinary actuator respond without a forced clock.
+    return (world(seats, cards=cards, changes={"timing": {"world_repricing": "9s"}}),
+            Population(seats))
+
+
 def flip_arm(*, until_window: int) -> Arm:
     """Well formed on even windows, malformed on odd ones, until ``until_window``."""
     def arm(view: View) -> dict:

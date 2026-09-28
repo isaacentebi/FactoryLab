@@ -229,26 +229,12 @@ def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):
 # --- intermittent support (R16b-10, wave 16c) --------------------------------------------
 
 
-def _half_judge(view):
-    """A judge that answers 0.3 (under the 0.5 floor) on even windows and declines on odd
-    ones: the card is violated whenever measured, and measured every other window."""
-    return P.verdict(0.3)(view) if view.window % 2 == 0 else P.decline(view)
-
-
 @pytest.fixture(scope="module")
 def intermittent(shared_run):
     """One live run supplies sampling, role-pricing and unsupported-attractor proofs."""
-    seats = [P.producer("steady-a", P.hold), P.producer("steady-b", P.hold),
-             *(P.judge(f"judge-{i}", _half_judge) for i in range(4)),
-             *(P.meta(f"meta-{i}", P.conformity(0.8)) for i in range(2))]
-    cards = [P.card("verdict-floor", "verdict_mean", "at least 0.5", answers_for="producer",
-                    norm="useful inquiry")]
-    # §IV.b: declare H = 9s / min_ratio so the ordinary actuator clock can respond
-    # in this bounded world. No clock is forced; 220 events cover the full nine-window
-    # immune horizon (216 still closes only eight), with synchronized refusals intact.
-    manifest = P.world(seats, cards=cards, changes={"timing": {"world_repricing": "9s"}})
+    # Keep the bounded shared run; the sampling test asserts full immune-horizon coverage.
     return shared_run("sf-intermittent", lambda: P.run(
-        manifest, P.Population(seats), events=220, instrument=False))
+        *P.intermittent(), events=220, instrument=False))
 
 
 def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured(intermittent):
@@ -288,13 +274,13 @@ def test_intermittent_sampling_rises_but_synchronized_declines_remain_unmeasured
 def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(intermittent):
     """§II.b preserves decline-credit accounting and ordinary producer violation prices.
 
-    Ledger completeness and the reward map remain independently enforced while the
-    positive abstention-charge requirement below is unresolved. R16b-10 still forbids
-    treating refusals as evidence of a failing attractor (§II.a, §IV.c).
+    The population owns both role-specific cards (§IV.a); without an evaluator card,
+    zero evaluator pressure is correct. R16b-10 still forbids treating refusals as
+    evidence of a failing producer attractor (§II.a, §IV.c).
     """
     run = intermittent
     assert [(c["id"], c["answers_for"]) for c in run.manifest["charter"]["cards"]] == [
-        ("verdict-floor", "producer")]
+        ("verdict-floor", "producer"), ("conformity-floor", "evaluator")]
     window = 1
     draws, origins = {}, {}
     for row in run.events:
@@ -358,17 +344,53 @@ def test_intermittent_declines_are_ledgered_and_producers_pay_ordinary_prices(in
     assert not [r for r in run.rows("immune.price_ratchet", "immune.price_ratchet_saturated")
                 if r["card_id"] == "verdict-floor"]
 
-
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="R16c-1: every odd-window judge decline has zero abstention charge; "
-                   "the sole card answers for producers, leaving evaluators unpriced")
-def test_intermittent_every_declined_judge_draw_pays_an_abstention_charge(intermittent):
-    """§II.b: every declined judge draw must pay, not merely receive a ledger credit."""
-    contributions = {r["handle"]: r for r in intermittent.rows("price.contribution")}
-    declined = {r["handle"] for r in intermittent.rows("commission.declined")
+    # §IV.a/§II.b: evaluator liability uses only the population's evaluator card.
+    # Keep the exact ordinary-law check outside xfail, even when pressure is zero.
+    card = "conformity-floor"
+    declined = {r["handle"] for r in run.rows("commission.declined")
                 if r["assembly_id"].startswith("judge-")
                 and contributions[r["handle"]]["window"] % 2}
-    credits = [r for r in intermittent.rows("router.decline_priced") if r["handle"] in declined]
+    credits = [r for r in run.rows("router.decline_priced") if r["handle"] in declined]
+    assert declined and len(credits) == len(declined)
+    closes = {r["window"]: r for r in run.rows("price.window")}
+    updates = [r for r in run.rows("price.update") if r["card_id"] == card]
+    # The card really measures conformity when delivered; an unknown observation or
+    # absent upper tier must not masquerade as the synchronized-refusal limitation.
+    assert updates and all(r["value"] == pytest.approx(0.8) for r in updates)
+    cap = run.manifest["prices"]["penalty_cap"]
+    for row in credits:
+        own = contributions[row["handle"]]
+        if own.get("niche"):
+            assert row["penalty"] == 0.0
+            continue
+        close = closes[own["window"]]
+        # Count-based liability waits for its origin close; no future price enters.
+        assert close["seq"] < row["seq"]
+        value = close["values"].get(card)
+        violation = 0.0 if value is None else max(0.0, (0.9 - value) / 0.9)
+        prices = [r for r in updates if r["window_end_event"] <= close["window_end_event"]
+                  and r["seq"] < row["seq"]]
+        price = prices[-1]["lambda_after"] if prices else 0.0
+        peers = [r for r in contributions.values() if r["window"] == own["window"]
+                 and r["role"] == "evaluator" and not r.get("niche")]
+        share = max(run.manifest["prices"]["min_blame_share"], 1 / len(peers))
+        assert row["penalty"] == pytest.approx(min(cap, price * violation) * share)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="Population conformity card is unmeasured in every odd window; "
+                   "every odd-window judge decline still has zero charge with this card")
+def test_intermittent_every_declined_judge_draw_pays_an_abstention_charge(intermittent):
+    """§IV.a: the population's positive-charge demand is not a universal kernel rule."""
+    run = intermittent
+    contributions = {r["handle"]: r for r in run.rows("price.contribution")}
+    declined = {r["handle"] for r in run.rows("commission.declined")
+                if r["assembly_id"].startswith("judge-")
+                and contributions[r["handle"]]["window"] % 2}
+    credits = [r for r in run.rows("router.decline_priced") if r["handle"] in declined]
     assert declined and len(credits) == len(declined)
     unpaid = [r["handle"] for r in credits if r["penalty"] <= 0]
-    assert not unpaid, f"{len(unpaid)}/{len(declined)} declined judge draws are unpriced: {unpaid}"
+    unmeasured = [r["window"] for r in run.rows("price.window")
+                  if r["window"] % 2 and "conformity-floor" not in r["values"]]
+    assert not unpaid, (f"{len(unpaid)}/{len(declined)} declined judge draws are unpriced; "
+                        f"conformity-floor unmeasured in windows {unmeasured}: {unpaid}")
