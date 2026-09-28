@@ -1037,7 +1037,8 @@ class PricingMixin:
             card = cards[cid]
             observation = normalise(card.observation)
             eligible = {h: d for h, d in self._split_decisions(window).items()
-                        if card.answers_for in ("all", d["role"])
+                        if (card.answers_for == "all" or
+                            (d.get("menu_roles") or {d["role"]: 1.0}).get(card.answers_for, 0) > 0)
                         and self.price_origins.get(h, {}).get(
                             observation, self.price_origins.get(h, {}).get("origin"))
                         == window.index}
