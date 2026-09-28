@@ -61,14 +61,16 @@ def test_th1b_negative_control_without_the_thrash_price_it_fails():
     assert g.th1b_duration(mutant.events, mutant.manifest).status == g.FAIL
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="population (c): th1's thrash episodes last two windows "
-                   "(flagged 11-12 and 31-32), so the thrash penalty peaks at 0.23 and "
-                   "never sits at penalty_cap 0.5; the anti-windup rule is unexercised. "
-                   "A population holding thrash for about 9 windows is needed (SF-0 "
-                   "derives eta so a unit violation saturates in r*k = 9)")
-def test_th1b_the_thrash_integral_is_frozen_at_the_cap(th1):
-    result = g.th1b2_frozen(th1.events, th1.manifest)
+@pytest.fixture(scope="module")
+def th1_sustained(shared_run):
+    # At v = 0.8 the unchanged 0.5 cap binds in windows 55–56, the first pair
+    # of capped updates: 228 events retain the actual anti-windup witness.
+    return shared_run("th1-sustained", lambda: P.run(*P.th1_sustained(), events=228,
+                                                    instrument=False))
+
+
+def test_th1b_the_thrash_integral_is_frozen_at_the_cap(th1_sustained):
+    result = g.th1b2_frozen(th1_sustained.events, th1_sustained.manifest)
     assert result.ok, result.evidence
 
 

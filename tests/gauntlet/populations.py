@@ -593,6 +593,18 @@ def th1(*, until_window: int = 50, record: bool = False) -> tuple[Any, Populatio
     return world(seats, cards=cards), Population(seats, record=record)
 
 
+def th1_sustained() -> tuple[Any, Population]:
+    """TH-1b: both producers oscillate through the two capped updates at windows 55–56."""
+    # Chapter II §II.b prices thrash's duration. Both arms oscillate so router
+    # selection cannot replace the period-2 signal with a steady producer; unlike
+    # th1's release population, neither stops before the cap-freeze witness.
+    seats = [producer("flip-a", flip_arm(until_window=57)),
+             producer("flip-b", flip_arm(until_window=57)), *honest_panel()]
+    cards = [card("well-formed-floor", "well_formed_rate", "at least 0.9",
+                  norm="truthful commitments")]
+    return world(seats, cards=cards), Population(seats)
+
+
 def iid_arm(p_malformed: float, salt: str) -> Arm:
     """Malformed with probability ``p`` per call, iid by hash of the seat's call count."""
     def arm(view: View) -> dict:
