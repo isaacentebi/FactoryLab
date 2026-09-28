@@ -996,7 +996,7 @@ _COMPONENT_FIELDS = (
                                "propagation_bound_ns", "observation_complete",
                                "reconciliation_ns", "expected_positions", "expected_cash",
                                "expected_fees", "recovery_span_ns", "incomplete_since_ns",
-                               "last_residual", "orders", "baseline_ns")),
+                               "last_residual", "orders", "baseline_ns", "baseline_fills_read")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
@@ -1172,7 +1172,8 @@ def _migrate_fill_cursor(saved, running) -> dict:
                 "observation_complete": True, "reconciliation_ns": None,
                 "expected_positions": None, "expected_cash": None, "expected_fees": None,
                 "recovery_span_ns": 0, "incomplete_since_ns": None,
-                "last_residual": None, "orders": {}, "baseline_ns": None, **saved}
+                "last_residual": None, "orders": {}, "baseline_ns": None,
+                "baseline_fills_read": False, **saved}
     for field in ("launch_ns", "since_ns", "read_ns", "through_ns", "propagation_bound_ns",
                   "reconciliation_ns", "recovery_span_ns", "incomplete_since_ns"):
         value = migrated[field]
@@ -1182,7 +1183,7 @@ def _migrate_fill_cursor(saved, running) -> dict:
             continue
         if type(value) is not int or (field != "through_ns" and value < 0):
             raise ResumeError(f"invalid fill cursor {field}")
-    for field in ("measured", "observation_complete"):
+    for field in ("measured", "observation_complete", "baseline_fills_read"):
         if type(migrated[field]) is not bool:
             raise ResumeError(f"invalid fill cursor {field}")
     seen = migrated["seen"]

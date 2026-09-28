@@ -101,6 +101,19 @@ def test_any_unrepresentable_execution_fails_entire_read(bad, valid_peer):
         venue.fills(0)
 
 
+def test_anchor_read_passes_upper_bound_to_every_inclusive_page():
+    calls = []
+
+    def fetch(user, start, *, end_time):
+        calls.append((start, end_time))
+        return FIRST if start == 0 else REST[:2]
+
+    fills = _venue(fetch).fills(0, until_ns=FILLS_PAGE * NS_PER_MS)
+    assert calls == [(0, FILLS_PAGE), (FILLS_PAGE, FILLS_PAGE)]
+    assert len(fills) == FILLS_PAGE + 1
+    assert all(f.ts_ns <= FILLS_PAGE * NS_PER_MS for f in fills)
+
+
 def test_a_stalled_full_page_fails_closed():
     same = [_row(i, 5) for i in range(FILLS_PAGE)]
     with pytest.raises(VenueUnavailable, match="stalled"):

@@ -33,7 +33,7 @@ def test_all_barrier_observations_must_cover_target(stale):
     for oid in ('first', 'second'):
         c.submitted(oid, now_ns=50)
         c.acknowledged(oid, {'order_id': oid})
-    venue = SimpleNamespace(fills=lambda start: [],
+    venue = SimpleNamespace(fills=lambda start, **kw: [],
         account=lambda: account(observed=199 if stale == 'positions' else 200),
         lookup=lambda client, **kw: status(client, observed=199 if client == stale else 200))
     c.poll(venue, now_ns=200)
@@ -48,7 +48,7 @@ def test_missing_observation_uses_actual_return_not_target(monkeypatch, missing)
     c = setup_cursor()
     c.submitted('o', now_ns=50)
     c.acknowledged('o', {'order_id': 'o'})
-    venue = SimpleNamespace(fills=lambda start: [],
+    venue = SimpleNamespace(fills=lambda start, **kw: [],
         account=lambda: account(observed=None if missing == 'positions' else 200),
         lookup=lambda *a, **kw: status('o', observed=None if missing == 'order' else 200))
     c.poll(venue, now_ns=200)
@@ -61,7 +61,7 @@ def test_incomplete_history_is_audited_without_globally_blocking_barrier():
     c.acknowledged('o', {'order_id': 'o'})
     f = Fill('o', 'BTC', True, D(1), D(10), D(0), 100,
              observed_at_ns=200, venue_id='f', history_complete=False)
-    venue = SimpleNamespace(fills=lambda start: [f], account=lambda: account(size=1),
+    venue = SimpleNamespace(fills=lambda start, **kw: [f], account=lambda: account(size=1),
                             lookup=lambda *a, **kw: status('o', size=2))
     c.poll(venue, now_ns=200)
     assert c.through_ns is None
@@ -90,7 +90,7 @@ def test_missing_observation_return_clock_is_replayed(monkeypatch):
     c.initialize(account(observed=0), now_ns=0)
     c.submitted('o', now_ns=50)
     c.acknowledged('o', {'order_id': 'o'})
-    venue = SimpleNamespace(fills=lambda start: [], account=lambda: account(observed=None),
+    venue = SimpleNamespace(fills=lambda start, **kw: [], account=lambda: account(observed=None),
                             lookup=lambda *a, **kw: status('o', observed=None))
     monkeypatch.setattr(time, 'time_ns', lambda: 201)
     prefix = len(ledger._recovery_items())
@@ -134,7 +134,8 @@ def test_preanchor_nonfactory_execution_is_absorbed_once_not_delivered():
     c = FillCursor(Ledger(), start_ns=0, measured=True)
     c.initialize(account(observed=200, size=1), now_ns=100)
     f = Fill('external', 'BTC', True, D(1), D(10), D(0), 150, venue_id='old')
-    venue = SimpleNamespace(fills=lambda start: [f], account=lambda: account(observed=300, size=1))
+    venue = SimpleNamespace(fills=lambda start, **kw: [f],
+                            account=lambda: account(observed=300, size=1))
     assert c.poll(venue, now_ns=199) == []
     assert c.through_ns is None
     assert c.poll(venue, now_ns=200) == []
@@ -146,12 +147,14 @@ def test_preanchor_nonfactory_execution_is_absorbed_once_not_delivered():
     assert c.expected_positions == {'perp:BTC': '1'}
 
 
-def test_execution_at_anchor_is_not_preanchor():
+def test_nonfactory_execution_at_inclusive_anchor_is_absorbed():
     c = FillCursor(Ledger(), start_ns=0, measured=True)
     c.initialize(account(observed=200, size=1), now_ns=100)
     f = Fill('external', 'BTC', True, D(1), D(10), D(0), 200, venue_id='boundary')
-    venue = SimpleNamespace(fills=lambda start: [f], account=lambda: account(size=1))
-    assert [ts for ts, _ in c.poll(venue, now_ns=200)] == [200]
+    venue = SimpleNamespace(fills=lambda start, **kw: [f], account=lambda: account(size=1))
+    assert c.poll(venue, now_ns=200) == []
+    assert len([r for r in c.ledger._recovery_items()
+                if r['kind'] == 'consequence.fill_absorbed']) == 1
     assert c.expected_positions == {'perp:BTC': '1'}
     assert c.through_ns == 200
     assert c.poll(venue, now_ns=200) == []
@@ -169,7 +172,7 @@ def test_5000_partials_one_resting_order_has_bounded_identity_memory():
                  observed_at_ns=now, venue_id=str(i))
         starts = []
         venue = SimpleNamespace(
-            fills=lambda start, f=f, starts=starts: starts.append(start) or (
+            fills=lambda start, f=f, starts=starts, **kw: starts.append(start) or (
                 [f] if f.ts_ns >= start else []),
             account=lambda now=now, i=i: account(observed=now, size=i),
             lookup=lambda *a, now=now, i=i, **kw: status('resting', observed=now, size=i))

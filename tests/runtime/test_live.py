@@ -82,7 +82,7 @@ class StubExchange:
     def cancel(self, order_id: str) -> None:
         pass
 
-    def fills(self, since_ns: int):
+    def fills(self, since_ns: int, *, until_ns=None):
         if self.calls < 2:
             return []
         return [

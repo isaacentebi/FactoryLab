@@ -16,9 +16,10 @@ class Venue:
         self.calls = []
         self.fees = fees
 
-    def fills(self, start):
+    def fills(self, start, *, until_ns=None):
         self.calls.append(start)
-        return [f for f in self.shown if f.ts_ns >= start]
+        return [f for f in self.shown if f.ts_ns >= start
+                and (until_ns is None or f.ts_ns <= until_ns)]
 
     def account(self):
         size = sum((f.size if f.is_buy else -f.size for f in self.executed), D(0))
@@ -134,7 +135,7 @@ def test_production_shaped_open_position_and_funding_cash_are_audit_only():
     c.acknowledged('factory', {'order_id': '100', 'status': 'filled'})
     state['assetPositions'] = [{'position': {'coin': 'BTC', 'szi': '1', 'entryPx': '100'}}]
     state['marginSummary'].update(accountValue='999', totalRawUsd='899', totalMarginUsed='10')
-    exchange.fills = lambda start: [replace(fill(100), px=D(100), fee=D(1))]
+    exchange.fills = lambda start, **kw: [replace(fill(100), px=D(100), fee=D(1))]
     assert len(c.poll(exchange, now_ns=200)) == 1
     assert c.through_ns == 200
     state['marginSummary'].update(accountValue='998', totalRawUsd='898')
@@ -301,6 +302,81 @@ def test_retry_baseline_absorbs_pre_anchor_nonfactory_execution():
     assert len(absorbed) == 1
     assert absorbed[0]['baseline_ns'] == 200
     assert absorbed[0]['key'] == [100, 'venue', '100']
+
+
+@pytest.mark.parametrize('fail_first', [False, True])
+def test_anchor_sweep_recovers_passed_timestamp_once_and_replays(fail_first):
+    from copy import deepcopy
+
+    from factorylab.runtime.resume import (
+        JournalProxy,
+        RecoveryJournal,
+        _migrate_fill_cursor,
+        decode,
+        encode,
+    )
+
+    venue = Venue(fees=False)
+    raw_account = venue.account
+    venue.account = lambda: (_ for _ in ()).throw(RuntimeError('offline'))
+    ledger = Ledger(clock_ns=lambda: 0)
+    journal = RecoveryJournal(ledger, lambda: 0)
+    journal.active = True
+    proxy = JournalProxy(venue, journal, 'exchange')
+    c = FillCursor(journal, start_ns=0, measured=True)
+    assert c.poll(proxy, now_ns=150) == []
+    assert c.since_ns == 150
+    venue.executed = venue.shown = [fill(100)]
+    venue.account = lambda: replace(raw_account(), observed_at_ns=200)
+    calls = []
+    raw_fills = venue.fills
+
+    def fills(start, *, until_ns=None):
+        calls.append((start, until_ns))
+        if until_ns is not None and fail_first and calls.count((0, 200)) == 1:
+            raise RuntimeError('anchor read unavailable')
+        return raw_fills(start, until_ns=until_ns)
+
+    venue.fills = fills
+    before = deepcopy({k: v for k, v in vars(c).items() if k != 'ledger'})
+    prefix = len(ledger._recovery_items())
+    assert c.poll(proxy, now_ns=200) == []
+    assert c.baseline_ns == 200
+    assert c.through_ns == 200  # Evidence retries do not revoke trading's account anchor.
+    if fail_first:
+        assert not c.baseline_fills_read
+        saved = decode(encode({k: v for k, v in vars(c).items() if k != 'ledger'}))
+        vars(c).update(_migrate_fill_cursor(saved, c))
+        assert c.poll(proxy, now_ns=200) == []
+    assert c.baseline_fills_read
+    assert calls.count((0, 200)) == 1 + int(fail_first)
+    # Force a later backward encounter after the ordinary identity cache has expired.
+    c.recovery_span_ns = 300
+    assert c.poll(proxy, now_ns=200) == []
+    absorbed = [r for r in ledger._recovery_items()
+                if r['kind'] == 'consequence.fill_absorbed']
+    assert len(absorbed) == 1
+    assert absorbed[0]['key'] == [100, 'venue', '100']
+
+    replay = RecoveryJournal(ledger, lambda: 0)
+    replay.io_store = journal.io_store
+    replay.active = True
+    replay.tail = iter(ledger._recovery_items()[prefix:])
+    restored = object.__new__(FillCursor)
+    vars(restored).update(before, ledger=replay)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('replay must not call the venue')
+
+    venue.account = venue.fills = forbidden
+    replay_proxy = JournalProxy(venue, replay, 'exchange')
+    assert restored.poll(replay_proxy, now_ns=200) == []
+    if fail_first:
+        assert restored.poll(replay_proxy, now_ns=200) == []
+    restored.recovery_span_ns = 300
+    assert restored.poll(replay_proxy, now_ns=200) == []
+    assert replay.peek() is None
+    assert {k: v for k, v in vars(restored).items() if k != 'ledger'} == {
+        k: v for k, v in vars(c).items() if k != 'ledger'}
 
 
 def test_backward_poll_replays_identity_append_before_propagation():

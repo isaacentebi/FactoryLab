@@ -890,6 +890,7 @@ class FillCursor:
         self.incomplete_since_ns: int | None = None
         self.orders: dict[str, dict] = {}
         self.baseline_ns: int | None = None
+        self.baseline_fills_read = False
 
     def submitted(self, client_id: str, *, now_ns: int) -> None:
         """Retain unresolved submission evidence until exact venue quantities agree."""
@@ -1125,6 +1126,20 @@ class FillCursor:
             if strict:
                 raise
             return []
+        anchor_read = False
+        if self.measured and self.baseline_ns is not None and not self.baseline_fills_read:
+            # Chapter II §III.b: one bounded read recovers outside facts already in
+            # the anchor. Failure retries without revoking the measured account anchor.
+            try:
+                anchored = exchange.fills(self.launch_ns, until_ns=self.baseline_ns)
+            except (RuntimeError, OSError, ValueError, ArithmeticError):
+                pass
+            else:
+                fills = [f for f in anchored
+                         if self.launch_ns <= f.ts_ns <= self.baseline_ns
+                         and not any(o["oid"] == f.order_id for o in self.orders.values())] + fills
+                read_start = self.launch_ns
+                anchor_read = True
         prior = dict(self.seen)
         if self.measured and read_start < self.since_ns:
             # Exceptional recovery scans durable identities without retaining the
@@ -1172,7 +1187,7 @@ class FillCursor:
                     self.ledger.append({"kind": "consequence.fill_identity", "key": list(key),
                                         "count": counts[key]})
                 if (self.measured and self.baseline_ns is not None
-                        and fill.ts_ns < self.baseline_ns
+                        and fill.ts_ns <= self.baseline_ns
                         and not any(o["oid"] == fill.order_id for o in self.orders.values())):
                     # Chapter II §III.b: the anchor already owns this outside account fact;
                     # its durable identity is evidence, not a second inventory movement.
@@ -1185,6 +1200,10 @@ class FillCursor:
                 observed = getattr(fill, "observed_at_ns", None)
                 if self.measured and observed is not None:
                     observations.append((fill.ts_ns, observed))
+        if anchor_read:
+            self.ledger.append({"kind": "consequence.fill_baseline_read",
+                                "start_ns": self.launch_ns, "end_ns": self.baseline_ns})
+            self.baseline_fills_read = True
         bound = self.propagation_bound_ns
         if observations:
             bound = max(bound or 0, *(max(0, seen - ts) for ts, seen in observations))

@@ -680,12 +680,12 @@ def test_a_fill_the_venue_makes_while_a_model_thinks_settles_between_tool_rounds
     ft = _FakeTime()
 
     class LateFill(FakeExchange):
-        def fills(self, since_ns):
+        def fills(self, since_ns, *, until_ns=None):
             if self._resting:
                 self._mids["BTC"] = Decimal("98")
                 self._now_ns = ft.t
                 self._cross_resting()
-            return super().fills(since_ns)
+            return super().fills(since_ns, until_ns=until_ns)
 
     class Slow:
         name = "slow"
