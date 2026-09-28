@@ -778,7 +778,11 @@ class PricingMixin:
                                     holdout=holdouts.get(card_id, 0.0),
                                     anticipated=self._anticipated_violation(
                                         card_id, card_values[card_id]),
-                                    pressure=pressure.get(card_id))
+                                    pressure=pressure.get(card_id),
+                                    charged_violation=held_sum(
+                                        violation(self.regions[card_id], card_values[card_id]),
+                                        self.window.closed_holdout_attribution.get(
+                                            card_id, {}).get("violation", 0.0)))
             if self.controller.snapshot()["cards"][card_id]["updates"] > before:
                 self.card_clock[card_id] = now
                 self.stats.price_updates += 1
@@ -814,10 +818,26 @@ class PricingMixin:
         self._settle_deferred(w.index)
         self._prune_price_evidence()
 
-    def _card_observed(self, card_id: str) -> dict[str, int]:
-        """A card's consecutive closed windows with no reading (``unmeasured_windows``;
-        wave 16, R10-f): 0 for a card measured at the last close or not yet closed."""
-        return {"unmeasured_windows": self.card_unmeasured.get(card_id, 0)}
+    def _card_observed(self, card_id: str) -> dict[str, int | float]:
+        """Support age and last measured window's full/charged pressures at current lambda."""
+        result = {"unmeasured_windows": self.card_unmeasured.get(card_id, 0)}
+        windows = [w for w in self.price_windows.values()
+                   if w.closed_values is not None and card_id in w.closed_values]
+        if windows:
+            window = max(windows, key=lambda w: w.index)
+            region = window.closed_regions.get(card_id)
+            if region is not None:
+                proxy = violation(region, window.closed_values[card_id])
+                attributed = window.closed_holdout_attribution.get(card_id, {}).get("violation", 0)
+                price = self.controller.price(card_id)
+                result.update({
+                    "pressure_window": window.index,
+                    "controller_pressure": card_pressure(price, held_sum(
+                        proxy, window.closed_holdouts.get(card_id, 0)), self.m.prices.penalty_cap),
+                    "charged_pressure": card_pressure(price, held_sum(proxy, attributed),
+                                                      self.m.prices.penalty_cap),
+                })
+        return result
 
     def _card_pressure(self, card_values: dict[str, float],
                        holdouts: dict[str, float]) -> dict[str, float]:

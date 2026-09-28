@@ -2310,7 +2310,12 @@ class SchematicsMixin:
             "card_penalty": (
                 "v_j = distance outside card j's inclusive region / observation.scale, plus "
                 "the attributable violation its failed holdouts add; p_j = min(lambda_j * v_j, "
-                "penalty_cap), 0 while v_j is 0; S = sum(p_j) over cards for the "
+                "penalty_cap), 0 while v_j is 0. PID bounds and saturation retain the full "
+                "violation, including ownerless holdouts. card_prices publishes "
+                "controller_pressure and charged_pressure separately beside lambda, using "
+                "the last measured pressure_window and current price; a lambda at its "
+                "controller bound need not impose penalty_cap on attributed rewards. "
+                "S = sum(p_j) over cards for the "
                 "settlement's role or all; each role's cards use their declared typed "
                 f"windows. penalty = min(S, {self.m.prices.penalty_cap}) * share; "
                 "share = sum(p_j * share_j) / S (zero when S = 0). "

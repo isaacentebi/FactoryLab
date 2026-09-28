@@ -96,3 +96,35 @@ def test_mixed_menu_abstention_bears_each_role_holdout_at_ordinary_weights():
     rt._priced_cards = lambda _: [(c, SimpleNamespace(id=c.observation), rt.window,
                                   2.0 if c.id == "c" else 1.0) for c in rt.charter.cards]
     assert FeedbackMixin._priced_abstention(rt, "0") == pytest.approx(0.25 * 0.04 + 0.75 * 0.02)
+
+
+def test_ownerless_holdout_reports_charged_pressure_below_controller_cap():
+    from factorylab.charter.controller import PriceController
+    from factorylab.kernel.ledger import Ledger
+
+    rt = attribution_runtime()
+    rt.regions = {"c": CardRegion("c", "min", 0.5, None, 1.0)}
+    rt.m = SimpleNamespace(prices=SimpleNamespace(penalty_cap=0.9))
+    ledger = Ledger(None)
+    rt.controller = PriceController(ledger, eta=0.5, decay=0.1,
+                                    penalty_cap=0.9, min_window_events=1, kp=0.5)
+    rt.controller.register(rt.regions["c"])
+    rt.controller.set_price("c", 90.0, amendment_id="test")
+    rt.controller.observe("c", 0.49, 1, holdout=1.0, pressure=0.9, charged_violation=0.01)
+    rt.window.closed_values = {"c": 0.49}
+    rt.window.closed_regions = rt.regions
+    rt.window.closed_holdouts = {"c": 1.0}
+    rt.window.closed_holdout_attribution = {"c": {"violation": 0.0}}
+    rt.window.closed_cards = rt.charter.cards
+    rt.window.closed_prices = {"c": rt.controller.price("c")}
+    rt.price_windows = {1: rt.window}
+    rt.card_unmeasured = {}
+    state = rt._card_observed("c")
+    assert state["charged_pressure"] < 0.9
+    assert state["controller_pressure"] == pytest.approx(0.9)
+    assert state["charged_pressure"] == pytest.approx(rt.controller.price("c") * 0.01)
+    assert rt.controller.price("c") == pytest.approx(0.9 / 1.01)
+    row = [r for r in ledger._recovery_items() if r["kind"] == "price.update"][-1]
+    assert row["at_cap"] is True
+    assert row["violation"] == pytest.approx(1.01)
+    assert row["charged_pressure"] == pytest.approx(state["charged_pressure"])
