@@ -48,7 +48,8 @@ def no_network(monkeypatch):
 
 @pytest.fixture
 def quote():
-    # Shape captured in docs/research/venice.md, with optional v2 metadata exercised.
+    # Captured quote shape, with optional v2 metadata exercised; quote procedure:
+    # docs/architecture/capital-loop-rehearsal.md.
     return {
         "x402Version": 2,
         "resource": {"url": "https://fake.test/api/v1/x402/top-up"},

@@ -51,7 +51,7 @@ seed = 3
 # $300 of inference backing, precommitted whole (GPT-6 §12.1). $120 is released at genesis
 # and the remaining $180 in three weekly tranches below.
 initial_balance_usd = "300"
-# Ten-minute tick (docs/launch-decisions.md, kept from edition 2): one coalesced world
+# Ten-minute tick (kept from edition 2): one coalesced world
 # update per seat per tick (C2), not one request per price print.
 tick_interval = "10s"
 
@@ -562,8 +562,7 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 # publish venue.vault_details/_positions/_create/_deposit/_withdraw and make vault
 # equity a venue pot (docs/manifest.md, "Vaults"); it changes the manifest hash.
 
-# Edition 3 charter as ratified on 15 September 2026 (docs/charter/edition3-ratified.toml,
-# draft docs/charter/edition3-draft.toml, decisions docs/plans/edition3.md C3): five norms
+# Edition 3 charter as ratified on 15 September 2026 under C3: five norms
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
@@ -577,7 +576,7 @@ edition = 1
 # UNPINNED. The roster changed after that session (DeepSeek's contract, every seat on
 # OpenRouter, the Venice menu), so its roster digest no longer holds and none is
 # claimed. Two sessions on the changed roster drafted new tables and rejected them, 4-1
-# and 3-2 (docs/charter/edition6-session-2.json, -3.json); several ballots read the draft
+# and 3-2 (edition 6 sessions 2 and 3); several ballots read the draft
 # against this table as if both were to stand. A funded launch needs a session that
 # adopts on the launch roster, and its digests pinned here.
 # Since Wave 11 the observations of `compute-burn-ceiling` (burn_per_window) and

@@ -1,4 +1,4 @@
-"""R3-C, death and identity: the acceptance of `docs/plans/edition3-r3.md`, as tests.
+"""R3-C, death and identity: the historical R3 acceptance, as tests.
 
     "partial fills, resting closes, unavailable mids, ledger failures, dropped acks,
     repeated kills and restarts: production stays dead, residual exposure is reported

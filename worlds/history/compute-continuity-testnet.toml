@@ -1,5 +1,5 @@
 # Mixed-provider testnet manifest; existing charter adopted 5-0 on 14 September 2026.
-# Approval: docs/charter/edition1-compute-continuity-ratified.toml.
+# Approved by the edition 1 compute-continuity ratification.
 # Ten-minute target; an in-progress cascade may finish after its deadline.
 # Live Hyperliquid testnet and real OpenRouter/Venice inference; fake-USD accounting.
 # Rehearsal only. Inference spends real prepaid credit.

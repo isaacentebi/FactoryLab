@@ -1,6 +1,6 @@
 """Edition 2, W10: uncertain bills settle from the provider's own balance.
 
-Two live rehearsals (docs/audits/v5/rehearsal.md) billed every provider call that returned
+Two live rehearsals billed every provider call that returned
 no HTTP status at its reserved ceiling, 34 to 62 percent of all spend. Model calls are
 serial, so the true cost of such a call is the provider's balance before it minus the
 balance after. These tests run the scripted world with a provider whose balance drops by

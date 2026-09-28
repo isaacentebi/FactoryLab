@@ -1,6 +1,6 @@
 """Two launch gates of edition 3 that no workstream test proves on its own.
 
-`docs/plans/edition3-r3.md`, "Gates before the funded manifest". Financial reality:
+Historical R3 acceptance, "Gates before the funded manifest". Financial reality:
 every custody account reconciles with the treasury and the venue after a fill, a
 funding print and a confirmed Venice purchase. Information boundaries: over one whole
 scripted run in which every seat keeps a marked private state, no evaluator request

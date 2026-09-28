@@ -1,15 +1,15 @@
-# Edition 2 testnet manifest (docs/plans/edition2.md, W7). The mixed OpenRouter/Venice roster of
+# Edition 2 testnet manifest (W7). The mixed OpenRouter/Venice roster of
 # worlds/compute-continuity-testnet.toml (same nine seats and models), live Hyperliquid testnet,
 # fake-USD accounting, real prepaid inference. Rehearsal only; no real money moves.
 # The charter below is the architect's draft, not ratified: scripts/ratify_charter.py stamps
 # the hashes after the testnet committee vote, and the funded manifest is derived from this
-# file after that (docs/launch-decisions.md, "Edition 2"). Never name a copy of this `funded`.
+# file after that. Never name a copy of this `funded`.
 name = "edition2-testnet"
 seed = 4
 # 90 USD: the OpenRouter allowance the launch decisions accept as the finite seed endowment.
 initial_balance_usd = "90"
-# Ten-minute tick (docs/launch-decisions.md): the final rehearsal at 600 s measured 1,337
-# calls and $3.47 a day for these nine seats (docs/audits/v4/gpt6-triage.md).
+# Ten-minute tick: the final rehearsal at 600 s measured 1,337
+# calls and $3.47 a day for these nine seats.
 tick_interval = "600s"
 
 # Contract C1: 30 USD unlocked at genesis, 60 USD locked and released as 10 USD on days 7, 14,
@@ -124,7 +124,7 @@ reasoning = { enabled = false }
 id = "seed-observer"
 role = "producer"
 # 15 September: GLM 5.3 flash via OpenRouter wrapped one reply in five under the edition 2
-# prompt, with and without the host pin (docs/audits/v5/rehearsal.md); DeepSeek 4.1 flash
+# prompt, with and without the host pin; DeepSeek 4.1 flash
 # scored 100% on every calibration column.
 model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["MarketMid", "Funding"]
@@ -203,7 +203,7 @@ trials = 3
 max_lifetime_windows = 6
 share = 0.1
 # One hour, never the compute-continuity two-minute window: the reviewer's rent trap
-# (docs/audits/v4/gpt6-triage.md) is 720 windows a day, $47 a day at 64 KiB of notes.
+# is 720 windows a day, $47 a day at 64 KiB of notes.
 window = "1h"
 
 [timing]
@@ -213,7 +213,7 @@ jitter_fraction = 0.2
 
 [evaluation]
 # Sixty events: at six world events per tick that is ten ticks, about 100 minutes at
-# a ten-minute tick, before an unjudged consequence is closed (docs/launch-decisions.md).
+# a ten-minute tick, before an unjudged consequence is closed.
 consequence_backstop_events = 60
 consequence_share = 0.3
 max_forecasts_per_verdict = 2
@@ -226,9 +226,9 @@ min_coverage = 0.5
 # The ceiling Assembly.invoke reserves is price.cost(int(chars * 1.5) + 64, max_tokens) with
 # chars = 419 (seed system prompt) + the rendered request (world/metering.py, input_slack 1.5):
 #   output part            3000 * 0.13                       =   390 micro-USD
-#   mean request, ~50,000 chars (20,636 mean input tokens in docs/audits/v3/rehearsal-final.md
+#   mean request, ~50,000 chars (20,636 mean input tokens in the historical final rehearsal
 #     at ~2.4 chars a token): est_in 75,692 * 0.03 = 2,271;   ceiling 2,661; three calls  7,983
-#   largest request, ~120,000 chars (52,832 max input tokens in docs/audits/v3/accelerated.md,
+#   largest request, ~120,000 chars (52,832 max input tokens in the historical accelerated rehearsal,
 #     the 28,127 micro-USD antagonist reservation): 180,692 * 0.03 = 5,421; ceiling 5,811;
 #     three calls 17,433
 # 0.05 USD = 50,000 micro-USD covers three cheapest-seat calls at the largest measured request
@@ -285,15 +285,15 @@ max_transfer_fee_usd = "2"
 # rehearsable lot (szDecimals 0, mid ~$4.6). BTC/USDC exists there but szDecimals 0
 # at a ~$6,100 mid puts one lot far beyond the spot balance a rehearsal holds, and
 # ETH/USDC does not exist on testnet at all. HYPE/USDC (@1035 on testnet) is the
-# physics of the exit route: the spot HYPE that pays the population's own Core gas
-# (docs/launch-decisions.md, "Self-serve gas"), one more MarketMid per tick.
+# physics of the exit route: the spot HYPE that pays the population's own Core gas,
+# one more MarketMid per tick.
 spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 
 # Edition 2 charter as ratified on 15 September 2026 (third ballot): scripts/ratify_charter.py
 # wrote the ratified_sha256 and roster_sha256 below after the vote
-# (docs/charter/edition2-ratification.json); the draft was docs/charter/edition2-draft.toml.
+# from the edition 2 draft.
 #
-# What changed from edition 1 and why (docs/audits/v4/gpt6-triage.md):
+# What changed from edition 1 and why:
 # - Five quota cards removed: noop-ceiling, revision-presence, amendments_activated_floor,
 #   truthful_commitments_verdict_consistency, evaluator_disagreement_ceiling. Each turned an
 #   instrument into an obligation and together they produce the two most likely deaths
@@ -307,7 +307,7 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 [charter]
 edition = 1
 # Ratified 15 September 2026 (third ballot, roster hash with the empty extra_body stripped: five norms, three cards, observer on DeepSeek 4.1
-# flash) by the seeded five-seat committee of this roster; docs/charter/edition2-ratification.json.
+# flash) by the seeded five-seat committee of this roster.
 ratified_sha256 = "a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39"
 roster_sha256 = "e0d1d9fbb937952845a967b8fa5d1978e6882b940f685ad4b0016085cbb90f2a"
 # consequential usefulness: create things or changes that others have reason to value; uptake by
