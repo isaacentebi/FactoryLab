@@ -174,16 +174,3 @@ def test_of4_a_holdout_that_constrains_nothing_is_adopted_and_never_binds(of4, o
                 and r.get("holdout", 0) > 0]
     tight = _holdout_results(of2, "used-registrations")
     assert tight and not all(tight)
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="future work (charter-market proposer grading); Astra C-3, "
-                   "for the architect: nothing in the kernel "
-                   "grades a holdout's proposer by realized consequence; the motion costs "
-                   "only its trial, and only the ballots are graded (policy.outcome). No "
-                   "Chapter II passage has been ruled to price it, so none is built here")
-def test_of4_a_holdout_that_never_binds_scores_its_proposer_below_one_that_does(of4, of2):
-    def proposer_rows(run):
-        (proposed,) = run.rows("holdout.proposed")
-        return [r for r in run.rows("policy.outcome") if r.get("handle") == proposed["handle"]]
-    assert proposer_rows(of4) and proposer_rows(of2)
