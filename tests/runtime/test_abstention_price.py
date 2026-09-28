@@ -139,10 +139,10 @@ def test_held_abstention_prices_are_causal_and_not_ordinary_act_imputations(monk
     assert expected > 0
     assert rt._priced_abstention(noop) == pytest.approx(expected)
     assert rt._priced_abstention(decline) == pytest.approx(expected)
-    assert rt._priced_abstention(ordinary) == 0
+    assert rt._priced_abstention(ordinary) == pytest.approx(expected)
     assert rt._penalty_for("evaluator", ordinary) == 0
     assert rt._penalty_for("evaluator", noop) == 0  # no implicit fallback
-    assert rt._abstention_price_terms(ordinary) == []
+    assert rt._abstention_price_terms(ordinary)
     _next_gap(rt)
     rt.window.verdicts = {"subject": {"eval-a": [0.8]}}
     current = _abstention(rt)

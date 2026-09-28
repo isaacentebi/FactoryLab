@@ -2940,10 +2940,11 @@ class FeedbackMixin:
         return penalty
 
     def _is_price_abstention(self, handle: str) -> bool:
-        """Only a NOOP or explicit decline can use held evidence (R16c-3)."""
+        """Neutral abstention imputations bear identical held prices (§II.b; D4/R16c-3)."""
         try:
             decision = self.queue.get(handle)
-            return (decision.propensity.chosen == NOOP or any(
+            return (decision.propensity.chosen == NOOP or decision.status in
+                    (SettleStatus.CENSORED, SettleStatus.TIMED_OUT) or any(
                 row.definition_version == DECLINED_DEFINITION
                 for row in self.queue.history(handle)
             ))
