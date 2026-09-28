@@ -3042,6 +3042,7 @@ class FeedbackMixin:
             return (decision.propensity.chosen == NOOP or decision.status in
                     (SettleStatus.CENSORED, SettleStatus.TIMED_OUT) or any(
                 row.definition_version == DECLINED_DEFINITION
+                or row.status in (SettleStatus.CENSORED, SettleStatus.TIMED_OUT)
                 for row in self.queue.history(handle)
             ))
         except KeyError:
