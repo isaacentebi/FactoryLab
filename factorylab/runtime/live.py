@@ -389,7 +389,7 @@ class LiveVenue:
         """Deliver first observations and corrections without pinning forward reads.
 
         Chapter II §III.b/§IV.c: unresolved evidence remains retryable only while
-        an open outcome can consume it, independently of newer venue facts.
+        an open or still-openable outcome can consume it, independently of newer venue facts.
         """
         interval = int(self.exchange.funding_interval_ns)
         out = []

@@ -436,7 +436,11 @@ class BootstrapMixin:
         self.venue = (
             LiveVenue(self.exchange, ledger=self.ledger,
                       last_funding_ns=self.clock.now_ns, markets=self._trading_markets,
-                      funding_needed=lambda coin, boundary: any(
+                      # Chapter II §III.b: a future named trade can still open from
+                      # its cached venue mark while newer mids are unavailable.
+                      funding_needed=lambda coin, boundary: (
+                          coin in self.venue_marks and self.venue_marks[coin][0] < boundary
+                      ) or any(
                           frozen.get("coin") == coin
                           and (frozen.get("funding") or {}).get("strict")
                           and frozen.get("open_ns") is not None

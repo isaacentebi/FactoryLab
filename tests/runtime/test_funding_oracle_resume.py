@@ -69,6 +69,78 @@ def test_delayed_funding_oracle_evidence_survives_runtime_checkpoint(tmp_path):
 
 
 @pytest.mark.gate
+def test_stale_mark_retains_gap_for_later_named_trade_and_releases_it():
+    from tests.runtime.test_consequence_horizon import S
+    from tests.runtime.test_loop import _consequence_produce
+    from tests.runtime.test_reward_chain import Population, _judge, _rows
+
+    interval = 60 * S
+
+    class Venue(FakeExchange):
+        settled_funding = True
+        funding_interval_ns = interval
+
+        def mids(self):
+            return {}  # The cached mark is the only available opening price.
+
+        def settled_funding_history(self, coin, start, end):
+            return [row for row in self.published if start <= row.ts_ns <= end]
+
+    exchange = Venue(seed=1, coins=("BTC",), funding_interval_ns=interval)
+    exchange.published = []
+    base = load_manifest("scripted")
+    manifest = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)),
+                       timing=replace(base.timing, world_repricing_ns=270 * S))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1, exchange=exchange,
+                 provider=Population(counterfactual={"coin": "BTC", "side": "buy"},
+                                     verdicts=(0.8,)),
+                 clock_source=ClockSource(0, S, 1).events())
+    try:
+        rt._manage_reserve_window()
+        rt._observe_mid("BTC", 0, "100")
+        rt.recent_mids["BTC"] = [{"t_s": 0, "mid": "100"}]
+        rt.venue.settled_launch_ns = 0
+        rt.fee_schedule = {"rates": {"BTC": "0"}, "read_ns": 0,
+                           "history": {"BTC": [[0, "0"]]}}
+        rt.venue.funding_oracles["BTC"] = {interval: ("100", interval)}
+        assert not rt.reference_mids
+        rt.venue._settled_rates(2 * interval, {"BTC"})
+        rt.venue._settled_rates(2 * interval + S, {"BTC"})
+        assert interval in rt.venue.settled_gaps["BTC"]
+        rt.clock.now_ns = 2 * interval + S
+        producer, event = _consequence_produce(rt)
+        judge = _judge(rt, event)
+        rt._settle_arrived_verdicts()
+        assert rt.reference_mids[producer]["open_ns"] == 0
+        rt._observe_mid("BTC", rt.reference_mids[producer]["due_ns"], "90")
+        exchange.published = [FundingEvent("BTC", Decimal("0.001"), None, interval)]
+        events = rt.venue._settled_rates(3 * interval, {"BTC"})
+        for event in events:
+            p = event.payload
+            rt._observe_funding(p["coin"], p["funding_ns"], p["rate"], p["mark"], settled=True)
+        rt.tick_through_ns = rt.clock.now_ns
+        rt.venue.through.update(mids=rt.clock.now_ns, rates=rt.clock.now_ns)
+        assert rt._reference_outcome(rt.reference_mids[producer])[0] == "measured", (
+            rt.reference_mids[producer], rt._patience_ns(), rt.clock.now_ns)
+        rt._settle_evaluations()
+        assert rt.world_outcomes[producer]["state"] == "measured", (
+            _rows(rt, "consequence.uninformative"), rt.fee_schedule)
+        assert len(_rows(rt, "verdict.consequence", handle=judge)) == 1
+        # Advancing marks bound retention; each future trade now opens after old gaps.
+        for step in range(4, 24):
+            rt.clock.now_ns = step * interval
+            rt._observe_mid("BTC", rt.clock.now_ns, "90")
+            rt.venue._settled_rates(rt.clock.now_ns, {"BTC"})
+            assert len(rt.venue.settled_gaps["BTC"]) <= 1
+            assert len(rt.venue.funding_oracles["BTC"]) <= 1
+            assert len(rt.venue.settled_emitted["BTC"]) <= 1
+        assert len(_rows(rt, "verdict.consequence", handle=judge)) == 1
+    finally:
+        rt._ledger_lock.close()
+
+
+@pytest.mark.gate
 def test_settled_launch_fingerprints_and_gaps_survive_checkpoint():
     class Venue(FakeExchange):
         settled_funding = True
