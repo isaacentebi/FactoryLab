@@ -220,10 +220,11 @@ class PricingMixin:
         self.price_windows: dict[int, MeasureWindow] = {}
         self.price_origins: dict[str, dict[str, int]] = {}
 
-    def _contribution(self, handle: str, role: str) -> dict:
-        """Every original decision has one contribution record per measurement window."""
+    def _contribution(self, handle: str, role: str, *, original: bool = True) -> dict:
+        """Only an original decision establishes a price origin; late evidence cannot reopen it."""
         self.price_windows[self.window.index] = self.window
-        self.price_origins.setdefault(handle, {"origin": self.window.index})
+        if original:
+            self.price_origins.setdefault(handle, {"origin": self.window.index})
         sample = self.window.decisions.setdefault(handle, {
             "role": role, "cost": 0, "ok": 0, "invocations": 0, "tool_calls": 0,
             "notional_micro": 0,
@@ -236,7 +237,7 @@ class PricingMixin:
         # §II.b/§IV.a: ownership is evidence, never inferred from a window total.
         contribution_only = (handle not in self.window.decisions
                              or self.window.decisions[handle].get("contribution_only", False))
-        sample = self._contribution(handle, self._decision_role(handle))
+        sample = self._contribution(handle, self._decision_role(handle), original=False)
         if contribution_only:
             sample["contribution_only"] = True
         if supplemental:
@@ -335,11 +336,11 @@ class PricingMixin:
             return
         notional = usd_to_micro(
             Decimal(str(payload["size"])) * Decimal(str(payload["px"])), rounding="nearest")
-        self._contribution(handle, "producer")
         self._record_behaviour(handle, notional_micro=notional, fills=1,
                                realized_pnl_micro=usd_to_micro(
                                    payload.get("realized_usd", "0"), rounding="nearest"))
-        self.price_origins[handle]["turnover"] = self.window.index
+        if handle in self.price_origins:
+            self.price_origins[handle]["turnover"] = self.window.index
 
     def _manage_reserve_window(self) -> None:
         """Close the measurement window when the price loop is due, and open the next.
@@ -1112,7 +1113,8 @@ class PricingMixin:
         defaults = dict.fromkeys(("amendments_proposed", "amendments_activated",
                                   "market_purchases", "registrations",
                                   "registration_rejections", "fills", "notional_micro",
-                                  "realized_pnl_micro", "exposures_settled", "exposures_won"), 0)
+                                  "realized_pnl_micro", "exposures_settled", "exposures_won",
+                                  "revised_decisions"), 0)
         defaults["meta_verdicts"] = []
         keys = BEHAVIOURAL_FACTS.intersection(
             key for sample in window.decisions.values() for key in sample)
@@ -1123,9 +1125,7 @@ class PricingMixin:
             facts.update({name: sample.get(name, value.copy() if isinstance(value, list) else value)
                           for name, value in defaults.items()})
             for name in sorted(keys):
-                if name == "revised_decisions":
-                    facts[name] = max(facts.get(name) or 0, sample.get(name, 0))
-                elif name not in defaults:
+                if name not in defaults:
                     facts[name] = sample.get(name, facts.get(name))
             for name, value in sample.get("supplemental", {}).items():
                 facts[name] = (facts.get(name) or 0) + value
@@ -1544,6 +1544,12 @@ class PricingMixin:
         owners = dict(self._split_decisions(window))
         owners.update((h, d) for h, d in window.decisions.items()
                       if d.get("contribution_only") and self._in_split(h, window))
+        # §IV.a: settled forecasts retain their known owner even without a new invocation.
+        for row in _rows(self.card_samples, "forecasts", "forecast_skill"):
+            handle = row.get("owner_handle")
+            if (row["window"] == window.index and handle is not None
+                    and self._in_split(handle, window) and not self._is_niche(handle)):
+                owners.setdefault(handle, {"role": row["role"], "contribution_only": True})
         return owners
 
     def _decision_share(self, window, handle, observation, role, region, value, *,
