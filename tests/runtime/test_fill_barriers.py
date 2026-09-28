@@ -147,14 +147,15 @@ def test_preanchor_nonfactory_execution_is_absorbed_once_not_delivered():
     assert c.expected_positions == {'perp:BTC': '1'}
 
 
-def test_nonfactory_execution_at_inclusive_anchor_is_absorbed():
+def test_nonfactory_execution_at_anchor_is_not_absorbed():
     c = FillCursor(Ledger(), start_ns=0, measured=True)
     c.initialize(account(observed=200, size=1), now_ns=100)
     f = Fill('external', 'BTC', True, D(1), D(10), D(0), 200, venue_id='boundary')
     venue = SimpleNamespace(fills=lambda start, **kw: [f], account=lambda: account(size=1))
-    assert c.poll(venue, now_ns=200) == []
-    assert len([r for r in c.ledger._recovery_items()
-                if r['kind'] == 'consequence.fill_absorbed']) == 1
+    assert len(c.poll(venue, now_ns=200)) == 1
+    assert not [r for r in c.ledger._recovery_items()
+                if r['kind'] in ('consequence.fill_absorbed',
+                                 'consequence.fill_absorbed_evidence')]
     assert c.expected_positions == {'perp:BTC': '1'}
     assert c.through_ns == 200
     assert c.poll(venue, now_ns=200) == []

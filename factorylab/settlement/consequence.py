@@ -1094,6 +1094,50 @@ class FillCursor:
         self.through_ns = now_ns if complete else None
         self.observation_complete = complete
 
+    def _anchor_evidence(self, exchange, *, now_ns, tick_ns) -> None:
+        """Recover baseline evidence without changing execution delivery or coverage."""
+        if (not self.measured or self.baseline_ns is None or self.baseline_fills_read
+                or now_ns is None):
+            return
+        # Chapter II §I.a, §III.b: the snapshot owns these facts; this independent
+        # read adds evidence only, never a second accounting or coverage interval.
+        try:
+            fills = exchange.fills(self.launch_ns, until_ns=self.baseline_ns)
+        except (RuntimeError, OSError, ValueError, ArithmeticError):
+            return
+        candidates = {}
+        for fill in fills:
+            if not self.launch_ns <= fill.ts_ns < self.baseline_ns:
+                continue
+            if (getattr(fill, "client_id", None) in self.orders
+                    or fill.order_id in self.orders
+                    or any(o["oid"] is None or o["oid"] == fill.order_id
+                           for o in self.orders.values())):
+                continue
+            payload = {name: str(value) if isinstance(value, Decimal) else value
+                       for name, value in vars(fill).items()}
+            identity = getattr(fill, "venue_id", None)
+            key = (("venue", identity) if identity else tuple(payload.items()))
+            candidates[key] = payload
+        if candidates:
+            for row in self.ledger._iter_items():
+                if row.get("kind") == "consequence.fill_absorbed_evidence":
+                    key = tuple(tuple(v) if isinstance(v, list) else v for v in row["key"])
+                    candidates.pop(key, None)
+            for key, payload in candidates.items():
+                self.ledger.append({"kind": "consequence.fill_absorbed_evidence",
+                                    "key": list(key), "baseline_ns": self.baseline_ns,
+                                    "fill": payload})
+        # Chapter II §IV.b–c: successful incomplete reads keep retrying through
+        # the measured publication delay and one polling tick.
+        bound = self.propagation_bound_ns
+        done = (now_ns is not None and bound is not None
+                and now_ns >= self.baseline_ns + bound + tick_ns)
+        self.ledger.append({"kind": "consequence.fill_baseline_read",
+                            "start_ns": self.launch_ns, "end_ns": self.baseline_ns,
+                            "read_ns": now_ns, "done": done})
+        self.baseline_fills_read = done
+
     def poll(self, exchange, *, strict: bool = False,
              now_ns: int | None = None, tick_ns: int = 0) -> list[tuple[int, dict]]:
         """Return unseen executions in timestamp order, persisting the cursor before advance.
@@ -1123,23 +1167,10 @@ class FillCursor:
         try:
             fills = exchange.fills(read_start)
         except RuntimeError:  # read-only venue without an account
+            self._anchor_evidence(exchange, now_ns=now_ns, tick_ns=tick_ns)
             if strict:
                 raise
             return []
-        anchor_read = False
-        if self.measured and self.baseline_ns is not None and not self.baseline_fills_read:
-            # Chapter II §III.b: one bounded read recovers outside facts already in
-            # the anchor. Failure retries without revoking the measured account anchor.
-            try:
-                anchored = exchange.fills(self.launch_ns, until_ns=self.baseline_ns)
-            except (RuntimeError, OSError, ValueError, ArithmeticError):
-                pass
-            else:
-                fills = [f for f in anchored
-                         if self.launch_ns <= f.ts_ns <= self.baseline_ns
-                         and not any(o["oid"] == f.order_id for o in self.orders.values())] + fills
-                read_start = self.launch_ns
-                anchor_read = True
         prior = dict(self.seen)
         if self.measured and read_start < self.since_ns:
             # Exceptional recovery scans durable identities without retaining the
@@ -1161,6 +1192,11 @@ class FillCursor:
         observations = []
         for fill in sorted(fills, key=lambda f: f.ts_ns):
             if fill.ts_ns < read_start:
+                continue
+            # Chapter II §III.b: an unresolved submission cannot yet attribute its
+            # execution. Keep discovery open without consuming a delivery identity.
+            if (self.measured and any(o["oid"] is None for o in self.orders.values())
+                    and not any(o["oid"] == fill.order_id for o in self.orders.values())):
                 continue
             payload = {
                 "order_id": fill.order_id,
@@ -1187,7 +1223,7 @@ class FillCursor:
                     self.ledger.append({"kind": "consequence.fill_identity", "key": list(key),
                                         "count": counts[key]})
                 if (self.measured and self.baseline_ns is not None
-                        and fill.ts_ns <= self.baseline_ns
+                        and fill.ts_ns < self.baseline_ns
                         and not any(o["oid"] == fill.order_id for o in self.orders.values())):
                     # Chapter II §III.b: the anchor already owns this outside account fact;
                     # its durable identity is evidence, not a second inventory movement.
@@ -1200,10 +1236,6 @@ class FillCursor:
                 observed = getattr(fill, "observed_at_ns", None)
                 if self.measured and observed is not None:
                     observations.append((fill.ts_ns, observed))
-        if anchor_read:
-            self.ledger.append({"kind": "consequence.fill_baseline_read",
-                                "start_ns": self.launch_ns, "end_ns": self.baseline_ns})
-            self.baseline_fills_read = True
         bound = self.propagation_bound_ns
         if observations:
             bound = max(bound or 0, *(max(0, seen - ts) for ts, seen in observations))
@@ -1216,6 +1248,7 @@ class FillCursor:
         elif now_ns is not None:
             self.through_ns = max(self.through_ns or now_ns, now_ns)
         self.propagation_bound_ns = bound
+        self._anchor_evidence(exchange, now_ns=now_ns, tick_ns=tick_ns)
         self.read_ns = now_ns
         if self.measured and now_ns is not None:
             self._reconcile(exchange, result, now_ns=now_ns, read_start=read_start,
