@@ -1097,7 +1097,9 @@ class RoutingMixin:
     def _draw_more_judges(self, ev: Event, states: list, drawn: list[str]) -> None:
         """A share of returns is drawn again, so two or more judges read it (P6, M2).
 
-        Guarantees: with probability ``evaluation.multi_judge_share``, drawn once per
+        Guarantees: with the live ``multi_judge_share`` probability, whose floor is
+        ``evaluation.multi_judge_share`` and adaptive ceiling ``sampling_cap``
+        (a base at or above that cap stays fixed), drawn once per
         judged return from the runtime's seeded stream and never drawn when the share
         is zero, the return's first router draws again until it has drawn
         ``evaluation.multi_judge_count`` times. Each further draw is an ordinary
@@ -1109,14 +1111,17 @@ class RoutingMixin:
         reward chain (``_settle_arrived_verdicts``), and the spread between them is
         the ensemble disagreement the early-warning statistics read (essay II.III.a).
         """
-        share = self.ev.multi_judge_share
-        if (share <= 0 or not states or self.wallet.dead or not self._judged_return(ev)
-                or self.rng.random() >= share):
+        share = self.multi_judge_share
+        if share <= 0 or not states or self.wallet.dead or not self._judged_return(ev):
+            return
+        draw_probability = self.rng.random()
+        if draw_probability >= share:
             return
         seats = [a for a in drawn if a != NOOP and a in self.assemblies]
         self.ledger.append({"kind": "route.multi_judge", "event_id": ev.id,
                             "subject": self._event_subject(ev), "first": list(seats),
-                            "draws": self.ev.multi_judge_count, "ts": self.clock.now_ns})
+                            "draws": self.ev.multi_judge_count, "share": share,
+                            "sample": draw_probability, "ts": self.clock.now_ns})
         for draw in range(len(drawn), self.ev.multi_judge_count):
             if self.wallet.dead or self._safety_stop is not None:
                 break

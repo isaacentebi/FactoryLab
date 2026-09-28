@@ -217,8 +217,12 @@ class GovernanceMixin:
                         self.window.revision_handles.add(handle)
                 self.stats.registrations_accepted += 1
                 self.window.registrations += 1
+                # §IV.a: holdouts price actual registrations, not the proxy's revision flag.
+                sample = self._contribution(handle, self._decision_role(handle))
+                sample["registrations"] = sample.get("registrations", 0) + 1
                 if item.get("kind") not in ("amendment", "retire"):
                     self.card_samples.revised(handle)
+                    self._record_behaviour(handle, revised_decisions=1)
             except (Infeasible, PermissionError, ValueError, OverflowError, KeyError,
                     TypeError, X402Error) as exc:
                 if isinstance(item, dict) and item.get("kind") == "connector":
@@ -233,6 +237,8 @@ class GovernanceMixin:
             item["index"] = index
         self.ledger.append({**item, "ts": self.clock.now_ns})
         self.window.registration_rejections += 1
+        sample = self._contribution(handle, self._decision_role(handle))
+        sample["registration_rejections"] = sample.get("registration_rejections", 0) + 1
         self._refusal_to_owner(handle, "registration_rejected", reason,
                                **({"index": index} if index is not None else {}))
 
@@ -610,6 +616,7 @@ class GovernanceMixin:
             challenge["amendment_id"] = am.id
             self.stats.amendments_proposed += 1
             self.window.amendments_proposed += 1
+            self._record_behaviour(challenge["handle"], amendments_proposed=1)
 
     def _register_proposal(self, contract: Contract, handle: str, *, reason: str) -> None:
         """Register a proposal's contract and charge its proposer the trial, as any
@@ -1319,6 +1326,7 @@ class GovernanceMixin:
         self.charter_book.propose(am, self.observations)
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
+        self._record_behaviour(handle, amendments_proposed=1)
 
     def _propose_holdout(self, handle: str, item: dict[str, Any]) -> None:
         """Admit a holdout motion to a trial; its ballot waits for the trial to end.
@@ -1610,7 +1618,7 @@ class GovernanceMixin:
             self._retire_assembly(motion.assembly_id, motion.id)
             row["status"] = "activated"
             self._activate_policy_ballots(motion.id)
-            self.card_samples.revised(motion.proposer_handle)
+            self._record_motion_revision(motion.proposer_handle)
             self.window.revision_returns += 1
 
     def _independent_decision(self, handle: str, assembly: str) -> bool:
@@ -1929,8 +1937,25 @@ class GovernanceMixin:
                 self.cadence.set_floor(self._horizon_ticks())
         self.stats.amendments_activated += 1
         self.window.amendments_activated += 1
-        self.card_samples.revised(am.proposer_handle)
+        self._record_behaviour(am.proposer_handle, amendments_activated=1)
+        self._record_motion_revision(am.proposer_handle)
         self.window.revision_returns += 1  # An activated amendment is a revision
+
+    def _record_motion_revision(self, handle: str) -> None:
+        """Each activation contributes one revision without duplicating its return row."""
+        from factorylab.charter.measurement import _rows
+
+        row = next((row for row in reversed(_rows(self.card_samples, "returns", "revision_rate"))
+                    if row["handle"] == handle), None)
+        # §II.b/IV.a: only the revision not already represented by the current
+        # response row supplements the owner's factual contribution.
+        represented = (row is not None and row["window"] == self.window.index
+                       and not row["revision"])
+        self.card_samples.revised(handle)
+        self._record_behaviour(handle, supplemental=True,
+                               revision_returns=1 - int(represented))
+        if handle in self.window.revision_handles:
+            self._record_behaviour(handle, revised_decisions=1)
 
     def _drop_cards(self, kept: set[str], reason_id: str) -> None:
         """Unprice every priced card the edition in force no longer carries."""

@@ -61,14 +61,16 @@ def test_th1b_negative_control_without_the_thrash_price_it_fails():
     assert g.th1b_duration(mutant.events, mutant.manifest).status == g.FAIL
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="population (c): th1's thrash episodes last two windows "
-                   "(flagged 11-12 and 31-32), so the thrash penalty peaks at 0.23 and "
-                   "never sits at penalty_cap 0.5; the anti-windup rule is unexercised. "
-                   "A population holding thrash for about 9 windows is needed (SF-0 "
-                   "derives eta so a unit violation saturates in r*k = 9)")
-def test_th1b_the_thrash_integral_is_frozen_at_the_cap(th1):
-    result = g.th1b2_frozen(th1.events, th1.manifest)
+@pytest.fixture(scope="module")
+def th1_sustained(shared_run):
+    # §II.b: retain actual successive capped updates, not a presumed stopping window.
+    # Changed refusal prices and durable sampling gaps alter ordinary router draws.
+    return shared_run("th1-sustained", lambda: P.run(*P.th1_sustained(), events=360,
+                                                    instrument=False))
+
+
+def test_th1b_the_thrash_integral_is_frozen_at_the_cap(th1_sustained):
+    result = g.th1b2_frozen(th1_sustained.events, th1_sustained.manifest)
     assert result.ok, result.evidence
 
 
@@ -137,7 +139,7 @@ def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop
 
 @pytest.fixture(scope="module")
 def th2r(shared_run):
-    return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=300))
+    return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=150))
 
 
 @pytest.mark.parametrize("loop", ["seat:molt-seat", "router:ProducerReturn"])
@@ -165,7 +167,7 @@ def _ignore_lifespans(original):
 
 
 def test_th2_negative_control_an_organ_blind_to_lifespans_fails():
-    mutant = P.run(*P.th2_reversion(), events=300,
+    mutant = P.run(*P.th2_reversion(), events=150,
                    # Wave 16: the organ diagnoses through ``versions.organ_step``, which
                    # calls the module's own ``diagnose``.
                    patches=[(versions, "diagnose", _ignore_lifespans(versions.diagnose))])

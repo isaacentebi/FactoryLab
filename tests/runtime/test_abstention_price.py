@@ -7,14 +7,21 @@ abstention now bears the same charter prices a woken decision of its role bears 
 the window it was drawn in.
 """
 
+from dataclasses import replace
+
 import pytest
 
+from factorylab.charter.measurement import CardSamples
+from factorylab.charter.windows import MetricWindow
 from factorylab.cortex.registration import measured_role
-from factorylab.kernel.queue import PropensityRecord
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime import pricing
+from factorylab.runtime.observations import window_facts
+from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.shared import NOOP
 from factorylab.runtime.worlds import load_manifest
 from tests.runtime.test_attributable_blame import _card, _commitments, _decision, _runtime
+from tests.runtime.test_learning_signal import _drawn, _router, _settle
 
 
 def _learned(rt, r, p, *, router=True):
@@ -87,6 +94,174 @@ def test_a_mixed_menu_abstention_is_priced_as_the_draw_would_have_woken(monkeypa
     # A one-role menu is that role alone, and an empty draw weighs its seats equally.
     judges = Sample(("eval-a", "eval-b", NOOP), (0.0, 0.0, 1.0), NOOP, 0, "r", "h", ())
     assert rt._abstention_roles(judges) == {"evaluator": 1.0}
+
+
+def _gap_runtime(monkeypatch):
+    # The price owner is under test, not the immune organ or a full world loop.
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    card = replace(_card(per=None), observation="verdict_mean", answers_for="evaluator",
+                   window=MetricWindow("windows", 1, None),
+                   acceptable_region="at least 0.8")
+    return _runtime(card), card
+
+
+def _next_gap(rt):
+    rt.window = pricing.MeasureWindow(rt.window.index + 1, rt._equity_micro())
+    rt.price_windows[rt.window.index] = rt.window
+    rt.card_samples.values.clear()
+
+
+def test_held_abstention_prices_are_causal_and_not_ordinary_act_imputations(monkeypatch):
+    """R16c-3: neither refusal nor late credit can erase or replace a supported fact."""
+    rt, card = _gap_runtime(monkeypatch)
+    warmup = _abstention(rt)
+    rt._close_price_window()
+    assert rt._priced_abstention(warmup) == 0
+    _next_gap(rt)
+    rt.window.verdicts = {"subject": {"eval-a": [0.2]}}
+    rt._close_price_window()
+    source = rt.window.index
+    _next_gap(rt)
+    noop = _abstention(rt)
+    decline = _decision(rt, "eval-a")
+    ordinary = _decision(rt, "eval-b")
+    rt._close_price_window()
+    # Settle after close, before the price owner releases completed attribution.
+    rt._settle_declined(decline, "declined")
+    _settle(rt, ordinary, SettleStatus.CENSORED)
+    terms = rt._abstention_price_terms(noop)
+    assert len(terms) == 1
+    term = terms[0]
+    assert term["held"] is True and term["source_window"] == source
+    assert term["window"] == source + 1
+    assert term["violation"] == pytest.approx(0.75)
+    expected = min(rt.m.prices.penalty_cap, term["lambda"] * 0.75) / 3
+    assert expected > 0
+    assert rt._priced_abstention(noop) == pytest.approx(expected)
+    assert rt._priced_abstention(decline) == pytest.approx(expected)
+    assert rt._priced_abstention(ordinary) == pytest.approx(expected)
+    assert rt._penalty_for("evaluator", ordinary) == 0
+    assert rt._penalty_for("evaluator", noop) == 0  # no implicit fallback
+    assert rt._abstention_price_terms(ordinary)
+    _next_gap(rt)
+    rt.window.verdicts = {"subject": {"eval-a": [0.8]}}
+    current = _abstention(rt)
+    rt._close_price_window()
+    assert rt._priced_abstention(current) == 0
+    assert not any(t.get("held") for t in rt._abstention_price_terms(current))
+    assert rt._priced_abstention(noop) == pytest.approx(expected)
+    assert rt._priced_abstention(warmup) == 0  # no future-window leakage
+    _next_gap(rt)
+    after_recovery = _abstention(rt)
+    rt._close_price_window()
+    assert rt._priced_abstention(after_recovery) == 0
+    assert rt._abstention_price_terms(after_recovery)[0]["source_window"] == source + 2
+
+
+def test_held_evidence_never_carries_holdout_owners_or_becomes_an_observation(monkeypatch):
+    """A supported proxy is reusable; another decision's holdout debt is not."""
+    rt, card = _gap_runtime(monkeypatch)
+    rt.predicates.register(
+        "one-call", "Invocation count",
+        "def resolve(facts):\n    return facts['invocations'] > 0\n",
+        facts={"invocations": 0}, persist=lambda _p: None,
+    )
+    rt.charter = replace(rt.charter, cards=(replace(card, holdout=("one-call@1",)),))
+    rt._derive_regions()
+    # A failing predicate without a supported card is not a supported predecessor.
+    warmup = _abstention(rt)
+    rt._close_price_window()
+    assert rt._priced_abstention(warmup) == 0
+    assert not rt.window.closed_held
+    _next_gap(rt)
+    owner = _decision(rt, "eval-a")
+    rt.window.decisions[owner]["invocations"] = 0
+    rt.window.verdicts = {"subject": {"eval-a": [0.2]}}
+    rt._close_price_window()
+    assert rt.window.closed_holdouts[card.id] > 0
+    assert rt.window.closed_holdout_attribution[card.id]["shares"] == {owner: 1.0}
+    _next_gap(rt)
+    noop = _abstention(rt)
+    rt._close_price_window()
+    term, = rt._abstention_price_terms(noop)
+    assert term["violation"] == pytest.approx(0.75)
+    assert term["holdout_violation"] == term["attributed_holdout_violation"] == 0
+    assert term["holdout_attributees"] == {} and term["holdout_share"] == 0
+    assert rt.window.closed_held  # the excluded field is not empty
+    assert "closed_held" not in window_facts(rt.window)
+    samples = CardSamples()
+    samples.closed(rt.window)
+    assert "closed_held" not in samples.windows[-1]
+
+
+@pytest.mark.parametrize("change", ["observation", "role", "kind", "scope", "remove"])
+def test_a_redefined_or_removed_metric_cannot_inherit_held_prices(monkeypatch, change):
+    """A reused id is not evidence for different rows, roles or scopes."""
+    rt, card = _gap_runtime(monkeypatch)
+    rt.window.verdicts = {"subject": {"eval-a": [0.2]}}
+    rt._close_price_window()
+    replacements = {
+        "observation": replace(card, observation="verdict_std"),
+        "role": replace(card, answers_for="producer"),
+        "kind": replace(card, window=MetricWindow("returns", 1, None)),
+        "scope": replace(card, window=MetricWindow("windows", 1, "role")),
+        "remove": card,
+    }
+    if change == "remove":
+        rt.charter = replace(rt.charter, cards=())
+        rt._derive_regions()
+    changed = replacements[change]
+    rt.charter = replace(rt.charter, cards=(changed,))
+    rt._derive_regions()
+    rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    _next_gap(rt)
+    noop = _abstention(rt, role=changed.answers_for)
+    rt._close_price_window()
+    assert rt._priced_abstention(noop) == 0
+    assert not any(t.get("held") for t in rt._abstention_price_terms(noop))
+
+
+@pytest.mark.parametrize("declines", [False, True])
+def test_mid_gap_checkpoint_resumes_actual_held_credit_charges(monkeypatch, declines):
+    """Checkpointing the gap preserves emitted prices and exactly-once learner credits."""
+    rt, card = _gap_runtime(monkeypatch)
+    rt.window.verdicts = {"subject": {"eval-a": [0.2]}}
+    rt._close_price_window()
+    _next_gap(rt)
+    rt._close_price_window()  # an entire gap before the checkpoint
+    _next_gap(rt)
+    router, _ = _router(rt)
+    router.latency = [5, 1]
+    arm = next(a for a in router.universe if a != NOOP) if declines else NOOP
+    handle = _drawn(rt, router, arm)
+    rt._contribution(handle, "evaluator")
+    if declines:
+        rt._settle_declined(handle, "declined")
+    else:
+        _settle(rt, handle, SettleStatus.INAPPLICABLE)
+    rt._deliver_returns()
+    restored = _runtime(card)
+    restore_runtime(restored, runtime_state(rt))
+    rows = []
+    for branch in (rt, restored):
+        branch._close_price_window()
+        branch.ticks_consumed += 100
+        branch._deliver_returns()
+        kind = "router.decline_priced" if declines else "router.abstention_priced"
+        credits = [row for row in branch.ledger._recovery_items()
+                   if row.get("kind") == kind and row.get("handle") == handle]
+        assert len(credits) == 1
+        credit = credits[0]
+        assert credit["penalty"] > 0
+        assert credit["terms"][0]["held"] is True
+        assert credit["terms"][0]["source_window"] == 0
+        branch._deliver_returns()
+        assert len([row for row in branch.ledger._recovery_items()
+                    if row.get("kind") == kind and row.get("handle") == handle]) == 1
+        rows.append(({key: value for key, value in credit.items()
+                      if key not in ("hash", "prev_hash", "seq")},
+                     _router(branch)[0].learner.state()))
+    assert rows[0] == rows[1]
 
 
 def test_every_abstention_a_world_draws_is_priced_on_the_roles_of_its_menu(

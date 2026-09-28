@@ -25,13 +25,14 @@ if TYPE_CHECKING:
 # is not a public window fact and never reaches a registered observation.
 # The early-warning summaries are the evaluators' (``runtime.ews``), not a public fact.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices", "closed_holdouts",
+                         "closed_cards", "closed_prices", "closed_holdouts", "closed_held",
                          "series_discarded", "ews_variance", "ews_autocorrelation",
                          # The provider and family names are text; the observations
                          # below publish their concentration, not the names.
                          "calls_by_provider", "calls_by_family",
                          # Wave 16, D5: per-decision relief evidence, filed by handle.
-                         "closed_relief", "paid_off_settled", "paid_off_handles",
+                         "closed_relief", "closed_holdout_attribution",
+                         "paid_off_settled", "paid_off_handles",
                          # The world's consequence scores in the window: the sampling
                          # actuator's evidence count, not a window observation.
                          "consequence_readings")

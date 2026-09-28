@@ -25,7 +25,8 @@ BEHAVIOURAL_FACTS = frozenset({
 #: Modules a holdout may import: arithmetic only, no clock, no randomness, no host.
 PURE_MODULES = frozenset({"math", "statistics"})
 _FORBIDDEN_NAMES = frozenset({"__import__", "eval", "exec", "compile", "getattr", "globals",
-                              "locals", "vars", "open", "input", "breakpoint"})
+                              "locals", "vars", "open", "input", "breakpoint", "setattr",
+                              "delattr", "__builtins__"})
 
 
 def behavioural_reads(code: str) -> frozenset[str]:
@@ -59,15 +60,23 @@ def behavioural_reads(code: str) -> frozenset[str]:
         return node.value
 
     for node in ast.walk(module):
+        # §I.a: a batch may share arithmetic modules, never predicate-writable state.
+        identifiers = [value for field, value in ast.iter_fields(node)
+                       if field in {"id", "name", "asname", "arg", "attr", "rest"}
+                       and isinstance(value, str)]
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            identifiers.extend(node.names)
+        if any(name.startswith("__") or name in _FORBIDDEN_NAMES for name in identifiers):
+            raise ValueError("holdout predicate: introspection and dunder names are not available")
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             names = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
                      else [node.module or ""])
-            if any(name.split(".")[0] not in PURE_MODULES for name in names):
+            if (any(name not in PURE_MODULES for name in names)
+                    or isinstance(node, ast.ImportFrom) and (
+                        node.level or any(alias.name == "*" for alias in node.names))):
                 raise ValueError("holdout predicate: imports only math and statistics")
-        elif isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
-            raise ValueError(f"holdout predicate: {node.id} is not available to a holdout")
-        elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
-            raise ValueError("holdout predicate: dunder attributes are not available")
+        elif isinstance(node, ast.Attribute) and not isinstance(node.ctx, ast.Load):
+            raise ValueError("holdout predicate: attribute writes are not available")
         elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
               and node.value.id == facts):
             reads.add(key(node.slice))

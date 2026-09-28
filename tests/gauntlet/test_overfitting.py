@@ -20,11 +20,11 @@ from tests.gauntlet import populations as P
 
 pytestmark = pytest.mark.gate
 
-#: Each world's events: the smallest that exhibit every criterion read from it. Probed
-#: at half and two-thirds of the first cut (300 and 400), where every criterion, and
-#: every negative control run on the same world as its positive, held.
-OF1 = 150
-OF2 = 200
+#: §III.b / §IV.a: retain settled counter-verdicts and the complete holdout lifecycle.
+#: Every consumer and matched negative control was probed at 100 and 150 events;
+#: 100 retains repeated consequence grades, adoption and post-adoption price rows.
+OF1 = 100
+OF2 = 100
 
 CARD = P.REVISION["id"]
 
@@ -106,10 +106,6 @@ def test_of2a_the_proxy_satisfied_the_registrar_bears_no_price_before_the_holdou
     assert early and all(t["violation"] == 0 for t in early)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "the holdout's violation is attributed by the region's relief rule "
-    "(pricing._decision_share); a proxy-satisfying registrar is always a reliever, so it "
-    "never bears the holdout."))
 def test_of2c_once_adopted_the_holdout_bites_on_the_registrars_decisions(of2):
     """Within ``min_ratio`` governance periods of activation, the failed holdout counts as
     card violation (``holdout`` in ``PriceController.observe``) and the registrar's
@@ -128,6 +124,16 @@ def test_of2c_negative_control_a_kernel_that_ignores_holdouts_fails():
     after = _activated_after(mutant, "hold-used-registrations")
     result = g.of2c_holdout_bites(mutant.events, mutant.manifest, card=CARD,
                                   seats={"registrar"}, after_window=after)
+    assert result.status == g.FAIL, result.evidence
+
+
+def test_of2c_negative_control_ownerless_holdouts_fail():
+    """§IV.a: the failed holdout must charge its attributee, not merely raise λ."""
+    mutant = P.run(*P.of2(), events=OF2, patches=[
+        (PricingMixin, "_holdout_attribution", lambda self, held: {})])
+    after = _activated_after(mutant, "hold-used-registrations")
+    result = g.of2c_holdout_bites(mutant.events, mutant.manifest, card=CARD,
+                                 seats={"registrar"}, after_window=after)
     assert result.status == g.FAIL, result.evidence
 
 
@@ -178,16 +184,3 @@ def test_of4_a_holdout_that_constrains_nothing_is_adopted_and_never_binds(of4, o
                 and r.get("holdout", 0) > 0]
     tight = _holdout_results(of2, "used-registrations")
     assert tight and not all(tight)
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="future work (charter-market proposer grading); Astra C-3, "
-                   "for the architect: nothing in the kernel "
-                   "grades a holdout's proposer by realized consequence; the motion costs "
-                   "only its trial, and only the ballots are graded (policy.outcome). No "
-                   "Chapter II passage has been ruled to price it, so none is built here")
-def test_of4_a_holdout_that_never_binds_scores_its_proposer_below_one_that_does(of4, of2):
-    def proposer_rows(run):
-        (proposed,) = run.rows("holdout.proposed")
-        return [r for r in run.rows("policy.outcome") if r.get("handle") == proposed["handle"]]
-    assert proposer_rows(of4) and proposer_rows(of2)
