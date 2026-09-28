@@ -194,21 +194,22 @@ GATE_FILE_BUDGET_DEFAULT_S = 60.0
 GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
     # Serial CPU on the integrated tree (lanes E, M, P and #149, #154, #155 merged).
     "tests/gauntlet/test_thrash.py": (
-        "98 s: the pathology instrument's thrash criteria. th1 (TH-1e reads the release "
-        "after its 50 steady windows) and th3 (two charter boundaries) fail at two thirds "
-        "of 300 events, and each has negative controls that run the same world with the "
-        "mechanism disabled (design G2); th2-reversion and its negative control are strict "
-        "xfails wave 16b turns green, kept at full size; th2 is halved, th4 shared"),
+        "Thrash criteria retain 300-event th1 release and th3 two-boundary witnesses, "
+        "360-event sustained cap updates, 150-event th2/reversion worlds and the shared "
+        "300-event IID null. Missing-price, missing-charge and always-ready negative "
+        "controls need only 100 events to report FAIL (never UNSUPPORTED); charge and "
+        "cadence controls omit unused steering snapshots. All assertions remain"),
     "tests/runtime/test_settled_release.py": (
         "89 s: wave 17b. Release changes nothing a reader sees, over a released and a kept "
         "150-event world (at 120 and 100 events the release share, the venue-confirmed "
         "released orders and the invariant's candidate pool are absent), the tally checked "
         "against the full scan after every event, and one crash probe resumed to the end"),
     "tests/runtime/test_retained_state_crash.py": (
-        "83 s: crash anywhere resumes to the uninterrupted run (a storage contract). Each "
-        "of the thirteen crash-point rows runs a world to its crash and resumes it to the "
-        "end over 30 ticks, the shortest that reaches every crash point; the rows share one "
-        "reference run, the two eviction rows another"),
+        "Crash/resume storage contract: thirteen crash-point rows retain event, unlink, "
+        "artifact-write and every checkpoint/io protocol step over 20 ticks (12 misses "
+        "the final-write crash). All rows retain full prefix/trail/summary/cleanup "
+        "assertions; matrix and eviction rows each share their reference. Late-world "
+        "divergence remains owned by test_checkpoint_coverage's 100-tick world"),
     "tests/runtime/test_evaluation_layer.py": (
         "78 s: tier recursion on two seeds and a fourth tier (CUTOVER, lane E), the "
         "multi-judge, adversarial, two-router and heavy-chaos worlds at their lane E "

@@ -55,7 +55,8 @@ def _no_thrash_price(rt):
 
 
 def test_th1b_negative_control_without_the_thrash_price_it_fails():
-    mutant = P.run(*P.th1(until_window=UNTIL), events=300,
+    # §II.b: the missing-price witness precedes TH-1e's long steady release tail.
+    mutant = P.run(*P.th1(until_window=UNTIL), events=100,
                    patches=[(immune, "thrash_penalty", _no_thrash_price)])
     assert g.flagged(mutant.events, "thrash")  # still diagnosed: only the price is gone
     assert g.th1b_duration(mutant.events, mutant.manifest).status == g.FAIL
@@ -80,7 +81,7 @@ def test_th1c_each_core_round_is_charged_price_times_its_own_movement(th1):
 
 
 def test_th1c_negative_control_a_charge_that_never_lands_fails():
-    mutant = P.run(*P.th1(until_window=UNTIL), events=300, patches=[
+    mutant = P.run(*P.th1(until_window=UNTIL), events=100, instrument=False, patches=[
         # Wave 16 takes the charge in ``_thrash_charge`` (R10-l): a mutant that takes
         # none leaves every moved core round uncharged.
         (FeedbackMixin, "_thrash_charge", lambda self, handle: 0.0)])
@@ -191,7 +192,7 @@ def test_th3_charter_revisions_stand_min_ratio_slowest_loops_apart(th3):
 
 
 def test_th3_negative_control_a_cadence_that_is_always_ready_fails():
-    mutant = P.run(*P.th3(), events=300, patches=[
+    mutant = P.run(*P.th3(), events=100, instrument=False, patches=[
         (GovernanceCadence, "ready", lambda self, **kw: True)])
     assert g.th3_governance_gap(mutant.events, mutant.manifest).status == g.FAIL
 

@@ -70,18 +70,22 @@ def _ratchet_resets_duration(original):
 
 def test_sf1b_negative_control_a_duration_reset_no_op_fails():
     manifest, population = P.sf1()
-    mutant = P.run(manifest, population, events=228, patches=[
+    # §II.b: three acting windows witness two resets; gain saturation is tested in sf1.
+    mutant = P.run(manifest, population, events=52, patches=[
         (PriceController, "ratchet", _ratchet_resets_duration(PriceController.ratchet))])
     result = g.sf1b_ratchet_cadence(mutant.events, mutant.manifest)
     assert result.status == g.FAIL
-    assert any("duration_reset" in problem for problem in result.evidence["problems"])
+    assert sum("duration_reset" in problem for problem in result.evidence["problems"]) >= 2
 
 
 def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
     manifest, population = P.sf1()
-    mutant = P.run(manifest, population, events=228,
+    mutant = P.run(manifest, population, events=52,
                    patches=[(PriceController, "ratchet", lambda self, *a, **k: None)])
-    assert g.sf1b_ratchet_cadence(mutant.events, mutant.manifest).status != g.PASS
+    result = g.sf1b_ratchet_cadence(mutant.events, mutant.manifest)
+    assert result.status == g.FAIL
+    # §II.b: missing evidence is not a negative control; retain three owed ratchets.
+    assert sum("missed_ratchet" in problem for problem in result.evidence["problems"]) >= 3
 
 
 def test_sf1b_a_transient_resolution_resets_the_duration(transient):

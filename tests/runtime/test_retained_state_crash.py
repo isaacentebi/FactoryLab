@@ -31,10 +31,10 @@ from tests.helpers import keep_every_checkpoint
 
 pytestmark = pytest.mark.gate
 
-# Every crash point below is reached by event 90 (tick 10 or so): a longer world only
-# replays more ticks after each resume. State that diverges only late in a world is
-# the checkpoint coverage test's to catch (test_checkpoint_coverage, 100 ticks).
-EVENTS = 30
+# §II: recovery never rewinds. Twenty ticks reach the last durable-write crash;
+# twelve do not. Longer worlds repeat the recovered tail. Late divergence remains
+# owned by test_checkpoint_coverage's 100-tick world.
+EVENTS = 20
 TRAIL = ("state.put", "artifact.put", "artifact.released", "artifact.collected",
          "artifact.retained", "venue.read_answered", "tool.refused")
 
