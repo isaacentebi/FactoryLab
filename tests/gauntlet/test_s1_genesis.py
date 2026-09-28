@@ -88,3 +88,17 @@ def test_post_genesis_registration_with_own_ok_return_still_traces(rows):
     result = g.s1_draw_sovereignty([seed, decision, invocation, registration])
     assert result.status == g.PASS
     assert result.evidence["acts"] == 1
+
+
+def test_seed_registration_after_the_first_world_event_fails_before_any_decision(rows):
+    # Codex on #162: genesis is the boot, and it ends at the first delivered world event,
+    # so a seed-shaped registration after that and before any decision opens is an act.
+    seed, decision = rows
+    first_event = {"kind": "event", "seq": decision["seq"] - 2, "payload": {}}
+    late = {**seed, "seq": decision["seq"] - 1}
+    result = g.s1_draw_sovereignty([seed, first_event, late, decision])
+    assert result.status == g.FAIL
+    assert result.evidence["unreturned"] == [{
+        "kind": "registry.register", "handle": None,
+        "why": "no decision opened before it",
+    }]

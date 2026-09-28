@@ -1857,12 +1857,15 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
     ``tool.call`` of that handle, no later than the invocation, is one of the write tools
     that ledgers this kind (``ACT_TOOLS``). A later invocation alone, a failed or
     malformed one before it, a read-only or unrelated tool call, or an act naming no
-    opened decision does not trace. A null-handle seed registration before the first
-    decision opens is genesis, not an act, and is omitted."""
-    # Chapter II §I.a: the architect's seed roster is genesis, not a seat's act.
-    # Any decision opening ends genesis, even if that decision is malformed.
+    opened decision does not trace. A null-handle seed registration made while the world
+    boots, before its first delivered world event, is genesis, not an act, and is
+    omitted."""
+    # Chapter II §I.a: the architect's seed roster is genesis, not a seat's act. Genesis
+    # ends at the first delivered world event (the first ``event`` row), which comes
+    # before any decision opens; any decision opening ends it too (Codex on #162: a
+    # seed-shaped registration after boot must not escape the audit).
     first_decision = next((i for i, row in enumerate(events)
-                           if row.get("kind") == "decision.open"), len(events))
+                           if row.get("kind") in ("event", "decision.open")), len(events))
     opened: dict[str, int] = {}
     invoked: dict[str, tuple[int, Any]] = {}
     tool_calls: dict[str, list[tuple[int, Any]]] = defaultdict(list)
