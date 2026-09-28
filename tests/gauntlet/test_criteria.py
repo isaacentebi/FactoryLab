@@ -1916,7 +1916,7 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
     stray = [{"kind": "event", "seq": 12, "event": {"id": "ev1", "kind": "ProducerReturn",
                                                     "payload": {}}},
              {"kind": "decision.open", "handle": "j2", "event_id": "ev1", "seq": 13},
-             {"kind": "invocation", "handle": "p9", "status": "error", "seq": 15}]
+             {"kind": "invocation", "handle": "p9", "status": "failed", "seq": 15}]
     result = g.of3a_sampling_behind_return(ok + stray, M)
     assert result.status == g.FAIL, result.evidence
     assert result.evidence["malformed"]["field"] == "event.payload.about_handle"
@@ -1943,6 +1943,20 @@ def test_of3a_the_producers_invocation_precedes_the_return(status):
     assert result.status == g.FAIL and result.evidence["unmade"][0]["return"] == "p1"
     made = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": status}, event, draw]
     assert g.of3a_sampling_behind_return(made, M).ok
+
+
+@pytest.mark.parametrize("status", [None, "missing", "cannot", "", 0])
+def test_of3a_an_invocation_without_a_real_status_proves_no_return(status):
+    """Codex on #169: a row the runtime cannot emit (no status, or one outside
+    Return.status) never proves a return was made; the criterion fails on it."""
+    event, draw = _returned_event("e", "p1", 2), {
+        "kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}
+    row = {"kind": "invocation", "handle": "p1", "seq": 1}
+    if status != "missing":
+        row["status"] = status
+    result = g.of3a_sampling_behind_return([row, event, draw], M)
+    assert result.status == g.FAIL, result.evidence
+    assert result.evidence["malformed"]["field"] == "status"
 
 
 def test_of3a_real_delivered_refusal_is_a_made_return():

@@ -78,6 +78,10 @@ class Result:
         raise TypeError("read Result.ok or Result.status, not the Result itself")
 
 
+#: Every status a Return can carry (factorylab/cortex/request.py, ``Return.status``).
+RETURN_STATUSES = frozenset({"ok", "malformed", "refused", "failed"})
+
+
 class Malformed(Exception):
     """A row lacks a field its kind's emitter always writes: missing evidence, never a
     value. A criterion that reads it fails (``criterion``), naming the row and field."""
@@ -2850,6 +2854,10 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     made: dict[str, list[int]] = defaultdict(list)
     for row in rows_of(events, "invocation"):
         handle = need(row, "handle")
+        # A row the runtime could not emit (no status, or one outside Return.status)
+        # proves nothing: need() fails the criterion on a missing one (Codex on #169).
+        if need(row, "status") not in RETURN_STATUSES:
+            raise Malformed(row, "status")
         if isinstance(handle, str) and handle:
             made[handle].append(need(row, "seq"))
     # loop.py emits every ProducerReturn with its ``about_handle``.
