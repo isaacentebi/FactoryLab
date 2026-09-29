@@ -89,6 +89,11 @@ def signed_s(rt, order_id):
     return str(int(order["timestamp"]) // 1000 + 9)
 
 
+def signed_s_of(intent):
+    """A match time just after an intent's order was signed."""
+    return str(int(intent["order_identity"]["order"]["timestamp"]) // 1000 + 9)
+
+
 def items(rt, kind):
     return [i for i in rt.seen_items if i["kind"] == kind]
 
@@ -709,7 +714,8 @@ def test_a_kill_with_matched_unconfirmed_quantity_is_not_flat():
     rt.polymarket._account_memo = None
     report = polymarket.wind_down(rt)
     # The order matched as a maker, unconfirmed: still the world's, never flat.
-    assert report["exposure_state"] == "wind_down_pending" and report["open_orders"] == 1
+    assert report["exposure_state"] == "wind_down_pending"
+    assert [(u["size"], u["booked"]) for u in report["unsettled"]] == [("10", "0")]
 
 
 def test_a_failed_trade_releases_its_matched_quantity_once_the_order_is_terminal():
@@ -977,3 +983,34 @@ def test_a_trade_that_contradicts_the_maker_only_venue_halts_buying():
     assert [i for i in items(rt, "polymarket.drift") if i.get("reason")]
     refused = buy(rt, server, collateral_decision(rt), price="0.20", market="fake-2")
     assert refused["error"] == polymarket.MAKER_ONLY_REFUSAL
+
+
+def test_a_discovered_partial_cancel_releases_its_unfilled_liability():
+    """Sol P2 on #177: a released placement discovered cancelled with 5 of 10 confirmed
+    and no failed legs stayed remaining=5, unconfirmed: the release required a failed
+    leg. Terminal evidence that agrees with what is booked releases it."""
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    server.lose_answer = True
+    server.fail_lookups = 10**6
+    buy(rt, server, handle)  # 10 at 0.30, its answer lost
+    for _ in range(UNCERTAIN_ORDER_POLLS + 1):
+        polymarket.tick(rt)
+    intent = rt.polymarket.intents[f"{handle}:tool:0"]
+    order_id = intent["order_hash"]
+    pm = server.orders[order_id]["pm"]
+    server.fake._all_orders[pm].update(filled=Decimal(5), remaining=Decimal(5))
+    server.trades.append({"id": "t-5", "status": "CONFIRMED",
+                          "match_time": signed_s_of(intent), "taker_order_id": "0xo",
+                          "size": "5", "price": "0.30", "maker_orders": [
+                              {"order_id": order_id, "matched_amount": "5",
+                               "price": "0.30", "side": "BUY"}]})
+    polymarket.tick(rt)  # the confirmed trade binds the order; 5 are booked
+    server.fake.cancel(client_id="by-hand", order_id=pm)  # the rest is cancelled
+    server.fail_lookups = 0
+    for _ in range(4):
+        polymarket.tick(rt)
+    (order,) = rt.consequences.table.orders
+    assert (order.remaining, order.executed, order.confirmed) == (0, 5, 5)

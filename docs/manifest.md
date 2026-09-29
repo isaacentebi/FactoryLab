@@ -2681,7 +2681,10 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   once the order is terminal (filled or cancelled) its matched size less its failed
   legs is what stays reserved or counts as unsettled; once that is booked, the order's
   unfilled liability is released in the consequence book and it is confirmed at what
-  was booked, so its account can close, and no fill is invented. Every confirmation
+  was booked, so its account can close, and no fill is invented; the same holds for an
+  order cancelled in part with no failed leg. An order with unfilled liability whose
+  placement's answer does not say it is over is read back, two a tick in turn, until
+  the venue does. Every confirmation
   (a cancelled order's included) confirms what matched less its failed legs. An acknowledged
   cancel's read-back overrides a placement answer that never came.
 * **Opening first.** No live order is taken ("the polymarket pot's opening is not yet

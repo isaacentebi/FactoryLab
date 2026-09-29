@@ -1686,12 +1686,14 @@ def confirm_terminal(rt: Any) -> None:
     the filled size included, leaves its account pinned until the next tick's read.
     """
     surface = rt.polymarket
+    unsure = []
     for order in rt.consequences.table.orders:
         client_id = surface.order_ids.get(order.order_id)
         if client_id is None or order.confirmed is not None:
             continue
         if order.remaining and surface.live:
-            _release_failed(rt, surface, order, client_id)
+            if not _release_terminal(rt, surface, order, client_id):
+                unsure.append((order, client_id))
             continue
         if order.remaining:
             continue
@@ -1708,42 +1710,53 @@ def confirm_terminal(rt: Any) -> None:
             executed = max(Decimal(0), Decimal(str(answer["filled_size"])) - failed)
             rt.consequences.confirm_terminal(order.order_id, answer["status"],
                                              str(executed), rt.n)
-
-
-def _release_failed(rt: Any, surface: PolymarketSurface, order: Any, client_id: str) -> None:
-    """Carry terminal evidence into the consequence book, inventing no fill.
-
-    Sol P2 on #177: an order the venue reports terminal whose remaining liability is
-    only legs that FAILED (never settled) kept its account pinned. Once its placement is
-    proven over and everything it matched, less its failed legs, is booked, its
-    unfilled liability is released (``ReturnConsequences.cancel``) and it is confirmed
-    at what was booked, the quantity that really executed.
-    """
-    intent = surface.intents[client_id]
-    failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
-    if not _terminal(surface, intent) and failed > 0:
-        # A resting post-only order whose matched legs FAILED stays "resting" in its
-        # placement's answer: its own status is read back until the venue says over.
+    if not unsure:
+        return
+    # An order with unfilled liability whose placement's answer does not say it is over
+    # (a resting order matched in part, or whose legs FAILED): its own status is read
+    # back, DISCOVERIES_PER_TICK a tick in turn, until the venue says it is over.
+    turn = int(surface.cursor.get("release_turn", 0))
+    surface.cursor = {**surface.cursor, "release_turn": turn + 1}
+    for step in range(min(DISCOVERIES_PER_TICK, len(unsure))):
+        order, client_id = unsure[(turn + step) % len(unsure)]
         try:
             answer = surface.venue.lookup(client_id, order_id=order.order_id)
         except Exception:  # noqa: BLE001 - an unanswered read proves nothing
-            return
+            continue
         if answer.get("status") in ("filled", "cancelled") and answer.get(
                 "filled_size") is not None:
-            intent = surface.intents[client_id] = {**intent, "result": {
+            intent = surface.intents[client_id]
+            surface.intents[client_id] = {**intent, "result": {
                 **intent["result"], "status": answer["status"],
                 "filled_size": str(answer["filled_size"])}}
+            _release_terminal(rt, surface, order, client_id)
+
+
+def _release_terminal(rt: Any, surface: PolymarketSurface, order: Any,
+                      client_id: str) -> bool:
+    """Carry terminal evidence into the consequence book, inventing no fill; whether the
+    placement is proven over.
+
+    Sol P2 on #177: an order the venue reports terminal with liability it will never
+    fill (cancelled in part, or matched in legs that FAILED) kept its account pinned.
+    Once its placement is proven over and everything it matched, less its failed legs,
+    is booked, its unfilled liability is released (``ReturnConsequences.cancel``) and it
+    is confirmed at what was booked, the quantity that really executed, whether or not
+    any leg failed.
+    """
+    intent = surface.intents[client_id]
     if not _terminal(surface, intent):
-        return
+        return False
+    failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
     booked = Decimal(surface.filled.get(order.order_id, "0"))
     matched = _cancelled(surface).get(order.order_id)
     if matched is None:
         matched = Decimal(str(intent["result"].get("filled_size") or "0"))
-    if failed <= 0 or matched - failed > booked:
-        return
-    rt.consequences.cancel(order.order_id, rt.n)
-    rt.consequences.confirm_terminal(order.order_id, str(intent["result"].get(
-        "status")), str(booked), rt.n)
+    if matched - failed <= booked:
+        rt.consequences.cancel(order.order_id, rt.n)
+        rt.consequences.confirm_terminal(order.order_id, str(intent["result"].get(
+            "status")), str(booked), rt.n)
+    return True
 
 
 def mark(rt: Any) -> None:
