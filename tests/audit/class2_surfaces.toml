@@ -719,6 +719,7 @@ sources = [
   "factorylab/world/polymarket_clob.py::LivePolymarket._intended",
   "factorylab/world/polymarket_clob.py::LivePolymarket._open_orders",
   "factorylab/world/polymarket_clob.py::LivePolymarket._placed",
+  "factorylab/world/polymarket_clob.py::LivePolymarket._positions",
   "factorylab/world/polymarket_clob.py::LivePolymarket.cancel",
   "factorylab/world/polymarket_clob.py::LivePolymarket.lookup",
   "factorylab/world/polymarket_clob.py::LivePolymarket.place",
