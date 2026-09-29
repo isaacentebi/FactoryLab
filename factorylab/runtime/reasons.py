@@ -81,6 +81,10 @@ class Reason(StrEnum):
     POLYMARKET_LIVE_REQUIRES_THE_WALL_CLOCK = "polymarket_live_requires_the_wall_clock"
     # A world replaying a recorded tape reads no live event market (look-ahead guard).
     POLYMARKET_LIVE_ON_A_TAPE = "polymarket_live_on_a_tape"
+    # The world's charter was voted for another launch (charter.launch), or a ratified
+    # charter states none (runtime/worlds.py, ``WorldManifest.check_launch``).
+    CHARTER_LAUNCH_MISMATCH = "charter_launch_mismatch"
+    CHARTER_LAUNCH_MISSING = "charter_launch_missing"
 
 
 class CredentialMissing(RuntimeError):

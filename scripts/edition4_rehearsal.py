@@ -966,6 +966,8 @@ def _rehearse(
     lock = None
     try:
         base = load_manifest(str(world))
+        # §I.b: its charter's ballots read the rail this launch installs (charter.launch).
+        base.check_launch("capital-loop" if capital_loop else "rehearsal")
         manifest = effective_manifest(
             base,
             prompt_mode=prompt_mode,

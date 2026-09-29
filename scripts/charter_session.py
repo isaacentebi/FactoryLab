@@ -236,55 +236,72 @@ def launch_mode(manifest, launch: str | None) -> str:
     return launch
 
 
-def launch_rail(manifest, launch: str):
-    """The treasury rail contract ``launch`` installs for ``manifest``, holding no key.
+def launched_manifest(manifest, launch: str):
+    """The manifest ``launch`` hands its Runtime, so the one its world block renders.
 
-    Guarantees the rail each launcher selects, by its own selection code: ``run`` is
-    ``bootstrap.rail_class`` of the manifest (``LiveRail`` with a reserve,
-    ``UnconfiguredRail`` without); ``rehearsal`` and ``capital-loop`` are the rehearsal
-    runner's ``effective_manifest`` (which refuses what the runner refuses) through
-    ``rail_class``, wrapped in the runner's own ``launch_guard``. Each is read as its
-    published contract (``InertRail``), never constructed.
+    ``run`` launches the manifest as given (``factorylab run``). ``rehearsal`` and
+    ``capital-loop`` launch the rehearsal runner's ``effective_manifest`` of it, with
+    the runner's own defaults (native completions, no prompt or reasoning factor):
+    its short tick, its fresh client namespace and, off the capital loop, its stripped
+    treasury. The runner's refusals (a simulated or mainnet world, a capital loop on a
+    world that is not hybrid, a route it cannot prepay) are its own.
+    """
+    if launch == "run":
+        return manifest
+    from scripts.edition4_rehearsal import effective_manifest
+
+    return effective_manifest(manifest, native_completions=True,
+                              capital_loop=launch == "capital-loop")
+
+
+def launch_rail(launched, launch: str):
+    """The treasury rail contract ``launch`` installs for ``launched``, holding no key.
+
+    ``launched`` is ``launched_manifest``'s. Guarantees the rail each launcher selects,
+    by its own selection code: ``bootstrap.rail_class`` of the launched manifest
+    (``LiveRail`` with a reserve, ``UnconfiguredRail`` without, ``HybridRail`` for a
+    hybrid world), and for ``rehearsal`` and ``capital-loop`` wrapped in the runner's
+    own ``launch_guard``. It is read as its published contract (``InertRail``), never
+    constructed.
     """
     from factorylab.runtime.bootstrap import rail_class
     from factorylab.runtime.published import InertRail
-    from scripts.edition4_rehearsal import effective_manifest, launch_guard
 
-    if launch == "run":
-        return InertRail.of(rail_class(manifest), testnet=not manifest.exchange.mainnet)
-    capital_loop = launch == "capital-loop"
-    launched = effective_manifest(manifest, native_completions=True, capital_loop=capital_loop)
     rail = InertRail.of(rail_class(launched), testnet=not launched.exchange.mainnet)
-    return InertRail.published_by(launch_guard(capital_loop)(rail))
+    if launch == "run":
+        return rail
+    from scripts.edition4_rehearsal import launch_guard
+
+    return InertRail.published_by(launch_guard(launch == "capital-loop")(rail))
 
 
 def launch_world(manifest, launch: str | None) -> dict:
     """The world block a seat of ``manifest`` reads at ``launch``: its public schematics.
 
-    Chapter II §I.b: guarantees the block is the launched runtime's own, and true. A
-    simulated world's is its runtime's over its own fake venue (``run``, the one launch
-    it has). A live world's is rendered by the runtime's schematics-only path
-    (``factorylab/runtime/published.py``) over the manifest as given, with the rail
-    that launch installs (``launch_rail``): no venue, rail or chain is read, signed to
+    Chapter II §I.b: guarantees the block is the launched runtime's own, and true: it
+    is rendered over the manifest the launch hands its Runtime (``launched_manifest``)
+    with the rail that launch installs (``launch_rail``). A simulated world's is its
+    runtime's over its own fake venue (``run``, the one launch it has). A live world's
+    is rendered by the runtime's schematics-only path
+    (``factorylab/runtime/published.py``): no venue, rail or chain is read, signed to
     or written, and every observation that path does not make (the account, the
     listing, the pots) is published as unavailable, never as a fake venue's figures.
     Built on the manifest's catalogue, so it makes no model call whichever provider
     the session's ballots then use.
     """
     launch = launch_mode(manifest, launch)
-    if manifest.exchange.kind != "fake":
+    launched = launched_manifest(manifest, launch)
+    if launched.exchange.kind != "fake":
         from factorylab.runtime.published import render_schematics
 
-        return render_schematics(manifest, rail=launch_rail(manifest, launch))
-    if launch != "run":
-        launch_rail(manifest, launch)  # the rehearsal runner's own refusal
+        return render_schematics(launched, rail=launch_rail(launched, launch))
     from factorylab.runtime.loop import Runtime
     from factorylab.world.exchange import FakeExchange
 
-    rt = Runtime(manifest, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, provider=ManifestCatalogue(manifest),
-                 exchange=FakeExchange(seed=manifest.exchange.seed, coins=manifest.exchange.coins,
-                                       start_cash_usd=manifest.exchange.start_cash_usd))
+    rt = Runtime(launched, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1, provider=ManifestCatalogue(launched),
+                 exchange=FakeExchange(seed=launched.exchange.seed, coins=launched.exchange.coins,
+                                       start_cash_usd=launched.exchange.start_cash_usd))
     return rt._world_block()
 
 
@@ -415,8 +432,13 @@ def approved(calls: list[dict], seats) -> bool:
                for row in calls) > len(seats) // 2
 
 
-def render_toml(cards: list[tuple[MetricCard, float | None]], norms) -> str:
-    """The charter table, typed regions and all, exactly as the load path reads it."""
+def render_toml(cards: list[tuple[MetricCard, float | None]], norms,
+                launch: str | None = None) -> str:
+    """The charter table, typed regions and all, exactly as the load path reads it.
+
+    ``launch`` is written as ``charter.launch``: part of the table, so of the digest
+    the export records and a funded load verifies, and checked by every launcher.
+    """
     def value(v: Any) -> str:
         if isinstance(v, dict):
             return "{ " + ", ".join(f"{k} = {value(x)}" for k, x in v.items()
@@ -424,7 +446,8 @@ def render_toml(cards: list[tuple[MetricCard, float | None]], norms) -> str:
         return json.dumps(v, ensure_ascii=False)
 
     rows = norms_raw(norms)
-    lines = ["[charter]", "edition = 1", "norms = [",
+    lines = ["[charter]", "edition = 1",
+             *([f"launch = {json.dumps(launch)}"] if launch is not None else []), "norms = [",
              *(f"  {value(row)}," for row in rows), "]", ""]
     for card, price in cards:
         lines.append("[[charter.cards]]")
@@ -533,10 +556,12 @@ def session(manifest, provider, out_dir: Path, *, diaries: list[Path], seed: int
             launch: str | None, world: dict | None = None) -> dict:
     """(a) → (b) → (c), with (d) on the ballot when diaries are given; evidence is written.
 
-    The evidence and the exported charter's header name the launch the world block was
-    rendered for (``launch_mode``): the ratification is for that launch.
+    The evidence and the exported charter name the launch the world block was
+    rendered for (``launch_mode``): the charter as ``charter.launch``, inside the digest
+    it is exported with, which every launcher checks (``WorldManifest.check_launch``).
     """
     launch = launch_mode(manifest, launch)
+    launched = launched_manifest(manifest, launch)
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in ("charter.toml", "session.json"):
         if (out_dir / name).exists():
@@ -549,7 +574,13 @@ def session(manifest, provider, out_dir: Path, *, diaries: list[Path], seed: int
     passing = [(p.card, p.price) for p in proposals if p.problem is None]
     evidence: dict[str, Any] = {
         "world": manifest.name, "roster_sha256": roster_hash(manifest),
-        "launch": {"mode": launch, "command": LAUNCHES[launch]},
+        # The roster digest is the manifest's as given: the world file this charter is
+        # written into, which the load path hashes against charter.roster_sha256. The
+        # block the ballots read is the launched manifest's (``launched_manifest``).
+        "launch": {"mode": launch, "command": LAUNCHES[launch],
+                   "rendered_manifest": {"name": launched.name,
+                                         "tick_interval_ns": launched.tick_interval_ns,
+                                         "roster_sha256": roster_hash(launched)}},
         "norms": norms_raw(manifest.charter.norms),
         "draft": {"seats": [s._asdict() for s in draft_seats], "proposals": [
             {"key": p.key, "proposer": p.proposer, "raw": p.raw, "price": p.price,
@@ -559,7 +590,7 @@ def session(manifest, provider, out_dir: Path, *, diaries: list[Path], seed: int
         "lambda_dollars": report, "approved": False,
     }
     if passing:
-        body = render_toml(passing, manifest.charter.norms)
+        body = render_toml(passing, manifest.charter.norms, launch)
         table = tomllib.loads(body)["charter"]
         Charter(1, manifest.charter.norms, tuple(card for card, _ in passing))
         seats, ballots = adopt(manifest, provider, table, world, rng, report, calls)

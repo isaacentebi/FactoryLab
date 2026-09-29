@@ -692,6 +692,11 @@ class WorldManifest:
     charter_ratified_sha256: str | None = None
     charter_roster_sha256: str | None = None
     charter_content_sha256: str | None = None
+    # The launch the charter was voted for (``CHARTER_LAUNCHES``): the launchers install
+    # different treasury rails, so a ballot saw one ``treasury.transfer`` contract.
+    # Part of the charter table, so of the digest a funded load verifies; admission
+    # provenance like the digests, so outside the manifest hash.
+    charter_launch: str | None = None
 
     # ---- derived
 
@@ -832,7 +837,7 @@ class WorldManifest:
         """
         payload = asdict(self)
         for name in ("charter_ratified_sha256", "charter_roster_sha256",
-                     "charter_content_sha256"):
+                     "charter_content_sha256", "charter_launch"):
             payload.pop(name)
         # A set, not a sequence: the same core whatever order the manifest listed it in.
         payload["evaluation"]["no_swap_regret_kinds"] = sorted(
@@ -902,6 +907,32 @@ class WorldManifest:
             raise ValueError("mainnet charter differs from the ratified charter digest")
         if roster_hash(self) != self.charter_roster_sha256:
             raise ValueError("mainnet roster differs from the roster the charter was ratified on")
+        if self.charter_launch is None:
+            raise ValueError("mainnet requires charter.launch from the ratified export")
+
+    def check_launch(self, launch: str) -> None:
+        """Refuse a launch its charter was not voted for (``CharterLaunchRefused``).
+
+        Chapter II §I.b: a ballot read the ``treasury.transfer`` contract of one launch
+        (``scripts/charter_session.py --launch``), and each launcher installs its own
+        rail. Guarantees a charter carrying ``charter.launch`` starts only under that
+        launch, and a ratified charter (``charter.ratified_sha256``) that states none
+        starts under none. A world whose charter states neither launches as before.
+        """
+        if launch not in CHARTER_LAUNCHES:
+            raise ValueError(f"launch must be one of {', '.join(CHARTER_LAUNCHES)}")
+        if self.charter_launch is None:
+            if self.charter_ratified_sha256 is not None:
+                raise CharterLaunchRefused(
+                    "charter_launch_missing",
+                    "this manifest carries a ratified charter (charter.ratified_sha256) that "
+                    "states no charter.launch")
+            return
+        if self.charter_launch != launch:
+            raise CharterLaunchRefused(
+                "charter_launch_mismatch",
+                f"this charter was ratified for launch {self.charter_launch}; this is "
+                f"launch {launch}")
 
     def _validate_endowment(self) -> None:
         """Locked backing is part of the initial balance and its tranches sum to it exactly."""
@@ -1558,10 +1589,25 @@ def duration_ns(value: Any) -> int:
     return int(s)
 
 
+#: The launches a charter can be voted for: ``scripts/edition4_rehearsal.py
+#: --capital-loop``, ``scripts/edition4_rehearsal.py`` and ``factorylab run``.
+CHARTER_LAUNCHES = ("capital-loop", "rehearsal", "run")
+
+
+class CharterLaunchRefused(ValueError):
+    """A launch its charter was not voted for was refused; nothing started."""
+
+    def __init__(self, reason: str, detail: str):
+        self.reason = reason
+        super().__init__(f"{reason}: {detail}")
+
+
 def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]:
     """Explicit charter tables yield their edition and card-specific errors for invalid fields."""
     if not isinstance(raw, dict):
         raise ValueError("charter must be a table")
+    if raw.get("launch") is not None and raw["launch"] not in CHARTER_LAUNCHES:
+        raise ValueError(f"charter.launch must be one of {', '.join(CHARTER_LAUNCHES)}")
     for name in PROVENANCE_FIELDS:
         value = raw.get(name)
         if value is not None and (not isinstance(value, str)
@@ -1973,6 +2019,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter_ratified_sha256=(d.get("charter") or {}).get("ratified_sha256"),
         charter_roster_sha256=(d.get("charter") or {}).get("roster_sha256"),
         charter_content_sha256=charter_content_sha256,
+        charter_launch=(d.get("charter") or {}).get("launch"),
         charter_parent_sha256=(d.get("charter") or {}).get("parent_charter_sha256"),
         norm_house=_norm_house(d.get("norm_house")),
         evaluation=evaluation,

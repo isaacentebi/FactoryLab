@@ -81,9 +81,12 @@ def test_the_dry_run_drafts_adopts_and_exports_a_charter_the_load_path_accepts(t
     # (c) The export binds the loaded cards and the roster that voted them, and both
     # name the launch the world was rendered for.
     text = (out / "charter.toml").read_text()
-    assert evidence["launch"] == {"mode": "run", "command": "factorylab run"}
+    assert evidence["launch"]["mode"] == "run"
+    assert evidence["launch"]["command"] == "factorylab run"
+    assert evidence["launch"]["rendered_manifest"]["name"] == manifest.name
     assert "# launch = run (factorylab run)\n" in text
-    table = voted_charter(out / "charter.toml", manifest)
+    table = voted_charter(out / "charter.toml", manifest, "run")
+    assert table["launch"] == "run"
     assert table == tomllib.loads(text)["charter"]
     assert all("region" in card and "acceptable_region" not in card for card in table["cards"])
     world = tomllib.loads((Path(__file__).parents[2] / "worlds/scripted.toml").read_text())
@@ -216,7 +219,7 @@ def test_the_session_publishes_the_schematics_a_launched_seat_reads(
     from tests.scripts.test_capital_loop_live_run import wired
 
     manifest = _world(case, wired(tmp_path, monkeypatch))
-    launched = _launched_block(manifest, launch, tmp_path)
+    launched = _launched_block(manifest, launch, tmp_path, as_launched=True)
     rendered = charter_session.launch_world(manifest, launch)
     assert set(rendered) == set(launched)
     assert rendered["tools"] == launched["tools"]
@@ -392,7 +395,8 @@ def test_the_schematics_path_cannot_run_a_world():
     from factorylab.world.exchange import FakeExchange
 
     world = load_manifest(CAPITAL_LOOP)
-    rail = charter_session.launch_rail(world, "capital-loop")
+    rail = charter_session.launch_rail(
+        charter_session.launched_manifest(world, "capital-loop"), "capital-loop")
     assert isinstance(rail, InertRail) and rail.ALLOWED == ("to_venice",)
 
     def build(manifest=world, **changes):
@@ -450,3 +454,163 @@ def test_the_plain_runtime_still_refuses_the_capital_loop_world():
         Runtime(world, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
                 router_gamma=0.1)
     assert world.exchange.kind == "hyperliquid"  # the session's manifest stays live
+
+
+def _bound(world, launch, tmp_path):
+    """A copy of ``world`` whose charter states ``launch`` (``charter.launch``)."""
+    text = (Path(__file__).parents[2] / world).read_text()
+    path = tmp_path / Path(world).name
+    path.write_text(text.replace("\n[charter]\n", f'\n[charter]\nlaunch = "{launch}"\n', 1))
+    return path
+
+
+def test_the_charter_states_its_launch_inside_the_digest_the_load_path_verifies():
+    """The export writes charter.launch into the table, so the charter digest covers
+    it; the manifest reads it as admission provenance, outside the manifest hash."""
+    from factorylab.charter.provenance import charter_content, charter_digest
+
+    base = tomllib.loads((Path(__file__).parents[2] / "worlds/scripted.toml").read_text())
+    table = dict(base["charter"], launch="rehearsal")
+    bound = manifest_from_dict({**base, "charter": table})
+    plain = manifest_from_dict(base)
+    assert bound.charter_launch == "rehearsal" and plain.charter_launch is None
+    assert bound.charter_content_sha256 == charter_digest(charter_content(table))
+    assert bound.charter_content_sha256 != plain.charter_content_sha256
+    assert bound.manifest_hash() == plain.manifest_hash()
+    with pytest.raises(ValueError, match="charter.launch must be one of"):
+        manifest_from_dict({**base, "charter": dict(base["charter"], launch="wake")})
+
+
+def test_each_launcher_admits_its_own_mode_and_refuses_another():
+    from factorylab.runtime.worlds import CHARTER_LAUNCHES, CharterLaunchRefused
+
+    base = tomllib.loads((Path(__file__).parents[2] / "worlds/scripted.toml").read_text())
+    unbound = manifest_from_dict(base)
+    for voted in CHARTER_LAUNCHES:
+        bound = manifest_from_dict({**base, "charter": dict(base["charter"], launch=voted)})
+        for launch in CHARTER_LAUNCHES:
+            unbound.check_launch(launch)  # an unratified world states none: as today
+            if launch == voted:
+                bound.check_launch(launch)
+                continue
+            with pytest.raises(CharterLaunchRefused) as refused:
+                bound.check_launch(launch)
+            assert refused.value.reason == "charter_launch_mismatch"
+
+
+def test_a_ratified_charter_that_states_no_launch_is_refused():
+    """A manifest carrying ratification digests but no charter.launch launches under
+    no launcher, and a funded (mainnet) admission requires the key."""
+    from dataclasses import replace
+
+    from factorylab.charter.provenance import charter_content, charter_digest
+    from factorylab.runtime.worlds import CHARTER_LAUNCHES, CharterLaunchRefused
+
+    base = tomllib.loads((Path(__file__).parents[2] / "worlds/scripted.toml").read_text())
+    ratified = manifest_from_dict({**base, "charter": dict(
+        base["charter"], ratified_sha256=charter_digest(charter_content(base["charter"])))})
+    for launch in CHARTER_LAUNCHES:
+        with pytest.raises(CharterLaunchRefused, match="charter_launch_missing"):
+            ratified.check_launch(launch)
+    from factorylab.charter.provenance import roster_hash
+
+    funded = replace(ratified, exchange=replace(ratified.exchange, client_namespace="f" * 32),
+                     charter_roster_sha256=roster_hash(ratified))
+    with pytest.raises(ValueError, match="mainnet requires charter.launch"):
+        funded._validate_funded_admission()
+    replace(funded, charter_launch="run")._validate_funded_admission()
+
+
+def test_factorylab_run_refuses_a_charter_voted_for_the_rehearsal_runner(tmp_path, capsys):
+    from factorylab.runtime.cli import ARGUMENT_EXIT, main
+    from factorylab.runtime.loop import run_world
+    from factorylab.runtime.worlds import CharterLaunchRefused
+
+    world = _bound("worlds/scripted.toml", "rehearsal", tmp_path)
+    assert main(["run", "--world", str(world), "--events", "1"]) == ARGUMENT_EXIT
+    assert capsys.readouterr().err.splitlines() == ["factorylab run: charter_launch_mismatch"]
+    with pytest.raises(CharterLaunchRefused):
+        run_world(load_manifest(str(world)), events=1)
+
+
+@pytest.mark.gate  # a matching launch runs a world
+def test_factorylab_run_admits_a_charter_voted_for_it(tmp_path, capsys):
+    from factorylab.runtime.cli import main
+
+    world = _bound("worlds/scripted.toml", "run", tmp_path)
+    assert main(["run", "--world", str(world), "--events", "1"]) == 0
+
+
+@pytest.mark.parametrize("world, voted, capital_loop", [
+    (TESTNET, "run", False), (TESTNET, "capital-loop", False),
+    (CAPITAL_LOOP, "rehearsal", True), (CAPITAL_LOOP, "run", True)])
+def test_the_rehearsal_runner_refuses_a_charter_voted_for_another_launch(
+        world, voted, capital_loop, tmp_path):
+    """Refused at the manifest, before any key, lock, chain read or venue."""
+    from scripts import edition4_rehearsal as rehearsal
+
+    out = tmp_path / "run"
+    report = rehearsal.run_rehearsal(_bound(world, voted, tmp_path), out=out,
+                                     capital_loop=capital_loop, provider=object())
+    assert report["status"] == "failed"
+    assert report["refusal"]["reason"] == "charter_launch_mismatch"
+
+
+@pytest.mark.gate  # run_rehearsal runs a real world
+@pytest.mark.parametrize("capital_loop", [True, False])
+def test_the_rehearsal_runner_admits_a_charter_voted_for_it(capital_loop, tmp_path, monkeypatch):
+    from scripts import edition4_rehearsal as rehearsal
+    from tests.scripts.test_capital_loop_live_run import launch_kwargs, repo_root, wired
+
+    w = wired(tmp_path, monkeypatch)
+    source = w["world"] if capital_loop else Path(__file__).parents[2] / TESTNET
+    voted = "capital-loop" if capital_loop else "rehearsal"
+    path = tmp_path / "bound" / Path(source).name
+    path.parent.mkdir()
+    path.write_text(Path(source).read_text().replace(
+        "\n[charter]\n", f'\n[charter]\nlaunch = "{voted}"\n', 1))
+    report = rehearsal.run_rehearsal(str(path), out=tmp_path / "runs" / "bound",
+                                     capital_loop=capital_loop,
+                                     duration_ns=3_600 * 1_000_000_000,
+                                     source_root=repo_root(), **launch_kwargs(w))
+    assert report["status"] == "completed", report.get("error")
+
+
+def test_a_runner_launch_renders_the_manifest_the_runner_launches(tmp_path):
+    """Codex on 88cecea: the runners hand Runtime effective_manifest(...), so the ballots
+    read that world. worlds/testnet.toml declares a 120 s tick and a reserve; under the
+    rehearsal runner it runs a 10 s tick on a stripped treasury, and says so. Under
+    ``run`` it is the file as given. The roster digest is the file's, as the load path
+    hashes it."""
+    from factorylab.charter.provenance import roster_hash
+
+    given = load_manifest("worlds/testnet.toml")
+    assert given.tick_interval_ns == 120 * 10**9 and given.treasury.reserve_address
+    rehearsed = charter_session.launch_world(given, "rehearsal")
+    run = charter_session.launch_world(given, "run")
+    assert rehearsed["tick_intervals"]["declared_ns"] == 10 * 10**9
+    assert run["tick_intervals"]["declared_ns"] == 120 * 10**9
+    treasury = rehearsed["mechanics"]["treasury"]
+    assert treasury["cctp_forwarding"] == "never"
+    assert run["mechanics"]["treasury"]["cctp_forwarding"] == "on_empty_gas"
+    assert _transfer(rehearsed) == (None, ())
+    assert _transfer(run)[1] == ("to_reserve", "to_venue", "spot_to_perps", "perps_to_spot")
+    out = tmp_path / "session"
+    assert charter_session.main(["session", "--world", "worlds/testnet.toml", "--out-dir",
+                                 str(out), "--dry-run", "--launch", "rehearsal"]) == 0
+    evidence = json.loads((out / "session.json").read_text())
+    assert evidence["roster_sha256"] == roster_hash(given)
+    assert evidence["launch"]["rendered_manifest"]["tick_interval_ns"] == 10 * 10**9
+    # The charter loads into the file it was voted for, and its digests are the ones
+    # the load path checks: the cards' content digest and the file's roster.
+    table = voted_charter(out / "charter.toml", given, "rehearsal")
+    raw = tomllib.loads((Path(__file__).parents[2] / "worlds/testnet.toml").read_text())
+    loaded = manifest_from_dict({**raw, "charter": dict(
+        table, ratified_sha256=evidence["charter_sha256"],
+        roster_sha256=evidence["roster_sha256"])})
+    assert loaded.charter_content_sha256 == evidence["charter_sha256"]
+    assert roster_hash(loaded) == loaded.charter_roster_sha256
+    assert loaded.charter_launch == "rehearsal"
+    loaded.check_launch("rehearsal")
+    with pytest.raises(ValueError, match="voted for launch rehearsal"):
+        voted_charter(out / "charter.toml", given, "run")

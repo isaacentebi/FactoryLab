@@ -2003,6 +2003,8 @@ def run_world(
     the jail cannot start: the world block would promise tools that no proposal
     could ever obtain. Nothing is written before the refusal.
     """
+    # §I.b: its charter's ballots read the rail this launch installs (charter.launch).
+    manifest.check_launch("run")
     reason = jail_probe()
     if reason is not None:
         raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
