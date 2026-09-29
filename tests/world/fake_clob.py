@@ -9,6 +9,7 @@ touches a network or a real key: every signer is generated in the test.
 
 from __future__ import annotations
 
+import base64
 import json
 from decimal import Decimal
 from urllib import parse
@@ -41,6 +42,7 @@ class FakeClob:
         self.lose_answer = False  # the next POST /order is executed but its answer lost
         self.extra_fills: list[dict] = []  # trade rows to inject on the next /data/trades
         self.signer_address: str | None = None
+        self.page_size: int | None = None  # rows a /data/trades page carries; None: all
 
     # ---- the transport
 
@@ -78,7 +80,14 @@ class FakeClob:
             rows = [t for t in self.trades + self.extra_fills
                     if int(t["match_time"]) > int(query.get("after", "0"))]
             self.extra_fills = []
-            return {"data": rows, "next_cursor": clob.END_CURSOR}
+            if self.page_size is None:
+                return {"data": rows, "next_cursor": clob.END_CURSOR}
+            # The CLOB's cursor is a base64 offset ("MA==" is 0, "LTE=" is -1, the end).
+            start = int(base64.b64decode(query.get("next_cursor", clob.FIRST_CURSOR)))
+            end = start + self.page_size
+            following = (base64.b64encode(str(end).encode()).decode() if end < len(rows)
+                         else clob.END_CURSOR)
+            return {"data": rows[start:end], "next_cursor": following}
         if path == "/balance-allowance":
             return {"balance": str(int(self.fake._cash * clob.UNIT)), "allowances": {}}
         raise AssertionError(f"unexpected request {method} {path}")

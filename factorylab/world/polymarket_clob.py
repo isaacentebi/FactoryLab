@@ -817,7 +817,10 @@ class LivePolymarket(PolymarketReader):
         ``complete`` is False when anything went unread; the cursor then keeps it.
         """
         state = json.loads(json.dumps(cursor or {}))
-        state.setdefault("after", 0)
+        # A world's first read starts at its first poll, less the overlap: no fill of
+        # its own orders can precede the world, and a funded wallet's older history is
+        # never paged through (Codex P1 on #177).
+        state.setdefault("after", max(0, now_ns // 1_000_000_000 - TRADE_OVERLAP_S))
         state.setdefault("seen", {})
         state.setdefault("book", {})
         state.setdefault("resolved", {})
@@ -839,12 +842,18 @@ class LivePolymarket(PolymarketReader):
                 continue
             state = trial
             events.extend(found)
-        return {"events": events, "cursor": state, "complete": complete}
+        # A read that stopped at the page bound resumes where it stopped (``page``).
+        return {"events": events, "cursor": state,
+                "complete": complete and "page" not in state}
 
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]]) -> list[dict]:
         if not orders:
             return []
-        rows, page_cursor = [], FIRST_CURSOR
+        # At most MAX_TRADE_PAGES pages a poll. A listing longer than that is read over
+        # several polls: what was read is booked (the seen set keeps each leg once), the
+        # page to resume at is kept in the cursor and ``after`` does not move until the
+        # listing has been read to its end, so no row is skipped (Codex P1 on #177).
+        rows, page_cursor, ended = [], state.get("page", FIRST_CURSOR), False
         for _ in range(MAX_TRADE_PAGES):
             page = self._l2("GET", "/data/trades", query={
                 "maker_address": self.funder, "after": str(state["after"]),
@@ -852,9 +861,8 @@ class LivePolymarket(PolymarketReader):
             rows.extend(page.get("data", []) if isinstance(page, dict) else [])
             page_cursor = page.get("next_cursor") if isinstance(page, dict) else END_CURSOR
             if not page_cursor or page_cursor == END_CURSOR:
+                ended = True
                 break
-        else:
-            raise PolymarketUnavailable("trades did not fit the page bound")
         found, pending = [], []
         for trade in rows:
             status = str(trade.get("status", "")).upper().removeprefix("TRADE_STATUS_")
@@ -883,6 +891,13 @@ class LivePolymarket(PolymarketReader):
         for at, _key, order_id, size, price, taker in sorted(found):
             events.append(self._fill_event(state, orders[order_id], order_id, size, price,
                                            taker, at))
+        if not ended:
+            state["page"] = page_cursor
+            state.setdefault("pending", [])
+            state["pending"] = sorted(set(state["pending"]) | set(pending))
+            return events
+        pending = sorted(set(pending) | set(state.pop("pending", [])))
+        state.pop("page", None)
         # The next read starts before the oldest trade not yet final (it is read again
         # until it is), else an overlap before the newest trade seen, so a trade the
         # venue lists late is still read. The seen set keeps every leg this world ever

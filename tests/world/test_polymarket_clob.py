@@ -333,3 +333,38 @@ def test_a_trade_listed_late_is_read_and_nothing_is_booked_twice():
     for poll in range(3):
         again = venue.poll(now_ns=3 + poll, cursor=second["cursor"], orders=orders)
         assert again["events"] == []  # the first fill is never booked again
+
+
+def test_more_trade_pages_than_one_poll_reads_are_read_over_several_polls():
+    """Codex P1 on #177: past MAX_TRADE_PAGES a poll discarded every row it read and left
+    the cursor where it was, so every later poll raised again and no fill ever settled."""
+    venue, server = live_venue()
+    token, intent = _intent(venue, server, "c-1", price="0.30")
+    venue.intent_of = {"c-1": intent}.get
+    _place(venue, token, price="0.30")  # rests; its fills are the rows below
+    server.page_size = 2
+    pages = clob.MAX_TRADE_PAGES + 1
+    server.trades = [{"id": f"t-{n}", "status": "CONFIRMED", "match_time": str(100 + n),
+                      "taker_order_id": "0x" + "cd" * 32, "size": "0.5", "price": "0.3",
+                      "maker_orders": [{"order_id": intent["order_hash"],
+                                        "matched_amount": "0.5", "price": "0.3",
+                                        "side": "BUY"}]}
+                     for n in range(2 * pages)]
+    orders = _orders(intent, token)
+    booked, cursor = [], {}
+    for now in range(1, 4):
+        answer = venue.poll(now_ns=now, cursor=cursor, orders=orders)
+        cursor = answer["cursor"]
+        booked += [e for e in answer["events"] if e["kind"] == "fill"]
+    assert len(booked) == 2 * pages  # every row, over two polls, none twice
+    assert sum(Decimal(e["size"]) for e in booked) == Decimal(pages)
+
+
+def test_a_first_poll_starts_at_the_world_never_at_the_wallets_history():
+    venue, server = live_venue()
+    token, intent = _intent(venue, server, "c-1", price="0.30")
+    venue.intent_of = {"c-1": intent}.get
+    _place(venue, token, price="0.30")
+    now_s = 1_790_000_000
+    answer = venue.poll(now_ns=now_s * 10**9, cursor={}, orders=_orders(intent, token))
+    assert answer["cursor"]["after"] == now_s - clob.TRADE_OVERLAP_S
