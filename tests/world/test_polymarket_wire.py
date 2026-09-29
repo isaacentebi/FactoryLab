@@ -138,12 +138,14 @@ def _page(*rows, **extra):
     _page({**TRADE, "maker_orders": [{**LEG, "matched_amount": "11"}]}),
     _page({**TRADE, "maker_orders": [{**LEG, "side": "SELL"}]}),
     _page({**TRADE, "maker_orders": [_without(LEG, "side")]}),
-    _page({**TRADE, "maker_orders": [{**LEG, "order_id": "0xo"}]}),
+    _page({**TRADE, "maker_orders": [{**LEG, "order_id": ""}]}),
+    _page({**TRADE, "maker_orders": [{**LEG, "order_id": 7}]}),
     _page({**TRADE, "maker_orders": None}), _page(_without(TRADE, "id")),
     _page({**TRADE, "id": ""}), _page({**TRADE, "id": 7}),
     _page(_without(TRADE, "match_time")), _page({**TRADE, "match_time": "-1"}),
     _page({**TRADE, "match_time": True}), _page({**TRADE, "status": "SETTLED"}),
-    _page({**TRADE, "taker_order_id": "0xo"}), _page({**TRADE, "price": "1"}),
+    _page({**TRADE, "taker_order_id": ""}), _page({**TRADE, "taker_order_id": None}),
+    _page({**TRADE, "price": "1"}),
     _page(_without(TRADE, "side")), _page({**TRADE, "size": "0"}),
     _page(TRADE, next_cursor=None), {"data": [TRADE], "next_cursor": ""},
 ])
@@ -195,12 +197,20 @@ def test_the_scan_finds_every_contradiction_and_never_raises(page, found):
     assert len(wire.scan_contradictions(page, [OURS])) == found
 
 
-def test_the_documented_trade_example_scans_uncharged():
-    """clob-openapi.yaml (read 2026-09-29), ``GET /data/trades`` example: every field a
-    string, ``fee_rate_bps: '30'`` on the trade (its taker's) and a maker leg's
-    ``fee_rate_bps`` a string. This world's maker leg at the documented "0" is
-    uncharged; the taker's rate is never read as this world's."""
-    documented = {
+def test_another_party_s_id_is_any_string_and_never_this_world_s():
+    """Architect's decision on #177: only this world's ids must be the hashes it signed;
+    another party's taker or maker id may be any non-empty string."""
+    trades, _ = wire.trades_page(_page(
+        {**TRADE, "taker_order_id": "0xo", "maker_orders": [
+            {**LEG, "order_id": "not-a-hash"}, {**LEG, "order_id": OURS.upper()[2:]}]}),
+        SIGNED)
+    assert trades == []  # "AB..." without its 0x is not a hash this world signed
+
+
+def _documented(**leg):
+    """clob-openapi.yaml's ``GET /data/trades`` example (read 2026-09-29), verbatim but
+    for one maker leg of this world's."""
+    return {
         "limit": 100, "next_cursor": "MTAw", "count": 1, "data": [{
             "id": "trade-123", "taker_order_id": "0xabcdef1234567890abcdef1234567890abcdef12",
             "market": "0x" + "00" * 31 + "01", "asset_id": TOKEN, "side": "BUY",
@@ -213,7 +223,30 @@ def test_the_documented_trade_example_scans_uncharged():
             "maker_orders": [{"order_id": OURS, "owner": "key-1",
                               "maker_address": "0x1234567890123456789012345678901234567890",
                               "matched_amount": "5", "price": "0.3", "fee_rate_bps": "0",
-                              "asset_id": TOKEN, "outcome": "YES", "side": "BUY"}]}]}
+                              "asset_id": TOKEN, "outcome": "YES", "side": "BUY", **leg}]}]}
+
+
+def test_the_documented_trade_example_parses_with_its_40_digit_taker_id():
+    trades, cursor = wire.trades_page(_documented(), SIGNED)
+    assert cursor == "MTAw"
+    assert [(t.status, [(leg.order_id, leg.size, leg.price, leg.taker) for leg in t.legs])
+            for t in trades] == [("CONFIRMED", [(OURS, Decimal(5), Decimal("0.3"), False)])]
+
+
+def test_a_size_in_base_units_is_malformed_never_booked_a_million_times_over():
+    """The documented example states ``size: '100000000'``: if the venue ever reports
+    this world's leg of a 10-share order in base units, the read is malformed (a visible
+    stall), never booked. A conversion, if the units are base units, belongs here, once."""
+    with pytest.raises(wire.Malformed, match="signed"):
+        wire.trades_page(_documented(matched_amount="100000000"), SIGNED)
+
+
+def test_the_documented_trade_example_scans_uncharged():
+    """clob-openapi.yaml (read 2026-09-29), ``GET /data/trades`` example: every field a
+    string, ``fee_rate_bps: '30'`` on the trade (its taker's) and a maker leg's
+    ``fee_rate_bps`` a string. This world's maker leg at the documented "0" is
+    uncharged; the taker's rate is never read as this world's."""
+    documented = _documented()
     assert wire.scan_contradictions(documented, [OURS]) == {}
 
 
@@ -258,7 +291,8 @@ def test_a_cancel_answer_names_one_outcome_or_none(answer, outcome):
 
 @pytest.mark.parametrize("answer", [
     None, {"canceled": [OURS]}, {"canceled": OURS, "not_canceled": {}},
-    {"canceled": ["0xo"], "not_canceled": {}}, {"canceled": [], "not_canceled": []},
+    {"canceled": [""], "not_canceled": {}}, {"canceled": [7], "not_canceled": {}},
+    {"canceled": [], "not_canceled": []},
 ])
 def test_a_cancel_answer_that_does_not_conform_is_malformed(answer):
     with pytest.raises(wire.Malformed):

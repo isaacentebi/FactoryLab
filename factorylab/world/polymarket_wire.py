@@ -9,8 +9,9 @@ book) is parsed here, against its documented shape, into a record of exact types
 
 * the fields the pot reads are present and of their documented type; a field the pot
   does not read may be absent or extra, and is ignored;
-* an order hash is ``0x`` and 64 hex digits, an address ``0x`` and 40; each is
-  lower-cased here, once, and everything downstream compares lower-case values;
+* this world's own order id is ``0x`` and 64 hex digits, a hash it signed; another
+  party's id is any non-empty string (it never touches the books); each is lower-cased
+  here, once, and everything downstream compares lower-case values;
 * a price is strictly inside (0, 1), a size positive, an amount a finite decimal (never
   a float: the transport parses numbers as ``Decimal``, and a bool is never a number);
 * a status is one of its documented values; a row that is not an object is malformed;
@@ -81,6 +82,15 @@ def order_hash(value: Any, what: str = "order hash") -> str:
     """``0x`` and 64 hex digits, lower-cased."""
     if not isinstance(value, str) or not _HASH.fullmatch(value):
         raise Malformed(f"{what} is not an order hash")
+    return value.lower()
+
+
+def other_id(value: Any, what: str) -> str:
+    """Another party's order id: any non-empty string, lower-cased. It never touches
+    this world's books; only this world's own ids must be the hashes it signed
+    (architect's decision on #177: the documented example's taker id is 40 digits)."""
+    if not isinstance(value, str) or not value:
+        raise Malformed(f"{what} is not an id")
     return value.lower()
 
 
@@ -245,10 +255,10 @@ def cancel_answer(answer: Any, order_id: str) -> tuple[str, str | None]:
     ``("cancelled", None)``, ``("not_canceled", why)`` or ``("unknown", None)`` when it
     names both or neither; raises ``Malformed`` otherwise."""
     row = obj(answer, "cancel answer")
-    cancelled = {order_hash(h, "canceled") for h in rows(
+    cancelled = {other_id(h, "canceled") for h in rows(
         field(row, "canceled", "cancel answer"), "canceled")}
     refused = obj(field(row, "not_canceled", "cancel answer"), "not_canceled")
-    refused = {order_hash(h, "not_canceled"): v for h, v in refused.items()}
+    refused = {other_id(h, "not_canceled"): v for h, v in refused.items()}
     ours = order_id.lower()
     if (ours in cancelled) == (ours in refused):
         return "unknown", None
@@ -284,7 +294,11 @@ def order(answer: Any, *, expect: str | None = None,
     than that limit (Sol P1, round 6: an answer is checked against the signed order,
     never against itself)."""
     row = obj(answer, "order")
-    found = order_hash(field(row, "id", "order"), "order id")
+    stated = field(row, "id", "order")
+    # An order asked for by its hash is this world's: it must be that hash; a listed
+    # order may be anyone's.
+    found = order_hash(stated, "order id") if expect is not None else other_id(
+        stated, "order id")
     if expect is not None and found != expect.lower():
         raise Malformed("order read back is another order")
     status = ORDER_STATUS.get(text(field(row, "status", "order"), "order status"))
@@ -343,8 +357,11 @@ def trades_page(answer: Any, ours: dict[str, tuple[Decimal, Decimal]]
                 ) -> tuple[list[Trade], str]:
     """A ``GET /data/trades`` page: the trades with a leg of one of ``ours`` (hash ->
     signed ``(size, limit)``), and its ``next_cursor``. Every row and every maker leg is
-    parsed, whoever's it is; a leg of this world's must be a BUY at no more than its
-    signed limit, of a positive size (Sol P1, round 7: a $1.40 fill was booked)."""
+    parsed, whoever's it is; another party's order id is any non-empty string, and a
+    leg is this world's only when its id is, in any case, a hash this world signed. A
+    leg of this world's must be a BUY at no more than its signed limit, of a positive
+    size no larger than its signed size (Sol P1, round 7: a $1.40 fill was booked; a
+    size in base units, 10^6 times the shares, is malformed, never booked)."""
     page = obj(answer, "trades page")
     own = {h.lower(): signed for h, signed in ours.items()}
     trades = []
@@ -361,7 +378,7 @@ def trades_page(answer: Any, ours: dict[str, tuple[Decimal, Decimal]]
         nano = row.get("match_time_nano")
         instant = at * 1_000_000_000 if nano in (None, "") else _seconds(nano, "match_time_nano")
         legs = []
-        taker = order_hash(field(row, "taker_order_id", "trade"), "taker_order_id")
+        taker = other_id(field(row, "taker_order_id", "trade"), "taker_order_id")
         side = text(field(row, "side", "trade"), "trade side")
         size = positive(field(row, "size", "trade"), "trade size")
         paid = price(field(row, "price", "trade"), "trade price")
@@ -371,7 +388,7 @@ def trades_page(answer: Any, ours: dict[str, tuple[Decimal, Decimal]]
             legs.append(_leg(taker, side, size, paid, own[taker], taker=True))
         for maker_raw in rows(field(row, "maker_orders", "trade"), "maker_orders"):
             maker = obj(maker_raw, "maker leg")
-            maker_id = order_hash(field(maker, "order_id", "maker leg"), "maker order_id")
+            maker_id = other_id(field(maker, "order_id", "maker leg"), "maker order_id")
             maker_side = text(field(maker, "side", "maker leg"), "maker side")
             if maker_side not in ("BUY", "SELL"):
                 raise Malformed("maker side is not documented")

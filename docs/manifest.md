@@ -2646,8 +2646,9 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
 * **Threat model.** The venue may be buggy, malformed, lagging or contradictory; the
   operator is honest. So every answer the pot reads passes one door
   (`world/polymarket_wire.py`): it is parsed against its documented shape (required
-  fields of exact types, hashes and addresses `0x` hex of their length and lower-cased
-  once, prices strictly inside (0, 1), sizes positive, statuses documented, a leg of
+  fields of exact types, this world's own order ids the hashes it signed (`0x` and 64
+  hex digits, in any case; another party's id is any non-empty string, which never
+  touches the books), everything lower-cased once, prices strictly inside (0, 1), sizes positive, statuses documented, a leg of
   this world's a BUY at no more than its signed limit, no row that is not an object),
   and one that does not conform is malformed whole: a read is unread (its cursor does
   not move), an acknowledgement uncertain. No venue answer is trusted where it would
@@ -2769,6 +2770,17 @@ and `GET /balance-allowance/update` once; the jurisdiction check
 (https://docs.polymarket.com/api-reference/geoblock). The first live smoke is one GTC
 buy of the market's minimum size at a price that does not cross, its lookup by hash,
 and its cancel.
+
+**Blocking step of the first live smoke: the units.** Before any live world trades, a
+smoke order must fill (as a maker), and its `GET /data/trades` row is read by hand to
+confirm the units of `size`, `matched_amount` and `price`: the parser
+(`world/polymarket_wire.py`) reads sizes as whole outcome tokens and prices as pUSD a
+token. The documented example states `size: '100000000'` on a 0.5-price trade, which
+may be six-decimal base units. Until it is confirmed, no live world runs. Meanwhile a
+leg of this world's larger than its signed size is malformed, so a base-unit report
+stalls the read visibly (`polymarket.read_malformed`) and is never booked a million
+times over. If the units are base units, the door gets one explicit conversion, and
+nothing downstream changes.
 
 ## New kinds of work: reward shapes and predicates
 

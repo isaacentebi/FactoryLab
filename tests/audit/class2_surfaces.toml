@@ -751,6 +751,7 @@ sources = [
   "factorylab/world/polymarket_wire.py::obj",
   "factorylab/world/polymarket_wire.py::order",
   "factorylab/world/polymarket_wire.py::order_hash",
+  "factorylab/world/polymarket_wire.py::other_id",
   "factorylab/world/polymarket_wire.py::positions_page",
   "factorylab/world/polymarket_wire.py::positive",
   "factorylab/world/polymarket_wire.py::price",
