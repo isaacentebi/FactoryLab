@@ -212,3 +212,36 @@ def test_venue_read_weight_boundary(facts):
     assert ComputeMixin._venue_read_refusal(rt, "seat", "venue.mids", {}) is None
     rt._venue_read_used = lambda _: 1
     assert ComputeMixin._venue_read_refusal(rt, "seat", "venue.mids", {})
+
+
+def test_polymarket_principal_and_order_budget_are_enforced_at_their_published_bounds():
+    """The pot's principal cap and its request budget, as world.read publishes them."""
+    from dataclasses import replace
+
+    from factorylab.cortex.admission_tools import tool_admission_schematics
+    from factorylab.runtime.polymarket import PRINCIPAL_REFUSAL, principal_excess
+    from factorylab.runtime.worlds import PolymarketSpec
+    from factorylab.world.polymarket_clob import BudgetSpent, RequestBudget
+
+    manifest = replace(load_manifest("scripted"), polymarket=PolymarketSpec(
+        enabled=True, principal_micro=40_000_000, order_requests_per_10s=7))
+    facts = tool_admission_schematics(manifest)["polymarket_orders"]
+    cap = facts["principal_micro"]
+    surface = SimpleNamespace(spec=manifest.polymarket, settled=Decimal(0))
+
+    def pot(usdc, tokens="0", avg="0.5"):
+        return {"usdc": usdc, "positions": [{"size": tokens, "avg_px": avg}]}
+
+    assert principal_excess(surface, pot(str(Decimal(cap) / 1_000_000))) is None
+    assert principal_excess(surface, pot("39.999999", "0.000002", "1")) == PRINCIPAL_REFUSAL
+    # What the pot earned itself never counts against its principal.
+    surface.settled = Decimal(5)
+    assert principal_excess(surface, pot("45")) is None
+    budget = RequestBudget(facts["order_requests_per_10s"], wall=lambda: 10**18)
+    for _ in range(facts["order_requests_per_10s"]):
+        budget.take()
+    with pytest.raises(BudgetSpent):
+        budget.take()
+    later = RequestBudget(1, wall=iter((0, 10_000_000_000)).__next__)
+    later.take()
+    later.take()  # a request 10 s later is outside the window

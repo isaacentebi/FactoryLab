@@ -305,7 +305,23 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
             "max_order_micro": manifest.polymarket.max_order_micro,
             "max_open_micro": manifest.polymarket.max_open_micro,
             "max_orders_per_window": manifest.polymarket.max_orders_per_window,
+            "principal_micro": manifest.polymarket.principal_micro,
+            "live_orders": manifest.polymarket.venue == "live" and manifest.polymarket.orders,
+            "order_requests_per_10s": manifest.polymarket.order_requests_per_10s,
             "rules": {
+                "principal": "When principal_micro is set, a buy is refused while the pot's "
+                "value on its own books (USDC, open tokens at cost, resolved unredeemed "
+                "tokens at their payout) less what its fills and resolutions settled "
+                "exceeds principal_micro. Cancellations and sells are not refused by it.",
+                "live": "With live_orders, an order is a GTC limit order on Polymarket's "
+                "CLOB, signed by the pot's wallet; its identity is its EIP-712 order hash, "
+                "recorded with the intent before it is sent, and a lost answer is looked "
+                "up by that hash and never sent again. A fill is booked once, when "
+                "Polymarket reports its trade CONFIRMED; a fill beyond its order's size "
+                "is booked to the pot owned by no decision. The pot's own requests "
+                "(orders, cancels, lookups, fills, account, marks and a write's market "
+                "read) are at most order_requests_per_10s in any sliding 10 s of wall "
+                "time; one past it is not sent and reads as unavailable.",
                 "arguments": "Schema, string length and token pattern checks precede dispatch. "
                 "Size and price are finite decimals, not booleans; size is positive "
                 "and price is strictly between zero and one.",

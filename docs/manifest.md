@@ -2280,8 +2280,13 @@ venue's writes. The keys, all fixed for the world's life:
 | key | default | meaning |
 |---|---|---|
 | `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
-| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs only; no write tool and no pot are registered, because live order signing on Polygon is not built |
-| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (`polymarket_live_writes_not_built`: a live venue is read-only until the live-trading wave, which must bring its own request bound) |
+| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs, and with `orders = true` signed orders on the CLOB (`world/polymarket_clob.py`, `LivePolymarket`; "Live orders" below) |
+| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (a live pot is what its wallet holds) and above `principal_usd` |
+| `orders` | `false` | live orders: registers the pot, its two reads and its two writes on the live venue. Refused with `venue = "fake"` (which always takes writes); requires `funder` and `principal_usd`; admitted only in the world named `funded`, under the same gate as a mainnet venue (`exchange.client_namespace`, the ratified charter and roster digests, `charter.launch`), because Polymarket's one network, Polygon, is real money |
+| `principal_usd` | absent | the pot's principal cap: while the pot's value on its own books (USDC, open tokens at cost, resolved unredeemed tokens at their payout) less what its fills and resolutions settled exceeds it, every buy is refused before any intent ("the polymarket pot holds more principal than [polymarket] principal_usd") and each reconciliation ledgers `polymarket.principal_exceeded`; a cancellation or a sell never is. What the pot earns never counts against it; a deposit always does. Positive exact USD |
+| `funder` | absent | the pot's wallet (lower-case 0x address), the orders' maker and the Data API's `user` |
+| `signature_type` | `0` | how the exchange verifies the pot's signature: 0 EOA (the key's own address must be `funder`), 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (a Deposit Wallet) |
+| `order_requests_per_10s` | `60` | the pot's own requests (orders, cancels, lookups, fills, its account, held tokens' marks and a write's market read) per sliding 10 s of wall time, each counted before it is sent; one past it is not sent. At most 200 (`/balance-allowance`'s published limit, the tightest endpoint these reach besides Gamma `/markets`), and with `orders`, `read_requests_per_10s + order_requests_per_10s` is at most 300, Gamma `/markets`' |
 | `max_order_usd` | `"10"` | the most one order's notional (`price x size`) may be |
 | `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
 | `max_orders_per_window` | `20` | orders placed per reserve window |
@@ -2334,12 +2339,13 @@ answered from the tick (below): a share is a quota on reads asked, so a seat can
 tell a tick's answer from a sent read. The seats therefore send at most
 `read_requests_per_10s - kernel_reserve_per_10s` in any sliding 10 s.
 
-**What reaches Polymarket.** Only a live-read world sends requests, and it holds no
-positions: writes, positions and the marks of the pot's lots exist only on the
-simulated venue (`venue = "fake"`, and a live world's offline `simulate_reads`), which
-sends Polymarket nothing. A live world with writes is refused at load
-(`polymarket_live_writes_not_built`) until the live-trading wave brings its own bound.
-So the kernel's requests to Polymarket are its settlement reads alone. **One live
+**What reaches Polymarket.** A live world's public reads are the seats' and the kernel's
+settlement reads, bounded below. A live world with `orders = true` also sends the pot's
+own requests, counted apart by its own budget, `order_requests_per_10s` in any sliding
+10 s of wall time, each before it is sent and never stamped as a public read (below,
+"Live orders"). The simulated venue (`venue = "fake"`, and a live world's offline
+`simulate_reads`) sends Polymarket nothing. So the kernel's public requests are its
+settlement reads alone. **One live
 Polymarket world runs a host**: a world whose Polymarket reads go to the network is
 admitted before its first event at genesis and before a resume replays anything
 (`runtime/polymarket.py`, `arm`). It must have a ledger (every request and its wall
@@ -2410,7 +2416,9 @@ carry text third parties wrote (questions, rules, slugs, resolution sources), so
 outside text exactly as a `connector.fetch` body is: prose of at least
 `MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
 artifact and outcome tools only, so market text cannot reach a write in the same wake. With
-the simulated venue, `polymarket.positions {}` reads the pot (free), and
+the simulated venue, or live orders, `polymarket.positions {}` reads the pot and
+`polymarket.open_orders {}` its resting orders (free; on the live venue both answer from
+the pot's one account read a tick and a Polymarket write), and
 `polymarket.place_limit {token_id, side, size, price}` and `polymarket.cancel {order_id}`
 write (free). The writes are consequence writes: only a producing decision with an open
 consequence account may make them, each has a client id (`<handle>:<slot>`) and a durable
@@ -2419,8 +2427,8 @@ unanswered intent is polled at most `UNCERTAIN_ORDER_POLLS` times and then relea
 unknown, and a batch that writes is weighed whole with the venue's writes.
 
 Custody: collateral is the `polymarket` pot, its own account in `custody_view` and in
-`world.pots` (valued at USDC plus tokens at cost, so a buy does not move the total; tokens
-listed by count and cost). An order is weighed against that pot alone, with the market's own
+`world.pots` (valued at USDC plus tokens at cost, so a buy does not move the total, and a
+resolved token not yet redeemed at its payout; tokens listed by count and cost). An order is weighed against that pot alone, with the market's own
 tick and minimum size, and never against the Hyperliquid accounts or the reserve. What the pot
 settles is ledgered as `venue.settled` with `custody = "polymarket"` and summed on the pot's
 own books, never in `BudgetBook.book_venue`; what a decision's event positions realise is its
@@ -2465,6 +2473,73 @@ The reads are the kernel's measurement and cost no seat anything. `scripts/fastl
 and `scripts/edition4_rehearsal.py` when it is handed a simulated clock, answer a
 live-read world's reads from the simulated venue (`simulate_reads`), which then moves and
 resolves on the world's clock; such a run takes no IP lock.
+
+### Live orders
+
+`venue = "live"` with `orders = true` trades the pot on Polymarket's CLOB
+(`world/polymarket_clob.py`, `LivePolymarket`), with the same tools, intents, custody and
+settlement as the simulated venue, and the same `FakePolymarket` contract (`place`,
+`cancel`, `lookup`, `account`), which `tests/world/fake_clob.py` serves over the
+published HTTP protocol in the tests. The protocol, each fact read 2026-09-29
+(Polymarket moved to CLOB V2 on 2026-04-28,
+https://docs.polymarket.com/changelog/predictions):
+
+| fact | what the code does | source |
+|---|---|---|
+| Order struct `Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)`, EIP-712 domain `{name: "Polymarket CTF Exchange", version: "2", chainId: 137, verifyingContract}`; V2 removed `taker`, `expiration`, `nonce`, `feeRateBps` | `order_hash`, checked against the exchange's own `hashOrder` by an `eth_call` on Polygon (`tests/world/test_polymarket_clob.py`) | https://docs.polymarket.com/v2-migration, https://docs.polymarket.com/trading/place-orders, https://github.com/Polymarket/ctf-exchange-v2 (`Structs.sol`, `Hashing.sol`) |
+| CTF Exchange `0xE111180000d2663C0091e4f400237545B87B996B`, Neg Risk CTF Exchange `0xe2222d279d744050d28e00520010520000310F59` (a neg-risk market's orders), Conditional Tokens `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`, CtfCollateralAdapter `0xAdA100Db00Ca00073811820692005400218FcE1f`, NegRiskCtfCollateralAdapter `0xadA2005600Dec949baf300f4C6120000bDB6eAab`, CollateralOnramp `0x93070a847efEf7F70739046A929D47a521F5B8ee` | `exchange_for`, constants | https://docs.polymarket.com/resources/contracts |
+| Collateral is pUSD (`0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`, 6 decimals), backed 1:1 by USDC; USDC.e becomes pUSD by `CollateralOnramp.wrap` | the pot is the funder's pUSD (`/balance-allowance`) | https://docs.polymarket.com/concepts/pusd |
+| Signature types 0 EOA, 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (Deposit Wallet, the default since 2026-05-04; an EOA trades only if allowlisted); type 3 signs an ERC-7739 `TypedDataSign` wrapper | `order_signature` | https://docs.polymarket.com/trading/wallets-auth, https://github.com/Polymarket/py-clob-client-v2 |
+| Amounts: 6 decimals for collateral and tokens; BUY maker = price x size USD, taker = size; SELL the reverse; per-tick decimals (`ROUNDING`) | `order_amounts` refuses what it would have to round | https://docs.polymarket.com/trading/place-orders |
+| L1: `ClobAuth(address address,string timestamp,uint256 nonce,string message)` under `{ClobAuthDomain, 1, 137}`; `GET /auth/derive-api-key`, else `POST /auth/api-key`. L2: HMAC-SHA256 of `timestamp + METHOD + path + body` (no query), base64url secret, padded urlsafe output | `l1_headers`, `l2_headers` | https://docs.polymarket.com/getting-started/api |
+| Allowances: pUSD `approve` and CTF `setApprovalForAll` for both exchanges; CTF `setApprovalForAll` for the collateral adapter to redeem | the operator's, before launch (below) | https://docs.polymarket.com/trading/wallets-auth, https://docs.polymarket.com/trading/positions/manage |
+| Ticks 0.1, 0.01, 0.005, 0.0025, 0.001, 0.0001; off-tick price and size below `orderMinSize` rejected, never rounded | refused before any intent | https://docs.polymarket.com/market-data/market-details, https://docs.polymarket.com/resources/error-codes |
+| Fee `shares x rate x (p (1 - p))^exponent`, takers only, 5 decimals, from the market's `feeSchedule`; no longer an order field | a taker fill's fee at the schedule the intent recorded | https://docs.polymarket.com/trading/fees |
+| GTC, GTD, FOK, FAK; `POST /order` answers `live`, `matched`, `delayed` or `unmatched`; `DELETE /order {orderID}` answers `{canceled, not_canceled}`; no client order id, the hash is the identity, a repost is `Duplicated` | every order is GTC; `matched` and `delayed` are read back by hash | https://docs.polymarket.com/trading/place-orders, https://docs.polymarket.com/trading/manage-orders |
+| `GET /data/order/{hash}` (LIVE, MATCHED, CANCELED, CANCELED_MARKET_RESOLVED, INVALID; `size_matched`), `GET /data/orders`, `GET /data/trades` (MATCHED, MINED, CONFIRMED, RETRYING, FAILED), Data API `/positions` | `lookup`, `account`, `poll` | https://docs.polymarket.com/concepts/order-lifecycle, https://docs.polymarket.com/api-spec/clob-openapi.yaml |
+| Resolution by UMA's optimistic oracle (2 h challenge, days if disputed); redemption `redeemPositions(pUSD, 0x0, conditionId, [1, 2])` on the collateral adapter, an on-chain transaction paid in POL | resolution read from Gamma; redemption is the operator's (below) | https://docs.polymarket.com/concepts/resolution, https://docs.polymarket.com/trading/positions/manage |
+| Rate limits: `POST /order` 5,000 per 10 s; `/data/orders`, `/data/trades` 500; `/balance-allowance` 200; Gamma `/markets` 300 | `order_requests_per_10s` | https://docs.polymarket.com/api-reference/rate-limits |
+
+The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
+
+* **Intent first.** A write is weighed (the pot, the caps, the principal, the market's
+  tick and minimum) before anything is ledgered. Its order is then built
+  (`order_identity`: the salt is `sha256(namespace:launch_nonce:client_id)`, so no
+  launch or intent shares one) and the `polymarket.intent` carries the order's fields
+  and its hash before the network call. `LivePolymarket.place` signs and sends only the
+  order a durable intent names, rebuilt to that hash (`intent_of`); anything else is
+  refused and nothing is sent. A kill's cancellations are intents too.
+* **Uncertain, never resent.** A 5xx, a timeout, a lost answer, `Duplicated`, `matched`
+  or `delayed` is uncertain, and resolved by `GET /data/order/{hash}`, polled at most
+  `UNCERTAIN_ORDER_POLLS` times; an order the CLOB does not know is uncertain, never
+  rejected. A process death between `polymarket.place` (or `polymarket.cancel`) and its
+  answer resumes with the call uncertain (`RecoveryJournal.call`), never resent.
+* **Fills.** Read from `/data/trades` for this world's orders only, each fill booked
+  once, when its trade is CONFIRMED; a FAILED trade never. The poll's cursor is carried
+  in and out of the journaled call and checkpointed. A fill that would take its order's
+  fills past its size is quarantined (`polymarket.fill_quarantined`,
+  `consequence.quarantined`): its money is booked to the pot and owned by no decision.
+  An order's account is released only once `GET /data/order` confirms it terminal with
+  no more filled than was booked (wave 17b).
+* **Custody.** `claimed + unattributed == booked` on the pot's own books
+  (`polymarket_custody` in the summary). Every debit names a real counterparty: a buy
+  pays its price to the matched side (a token at cost, not a P&L), a taker fee is
+  Polymarket's, a sale realises against the pot's average cost. Gas is spent only by a
+  redemption, which this wave leaves to the operator.
+* **Settlement.** A held position is marked at its book's midpoint each tick (inside
+  the pot's budget) and scored at the consequence backstop on that mark, the market's
+  anticipatory settlement (essay II.IV.b); the resolution, days later, closes its lots
+  at the payout and books late money without rescoring (II.III.b). A resolved token not
+  yet redeemed is valued at its payout.
+
+What the owner provides before a live world: a Polygon wallet (a Deposit Wallet,
+`signature_type = 3`, or an allowlisted EOA, `0`) as `funder`, its signing key in
+`polymarket.key` (mode 0400 or 0600, read into `POLYMARKET_PRIVATE_KEY`); pUSD in it
+at most `principal_usd`; POL for the approvals and redemptions; the approvals above,
+and `GET /balance-allowance/update` once; the jurisdiction check
+(https://docs.polymarket.com/api-reference/geoblock). The first live smoke is one GTC
+buy of the market's minimum size at a price that does not cross, its lookup by hash,
+and its cancel.
 
 ## New kinds of work: reward shapes and predicates
 

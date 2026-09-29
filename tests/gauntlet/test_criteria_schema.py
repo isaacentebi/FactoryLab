@@ -907,6 +907,25 @@ def test_a_launched_manifest_missing_a_field_is_diary_invalid():
     assert "immune.decay_step is no field" in g.kernel_problem(legacy)
 
 
+def test_a_launch_that_predates_a_later_field_reads_it_at_its_default_and_no_other():
+    """A world launched before Polymarket orders existed states none of their keys: their
+    defaults are the physics it ran under. A launch that states one reads it exactly."""
+    from factorylab.runtime.worlds import load_manifest
+
+    good = json.loads(load_manifest("scripted").canonical_json())
+    older = json.loads(json.dumps(good))
+    for path in g.LATER_FIELDS:
+        block, _, name = path.partition(".")
+        older[block].pop(name)
+    assert g.kernel_problem(older) is None
+    stated = json.loads(json.dumps(good))
+    stated["polymarket"]["orders"] = "yes"
+    assert g.kernel_problem(stated) is not None
+    unknown = json.loads(json.dumps(older))
+    unknown["polymarket"]["leverage"] = 3
+    assert "no field" in g.kernel_problem(unknown)
+
+
 def test_a_propensity_with_a_field_the_kernel_record_lacks_is_malformed():
     """Codex on e74c48d, the same class: the propensity is built as the kernel's
     ``PropensityRecord`` from the whole row, never filtered to its fields."""
