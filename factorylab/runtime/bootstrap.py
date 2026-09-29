@@ -329,6 +329,11 @@ class BootstrapMixin:
         # and one naming a different receiver refuses (``witness_mismatch``).
         self.witness_required = witness.receiver_identity() is not None
         self.witness_receiver = witness.receiver_identity()
+        # The launch the charter was voted for (charter.launch, §I.b): part of the
+        # launched identity, carried in every checkpoint and the Launch event, so a
+        # manifest edited after launch cannot rebind it (``charter_launch_changed``).
+        # It stays outside the manifest hash, so no existing world is renamed.
+        self.charter_launch = manifest.charter_launch
         # The diary this state descends from (the hash of its first sealed record).
         # None until the ledger has one; restore sets it from the checkpoint so a
         # twin restored in memory still names the diary it came from.

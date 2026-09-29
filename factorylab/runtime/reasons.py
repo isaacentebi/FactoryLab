@@ -85,6 +85,8 @@ class Reason(StrEnum):
     # charter states none (runtime/worlds.py, ``WorldManifest.check_launch``).
     CHARTER_LAUNCH_MISMATCH = "charter_launch_mismatch"
     CHARTER_LAUNCH_MISSING = "charter_launch_missing"
+    # A resume's manifest names another charter.launch than the world launched with.
+    CHARTER_LAUNCH_CHANGED = "charter_launch_changed"
 
 
 class CredentialMissing(RuntimeError):

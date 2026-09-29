@@ -366,6 +366,10 @@ class Runtime(
                  # a world launched without one ledgers nothing, exactly as before.
                  **({"witness_required": True, "witness_receiver": self.witness_receiver}
                     if getattr(self, "witness_required", False) else {}),
+                 # The launch its charter was voted for; a world whose charter names
+                 # none ledgers nothing, exactly as before.
+                 **({"charter_launch": self.charter_launch}
+                    if getattr(self, "charter_launch", None) is not None else {}),
                  "manifest": json.loads(self.m.canonical_json())},
                 "kernel",
             )

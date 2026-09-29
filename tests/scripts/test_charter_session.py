@@ -614,3 +614,78 @@ def test_a_runner_launch_renders_the_manifest_the_runner_launches(tmp_path):
     loaded.check_launch("rehearsal")
     with pytest.raises(ValueError, match="voted for launch rehearsal"):
         voted_charter(out / "charter.toml", given, "run")
+
+
+def _diary_of(world, tmp_path, *, bound_by_run=True):
+    """A one-event diary of ``world``: launched by ``run_world`` (which checks ``run``),
+    or by the bare Runtime a runner builds (which binds no launch of its own)."""
+    from factorylab.runtime.loop import Runtime, run_world
+
+    manifest, path = load_manifest(str(world)), tmp_path / "world.jsonl"
+    if bound_by_run:
+        run_world(manifest, events=1, seed=1, ledger_path=str(path))
+    else:
+        Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
+                ledger_path=str(path), router_gamma=0.1).run()
+    return manifest, path
+
+
+@pytest.mark.gate  # launches a world to resume
+def test_factorylab_resume_refuses_a_world_bound_to_the_rehearsal_runner(tmp_path, capsys):
+    """Codex on 43799ed: resume bypassed the launch binding. ``factorylab resume`` is the
+    ``run`` launch, so a world whose charter was voted for the runner is refused, with
+    the diary untouched."""
+    from factorylab.runtime.cli import main
+
+    world = _bound("worlds/scripted.toml", "rehearsal", tmp_path)
+    _manifest, path = _diary_of(world, tmp_path, bound_by_run=False)
+    before = path.read_bytes()
+    assert main(["resume", "--world", str(world), "--ledger", str(path)]) == 1
+    assert capsys.readouterr().err.splitlines() == [
+        "factorylab resume: charter_launch_mismatch"]
+    assert path.read_bytes() == before
+
+
+@pytest.mark.gate  # launches a world to resume
+@pytest.mark.parametrize("launched, edited", [("run", None), (None, "run")])
+def test_a_charter_launch_edited_after_launch_is_refused_on_resume(launched, edited, tmp_path):
+    """charter.launch is outside the manifest hash the diary binds, so the launched
+    value rides in the checkpoint: an edit is refused before anything is restored, and
+    the one item written is the refusal itself."""
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.runtime.resume import ResumeError, resume_world
+
+    source = (_bound("worlds/scripted.toml", launched, tmp_path) if launched
+              else Path(__file__).parents[2] / "worlds/scripted.toml")
+    manifest, path = _diary_of(source, tmp_path)
+    edited_path = tmp_path / "edited" / "scripted.toml"
+    edited_path.parent.mkdir()
+    edited_path.write_text(
+        (Path(__file__).parents[2] / "worlds/scripted.toml").read_text().replace(
+            "\n[charter]\n", f'\n[charter]\nlaunch = "{edited}"\n', 1) if edited
+        else (Path(__file__).parents[2] / "worlds/scripted.toml").read_text())
+    changed = load_manifest(str(edited_path))
+    assert changed.manifest_hash() == manifest.manifest_hash()
+    assert changed.charter_launch != manifest.charter_launch
+
+    def kinds():
+        return [i["kind"] for i in Ledger.reopen(str(path), manifest=json.loads(
+            manifest.canonical_json()))._recovery_items()]
+
+    before = kinds()
+    with pytest.raises(ResumeError) as refused:
+        resume_world(changed, str(path))
+    assert refused.value.code == "charter_launch_changed"
+    assert kinds() == before + ["failed_resume"]
+
+
+@pytest.mark.gate  # launches and resumes a world
+def test_a_matching_resume_continues(tmp_path, capsys):
+    from factorylab.runtime.cli import main
+    from factorylab.runtime.resume import resume_world
+
+    world = _bound("worlds/scripted.toml", "run", tmp_path)
+    manifest, path = _diary_of(world, tmp_path)
+    assert resume_world(manifest, str(path))["manifest_hash"] == manifest.manifest_hash()
+    assert main(["resume", "--world", str(world), "--ledger", str(path)]) == 0
+    assert "charter_launch" not in capsys.readouterr().err
