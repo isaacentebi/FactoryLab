@@ -817,10 +817,11 @@ class LivePolymarket(PolymarketReader):
         ``complete`` is False when anything went unread; the cursor then keeps it.
         """
         state = json.loads(json.dumps(cursor or {}))
-        # A world's first read starts at its first poll, less the overlap: no fill of
-        # its own orders can precede the world, and a funded wallet's older history is
-        # never paged through (Codex P1 on #177).
-        state.setdefault("after", max(0, now_ns // 1_000_000_000 - TRADE_OVERLAP_S))
+        # Where a read starts is a durable fact, never the moment a poll happens to run
+        # (Astra P0, Codex on #177): ``_fills`` holds it at or before the earliest order
+        # of this world not wholly booked, less the overlap. No fill of an order can
+        # precede the order's own signed timestamp, and a funded wallet's older history
+        # is never paged through.
         state.setdefault("seen", {})
         state.setdefault("book", {})
         state.setdefault("resolved", {})
@@ -849,6 +850,15 @@ class LivePolymarket(PolymarketReader):
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]]) -> list[dict]:
         if not orders:
             return []
+        outstanding = [int(o["timestamp"]) // 1000 for oid, o in orders.items()
+                       if o.get("timestamp") is not None
+                       and _dec(state.get("booked", {}).get(oid, "0")) < _dec(o["size"])]
+        if "page" not in state:
+            floor = (min(outstanding) - TRADE_OVERLAP_S) if outstanding else None
+            if "after" not in state:
+                state["after"] = max(0, floor) if floor is not None else 0
+            elif floor is not None and floor < state["after"]:
+                state["after"] = max(0, floor)
         # At most MAX_TRADE_PAGES pages a poll. A listing longer than that is read over
         # several polls: what was read is booked (the seen set keeps each leg once), the
         # page to resume at is kept in the cursor and ``after`` does not move until the

@@ -1490,6 +1490,10 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
         orders[order_id] = {"token_id": token, "side": str(args["side"]),
                             "size": str(args["size"]), "price": str(args["price"]),
                             "market_id": surface.token_markets.get(token),
+                            # The order's own signed timestamp (ms): no fill of it can
+                            # precede it, so the fill read starts no later.
+                            "timestamp": str((identity.get("order") or {}).get(
+                                "timestamp", "0")),
                             "fee_rate": str(identity.get("fee_rate", "0")),
                             "fee_exponent": str(identity.get("fee_exponent", "1"))}
     return orders

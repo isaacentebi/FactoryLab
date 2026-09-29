@@ -374,14 +374,24 @@ def test_more_trade_pages_than_one_poll_reads_are_read_over_several_polls():
     assert sum(Decimal(e["size"]) for e in booked) == Decimal(pages)
 
 
-def test_a_first_poll_starts_at_the_world_never_at_the_wallets_history():
+def test_a_first_poll_long_after_an_execution_still_books_it():
+    """Astra P0 and Codex on #177: the cursor started at the first poll less 600 s, so a
+    world resumed more than ten minutes after its order executed never read the fill.
+    It starts at its earliest order not wholly booked, less the overlap."""
     venue, server = live_venue()
-    token, intent = _intent(venue, server, "c-1", price="0.30")
+    token, intent = _intent(venue, server, "c-1", price="0.45")
     venue.intent_of = {"c-1": intent}.get
-    _place(venue, token, price="0.30")
-    now_s = 1_790_000_000
-    answer = venue.poll(now_ns=now_s * 10**9, cursor={}, orders=_orders(intent, token))
-    assert answer["cursor"]["after"] == now_s - clob.TRADE_OVERLAP_S
+    _place(venue, token, price="0.45")
+    placed_s = int(intent["order_identity"]["order"]["timestamp"]) // 1000
+    server.trades[0]["match_time"] = str(placed_s + 5)
+    orders = {**_orders(intent, token)}
+    orders[intent["order_hash"]]["timestamp"] = intent["order_identity"]["order"]["timestamp"]
+    answer = venue.poll(now_ns=(placed_s + 1_000) * 10**9, cursor={}, orders=orders)
+    assert [e["kind"] for e in answer["events"]] == ["fill"]
+    # Wholly booked, the order no longer holds the cursor back.
+    later = venue.poll(now_ns=(placed_s + 5_000) * 10**9, cursor=answer["cursor"],
+                       orders=orders)
+    assert later["cursor"]["after"] == placed_s + 5 - clob.TRADE_OVERLAP_S
 
 
 def _facts(neg_risk=False):

@@ -212,7 +212,9 @@ class FakeClob:
                                  is_buy=signed["side"] == 0, size=size, price=price)
         if result["status"] == "rejected":
             return {"success": False, "errorMsg": result["error"], "orderID": ""}
-        self.orders[digest] = {"pm": result["order_id"]}
+        # A trade of an order is matched no earlier than the order was signed.
+        self.orders[digest] = {"pm": result["order_id"],
+                               "signed_s": int(order["timestamp"]) // 1000}
         self.pm_to_hash[result["order_id"]] = digest
         self._trades(self.fake._events[before:], taker=True)
         del self.fake._events[before:]
@@ -248,7 +250,8 @@ class FakeClob:
             rate = self._market_of(event["token_id"])["fee_rate"]
             row = {"id": f"t-{len(self.trades) + 1}", "status":
                    "CONFIRMED" if self.confirm else "MATCHED",
-                   "match_time": str(max(1, event["ts_ns"] // 1_000_000_000)),
+                   "match_time": str(max(1, event["ts_ns"] // 1_000_000_000,
+                                         self.orders[digest]["signed_s"])),
                    "asset_id": event["token_id"], "maker_orders": []}
             if taker:
                 # The execution's own fee rate, in basis points (get-trades).

@@ -69,6 +69,13 @@ def buy(rt, server, handle, *, size="10", price="0.30", slot="tool:0", side="buy
     return rt._run_tool("seed-decider", handle, call, slot=slot)[0]
 
 
+def signed_s(rt, order_id):
+    """A match time just after the order was signed, in the venue's seconds."""
+    client_id = rt.polymarket.order_ids[order_id]
+    order = rt.polymarket.intents[client_id]["order_identity"]["order"]
+    return str(int(order["timestamp"]) // 1000 + 9)
+
+
 def items(rt, kind):
     return [i for i in rt.seen_items if i["kind"] == kind]
 
@@ -209,7 +216,8 @@ def test_a_fill_is_booked_once_when_confirmed_and_never_past_its_order():
     order_id = result["order_id"]
     # The venue now reports a second execution of the same 10-token order: quarantined,
     # booked to the pot, owned by no decision.
-    server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED", "match_time": "9",
+    server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED",
+                           "match_time": signed_s(rt, order_id),
                            "taker_order_id": order_id, "size": "5", "price": "0.41",
                            "maker_orders": []}]
     before = dict(rt.venue_deltas.get(handle, {}))
@@ -226,7 +234,8 @@ def test_unattributed_custody_is_what_no_return_owns_and_the_books_close():
     # fake-2 charges takers 5%: each fill books its fee to the pot.
     order_id = buy(rt, server, handle, size="5", price="0.75", market="fake-2")["order_id"]
     polymarket.tick(rt)
-    server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED", "match_time": "9",
+    server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED",
+                           "match_time": signed_s(rt, order_id),
                            "taker_order_id": order_id, "size": "5", "price": "0.71",
                            "maker_orders": []}]
     polymarket.tick(rt)
