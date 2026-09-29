@@ -1951,9 +1951,10 @@ checkpoint's `config.universe`; a resume is handed them and never resolves again
 market the venue lists later is not added and one it delists stays named (the venue
 refuses its orders). A `market` registration still adds a listed market outside the
 universe, under its novelty trial. A schematics render reads no venue and resolves
-nothing: it seeds the explicit names alone. The simulated venue
-(`fastloop.simulation_manifest`) lists no HIP-3 dex, so a simulated world keeps the
-first-dex selectors and drops the dex ones.
+nothing: it seeds the explicit names alone. The random-walk simulated venue
+(`fastloop.simulation_manifest`) lists no HIP-3 dex, so that simulated world keeps the
+first-dex selectors and drops the dex ones; a tape replay keeps every name, and its
+selectors resolve against what the tape recorded, HIP-3 markets included.
 
 **Published.** `world.trading_markets` carries, beside the explicit and registered
 markets by class, `universe`: the selectors as written, the count each class resolved

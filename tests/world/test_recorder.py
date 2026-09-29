@@ -171,3 +171,42 @@ def test_a_poll_is_stamped_when_its_answers_arrived_never_before():
     before = now[0]
     poll = rec.poll()
     assert poll["ts"] == now[0] > before
+
+
+def _future_tape(tmp_path):
+    """A broad recording (first-dex perps, an xyz perp, USDC pairs) after every cutoff."""
+    venue = Venue(3)
+    clock = iter(range(2_000_000_000 * S, 2_000_001_000 * S, 10 * S))
+    rec = Recorder(venue, coins=["*", "xyz:*"], spot_pairs=["*/USDC"],
+                   clock=lambda: next(clock), source="hyperliquid-test", books_per_poll=7)
+
+    def advance(_seconds):
+        venue.step += 1
+
+    journal = record(rec, tmp_path / "f.journal.jsonl", polls=4, interval_s=10, sleep=advance)
+    return Tape.from_data(compact(*read_journal(journal)))
+
+
+def test_a_breadth_replay_keeps_its_hip3_markets(tmp_path):
+    """Codex P1 on #178: the simulated manifest stripped HIP-3 names for every fake
+    venue, so a tape that recorded xyz:TSLA replayed first-dex perps only. Only the
+    random walk, which lists no HIP-3 dex, drops them."""
+    from dataclasses import replace
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import WORLDS_DIR
+    from factorylab.world.scripted import ScriptedProvider
+    from scripts import fastloop
+
+    tape = _future_tape(tmp_path)
+    world = WORLDS_DIR / "edition7-breadth-testnet.toml"
+    walked = fastloop.simulation_manifest(world, 1)
+    assert "xyz:*" not in walked.exchange.coins
+    manifest = fastloop.simulation_manifest(world, 1, tape=tape, allow_unknown_cutoff=True)
+    assert "xyz:*" in manifest.exchange.coins
+    manifest = replace(manifest, assemblies=tuple(
+        replace(a, max_tokens=1024) for a in manifest.assemblies))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(),
+                 exchange=fastloop.tape_venue(tape, manifest))
+    assert "xyz:TSLA" in rt.universe["coins"] and "BTC" in rt.universe["coins"]

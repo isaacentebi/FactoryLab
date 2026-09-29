@@ -1252,10 +1252,12 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False,
               and base.treasury.reserve_address is not None)
     manifest = rehearsal.effective_manifest(base, native_completions=True,
                                             capital_loop=hybrid)
-    # The fake venue lists no builder-deployed (HIP-3) dex: a market or selector on
-    # one (``xyz:TSLA``, ``xyz:*``) is not a market of the simulated world, which keeps
-    # the rest of the launch universe (factorylab/world/universe.py).
-    coins = tuple(c for c in manifest.exchange.coins if ":" not in c) or ("BTC", "ETH")
+    # The random walk lists no builder-deployed (HIP-3) dex: a market or selector on
+    # one (``xyz:TSLA``, ``xyz:*``) is not a market of that simulated world, which keeps
+    # the rest of the launch universe (factorylab/world/universe.py). A tape lists what
+    # it recorded, HIP-3 markets included, and resolves the launch universe as it is.
+    coins = (manifest.exchange.coins if tape is not None else
+             tuple(c for c in manifest.exchange.coins if ":" not in c) or ("BTC", "ETH"))
     exchange = replace(manifest.exchange, kind="fake", mainnet=False, seed=seed,
                        coins=coins, spot_pairs=(), client_namespace=None,
                        vault_tools=vault_tools or manifest.exchange.vault_tools,
