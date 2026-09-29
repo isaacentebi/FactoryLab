@@ -913,14 +913,14 @@ class _SoakRequirement:
 
     A soak run certifies its tree (appends its hash to ``SOAK_PASSES``) only when its
     invocation and effective options are exactly the whole tier's (``uncertifiable``),
-    nothing failed, skipped or xfailed, the soak tests it ran and those whose call passed
-    are each exactly ``SOAK_INVENTORY`` (compared on collected node ids), and the
-    tree is the same at its end as at its start; anything else runs as usual and says
-    why it certified nothing. A whole gate run (``-m gate`` or ``-m "check or gate"``, no file
-    arguments, no ``-k``) on a tree that changed a soak-required path since
-    ``origin/main`` (``soak_required``) fails unless that tree is certified, and fails if
-    the tree changed while it ran. Without git (or ``origin/main``) nothing is judged,
-    and the run says so.
+    nothing failed, skipped or xfailed (a collection either), the soak tests it ran and
+    those whose call passed are each exactly ``SOAK_INVENTORY`` (compared on collected
+    node ids), and the tree is the same at its end as at its start; anything else runs as
+    usual and says why it certified nothing. A whole gate run (``-m gate`` or
+    ``-m "check or gate"``, no file arguments, no ``-k``) on a tree that changed a
+    soak-required path since ``origin/main`` (``soak_required``) fails unless that tree
+    is certified, and fails if the tree changed while it ran. Without git (or
+    ``origin/main``) nothing is judged, and the run says so.
     """
 
     def __init__(self, root: Path):
@@ -928,6 +928,7 @@ class _SoakRequirement:
         self.passed: set[str] = set()
         self.seen: set[str] = set()
         self.failed = self.skipped = False
+        self.collection_problem: str | None = None
         self.tiers: set[str] = set()
 
     @staticmethod
@@ -957,11 +958,19 @@ class _SoakRequirement:
         if report.failed:
             self.failed = True
 
+    def pytest_collectreport(self, report):
+        """A collection that skipped or failed (a module-level ``pytest.skip`` or
+        ``importorskip`` leaves no test report at all); xdist forwards a worker's."""
+        if not report.passed and self.collection_problem is None:
+            self.collection_problem = f"collecting {report.nodeid or 'a module'} {report.outcome}"
+
     def _why_not_certified(self, session) -> str | None:
         config = session.config
         why = uncertifiable(config.invocation_params.args, os.environ, config.option)
         if why is None and (session.exitstatus != pytest.ExitCode.OK or self.failed):
             why = "the run did not pass"
+        if why is None and self.collection_problem:
+            why = self.collection_problem
         if why is None and self.skipped:
             why = "a soak test was skipped or xfailed"
         if why is None:

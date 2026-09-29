@@ -189,8 +189,15 @@ def _report(nodeid, tier, *, when="call", outcome="passed", reported=None, **ext
                            factorylab_tier=tier, **extra)
 
 
+def _collect(nodeid, outcome):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(nodeid=nodeid, outcome=outcome, passed=outcome == "passed")
+
+
 def _soak_session(tmp_path, *, marks, tiers, passed, status=None,
-                  args=("-m", "soak", "-n", "2"), environ=None, reports=(), **options):
+                  args=("-m", "soak", "-n", "2"), environ=None, reports=(), collect=None,
+                  **options):
     from types import SimpleNamespace
 
     from tests import conftest
@@ -205,6 +212,8 @@ def _soak_session(tmp_path, *, marks, tiers, passed, status=None,
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(conftest.os, "environ", environ or {})
         plugin.pytest_sessionstart(session)
+        if collect is not None:
+            plugin.pytest_collectreport(collect)
         for nodeid in passed:
             plugin.pytest_runtest_logreport(_report(nodeid, tiers))
         if not passed and not reports:  # a setup report: the tier ran, no body did
@@ -247,6 +256,8 @@ def test_only_the_whole_soak_inventory_passing_certifies_its_tree(tmp_path, monk
         dict(reports=[_report("tests/a.py::soak_new", "soak", outcome="skipped",
                               wasxfail="")]),
         dict(passed=ids[:1], reports=[_report(ids[1], "soak", wasxfail="")]),
+        dict(collect=_collect("tests/b.py", "skipped")),  # module-level skip
+        dict(collect=_collect("tests/b.py", "failed")),
     ]
     for case in refused:
         _, plugin = _soak_session(tmp_path, **{"marks": "soak", "tiers": "soak",
@@ -347,3 +358,36 @@ def test_a_whole_gate_on_a_soak_required_change_fails_until_soak_passed_on_its_t
     plugin.pytest_sessionfinish(session)
     assert session.exitstatus == pytest.ExitCode.TESTS_FAILED
     assert "changed while the gate ran" in plugin.problem
+
+
+@pytest.mark.gate  # runs pytest in child processes, serially and on two xdist workers
+@pytest.mark.parametrize("workers", [0, 2], ids=["serial", "xdist"])
+@pytest.mark.parametrize("skip", [
+    'pytest.importorskip("factorylab_no_such_module")',
+    'pytest.skip("not here", allow_module_level=True)'], ids=["importorskip", "skip"])
+def test_a_module_skipped_at_collection_reaches_the_soak_guard(tmp_path, workers, skip):
+    """Sol's confirmation review of #179: a soak module skipped at collection leaves a
+    skipped collection report and no test report. The guard sees it, in the process
+    that judges certification: the one pytest process, or xdist's controller, which a
+    worker forwards it to."""
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    (tmp_path / "conftest.py").write_text(
+        f"import sys\nsys.path.insert(0, {str(repo)!r})\n"
+        "from tests.conftest import _SoakRequirement\n\n"
+        "def pytest_configure(config):\n"
+        "    if not hasattr(config, 'workerinput'):\n"
+        "        config.pluginmanager.register(_SoakRequirement(config.rootpath), 'probe')\n\n"
+        "def pytest_terminal_summary(terminalreporter, config):\n"
+        "    probe = config.pluginmanager.get_plugin('probe')\n"
+        "    if probe is not None:\n"
+        "        terminalreporter.write_line(f'PROBLEM={probe.collection_problem}')\n")
+    (tmp_path / "test_long.py").write_text(
+        f"import pytest\n\n{skip}\npytestmark = pytest.mark.soak\n\n"
+        "def test_long():\n    assert False\n")
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-n", str(workers),
+         str(tmp_path)], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert "PROBLEM=collecting test_long.py skipped" in done.stdout, done.stdout
