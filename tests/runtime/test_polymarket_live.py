@@ -546,3 +546,23 @@ def test_money_gone_that_the_books_do_not_explain_stops_new_exposure_until_it_ag
     server.fake._cash += Decimal(5)
     polymarket.tick(rt)
     assert buy(rt, server, collateral_decision(rt))["status"] == "resting"
+
+
+def test_a_placement_rejected_after_its_intent_is_not_polled():
+    """Codex P2 on #177: a placement the pot's budget rejected entered the world's orders
+    and was looked up and read for fills for the world's life."""
+    rt, server = live_world(budget=12, wall=lambda: 1_790_000_000_000_000_000)
+    polymarket.tick(rt)
+    live = rt.polymarket.venue.target
+    place = live.place
+
+    def spent(**kwargs):  # the budget is spent between the intent and the send
+        live.budget.stamps = [1_790_000_000_000_000_000] * 12
+        return place(**kwargs)
+
+    live.place = spent
+    result = buy(rt, server, collateral_decision(rt))
+    assert result["status"] == "rejected" and "budget" in result["error"]
+    assert result["order_id"] not in rt.polymarket.order_ids
+    assert polymarket._live_orders(rt.polymarket) == {}
+    assert polymarket.local_commitments(rt.polymarket) == (Decimal(0), Decimal(0))

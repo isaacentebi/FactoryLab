@@ -1422,7 +1422,9 @@ def _record(rt: Any, surface: PolymarketSurface, client_id: str,
     if intent["operation"] == "polymarket.cancel":
         if result["status"] == "cancelled":
             rt.consequences.cancel(intent["args"]["order_id"], rt.n)
-    elif result.get("order_id") is not None:
+    elif result.get("order_id") is not None and result["status"] != "rejected":
+        # A rejected placement names its hash (the live venue's answer always does) but
+        # is no order of this world's: nothing is looked up or read for it (Codex P2).
         surface.order_ids[str(result["order_id"])] = client_id
         attributed = result
         if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
@@ -1564,6 +1566,8 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
         known[surface.intents[client_id]["order_hash"]] = client_id
     for order_id, client_id in known.items():
         intent = surface.intents[client_id]
+        if intent["result"].get("status") == "rejected":
+            continue  # never an order the venue holds (Codex P2 on #177)
         args, identity = intent["args"], intent.get("order_identity") or {}
         token = str(args["token_id"])
         if token in resolved and order_id in surface.cursor.get("terminal", ()):
