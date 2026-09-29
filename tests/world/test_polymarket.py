@@ -17,9 +17,7 @@ import pytest
 from factorylab.world.polymarket import (
     TICK_SIZES,
     FakePolymarket,
-    LiveOrderAdapter,
     PolymarketReader,
-    PolymarketRefused,
     PolymarketUnavailable,
     http_get_json,
     parse_book,
@@ -341,14 +339,6 @@ def test_fake_is_deterministic_for_one_seed():
         return [fake.advance(n * 10**9) for n in range(1, 30)], fake.account()
 
     assert run() == run()
-
-
-def test_live_order_adapter_refuses_every_write():
-    adapter = LiveOrderAdapter()
-    for call in (lambda: adapter.place(token_id="1"), lambda: adapter.cancel(order_id="1"),
-                 lambda: adapter.lookup("x")):
-        with pytest.raises(PolymarketRefused):
-            call()
 
 
 def test_a_request_is_stamped_before_it_is_sent_and_counts_in_flight_or_failed():

@@ -11,7 +11,8 @@ market is a place where the world outside the loop prices a belief and then
 settles it (essay II.III, the realized-consequence signal "sits outside the
 factory's input entirely"; II.IV.a, "vote on values, bet on beliefs").
 
-Three parts, in the order the runtime needs them:
+Two parts, in the order the runtime needs them (live orders are
+``world/polymarket_clob.py``, ``LivePolymarket``):
 
 ``PolymarketReader``
     Plain HTTPS GETs against the two public, unauthenticated APIs: the Gamma
@@ -20,10 +21,7 @@ Three parts, in the order the runtime needs them:
 ``FakePolymarket``
     A deterministic venue with seeded markets, a moving book, resting orders
     that fill, a collateral pot, and scripted resolution. It answers the same
-    reads as the reader and is the only venue writes reach in this phase.
-``LiveOrderAdapter``
-    The marked seam for live order signing on Polygon. It is not built. Its
-    docstring lists what it will need.
+    reads as the reader, and its writes are the contract the live order venue keeps.
 
 Sources, read 2026-09-22 (Polymarket moved to CLOB V2 on 2026-04-28; the
 changelog is https://docs.polymarket.com/changelog/predictions):
@@ -878,70 +876,3 @@ class FakePolymarket:
                 "outcome_index": side, "outcome_name": market["outcomes"][side],
                 "payout": str(payout),
                 "size": str(size), "realized_usd": str(realized), "ts_ns": self._now_ns})
-
-
-# --- the live seam (phase 2) ------------------------------------------------------------
-
-class LiveOrderAdapter:
-    """The marked seam for live Polymarket orders. Not built: every method refuses.
-
-    Phase 2 replaces this with an adapter that has the same ``place``, ``cancel``,
-    ``lookup``, ``account`` and ``advance`` contract as ``FakePolymarket``. What it
-    needs, none of which exists in this repository (facts as of CLOB V2,
-    2026-04-28):
-
-    * **Custody.** A Polygon PoS (chain id 137) wallet as the ``polymarket`` pot,
-      holding pUSD, Polymarket's USDC-backed collateral token
-      (``0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB``, 6 decimals), plus a little
-      POL for approvals and redemptions. USDC.e is wrapped into pUSD through the
-      CollateralOnramp (https://docs.polymarket.com/concepts/pusd). The key lives
-      in the operator's secret store beside the others; nothing here reads it. No
-      treasury route funds this pot yet: until one exists the operator funds it,
-      and the pot never borrows Hyperliquid or Base collateral.
-    * **Signature type.** 0 (a plain EOA) needs Polymarket's allowlisting; 3 (a
-      Deposit Wallet, ERC-1271) is the default for accounts made since 2026-05-04
-      (https://docs.polymarket.com/trading/wallets-auth).
-    * **Allowances.** Once per wallet: pUSD ``approve`` and the CTF's
-      ``setApprovalForAll`` for the CTF Exchange
-      (``0xE111180000d2663C0091e4f400237545B87B996B``) and the Neg Risk CTF
-      Exchange (``0xe2222d279d744050d28e00520010520000310F59``), and the collateral
-      adapters for redemption (https://docs.polymarket.com/resources/contracts).
-    * **Credentials.** CLOB API credentials (key, secret, passphrase) from an L1
-      EIP-712 ``ClobAuth`` signature (``POST /auth/api-key`` or
-      ``GET /auth/derive-api-key``); every trading request then carries L2 HMAC
-      headers.
-    * **Signing.** Each order is an EIP-712 V2 ``Order`` signed under the
-      "Polymarket CTF Exchange" version 2 domain, with the market's tick size and
-      neg-risk flag. ``py-clob-client`` is archived and V1 clients no longer work
-      against production; the maintained options are ``polymarket-client`` (the
-      official SDK) and ``py-clob-client-v2``. Adding either is a dependency
-      decision AGENTS.md requires a written reason for, and both pull in more than
-      ``eth_account``, which this repository already has.
-    * **Identity.** The CLOB takes no client order id. The durable identity is the
-      order's own hash, fixed by its fields and salt before submission: the adapter
-      derives the salt from the runtime's client id, ledgers the hash with the
-      intent, and recovers an uncertain submission by looking the hash up instead
-      of resubmitting.
-    * **Settlement.** Resolution is proposed and, if disputed, decided through
-      UMA's Optimistic Oracle (a two-hour challenge window; days if it reaches a
-      DVM vote). The adapter reads it from Gamma (``closed``, ``outcomePrices``,
-      ``umaResolutionStatus``), then redeems with ``redeemPositions`` through the
-      collateral adapter, an on-chain transaction the pot pays gas for. Only the
-      redemption receipt is the pot's pUSD.
-    * **Access.** Polymarket's geographic restrictions
-      (https://docs.polymarket.com/api-reference/geoblock) apply to the operator's
-      jurisdiction; the operator confirms eligibility.
-    """
-
-    name = "polymarket-live"
-    deterministic = False
-    REFUSAL = "live Polymarket orders are not built in this phase"
-
-    def place(self, **_: Any) -> dict[str, Any]:
-        raise PolymarketRefused(self.REFUSAL)
-
-    def cancel(self, **_: Any) -> dict[str, Any]:
-        raise PolymarketRefused(self.REFUSAL)
-
-    def lookup(self, client_id: str) -> dict[str, Any]:
-        raise PolymarketRefused(self.REFUSAL)
