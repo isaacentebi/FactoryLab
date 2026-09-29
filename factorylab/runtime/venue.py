@@ -790,14 +790,11 @@ class VenueMixin:
         spot balance in the tick's account read. Every other market's price is one
         batched ``venue.mids`` read away, and its book one ``venue.order_book``.
         """
-        markets = self._trading_markets()
         pinned = getattr(self, "universe", None)
         if not pinned:
-            return markets
-        selected = set(pinned["coins"]) | set(pinned["spot_pairs"])
-        explicit = (set(universe_names.explicit_markets(self.m.exchange.coins))
-                    | set(universe_names.explicit_markets(self.m.exchange.spot_pairs)))
-        out = [m for m in markets if m not in selected or m in explicit]
+            return self._trading_markets()
+        base, observable = self._broadcast_membership()
+        out = list(base)
         in_play = set(self._fee_needs())
         consequences = getattr(self, "consequences", None)
         if consequences is not None:
@@ -816,14 +813,38 @@ class VenueMixin:
             in_play |= {p.coin for p in account.positions if p.size}
             in_play |= {f"{b.coin}/USDC" for b in account.spot_balances
                         if b.coin != "USDC" and b.total}
-        # Permission to trade is not the obligation to observe: a named trade may name
-        # any market the venue lists (the counterfactual contract), so a consequence
-        # that reads one is broadcast whether or not the world may trade it; orders
-        # stay held to the pinned universe (venue tools). Anything else in play is a
-        # market the world trades, and nothing unlisted is ever broadcast.
-        observable = set(markets) | set(self._listed_instruments())
         out.extend(sorted(m for m in in_play if m in observable and m not in out))
         return tuple(out)
+
+    def _broadcast_membership(self) -> tuple[tuple[str, ...], frozenset[str]]:
+        """The broadcast set's fixed part and the markets it may observe, built once.
+
+        Guarantees ``(base, observable)``: ``base`` the explicit and registered markets
+        in trading order, ``observable`` every market the world trades or the venue's
+        last listing names. Permission to trade is not the obligation to observe: a
+        named trade may name any market the venue lists (the counterfactual contract),
+        so a consequence that reads one is broadcast whether or not the world may trade
+        it; orders stay held to the pinned universe (venue tools), and nothing unlisted
+        is ever broadcast. Rebuilt only when a registration changes the trading markets
+        or a listing read may have changed the listing, so a call walks neither the
+        universe nor the listing (Chapter II §IV.c).
+        """
+        tools = getattr(self, "venue_tools", None)
+        schedule = getattr(self, "fee_schedule", None) or {}
+        key = (None if tools is None else (len(tools.coins), len(tools.spot_pairs)),
+               schedule.get("read_ns"), len(schedule.get("listed") or ()))
+        memo = self.__dict__.get("_broadcast_memo")
+        if memo is not None and memo[0] == key:
+            return memo[1], memo[2]
+        pinned = self.universe
+        markets = self._trading_markets()
+        selected = set(pinned["coins"]) | set(pinned["spot_pairs"])
+        explicit = (set(universe_names.explicit_markets(self.m.exchange.coins))
+                    | set(universe_names.explicit_markets(self.m.exchange.spot_pairs)))
+        base = tuple(m for m in markets if m not in selected or m in explicit)
+        observable = frozenset(markets) | frozenset(self._listed_instruments())
+        self.__dict__["_broadcast_memo"] = (key, base, observable)
+        return base, observable
 
     def _tick_mids(self) -> dict[str, Decimal]:
         """The venue's mid prices, read once for the tick that reads them.

@@ -26743,7 +26743,7 @@
     "factorylab/runtime/routing.py": "267b781ce62203279e17544891bf27c654e4c344e46f337528ca52cbb5b091c6",
     "factorylab/runtime/subscriptions.py": "2c096e82698cc03a7f5d7af70942b522b29a00c26611bb2830a0078456d93a6c",
     "factorylab/runtime/vault.py": "579d47cf327d29454bdccafeda667212bb96cc12900e4e4060957d48592bb8ab",
-    "factorylab/runtime/venue.py": "cb48af4ef15b8c1e08426790f4560cd9abe55e5e6f8453ea175477fd59fbc9e0",
+    "factorylab/runtime/venue.py": "71bef14244f5d412bcf3f99b3ff8d7e273170a9b746450dc07a1b85d233a6fcb",
     "factorylab/runtime/websearch.py": "fa78a58b37bed02a006a9528a7f85b0f5d4ae3e23f31b47e7d1b1120a1ccb7fa",
     "factorylab/settlement/vocabulary.py": "2805fe20978480c467e7eebb3ea2b758c711654e83a618d8678475c6c5eab4a8",
     "factorylab/world/connector.py": "226ee503dcae74737ca857082d5341972e7397281ed2730a754483a6247999a8",

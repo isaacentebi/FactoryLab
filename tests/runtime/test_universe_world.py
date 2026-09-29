@@ -270,3 +270,33 @@ def test_a_simulated_venue_advances_only_the_markets_the_world_watches(monkeypat
         venue = rt.exchange.target
         work[n] = (list(created), sum(len(h) for h in venue._mid_history.values()))
     assert work[3] == work[3000] == ([1] * 5, 5)
+
+
+@pytest.mark.parametrize("n", [3, 3000])
+def test_the_broadcast_set_is_built_without_scanning_the_universe_each_call(monkeypatch, n):
+    """Codex P2 on #178: _broadcast_markets rebuilt sets from the whole pinned universe
+    and walked every trading market on every call, several times a tick. Its fixed
+    membership is kept until a registration or a new listing read changes it: over many
+    calls the universe and the listing are each walked once, at 3 and at 3000 markets."""
+    rt = runtime(n)
+    rt._read_fee_schedule()
+    walked = {"trading": 0, "listed": 0}
+    trading, listed = type(rt)._trading_markets, type(rt)._listed_instruments
+
+    def count_trading(self):
+        walked["trading"] += 1
+        return trading(self)
+
+    def count_listed(self):
+        walked["listed"] += 1
+        return listed(self)
+
+    monkeypatch.setattr(type(rt), "_trading_markets", count_trading)
+    monkeypatch.setattr(type(rt), "_listed_instruments", count_listed)
+    rt.order_intents["c"] = {"args": {"coin": "C1"}, "operation": "venue.place_market"}
+    for _ in range(20):
+        assert rt._broadcast_markets() == ("C1",)
+    assert walked == {"trading": 1, "listed": 1}
+    # A registration changes the fixed membership, and the next call sees it.
+    rt._admit_market("NEW", "perp")
+    assert "NEW" in rt._broadcast_markets()
