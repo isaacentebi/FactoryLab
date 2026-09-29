@@ -61,6 +61,7 @@ from factorylab.runtime.governance import GovernanceMixin
 from factorylab.runtime.live import LiveClock, Reconciler, wall_paced
 from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
+from factorylab.runtime.published import refuse_to_run
 from factorylab.runtime.resume import decode, encode, runtime_state
 from factorylab.runtime.routing import (
     JUDGING_SHAPES,
@@ -294,6 +295,7 @@ class Runtime(
         """Keep exclusive ledger ownership through the last runtime action or process death."""
         from factorylab.runtime import polymarket
 
+        refuse_to_run(self)  # a schematics-only runtime runs no world (runtime/published.py)
         try:
             # A live Polymarket reader is admitted, and holds the host's IP, before the
             # world's first event; an offline one takes nothing.
@@ -305,6 +307,7 @@ class Runtime(
 
     def _run(self) -> dict[str, Any]:
         """Continue the original source budget; restored internal events keep their ordering."""
+        refuse_to_run(self)
         if self.termination.final or (self.started and self._check_termination()):
             return self._summary()
         self.ledger.active = True
@@ -341,6 +344,7 @@ class Runtime(
 
     def _launch(self) -> None:
         """Publish Launch only after a recoverable pre-launch snapshot exists."""
+        refuse_to_run(self)
         self.bus.publish(
             Event(
                 "launch",
@@ -373,6 +377,7 @@ class Runtime(
 
     def _process_event(self, ev: Event) -> bool:
         """Normal execution and recovery use identical transitions after a durable input item."""
+        refuse_to_run(self)
         previous_window = self.reserve_window_start
         self.n += 1
         self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)

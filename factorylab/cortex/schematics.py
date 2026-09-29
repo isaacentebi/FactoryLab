@@ -1424,7 +1424,17 @@ class SchematicsMixin:
         tick = self.ticks_consumed
         memo = getattr(self, "_instruments_memo", None)
         if memo is None or memo[0] != tick:
-            memo = (tick, self.exchange.instruments())
+            from factorylab.runtime.published import NotYetRead
+
+            try:
+                listing = self.exchange.instruments()
+            except NotYetRead as exc:
+                # A schematics render (runtime/published.py, §I.b) reads no venue: the
+                # listing is published as not read, never as an empty or invented one.
+                from factorylab.runtime.custody import unavailable
+
+                return unavailable(str(exc))
+            memo = (tick, listing)
             self._instruments_memo = memo
         traded = {"perp": set(self.venue_tools.coins), "spot": set(self.venue_tools.spot_pairs)}
         return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]

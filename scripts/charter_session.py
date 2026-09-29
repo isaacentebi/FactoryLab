@@ -65,6 +65,7 @@ from factorylab.charter.provenance import charter_digest, norms_raw, roster_hash
 from factorylab.charter.region import region_schema  # noqa: E402
 from factorylab.charter.windows import window_schema  # noqa: E402
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, _parse_json_object  # noqa: E402
+from factorylab.runtime.published import ManifestCatalogue  # noqa: E402
 from factorylab.world.models import ModelRequest, ModelResponse  # noqa: E402
 
 MAX_TOKENS = 1500
@@ -72,35 +73,6 @@ VOTE_MAX_TOKENS = 4000
 CARD_FIELDS = ("id", "norm", "description", "units", "window", "region", "observation",
                "answers_for")
 # --- the provider -------------------------------------------------------------------
-
-class ManifestCatalogue:
-    """A provider that answers ``catalogue()`` from the manifest's own model table.
-
-    A world whose seats size their completions natively ("provider" max_tokens,
-    edition 5 and 6) needs each model's completion limit before its runtime can
-    build a world block. The limits here are the manifest's, never a network read.
-    """
-
-    name = "manifest-catalogue"
-
-    def __init__(self, manifest) -> None:
-        self.manifest = manifest
-
-    def catalogue(self) -> list:
-        from factorylab.world.models import CatalogueEntry
-
-        rows = []
-        for model in self.manifest.models:
-            rows.append(CatalogueEntry(
-                id=model.id, name=model.id,
-                prompt_usd_per_token=str(float(model.input_usd_per_mtok) / 1_000_000),
-                completion_usd_per_token=str(float(model.output_usd_per_mtok) / 1_000_000),
-                context_length=200_000, max_completion_tokens=100_000))
-        return rows
-
-    def complete(self, req: ModelRequest) -> ModelResponse:
-        raise RuntimeError("the manifest catalogue answers no completion")
-
 
 class ScriptedCharterProvider(ManifestCatalogue):
     """A deterministic stand-in population for ``--dry-run``: plumbing, not behaviour.
@@ -229,23 +201,55 @@ def survey_world(world: dict) -> dict:
         "proposal_shapes", "stable_prefix")}
 
 
-def launch_world(manifest) -> dict:
-    """The runtime's own world block over a fake venue: launch-shaped public facts.
+def launch_rail(manifest):
+    """The treasury rail contract a live world's launcher builds, as the world publishes it.
 
-    Built on the manifest's catalogue, so it makes no call and reads no network,
-    whichever provider the session's ballots then use.
+    Guarantees the name, admitted directions and gas table of the rail a live seat of
+    ``manifest`` acts through at launch, and no key: a testnet Hyperliquid world
+    launches through ``scripts/edition4_rehearsal.py``. A hybrid Venice world is
+    funded only by ``--capital-loop`` (bootstrap refuses its treasury anywhere else,
+    and the plain runner strips it), which wraps its ``HybridRail`` in
+    ``CapitalLoopRail``: that funded launch is the one its charter is ratified for
+    (its manifest's [charter] note), so it is the one rendered. The runner wraps every
+    other testnet world's rail in ``DeniedTransferRail``. A mainnet world launches on
+    the rail bootstrap builds.
     """
-    from dataclasses import replace
+    from factorylab.runtime.published import InertRail
+    from factorylab.world.treasury import TRANSFER_DIRECTIONS, UnconfiguredRail
+    from factorylab.world.treasury_rails import HybridRail, LiveRail
+    from scripts.edition4_rehearsal import CapitalLoopRail, DeniedTransferRail
 
+    treasury = manifest.treasury
+    if not manifest.exchange.mainnet:
+        if treasury.venice_network == "base-mainnet" and treasury.reserve_address is not None:
+            # CapitalLoopRail reads its name and gas table through to the hybrid rail.
+            return InertRail(HybridRail.name, CapitalLoopRail.ALLOWED, HybridRail.GAS_BUDGETS)
+        return InertRail(DeniedTransferRail.name, DeniedTransferRail.ALLOWED)
+    if treasury.reserve_address is not None:
+        return InertRail(LiveRail.name, TRANSFER_DIRECTIONS, LiveRail.GAS_BUDGETS)
+    return InertRail(UnconfiguredRail.name, UnconfiguredRail.ALLOWED)
+
+
+def launch_world(manifest) -> dict:
+    """The world block a seat of ``manifest`` reads at launch: its public schematics.
+
+    Chapter II §I.b: guarantees the block is the launched runtime's own, and true. A
+    simulated world's is its runtime's over its own fake venue. A live world's is
+    rendered by the runtime's schematics-only path (``factorylab/runtime/published.py``)
+    over the manifest as given, with the rail its launcher builds (``launch_rail``): no
+    venue, rail or chain is read, signed to or written, and every observation that path
+    does not make (the account, the listing, the pots) is published as unavailable,
+    never as a fake venue's figures. Built on the manifest's catalogue, so it makes no
+    model call whichever provider the session's ballots then use.
+    """
+    if manifest.exchange.kind != "fake":
+        from factorylab.runtime.published import render_schematics
+
+        return render_schematics(manifest, rail=launch_rail(manifest))
     from factorylab.runtime.loop import Runtime
     from factorylab.world.exchange import FakeExchange
 
-    # The block is rendered over a fake venue, so the manifest it launches is stated as
-    # one: a capital-loop world's real-money rails (treasury.venice_network) are never
-    # armed here, and its roster, the one the export digests, is unchanged (the export
-    # hashes the manifest it was given, not this copy).
-    shown = replace(manifest, exchange=replace(manifest.exchange, kind="fake"))
-    rt = Runtime(shown, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
+    rt = Runtime(manifest, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1, provider=ManifestCatalogue(manifest),
                  exchange=FakeExchange(seed=manifest.exchange.seed, coins=manifest.exchange.coins,
                                        start_cash_usd=manifest.exchange.start_cash_usd))

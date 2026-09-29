@@ -153,10 +153,23 @@ class BootstrapMixin:
         capital_loop: bool = False,
         _journal: RecoveryJournal | None = None,
         _lock: LedgerLock | None = None,
+        _schematics_rail: Any | None = None,
     ) -> None:
         self.live = manifest.exchange.kind != "fake"
+        # SCHEMATICS ONLY (Chapter II §I.b, the schematics are public): given an inert
+        # rail, this builds a live world's runtime over inert stand-ins so its world
+        # block can be published before launch (factorylab/runtime/published.py). It
+        # arms nothing and it never runs: ``run``, launch and every event refuse it.
+        self.schematics_only = _schematics_rail is not None
+        if self.schematics_only:
+            from factorylab.runtime.published import check_inert
+
+            check_inert(manifest, exchange=exchange, rail=_schematics_rail,
+                        provider=provider, market=market, ledger_path=ledger_path,
+                        journal=_journal, lock=_lock, capital_loop=capital_loop,
+                        clock_source=clock_source)
         if (self.live and getattr(manifest.treasury, "venice_network", None) is not None
-                and capital_loop is not True):
+                and capital_loop is not True and not self.schematics_only):
             # A manifest alone never switches on real-money mode: `factorylab run` or
             # `resume` of a hybrid world would sign mainnet top-ups with no rehearsal
             # guard around them. Only the capital-loop runner passes the opt-in, and it
@@ -175,7 +188,8 @@ class BootstrapMixin:
         if problem is not None:
             raise ValueError(problem)
         check_tape(manifest, exchange)
-        if self.live and not ledger_path and _journal is None and mainnet_rail(manifest):
+        if (self.live and not ledger_path and _journal is None and mainnet_rail(manifest)
+                and not self.schematics_only):
             # Every reserve-key entry of a world names its diary: without one, a used
             # authorization could never be shown booked (a false recovery), and a
             # cancel could never tell whether the world has ended. Refused before any
@@ -334,7 +348,10 @@ class BootstrapMixin:
             self.market.guard = ReserveGuard("x402_purchase", run_dir=run_dir, ledger=ledger)
 
         if self.live:
-            if manifest.treasury.reserve_address is not None:
+            if self.schematics_only:
+                # The launcher's rail as published, holding no key: no signer is built.
+                rail = _schematics_rail
+            elif manifest.treasury.reserve_address is not None:
                 from factorylab.world.treasury_rails import HybridRail, LiveRail
 
                 # A hybrid capital-loop rehearsal buys real Venice credit on Base mainnet
@@ -725,7 +742,8 @@ class BootstrapMixin:
         self.fees_to_date = 0
         self.funding_to_date = 0
         self.spot_inventory = {}
-        if not self.ledger.bootstrap:
+        # A schematics render reads no venue, so it claims no launch holdings.
+        if not self.ledger.bootstrap and not self.schematics_only:
             # Launch holdings have no author. Their basis is the observed launch mark,
             # so a later closer is credited only for the world's subsequent price move.
             balances = self.exchange.account().spot_balances
