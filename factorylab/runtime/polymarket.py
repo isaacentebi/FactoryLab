@@ -2099,7 +2099,47 @@ def _own_orders(surface: PolymarketSurface, orders: list[dict]) -> list[dict]:
     world's own."""
     if not surface.live:
         return list(orders)
-    return [o for o in orders if str(o["order_id"]) in surface.order_ids]
+    own = _own_hashes(surface)
+    return [o for o in orders if str(o["order_id"]) in own]
+
+
+def _own_hashes(surface: PolymarketSurface) -> set[str]:
+    """Every order hash this world may own: those the venue acknowledged, and those of
+    its placements only their durable intents know, uncertain or released unresolved
+    (Sol P1 on #177), but never a rejected one."""
+    own = set(surface.order_ids)
+    for intent in surface.intents.values():
+        if (intent["operation"] == "polymarket.place_limit" and intent.get("order_hash")
+                and intent["result"].get("status") != "rejected"
+                and not intent.get("terminal")):
+            own.add(str(intent["order_hash"]))
+    return own
+
+
+def _unsettled(surface: PolymarketSurface) -> tuple[list[dict], list[str]]:
+    """What the world may hold that no read shows yet: each of its orders that matched
+    more than is booked from a CONFIRMED trade (Sol P1 on #177: matched quantity is in
+    neither the open orders nor the positions), and each placement still unanswered."""
+    cancelled = _cancelled(surface)
+    failed = surface.cursor.get("failed", {})
+    matched_rows, unanswered = [], []
+    for _client_id, intent in sorted(surface.intents.items()):
+        if intent["operation"] != "polymarket.place_limit" or not intent.get("order_hash"):
+            continue
+        order_id, result = str(intent["order_hash"]), intent["result"]
+        if result.get("status") == "rejected" or intent.get("terminal"):
+            continue
+        if result.get("status") == "uncertain":
+            unanswered.append(order_id)
+            continue
+        matched = (cancelled[order_id] if cancelled.get(order_id) is not None
+                   else Decimal(str(result.get("filled_size") or "0")))
+        booked = Decimal(surface.filled.get(order_id, "0")) + Decimal(
+            str(failed.get(order_id, "0")))
+        if matched > booked:
+            matched_rows.append({"order_id": order_id, "size": str(matched),
+                                 "booked": str(booked)})
+    return matched_rows, unanswered
 
 
 def _own_view(surface: PolymarketSurface, account: dict) -> dict:
@@ -2147,7 +2187,16 @@ def wind_down(rt: Any) -> dict[str, Any]:
     try:
         # Only this world's orders (Codex P1 on #177): the wallet may rest orders placed
         # by hand or by another process, and the kill has no claim on them.
-        for order in _own_orders(surface, surface.account(rt)["open_orders"]):
+        targets = [str(o["order_id"])
+                   for o in _own_orders(surface, surface.account(rt)["open_orders"])]
+        if surface.live:
+            # A placement known only by its durable hash may rest though no read shows
+            # it (Sol P1 on #177): it is cancelled by its hash too.
+            _matched, unanswered = _unsettled(surface)
+            targets += [h for h in unanswered if h not in targets]
+        uncertain = False
+        for order_id in targets:
+            order = {"order_id": order_id}
             client_id = f"kill:{order['order_id']}"
             rt.ledger.append({"kind": "polymarket.wind_down", "op": "cancel",
                               "client_id": client_id, "order_id": order["order_id"]})
@@ -2163,13 +2212,20 @@ def wind_down(rt: Any) -> dict[str, Any]:
             rt.ledger.append({"kind": "polymarket.wind_down_result", "client_id": client_id,
                               "result": result})
             report["cancelled"] += result.get("status") == "cancelled"
+            uncertain |= result.get("status") == "uncertain"
+        surface._account_memo = None  # the cancels may have moved it
         still = sanitized(_own_view(surface, surface.account(rt)))
         report["residual"] = [{key: p[key] for key in ("token_id", "market_id", "outcome",
                                                        "size", "avg_px")}
                               for p in still["positions"]]
         report["open_orders"] = len(still["open_orders"])
-        report["exposure_state"] = (PENDING if still["positions"] or still["open_orders"]
-                                    else FLAT)
+        matched, unanswered = _unsettled(surface) if surface.live else ([], [])
+        report["unsettled"], report["unanswered"] = matched, unanswered
+        # Matched but unconfirmed quantity is exposure; an order or a cancel the venue
+        # has not answered for leaves the pot unknown, never flat (Sol P1 on #177).
+        report["exposure_state"] = (
+            UNKNOWN if uncertain or unanswered else
+            PENDING if still["positions"] or still["open_orders"] or matched else FLAT)
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         report["error"] = type(exc).__name__
         report["exposure_state"] = UNKNOWN

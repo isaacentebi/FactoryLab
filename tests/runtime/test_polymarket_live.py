@@ -833,3 +833,35 @@ def test_a_misbooked_cost_basis_shows_as_drift_never_hidden_by_the_larger_valuat
     rt.polymarket.settled += Decimal(1)  # and the $1.00 of profit it would book
     assert Decimal(polymarket.reconcile(rt)["drift"]) == Decimal(-1)
     assert rt.polymarket.drifting
+
+
+def test_a_kill_cancels_a_placement_known_only_by_its_durable_hash():
+    """Sol P1 on #177: a placement whose answer was lost and whose lookups all failed was
+    known only to its intent; the kill did not cancel it and reported flat."""
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    server.lose_answer = True
+    server.fail_lookups = 10**6
+    buy(rt, server, handle)
+    for _ in range(UNCERTAIN_ORDER_POLLS + 1):
+        polymarket.tick(rt)
+    intent = rt.polymarket.intents[f"{handle}:tool:0"]
+    assert intent["unresolved"] and intent["order_hash"] not in rt.polymarket.order_ids
+    rt.polymarket._account_memo = None
+    report = polymarket.wind_down(rt)
+    assert ("DELETE", "/order") in server.calls and server.fake._orders == {}
+    assert report["exposure_state"] != "flat"  # its cancel is not confirmed
+
+
+def test_a_kill_with_matched_unconfirmed_quantity_is_not_flat():
+    """Sol P1 on #177: a buy matched but not CONFIRMED shows in neither open orders nor
+    positions; the kill reported flat while $4.50 was still committed."""
+    rt, server = live_world(confirm=False)
+    buy(rt, server, collateral_decision(rt), price="0.45")
+    polymarket.tick(rt)
+    rt.polymarket._account_memo = None
+    report = polymarket.wind_down(rt)
+    assert report["exposure_state"] == "wind_down_pending"
+    assert [(u["size"], u["booked"]) for u in report["unsettled"]] == [("10", "0")]
