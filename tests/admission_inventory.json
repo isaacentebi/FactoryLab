@@ -26734,7 +26734,7 @@
     "factorylab/kernel/money.py": "9e172c8753d812971f2d52aab5b1654e077226c0974adbcf90ae4ca5e47f9b6e",
     "factorylab/kernel/registry.py": "7e848639de72db3937110978339005251a001e86bd5684dfda927b99f84a798c",
     "factorylab/kernel/reserve.py": "11373ac82be95c9800c266b4fb5a1dbc035688602a2999c2bad4395c4d098a64",
-    "factorylab/runtime/composition.py": "7f62225a3256192cf8190ac91b3b6039fbbebe83f1c8ee3b6217a7cb3f3e7109",
+    "factorylab/runtime/composition.py": "07901c7e1c6e2ebed31fe7dd009f21e9d2a00dd8a027f0b2b5307af5243627cc",
     "factorylab/runtime/compute.py": "a96bedb69b3a8aa963b80ff3087e965893d9d021ef6bf6eed6babc2e16f51bb5",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",

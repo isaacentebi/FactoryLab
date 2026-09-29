@@ -39,7 +39,7 @@ import sys
 import tomllib
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -216,6 +216,8 @@ class Physics:
     sampling_cap: float = 0.7
     consequence_share: float = 0.3
     no_swap_regret_kinds: tuple[str, ...] = ()
+    jitter_fraction: float = 0.2
+    cadence_sample: int = 200
 
     @property
     def H(self) -> int:  # noqa: N802 - the design's symbol
@@ -256,6 +258,8 @@ def physics(manifest: Mapping | None) -> Physics:
         sampling_cap=float(get(evaluation, "sampling_cap", base.sampling_cap)),
         consequence_share=float(get(evaluation, "consequence_share", base.consequence_share)),
         no_swap_regret_kinds=tuple(get(evaluation, "no_swap_regret_kinds", ())),
+        jitter_fraction=float(get(timing, "jitter_fraction", base.jitter_fraction)),
+        cadence_sample=int(get(timing, "cadence_sample", base.cadence_sample)),
     )
     return ph
 
@@ -1203,28 +1207,98 @@ def update_windows(events: Iterable[Mapping]) -> dict[int, int]:
             if need(row, "window_end_event") in closes}
 
 
+#: The rows that move a card's integral outside ``price.update`` (controller.py): an
+#: adopted price becomes it (``set_price``), a ratchet raises it (``ratchet``), a
+#: redefinition restarts it (``redefine``).
+INTEGRAL_ROWS = frozenset({"price.proposed", "immune.price_ratchet", "price.redefined"})
+
+
+@dataclass(frozen=True)
+class HeldUpdate:
+    """A price update whose integrator the law holds, and the integral in force before it."""
+
+    row: Mapping
+    expected: float
+
+
+def held_updates(events: list[Mapping], card: str, ph: Physics) -> list[list[HeldUpdate]]:
+    """The card's runs of consecutive price updates whose integrator the published law
+    holds, each with the integral in force before it (``expected``).
+
+    The law (``world.adaptive_scoring``, the controller's recurrence; controller.py
+    ``_pid``): while ``v > 0``, with ``I_E = min(E, I)``, ``I' = I_E`` while ``lambda >=
+    B``, ``B = penalty_cap / v`` of the window just observed and ``lambda`` the price in
+    force while it ran (the row's ``lambda_before``: what its decisions bore). A window
+    whose price sat below its own bound (its penalty ``lambda · v`` below the cap) may
+    integrate up to ``B``, however close to it the update then sets the price: that
+    price is the update's output (``lambda_after``), not the penalty the window bore.
+    ``E`` is the largest ``B`` of the card's failure episode (its violating updates since
+    it last complied or was redefined, this one included). ``I`` is the previous
+    update's ``i``, moved by the rows between (``INTEGRAL_ROWS``): an adoption sets it to
+    its ``lambda_after``, a ratchet raises it by its ``step`` up to the bound of the last
+    violation, a redefinition restarts it at its ``declared`` price and ends the
+    episode. Float arithmetic is the controller's own (``ratio``, ``held_sum``)."""
+    from factorylab.charter.controller import held_sum, ratio
+
+    runs: list[list[HeldUpdate]] = []
+    current: list[HeldUpdate] = []
+    integral: float | None = None
+    episode, previous_v = 0.0, 0.0
+    for row in events:
+        kind = row.get("kind")
+        # Every emitter of these kinds names its card (controller.py).
+        if (kind != "price.update" and kind not in INTEGRAL_ROWS) \
+                or need(row, "card_id") != card:
+            continue
+        if kind == "price.proposed":
+            integral = need(row, "lambda_after")
+        elif kind == "immune.price_ratchet":
+            if integral is not None:
+                raised = held_sum(integral, need(row, "step"))
+                integral = min(ratio(ph.cap, previous_v), raised) if previous_v > 0 \
+                    else raised
+        elif kind == "price.redefined":
+            integral, episode, previous_v = need(row, "declared"), 0.0, 0.0
+        else:
+            v = need(row, "violation")
+            episode = max(episode, ratio(ph.cap, v)) if v > 0 else 0.0
+            if v > 0 and need(row, "lambda_before") >= ratio(ph.cap, v) \
+                    and integral is not None:
+                current.append(HeldUpdate(row, min(episode, integral)))
+            elif current:
+                runs.append(current)
+                current = []
+            integral, previous_v = need(row, "i"), v
+    if current:
+        runs.append(current)
+    return runs
+
+
 @criterion("SF-1c")
 def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
-    """SF-1c: once the penalty sits at ``penalty_cap``, the integral is exactly constant.
+    """SF-1c: while the penalty sits at ``penalty_cap``, the integral is exactly held.
 
     Wave 16 R-E (amended): "while the penalty sits at penalty_cap, λ's integrator
-    does not integrate (it is frozen)". Read only on runs of consecutive updates whose
-    penalty ``λ·v`` is at the cap (``capped_runs``): within each run the integral is
-    equal, not merely close, from one update to the next. A run ends at any update below
-    the cap (the violation eased, and the integral may then legitimately move) and a new
-    run starts at the next capped update.
-    """
+    does not integrate (it is frozen)". The penalty a window's decisions bore is the
+    price in force while it ran times its violation, so the held updates are the ones
+    whose ``lambda_before`` sits at the window's own bound (``held_updates``, the
+    published recurrence's ``lambda >= B``): each must leave the integral exactly where
+    it stood (``I_E``), equal, not merely close. A window whose price sat below its
+    bound integrates up to it, and an update that thereby sets the price at the bound
+    is not a held one: reading "at the cap" from the price the update set would call
+    that integration a windup."""
     ph = physics(manifest)
-    runs = [run for run in capped_runs(events, card, ph) if len(run) >= 2]
+    runs = held_updates(events, card, ph)
     if not runs:
-        return _unsupported("SF-1c", "the penalty never sat at the cap for two updates",
+        return _unsupported("SF-1c", "the penalty never sat at the cap while a window ran",
                             card=card)
     # ``price.update`` always carries the PID's integral ``i`` (controller.py ``_pid``
-    # terms): two rows without one are malformed, never "equal".
-    moved = [(need(a, "i"), need(b, "i")) for run in runs
-             for a, b in zip(run, run[1:], strict=False) if need(a, "i") != need(b, "i")]
+    # terms): a row without one is malformed, never "equal".
+    moved = [(held.expected, need(held.row, "i")) for run in runs for held in run
+             if need(held.row, "i") != held.expected]
     return _result("SF-1c", not moved, card=card, runs=len(runs),
-                   integrals=[[row.get("i") for row in run][:12] for run in runs[:3]],
+                   held=sum(len(run) for run in runs),
+                   integrals=[[need(held.row, "i") for held in run][:12] for run in runs[:3]],
                    moved=moved[:5])
 
 
@@ -1233,11 +1307,13 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     """SF-1d: sustained saturation is ledgered and its duration rises by one per window.
 
     Wave 16 R-E: "At saturation, ledger the fact and publish it to governance". Demanded
-    only once the penalty has sat at the cap for ``min_ratio`` consecutive updates (the
-    same partition as SF-1c: one capped update followed by uncapped ones is not
-    sustained saturation). Durations are read per saturation episode (A), as the kernel
-    writes them (R-E, R10-e): a saturated ratchet carries the failing attractor's own
-    duration, which kept counting from the ratchets before it, so an episode starts at
+    only once the penalty has sat at the cap for ``min_ratio`` consecutive updates
+    (``capped_runs``, at the price each update set: the organ's saturation gate reads the
+    price in force at its close, controller.py ``_at_cap``; one capped update followed by
+    uncapped ones is not sustained saturation). Durations are read per saturation
+    episode (A), as the kernel writes them (R-E, R10-e): a saturated ratchet carries the
+    failing attractor's own duration, which kept counting from the ratchets before it,
+    so an episode starts at
     whatever duration the attractor stood at, and each next row is the previous plus
     one at a later window (the organ's acting grid, not every window). A row whose
     duration does not continue the episode starts another; whether the duration fell
@@ -1453,6 +1529,167 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     return out
 
 
+def _is_tick(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def router_kinds(events: Iterable[Mapping]) -> dict[str, str]:
+    """Each router's kind: the ``event_kind`` its ``router.created`` row names (routing.py
+    ``_build_router``, which ids it ``router:<kind>``, ``#<n>`` and ``@<generation>``; a
+    fresh id every time, ``_fresh_router_id``, so a second row for one id is malformed)."""
+    return unique_map(rows_of(events, "router.created"), lambda row: need(row, "learner_id"),
+                      lambda row: need(row, "event_kind"))
+
+
+def router_kind(router: str, kinds: Mapping[str, str]) -> str:
+    """``router``'s kind (``router_kinds``), else read from its id as routing.py forms it."""
+    return kinds.get(router) or router.split(":", 1)[1].split("#")[0].split("@")[0]
+
+
+def _metered(row: Mapping) -> bool:
+    """Whether a ``router.learned`` row is a sample of its router's meter. NOOP never is,
+    and nor is a restored round whose ``opened_tick`` is stated as None: the kernel feeds
+    no meter for it (feedback.py ``_record_router_round`` returns early; Codex on
+    2bc2d30). A row with no ``opened_tick`` key at all is an older diary's, not this."""
+    return need(row, "action") != "NOOP" and not ("opened_tick" in row
+                                                  and row.get("opened_tick") is None)
+
+
+def tick_clocked(events: list[Mapping]) -> bool:
+    """Whether the diary states the gain loop's own clock: a ``tick`` on every organ close,
+    and an ``opened_tick`` and ``closed_tick`` on every round a router meter sampled
+    (``router.learned``, R16b-5; NOOP is never a sample). The clock is the organ's: a
+    diary with no sampled round yet is still on it, its meters empty and read at the
+    kernel's floor of one tick (``Clockwork.measured``; Codex on 88309a5), never at the
+    window reading's looser bound. An older diary has no such clock and is read in
+    windows (``router_round_periods``)."""
+    closes = windows(events)
+    learned = [row for row in rows_of(events, "router.learned") if _metered(row)]
+    return (bool(closes) and all(_is_tick(row.get("tick")) for row in closes)
+            and all(_is_tick(row.get("opened_tick")) and _is_tick(row.get("closed_tick"))
+                    for row in learned))
+
+
+@dataclass
+class GainAct:
+    """One acting organ close as the gain loop read it (``gain_acts``): its window and
+    tick, each kind's meter there (``inner``), each kind's last fire before it (``fired``:
+    tick and meter), the routers whose γ changed at it (``stepped``) and the kinds whose
+    loop it fired (``kinds``)."""
+
+    window: int
+    tick: int
+    inner: dict[str, int]
+    fired: dict[str, tuple[int, int]]
+    stepped: set[str] = field(default_factory=set)
+    kinds: set[str] = field(default_factory=set)
+
+
+def gain_acts(events: list[Mapping], ph: Physics) -> list[GainAct]:
+    """Each acting organ close, with what the kernel's gain loop read there per router kind,
+    in the kernel's own clock: world ticks (clockwork.py, "one clock domain"), never price
+    windows, whose length in ticks the world sets and varies.
+
+    ``immune._gain`` steps a kind's routers at an acting close only when its loop
+    (``gain:<kind>``) is due (``Clockwork.due``): it never fired, or the period it drew
+    at its last fire, ``ceil(min_ratio × I_fire × (1 + jitter_fraction × u))`` with its
+    own draw ``u < 1``, has elapsed, and the ticks since are still at least ``min_ratio ×
+    I_now``. ``I`` is the kind's router meter (``measured("router:<kind>")``: the p90 of
+    its latest ``cadence_sample`` closures, floor 1, and 1 while it holds none: a kind
+    absent from ``inner`` reads 1), replayed from the rounds it samples
+    (``router.learned``, ``closed_tick − opened_tick``, feedback.py
+    ``_record_router_round``; NOOP never). Whatever ``u`` was, a step is certainly due
+    once ``min_ratio × I_fire × (1 + jitter_fraction)`` has elapsed too (``due``): the
+    jitter only lengthens (essay II.IV.c), and the organ's own cadence decides which
+    close comes next. A kind's loop fires at the close any of its routers' γ changed
+    (every ``immune.gain`` row, whatever its pathology), with the meter read there.
+
+    Guarantees one ``GainAct`` per acting close, in order, each with the routers whose γ
+    changed at it and each kind's last fire before it, read by ``certainly_due``."""
+    from factorylab.runtime.clockwork import p90
+
+    kinds = router_kinds(events)
+    meters: dict[str, list[int]] = defaultdict(list)
+    fired: dict[str, tuple[int, int]] = {}
+    acts: list[GainAct] = []
+    for row in events:
+        kind = row.get("kind")
+        if kind == "router.learned" and _metered(row):
+            sample = meters[router_kind(need(row, "router"), kinds)]
+            sample.append(max(0, need(row, "closed_tick") - need(row, "opened_tick")))
+            del sample[:-ph.cadence_sample]
+        elif kind == "immune.window" and need(row, "acts"):
+            now = need(row, "tick")
+            inner = {k: max(1, p90(v)) for k, v in meters.items() if v}
+            acts.append(GainAct(need(row, "window"), now, inner, dict(fired)))
+        elif kind == "immune.gain":
+            act = acts[-1] if acts else None
+            if act is None or need(row, "window") != act.window:
+                raise Malformed(row, "window (a gain row outside its acting close)")
+            k = router_kind(need(row, "router"), kinds)
+            act.stepped.add(need(row, "router"))
+            if k not in act.kinds:  # the kind's first change at this close fires it
+                act.kinds.add(k)
+                fired[k] = (act.tick, act.inner.get(k, 1))
+    return acts
+
+
+def certainly_due(act: GainAct, ph: Physics, kind: str) -> bool:
+    """Whether ``kind``'s gain loop was due at ``act`` whatever its jitter draw was."""
+    if kind not in act.fired:
+        return True
+    at, inner_then = act.fired[kind]
+    elapsed = act.tick - at
+    return (elapsed >= ph.r * act.inner.get(kind, 1)
+            and elapsed >= math.ceil(ph.r * inner_then * (1.0 + ph.jitter_fraction)))
+
+
+@dataclass
+class ClockedGain:
+    """One router's γ through one episode on the kernel's clock (``_sf1e_clocked``)."""
+
+    late: dict | None
+    reached_at: int | None
+    gamma: float | None
+    due_seen: bool
+
+
+def _sf1e_clocked(rows: list[Mapping], acts: list[GainAct], ph: Physics, kind: str,
+                  begin: int, stop: int) -> ClockedGain:
+    """One router's γ through windows ``begin``..``stop`` of an episode, act by act on the
+    kernel's clock (``gain_acts``). ``late`` is the first acting close at which its kind's
+    loop was certainly due (``certainly_due``), its γ was known and below ``gamma_max``,
+    and it did not step; ``reached_at`` the window its γ reached ``gamma_max`` (``begin``
+    when it already stood there); ``gamma`` its last known γ (None while no gain row before
+    or during the episode states it: the kernel writes none for a router at ``gamma_max``);
+    ``due_seen`` whether a step was certainly due at some close of the episode."""
+    prior = [row for row in rows if need(row, "window") < begin]
+    gamma = gamma_of(need(prior[-1], "gamma_after")) if prior else None
+    top = begin if gamma is not None and gamma >= ph.gamma_max else None
+    due_seen = False
+    for act in acts:
+        window = act.window
+        if not begin <= window <= stop:
+            continue
+        mine = [row for row in rows if need(row, "window") == window]
+        before = gamma_of(need(mine[0], "gamma_before")) if gamma is None and mine else gamma
+        due = certainly_due(act, ph, kind)
+        due_seen = due_seen or due
+        if due and before is not None and before < ph.gamma_max \
+                and not any(raises(row) for row in mine):
+            fired = act.fired.get(kind)
+            late = {"window": window, "tick": act.tick, "gamma": before,
+                    "fired_tick": fired[0] if fired else None,
+                    "inner_at_fire": fired[1] if fired else None,
+                    "inner_now": act.inner.get(kind, 1)}
+            return ClockedGain(late, None, before, True)
+        if mine:
+            gamma = gamma_of(need(mine[-1], "gamma_after"))
+        if top is None and gamma is not None and gamma >= ph.gamma_max:
+            top = window
+    return ClockedGain(None, top, gamma, due_seen)
+
+
 @criterion("SF-1e")
 def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1e: in each stable-failure episode, γ reaches ``gamma_max`` within
@@ -1479,6 +1716,16 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     The routers judged are every router with decisions in the diary
     (``router_presence``), not only those with gain rows; one replaced before its bound
     (``router_retirements``) is no evidence.
+
+    A diary that states the gain loop's own clock (``tick_clocked``: ticks on every
+    organ close and on every round a router meter samples) is read on it instead, act by
+    act (``gain_acts``, ``_sf1e_clocked``): the kernel's loop is in world ticks and its
+    windows are not a fixed number of ticks, its meter is the router kind's latest
+    ``cadence_sample`` closures (not the whole diary's), its period is lengthened by its
+    own jitter, and it steps only at the organ's next acting close. There a router is late
+    when an acting close of the episode found its kind's loop certainly due, its γ known
+    and below ``gamma_max``, and did not step it; the bound is that close, and reaching
+    the top with no late step is the router's pass.
 
     ``fail`` when an episode stayed flagged through a router's bound without that router
     reaching the top, or γ unwound while flagged; ``unsupported`` when an episode still
@@ -1512,7 +1759,11 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     retired = router_retirements(events)
     last = max(need(w, "window") for w in closes)
     problems, reached, pending, resolved, stateless = [], {}, [], 0, []
-    rounds = router_round_periods(events)
+    # The gain loop's own clock is world ticks (``gain_acts``); a diary that states it is
+    # read act by act on it, an older one in windows (``router_round_periods``).
+    clocked = tick_clocked(events)
+    acts, kinds = (gain_acts(events, ph), router_kinds(events)) if clocked else ([], {})
+    rounds = {} if clocked else router_round_periods(events)
     for router in routers:
         rows = by_router.get(router, [])
         born = presence[router]  # every router judged is present (gain rows included)
@@ -1522,6 +1773,23 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
             if born > end or (gone is not None and gone <= start):
                 continue  # the router did not exist during this episode
             begin = max(start, born)
+            if clocked:
+                stop = end if gone is None else min(end, gone - 1)
+                gain = _sf1e_clocked(rows, acts, ph, router_kind(router, kinds), begin, stop)
+                entry = {"router": router, "episode": [start, end], "begin": begin,
+                         **asdict(gain)}
+                if gain.late is not None:
+                    problems.append(entry)
+                elif gain.reached_at is not None:
+                    reached.setdefault(router, {"window": gain.reached_at,
+                                                "episode": [start, end]})
+                elif gain.gamma is None and gain.due_seen:
+                    stateless.append(entry)  # a step was due and its γ is unobserved
+                elif end == last and stop == end:
+                    pending.append(entry)  # open at the diary's end, never late so far
+                else:
+                    resolved += 1  # the episode (or the router) ended before its top
+                continue
             prior = [row for row in rows if need(row, "window") < begin]
             inside = [row for row in rows if begin <= need(row, "window") <= end]
             if not prior and not inside:
@@ -1562,9 +1830,10 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
             window = need(row, "window")
             if window in flag_set and window not in thrash and lowers(row):
                 problems.append({"router": router, "unwound_while_flagged": need(row, "window")})
-    evidence = {"problems": problems[:10], "reached": reached, "pending": pending[:10],
-                "resolved": resolved, "stateless": stateless[:10],
-                "episodes": episodes[:10], "organ_period": period}
+    evidence = {"clock": "ticks" if clocked else "windows", "problems": problems[:10],
+                "reached": reached, "pending": pending[:10], "resolved": resolved,
+                "stateless": stateless[:10], "episodes": episodes[:10],
+                "organ_period": period}
     if problems:
         return _result("SF-1e", False, **evidence)
     if pending:

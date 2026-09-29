@@ -235,6 +235,14 @@ class CompositionMixin:
             cost_ceiling=ceiling, return_channels=channels, **cutoff_kw)
         if snapshot is not None:
             self.snapshot_keys[handle] = snapshot
+        if item.target != "self":
+            # Essay II.II.b, wave 16 I-10: the thrash price lands on every router whose
+            # tier moved, and a request router is one (it draws, and learns from the
+            # child's settlement). Its draw's movement is recorded, and charged, exactly
+            # as an event router's is (``RoutingMixin._record_movement``); a ``self``
+            # child is drawn by no router, so nothing moved.
+            self._record_movement(self.routers[request_router_key(item.target)][0],
+                                  sample, handle)
         forwarded = self._forwarded_propensity(handle, item, actor)
         self.ledger.append({
             "kind": "request.child", "handle": handle, "requested": item.target,
