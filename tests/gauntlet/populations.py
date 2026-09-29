@@ -246,7 +246,7 @@ class Population(ScriptedProvider):
         arm = (seat.arms.get(form) if seat is not None else None) or side.defaults[form]
         reply = arm(view)
         if form == "produce":
-            reply = names_declined_trade(reply, text, inputs, self.calls[key])
+            reply = names_declined_trade(reply, text, inputs, self.calls[key], req)
         if side.record:
             side.requests.append((you, form, text))
             side.emitted.update(_strings(reply))

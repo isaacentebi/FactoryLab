@@ -77,7 +77,7 @@ class ScriptedProvider:
         else:
             reply = self._produce(desc, inputs)
         reply = self._satisfy_contract(reply, req, text, inputs)
-        reply = names_declined_trade(reply, text, inputs, self._producer_calls)
+        reply = names_declined_trade(reply, text, inputs, self._producer_calls, req)
         return ModelResponse(
             req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
         )
@@ -417,7 +417,7 @@ def _published_coins(schema: Any) -> set[str]:
 
 
 def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any],
-                         n: int) -> dict[str, Any]:
+                         n: int, req: ModelRequest | None = None) -> dict[str, Any]:
     """``reply`` naming a declined trade when it is a final answer that orders nothing.
 
     The return contract of a producing kind (``runtime.grounded``): a final answer
@@ -426,10 +426,12 @@ def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any
     the scripted population names both. A reply to a schema that does not publish
     the field, and one that already names a trade, places an answer order, declines,
     or continues through tools or children, is unchanged. An ``order`` that only
-    reports a tool's write names one too: the write may have been refused.
+    reports a tool's write names one too: the write may have been refused. The
+    schema is read where only the kernel writes (``_schema_line``); a prompt whose
+    contract leads is read through ``req``, which bounds that run.
     """
-    schema = text.split("OUTCOME SCHEMA\n", 1)
-    if (len(schema) < 2 or '"counterfactual"' not in schema[1].split("\n", 1)[0]
+    line = _schema_line(text, req)
+    if (line is None or '"counterfactual"' not in line
             or not isinstance(reply, dict) or "counterfactual" in reply
             or (reply.get("action") == "order"
                 and all(k in reply for k in ("coin", "side", "size")))
@@ -437,7 +439,7 @@ def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any
             or reply.get("status") == "cannot"):
         return reply
     try:
-        published = json.loads(schema[1].split("\n", 1)[0])
+        published = json.loads(line)
     except ValueError:
         published = None
     coin = listed_coin(inputs, published)
@@ -458,7 +460,7 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
     ``response_schema``; never from the request's prose. A request with neither
     reads as requiring nothing.
     """
-    schema: Any = _rendered_schema(text)
+    schema: Any = _rendered_schema(text, req)
     if not isinstance(schema, dict) and req is not None:
         schema = req.response_schema
     if not isinstance(schema, dict):
@@ -469,7 +471,7 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
 def _contract_schema(req: ModelRequest | None, text: str) -> dict | None:
     """The request's outcome schema, from the same trusted sources as
     ``outcome_required``: the rendered ``OUTCOME SCHEMA`` line, else the wire schema."""
-    schema = _rendered_schema(text)
+    schema = _rendered_schema(text, req)
     if isinstance(schema, dict):
         return schema
     schema = req.response_schema if req is not None else None
@@ -659,7 +661,7 @@ def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
     """The fields EVERY admitted answer shape requires: what the contract obliges any
     answer to carry, from the same trusted sources as ``outcome_required``. A mixed
     contract (a producer's return or a verdict) obliges neither."""
-    schema: Any = _rendered_schema(text)
+    schema: Any = _rendered_schema(text, req)
     if not isinstance(schema, dict) and req is not None:
         schema = req.response_schema
     if not isinstance(schema, dict):
@@ -689,37 +691,50 @@ def _kernel_tail(text: str) -> str:
     return "" if newline < 0 else text[newline:]
 
 
-def _kernel_head(text: str) -> str:
-    """The part of a prompt before its REQUEST header: only the kernel writes there.
+def _kernel_lead(req: ModelRequest | None) -> str:
+    """The cacheable run heading ``req``'s final message, as the kernel bounded it.
 
-    Under a world's stable block the reply contract leads the prompt
-    (``Request.sections``: the cacheable run), ahead of the seat's account, the
-    update and the author's description, so nothing an author wrote precedes it.
-    Read to the first REQUEST header line, which an author's text cannot come
-    before."""
-    if text.startswith("REQUEST\n"):
+    Guarantees exactly the prefix ``Assembly.build_model_request`` stated
+    (``cache_prefix_chars``: the stable block and, behind a block that ends its line,
+    the reply contract), or the empty string when the request states none.
+    """
+    chars = getattr(req, "cache_prefix_chars", 0)
+    messages = getattr(req, "messages", ())
+    if type(chars) is not int or chars <= 0 or not messages:
         return ""
-    at = text.find("\nREQUEST\n")
-    return text if at < 0 else text[:at + 1]
+    content = messages[-1].get("content")
+    return content[:chars] if isinstance(content, str) and chars <= len(content) else ""
 
 
-def _rendered_schema(text: str) -> Any:
-    """The rendered ``OUTCOME SCHEMA`` line, parsed, from kernel-written text only.
+def _schema_line(text: str, req: ModelRequest | None = None) -> str | None:
+    """The kernel's rendered ``OUTCOME SCHEMA`` line, or None.
 
-    Read from the head of the prompt, where a request under a world block renders
-    it, and otherwise from the tail after the last INPUTS line, where a request
-    without one does; never from an author's description. None when neither holds
-    a readable one."""
+    Two places hold it, and each is read only where the kernel alone decides what
+    follows. Where the contract leads, it is the LAST marker inside the kernel's
+    own run (``_kernel_lead``): the stable block before it renders charter norms
+    verbatim, which may carry any header (Codex on b8a9cf6), while after it the
+    run holds only the schema's JSON line and the kernel's contract prose. Where
+    it trails, it is the first marker after the last INPUTS line
+    (``_kernel_tail``). Never an author's description, and never a norm.
+    """
     marker = "OUTCOME SCHEMA\n"
-    for region in (_kernel_head(text), _kernel_tail(text)):
-        at = region.find(marker)
-        if at < 0 or (at > 0 and region[at - 1] != "\n"):
-            continue
-        try:
-            return json.loads(region[at + len(marker):].split("\n", 1)[0])
-        except (ValueError, json.JSONDecodeError):
-            return None
-    return None
+    at = _kernel_lead(req).rfind("\n" + marker)
+    if at >= 0:
+        return _kernel_lead(req)[at + 1 + len(marker):].split("\n", 1)[0]
+    tail = _kernel_tail(text)
+    at = tail.find("\n" + marker)
+    return None if at < 0 else tail[at + 1 + len(marker):].split("\n", 1)[0]
+
+
+def _rendered_schema(text: str, req: ModelRequest | None = None) -> Any:
+    """The kernel's rendered ``OUTCOME SCHEMA`` (``_schema_line``), parsed, or None."""
+    line = _schema_line(text, req)
+    if line is None:
+        return None
+    try:
+        return json.loads(line)
+    except (ValueError, json.JSONDecodeError):
+        return None
 
 
 def _scoring_keys(text: str) -> frozenset[str]:
