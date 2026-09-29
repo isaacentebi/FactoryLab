@@ -13,9 +13,14 @@ checkpoints written between 1,500 and 5,000 world events (``plateau_problems``):
 1. no decision leak: the least-squares slope of each 500-event block's median
    retained decisions is at most +2% of the first block's value per block;
 2. no leak of state other than decisions: holding the retained decisions fixed, the
-   checkpoint does not grow with age. Over every checkpoint in range, bytes are fit by
-   least squares to ``a + c * decisions + g * tick``; the growth ``g`` over the range
-   is at most 10% of the median checkpoint's bytes.
+   checkpoint grows neither with age nor with the decisions the world has completed.
+   Over every checkpoint in range, bytes are fit by least squares to ``a + c *
+   decisions + g * tick`` and to ``a + c * decisions + g * completed``, with the cost
+   of a retained decision ``c`` bounded outside the fit (never negative, never above
+   the first block's bytes per retained decision); the growth ``g`` over each range is
+   at most 10% of the median checkpoint's bytes. Unbounded, ``c`` could go negative and
+   explain away a leak left by every completed decision as retention falls (Sol on
+   #179: 7.55 MB leaked, read as no growth).
 
 Why a fit, not bytes per decision (the rule until 2026-09-29, which failed on a
 world with no leak): a checkpoint is about 1.2 MB of aggregates that do not scale
@@ -63,7 +68,8 @@ def _slope(values: list[float]) -> float:
 
 
 def _fit(columns: list[list[float]], y: list[float]) -> list[float]:
-    """Least-squares coefficients of ``y`` on ``columns`` (the normal equations)."""
+    """Least-squares coefficients of ``y`` on ``columns`` (the normal equations); every
+    column must vary, or be the intercept, so the system is not singular."""
     n = len(columns)
     rows = [[sum(a * b for a, b in zip(columns[i], columns[j], strict=True))
              for j in range(n)]
@@ -78,35 +84,77 @@ def _fit(columns: list[list[float]], y: list[float]) -> list[float]:
     return [row[n] for row in rows]
 
 
-def plateau_problems(checkpoints: list[tuple[int, int, int]]) -> list[str]:
-    """Why ``checkpoints`` (tick, bytes, retained decisions), each written at or after
-    ``FROM``, show a leak, or [] when they show none.
+def _varies(values: list[float]) -> bool:
+    return max(values) > min(values)
+
+
+def _growth(retained: list[float], driver: list[float], sizes: list[float],
+            per_decision_max: float) -> tuple[float, float]:
+    """(bytes per retained decision, bytes of growth along ``driver`` over its range),
+    from ``bytes ~ a + c * retained + g * driver``.
+
+    The decision term is bounded to ``[0, per_decision_max]``, a bound read outside the
+    fit: a retained decision costs no negative bytes, and none more than the first
+    block's whole checkpoint per retained decision. Unbounded, a fit can explain a leak
+    that grows as retained decisions fall (one left behind by every completed decision)
+    with a negative per-decision cost and read no growth at all. Where the bound binds,
+    the term is fixed at it and the rest refit. A column that does not vary (a perfectly
+    steady plateau) is left out of the fit rather than making it singular.
+    """
+    ones = [1.0] * len(sizes)
+    if not _varies(driver):
+        return 0.0, 0.0
+    if _varies(retained):
+        _a, per_decision, per_step = _fit([ones, retained, driver], sizes)
+        if not 0.0 <= per_decision <= per_decision_max:
+            per_decision = min(max(per_decision, 0.0), per_decision_max)
+            rest = [y - per_decision * r for y, r in zip(sizes, retained, strict=True)]
+            _a, per_step = _fit([ones, driver], rest)
+    else:
+        per_decision = 0.0
+        _a, per_step = _fit([ones, driver], sizes)
+    return per_decision, per_step * (max(driver) - min(driver))
+
+
+def plateau_problems(checkpoints: list[tuple]) -> list[str]:
+    """Why ``checkpoints`` (tick, bytes, retained decisions[, completed decisions so far]),
+    each written at or after ``FROM``, show a leak, or [] when they show none.
 
     Guarantees a problem when the least-squares slope of each ``BLOCK``'s median
     retained decisions exceeds ``MAX_DECISION_SLOPE`` of the first block's per block
-    (a decision leak), or when, with bytes fit to ``a + c * decisions + g * tick``, the
-    age term ``g`` over the range exceeds ``MAX_AGE_GROWTH`` of the median bytes (a leak
-    of anything else a checkpoint carries). Each problem names what it measured.
+    (a decision leak), or when bytes, fit to ``a + c * retained + g * tick`` and, given
+    completed decisions, to ``a + c * retained + g * completed`` (``_growth``: ``c``
+    bounded outside the fit), grow along either by more than ``MAX_AGE_GROWTH`` of the
+    median bytes over its range (a leak of anything else a checkpoint carries, with the
+    world's age or with the decisions it has completed). Each problem names what it
+    measured.
     """
     blocks: dict[int, list[int]] = {}
-    for tick, _size, retained in checkpoints:
-        blocks.setdefault((tick - FROM) // BLOCK, []).append(retained)
-    decisions = [median(values) for _key, values in sorted(blocks.items())]
-    ticks = [float(tick) for tick, _size, _retained in checkpoints]
-    sizes = [float(size) for _tick, size, _retained in checkpoints]
-    _a, per_decision, per_tick = _fit(
-        [[1.0] * len(checkpoints), [float(r) for _t, _s, r in checkpoints], ticks], sizes)
-    growth, level = per_tick * (max(ticks) - min(ticks)), median(sizes)
-    series = (f"block median decisions {[round(d) for d in decisions]}; "
-              f"{per_decision:.0f} bytes per decision, {per_tick:+.1f} bytes per tick")
+    for row in checkpoints:
+        blocks.setdefault((row[0] - FROM) // BLOCK, []).append(row)
+    first = sorted(blocks.items())[0][1]
+    decisions = [median(row[2] for row in rows) for _key, rows in sorted(blocks.items())]
+    per_decision_max = median(row[1] / max(1, row[2]) for row in first)
+    sizes = [float(row[1]) for row in checkpoints]
+    retained = [float(row[2]) for row in checkpoints]
+    drivers = {"age": [float(row[0]) for row in checkpoints]}
+    if all(len(row) > 3 for row in checkpoints):
+        drivers["completed decisions"] = [float(row[3]) for row in checkpoints]
+    level = median(sizes)
     problems = []
     slope = _slope(decisions)
+    growths = {name: _growth(retained, values, sizes, per_decision_max)
+               for name, values in drivers.items()}
+    series = (f"block median decisions {[round(d) for d in decisions]}; "
+              + "; ".join(f"{c:.0f} bytes per decision and {g:+.0f} bytes with {name}"
+                          for name, (c, g) in growths.items()))
     if slope > MAX_DECISION_SLOPE * decisions[0]:
         problems.append(f"decision leak: slope {slope:.1f} per block exceeds "
                         f"{MAX_DECISION_SLOPE:.0%} of {decisions[0]:.0f} ({series})")
-    if growth > MAX_AGE_GROWTH * level:
-        problems.append(f"state leak: {growth:.0f} bytes of growth with age exceeds "
-                        f"{MAX_AGE_GROWTH:.0%} of {level:.0f} ({series})")
+    for name, (_c, growth) in growths.items():
+        if growth > MAX_AGE_GROWTH * level:
+            problems.append(f"state leak: {growth:.0f} bytes of growth with {name} "
+                            f"exceeds {MAX_AGE_GROWTH:.0%} of {level:.0f} ({series})")
     return problems
 
 
@@ -128,8 +176,11 @@ def test_the_checkpoint_plateaus_between_1500_and_5000_events():
             # venue reads a checkpoint never carries.
             state = runtime_state(rt)
             world = len(canonical(state["fake_exchange"])) if state["fake_exchange"] else 0
+            retained = len(rt.queue.retained())
+            completed = (sum(rt.queue.released_counts().values()) + retained
+                         - len(rt.queue.outstanding()))
             checkpoints.append((rt.ticks_consumed, len(canonical(state)) - world,
-                                len(rt.queue.retained())))
+                                retained, completed))
         return written
 
     rt._snapshot = measured
@@ -137,7 +188,7 @@ def test_the_checkpoint_plateaus_between_1500_and_5000_events():
     assert rt.ticks_consumed == EVENTS
     assert checkpoints and checkpoints[0][0] < FROM + BLOCK
     assert checkpoints[-1][0] > EVENTS - BLOCK
-    assert len({(tick - FROM) // BLOCK for tick, _s, _r in checkpoints}) == (
+    assert len({(row[0] - FROM) // BLOCK for row in checkpoints}) == (
         EVENTS - FROM) // BLOCK
     assert not plateau_problems(checkpoints)
 
@@ -204,6 +255,30 @@ def test_a_leak_hidden_by_falling_activity_is_still_a_state_leak():
 def test_the_runs_that_failed_the_earlier_rules_show_no_leak(decisions, sizes):
     """Activity, not growth: each earlier rule's false alarm is no leak under this one."""
     assert plateau_problems(_medians(decisions, sizes)) == []
+
+
+def test_a_leak_left_by_every_completed_decision_is_not_explained_away():
+    """Sol's counterexample on #179: outstanding decisions fall from 1,000 to 849 while
+    each completed decision leaves 50 KB behind, 7.55 MB in all (3.3 MB -> 10.5 MB). An
+    unbounded fit took it as a negative cost per retained decision and read no growth."""
+    checkpoints = []
+    for i in range(152):
+        retained = 1000 - i
+        tick = FROM + i * (EVENTS - FROM) // 151
+        size = FIXED + PER_DECISION * retained + 50_000 * (1000 - retained)
+        checkpoints.append((tick, size, retained, 1000 - retained))
+    problems = plateau_problems(checkpoints)
+    assert [p.split(":")[0] for p in problems] == ["state leak", "state leak"]
+    assert "with age" in problems[0] and "with completed decisions" in problems[1]
+    # Without the completed count the bounded age fit still reads the leak.
+    assert plateau_problems([row[:3] for row in checkpoints])
+
+
+def test_a_perfectly_steady_plateau_is_no_leak_and_no_error():
+    """Constant bytes and constant retention leave the decision column constant: it is
+    left out of the fit, not a singular system (Sol on #179: ZeroDivisionError)."""
+    checkpoints = [(FROM + 100 * i, 3_300_000, 1000, 5 * i) for i in range(35)]
+    assert plateau_problems(checkpoints) == []
 
 
 def test_bytes_per_decision_swing_with_activity_over_fixed_aggregates():
