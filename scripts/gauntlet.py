@@ -1547,14 +1547,18 @@ def router_kind(router: str, kinds: Mapping[str, str]) -> str:
 
 
 def tick_clocked(events: list[Mapping]) -> bool:
-    """Whether the diary states the gain loop's own clock: a ``tick`` on every organ close
-    and an ``opened_tick`` and ``closed_tick`` on every round a router meter samples
-    (``router.learned``, R16b-5; NOOP is never a sample). An older diary has no such clock
-    and is read in windows (``router_round_periods``)."""
+    """Whether the diary states the gain loop's own clock: a ``tick`` on every organ close,
+    and an ``opened_tick`` and ``closed_tick`` on every round a router meter sampled
+    (``router.learned``, R16b-5; NOOP is never a sample). The clock is the organ's: a
+    diary with no sampled round yet is still on it, its meters empty and read at the
+    kernel's floor of one tick (``Clockwork.measured``; Codex on 88309a5), never at the
+    window reading's looser bound. An older diary has no such clock and is read in
+    windows (``router_round_periods``)."""
+    closes = windows(events)
     learned = [row for row in rows_of(events, "router.learned") if need(row, "action") != "NOOP"]
-    return (bool(learned) and all(_is_tick(row.get("opened_tick"))
-                                  and _is_tick(row.get("closed_tick")) for row in learned)
-            and all(_is_tick(row.get("tick")) for row in windows(events)))
+    return (bool(closes) and all(_is_tick(row.get("tick")) for row in closes)
+            and all(_is_tick(row.get("opened_tick")) and _is_tick(row.get("closed_tick"))
+                    for row in learned))
 
 
 @dataclass
@@ -1582,7 +1586,8 @@ def gain_acts(events: list[Mapping], ph: Physics) -> list[GainAct]:
     at its last fire, ``ceil(min_ratio × I_fire × (1 + jitter_fraction × u))`` with its
     own draw ``u < 1``, has elapsed, and the ticks since are still at least ``min_ratio ×
     I_now``. ``I`` is the kind's router meter (``measured("router:<kind>")``: the p90 of
-    its latest ``cadence_sample`` closures, floor 1), replayed from the rounds it samples
+    its latest ``cadence_sample`` closures, floor 1, and 1 while it holds none: a kind
+    absent from ``inner`` reads 1), replayed from the rounds it samples
     (``router.learned``, ``closed_tick − opened_tick``, feedback.py
     ``_record_router_round``; NOOP never). Whatever ``u`` was, a step is certainly due
     once ``min_ratio × I_fire × (1 + jitter_fraction)`` has elapsed too (``due``): the

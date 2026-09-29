@@ -124,3 +124,40 @@ def test_the_jitter_only_lengthens_and_is_bounded(second, late):
     assert (status == g.FAIL) is late
     if late:
         assert problems[0]["late"]["window"] == 2
+
+
+def _unmetered(step_at_six):
+    """A tick-clocked diary with no round learned yet: the organ acts at ticks 0, 3 and 6
+    (windows 1 to 3), and router:Tick steps 0.40 -> 0.45 at tick 0. Its meter is empty,
+    so the kernel reads it at its floor of one tick: the loop is certainly due from
+    ceil(3 × 1 × 1.2) = 4 ticks, not at tick 3, and at tick 6."""
+    rows = [{"kind": "router.created", "learner_id": "router:Tick", "event_kind": "Tick",
+             "replaces": []},
+            _act(1, 0), _gain(1, 0, 0.4, 0.45), _act(2, 3), _act(3, 6)]
+    if step_at_six:
+        rows.append(_gain(3, 6, 0.45, 0.5))
+    return rows
+
+
+def test_an_empty_meter_is_the_kernels_floor_not_the_window_reading():
+    """Codex on 88309a5: with no non-NOOP ``router.learned`` row the diary is still on
+    the organ's tick clock, so a skipped due step fails. The window reading (min_ratio
+    windows a step) left it pending: an episode open at its end, never late."""
+    skipped = _unmetered(step_at_six=False)
+    assert g.tick_clocked(skipped)
+    status, problems = _problems(skipped, {})
+    assert status == g.FAIL
+    assert problems[0]["late"] == {"window": 3, "tick": 6, "gamma": 0.45, "fired_tick": 0,
+                                   "inner_at_fire": 1, "inner_now": 1}
+
+
+def test_control_an_empty_meter_whose_due_step_lands_passes():
+    result = g.sf1e_gain(_unmetered(step_at_six=True), {})
+    assert result.ok, result.evidence
+    assert result.evidence["reached"]["router:Tick"]["window"] == 3
+
+
+def test_a_diary_whose_organ_closes_carry_no_tick_is_read_in_windows():
+    legacy = [{k: v for k, v in row.items() if k != "tick"} for row in _unmetered(False)]
+    assert not g.tick_clocked(legacy)
+    assert g.sf1e_gain(legacy, {}).evidence["clock"] == "windows"
