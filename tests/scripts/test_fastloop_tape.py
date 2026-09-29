@@ -237,16 +237,23 @@ def test_a_stand_ins_call_takes_a_measured_latency_and_expires_past_its_deadline
 
 
 @pytest.mark.gate
-def test_a_scripted_latency_model_reproduces_the_paid_runs_delivered_gaps(tmp_path):
+# The tape's first 40 of 54 ticks in the gate (p50 16.4 s, p90 29.6 s, two thirds late);
+# the whole tape in the soak tier.
+@pytest.mark.parametrize("ticks", [40, pytest.param(None, marks=pytest.mark.soak)],
+                         ids=["40", "whole"])
+def test_a_scripted_latency_model_reproduces_the_paid_runs_delivered_gaps(tmp_path, ticks):
     """Critique C1: a zero-latency stand-in on the idle-skipping clock delivers every tick
     on time, blind to the lateness the paid run lived with. Given the per-call latencies
     longrun1's own diary measured, the scripted population on longrun1's tape delivers
     about the gaps longrun1 delivered (p50 16.1 s, p90 38.3 s over its six hours)."""
+    tape = TAPE if ticks is None else tmp_path / "cut.tape.json"
+    if ticks is not None:
+        _short_tape(tape, ticks)
     blind = fastloop.run("scripted", None, WORLD, tmp_path / "blind", cap_usd="2", seed=1,
-                         tape_from=TAPE, allow_unknown_cutoff=True)
+                         tape_from=tape, allow_unknown_cutoff=True)
     assert blind["pace"]["delivered_s"]["p90"] == 10.0 and blind["pace"]["late_share"] == 0
     card = fastloop.run("scripted", None, WORLD, tmp_path / "paced", cap_usd="2", seed=1,
-                        tape_from=TAPE, latency_from=LATENCY, allow_unknown_cutoff=True)
+                        tape_from=tape, latency_from=LATENCY, allow_unknown_cutoff=True)
     assert card["status"] == "completed", card.get("error")
     delivered = card["pace"]["delivered_s"]
     assert 0.6 * 16.07 <= delivered["p50"] <= 1.4 * 16.07
@@ -255,7 +262,7 @@ def test_a_scripted_latency_model_reproduces_the_paid_runs_delivered_gaps(tmp_pa
     assert card["pace"]["latency_model"] == str(LATENCY)
     # A later tick is never earlier: busy time stays real and the tape is never outrun.
     stamps = [e["ts_ns"] for e in _world_events(_events(card), "Tick")]
-    assert stamps == sorted(set(stamps)) and stamps[-1] <= Tape.load(TAPE).end_ns
+    assert stamps == sorted(set(stamps)) and stamps[-1] <= Tape.load(tape).end_ns
 
 
 class _Died(BaseException):

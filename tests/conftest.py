@@ -552,7 +552,12 @@ def pytest_collection_modifyitems(items):
             module.own_markers[:] = [m for m in module.own_markers
                                      if m.name not in _GATE_MARKS]
     for item in items:
-        if any(item.get_closest_marker(m) for m in ("network", "slow", "soak")):
+        if item.get_closest_marker("soak"):
+            # A soak row (a long param of a gate test) is soak only: -m gate never
+            # selects it, whatever its test is marked.
+            item.own_markers[:] = [m for m in item.own_markers if m.name not in _GATE_MARKS]
+            continue
+        if any(item.get_closest_marker(m) for m in ("network", "slow")):
             continue
         world_fixtures = _world_fixtures(item, world_functions_of)
         if (any(item.get_closest_marker(m) for m in _GATE_MARKS)
