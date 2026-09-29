@@ -299,18 +299,19 @@ GATE_FILE_BUDGET_DEFAULT_S = 60.0
 TIER_BUDGET_ENV = "FACTORYLAB_TIER_BUDGET_S"
 TIER_BUDGETS_S = {"gate": 560.0, "slow": 560.0}
 GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
-    # Serial CPU on the integrated tree (lanes E, M, P and #149, #154, #155 merged).
+    # Serial CPU measured at -n 2 on a loaded host (load average 8-10), test-speed-2.
     "tests/gauntlet/test_thrash.py": (
-        "Thrash criteria retain 300-event th1 release and th3 two-boundary witnesses, "
-        "360-event sustained cap updates, 150-event th2/reversion worlds and the shared "
-        "300-event IID null. Missing-price, missing-charge and always-ready negative "
-        "controls need only 100 events to report FAIL (never UNSUPPORTED); charge and "
-        "cadence controls omit unused steering snapshots. All assertions remain"),
+        "42-54 s: TH-1 at 100 events (detector, price, charge, frontier, physics) with its "
+        "missing-price and missing-charge controls at 100, TH-2 at 100 and its reversion "
+        "world at 150 (the router loop's short lifespan needs it), TH-3 at 150 (two "
+        "charter boundaries) with its always-ready control at 100. The original 300/360 "
+        "worlds, TH-1e/f, the frozen integral and TH-4's null run in the soak tier"),
     "tests/runtime/test_settled_release.py": (
-        "89 s: wave 17b. Release changes nothing a reader sees, over a released and a kept "
-        "150-event world (at 120 and 100 events the release share, the venue-confirmed "
-        "released orders and the invariant's candidate pool are absent), the tally checked "
-        "against the full scan after every event, and one crash probe resumed to the end"),
+        "87-90 s: wave 17b. Release changes nothing a reader sees, over a released and a "
+        "kept 150-event world (at 120 and 100 events the release share, the "
+        "venue-confirmed released orders and the invariant's candidate pool are absent), "
+        "the tally checked against the full scan after every event; the crash probe "
+        "resumes the released world's own diary, copied mid-pass after tick 140"),
     "tests/runtime/test_retained_state_crash.py": (
         "Crash/resume storage contract: thirteen crash-point rows retain event, unlink, "
         "artifact-write and every checkpoint/io protocol step over 20 ticks (12 misses "
@@ -318,33 +319,33 @@ GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
         "assertions; matrix and eviction rows each share their reference. Late-world "
         "divergence remains owned by test_checkpoint_coverage's 100-tick world"),
     "tests/runtime/test_evaluation_layer.py": (
-        "78 s: tier recursion on two seeds and a fourth tier (CUTOVER, lane E), the "
-        "multi-judge, adversarial, two-router and heavy-chaos worlds at their lane E "
-        "sizes; family-disjoint judging reads the shared 100-event scripted run"),
+        "75-88 s: tier recursion on two seeds and a fourth tier at 100 events (120 in the "
+        "soak tier), the multi-judge, adversarial, two-router and heavy-chaos worlds at "
+        "their lane E sizes; family-disjoint judging reads the shared 100-event run"),
     "tests/scripts/test_class2_audit.py": (
-        "74 s: the Class 2 release audit's CLI, run on real git histories (about 2,500 git "
+        "80 s: the Class 2 release audit's CLI, run on real git histories (about 2,500 git "
         "calls, the tool's own provenance and calibration reads) and the seat-text scan; "
         "gate as a whole (GATE_MODULE), on one worker"),
     "tests/runtime/test_bounded_memory.py": (
-        "68 s: the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at "
+        "65-76 s: the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at "
         "2.2 against the 2.3 bound) and pruning changes nothing a reader sees (a 120-tick "
-        "world with and without pruning: at 60 ticks only 45% of returns are slim, under "
-        "the test's own non-vacuity bound); every other test reads these shared worlds"),
+        "world with and without pruning, the second in memory: at 60 ticks only 45% of "
+        "returns are slim, under the test's own non-vacuity bound)"),
     "tests/gauntlet/test_stable_failure.py": (
-        "65 s: SF-1 (sf1c reads the integral frozen at the cap, which a two-thirds run "
-        "does not reach) with its two negative controls, and the transient world and its "
-        "control, strict xfails wave 16b turns green, all at 300 events; sf2 is halved"),
+        "57-64 s: SF-1 at 100 events (a-d, f, physics) with its two 52-event controls, the "
+        "transient world at 150 with its control, SF-2 at 100 and the 220-event "
+        "intermittent world, several running observations in the jail. The original "
+        "228/250 worlds and SF-1e run in the soak tier"),
     "tests/audit/test_class2_rendered.py": (
-        "56-61 s: every launchable world's launch path run for 60 ticks on the scripted "
+        "56-66 s: every launchable world's launch path run for 60 ticks on the scripted "
         "population, each once and shared by the file's tests, and every request it sends "
         "rendered and linted; since wave 16b the edition6 worlds reach the counter-verdict "
-        "request inside those 60 ticks, whose surfaces the audit must read (the budget "
-        "sits inside the run-to-run noise)"),
+        "request inside those 60 ticks, whose surfaces the audit must read"),
     "tests/gauntlet/test_overfitting.py": (
-        "105-124 s: three 400-event worlds at about 40 s each, the fewest in which a seated "
-        "adversary's holdout is proposed, trialled, balloted and activated at the steady "
-        "cadence: of2 (OF-2a/c/d), of4 (a trivial predicate) and OF-2c's negative control "
-        "(holdouts ignored); of1 and its control are 300 events and shared"),
+        "77-89 s: four 100-event worlds (of2, of4, OF-2c's two controls) and two of1 "
+        "worlds, the fewest in which a seated adversary's holdout is proposed, trialled, "
+        "balloted and activated; about half the CPU is the jail's interpreters, one per "
+        "registered observation at each price close"),
 }
 
 
