@@ -176,3 +176,40 @@ def test_the_schematics_render_of_a_selector_world_resolves_nothing_and_says_so(
     assert universe["selectors"] == {"coins": ["*", "xyz:*"], "spot_pairs": ["*/USDC"]}
     assert universe["resolved"]["status"] == "unavailable"
     assert block["trading_markets"]["perp"] == []
+
+
+def _produced(n: int, reply: dict):
+    """One producer request of a universe world over ``n`` extra markets: the prompt the
+    seat read, its outcome schema, and the (status, reason) the kernel recorded."""
+    from tests.runtime.test_counterfactual_contract import Seat, _published, _returned
+    from tests.runtime.test_loop import _consequence_produce
+
+    seat = Seat(reply)
+    rt = Runtime(universe_manifest(), events=0, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=.1, provider=seat, exchange=fake(n))
+    rt._manage_reserve_window()
+    handle, _event = _consequence_produce(rt)
+    (prompt,) = seat.prompts
+    return prompt, json.dumps(_published(prompt)), _returned(rt, handle)
+
+
+def test_a_producer_prompt_and_its_schema_do_not_grow_with_the_universe():
+    """Chapter II §IV.c: a request's size follows the world, not the venue's listing. The
+    tick payload carries the broadcast markets' mids, and the counterfactual coin is
+    named by reference once the listing is long (the kernel still checks it)."""
+    reply = {"action": "hold", "counterfactual": {"coin": "BTC", "side": "buy"}}
+    small_prompt, small_schema, small = _produced(3, reply)
+    large_prompt, large_schema, large = _produced(3000, reply)
+    assert small == large == ("ok", None)
+    assert abs(len(large_prompt) - len(small_prompt)) < 600
+    assert abs(len(large_schema) - len(small_schema)) < 400
+    assert "C2999" not in large_prompt
+
+
+def test_a_counterfactual_off_the_listing_is_refused_when_named_by_reference():
+    from factorylab.runtime.grounded import COUNTERFACTUAL_UNLISTED
+
+    _prompt, schema, returned = _produced(
+        3000, {"action": "hold", "counterfactual": {"coin": "NOT-LISTED", "side": "buy"}})
+    assert '"enum": ["BTC"' not in schema  # the listing is named, not enumerated
+    assert returned == ("malformed", COUNTERFACTUAL_UNLISTED)

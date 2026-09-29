@@ -588,7 +588,9 @@ The request states this contract as structure, and the published schema is the
 enforced one (§II.b). Every round's `outcome_schema` is rebuilt by one function
 (`producing_contract`) from the facts the kernel checks: before the decision
 acts, a producing answer is `anyOf` (a) the kind's answer with `counterfactual`
-required and its `coin` an `enum` of the instruments the venue lists, or, when the
+required and its `coin` an `enum` of the instruments the venue lists (while it lists at
+most `LISTED_ENUM_MAX`, 64; above that the coin is a string naming the listing by
+reference, and the kernel checks it against the same listing), or, when the
 decision may place an answer order and the kind owns one, (b) `action: "order"`
 with `coin`, `side` and `size` required. After a venue write the venue accepted or
 left `uncertain`, the field is optional. With nothing listed it is absent. The kernel
@@ -1985,7 +1987,8 @@ markets it is in play on: a market a named trade or an open consequence still re
 instrument an open return holds or held, an order intent not yet released, and a
 position or spot balance in the tick's account read. A former market's settled funding
 cursor is read again only while a boundary of it is still owed. A world with no
-selector broadcasts its trading markets, as before. A simulated or recorded venue's
+selector broadcasts its trading markets, as before. A producer's tick payload carries
+the broadcast markets' mids only; every other listed mid is one `venue.mids` read away. A simulated or recorded venue's
 advance is filtered to the same set.
 
 **HIP-3 on the live adapter.** A HIP-3 coin is `dex:COIN` everywhere (orders, fills,

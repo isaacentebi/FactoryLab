@@ -11,6 +11,7 @@ from typing import Any
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import (
     JUDGING_FIELDS,
+    LISTED_ENUM_MAX,
     MAX_PROGRAM_STATE_BYTES,
     SEED_KIND_LINES,
     SEED_SYSTEM_PROMPT,
@@ -375,8 +376,10 @@ class SchematicsMixin:
             "optional otherwise. Without it, or with a coin the venue does not list, the "
             "return is malformed. It is not required while nothing is listed. Each "
             "request's outcome schema states this for that request as a union: an answer "
-            "with counterfactual required, its coin one of the listed coins, or, where an "
-            "answer order may be placed, an answer order with coin, side and size"
+            "with counterfactual required, its coin one of the listed coins (enumerated "
+            f"while the venue lists at most {LISTED_ENUM_MAX}, else named by reference to "
+            "the listing and checked against it), or, where an answer order may be placed, "
+            "an answer order with coin, side and size"
         ),
         "verdict": (
             "evaluator returns (required in an answer; a decline is its own form): the "
