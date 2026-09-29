@@ -89,6 +89,8 @@ class Reason(StrEnum):
     CHARTER_LAUNCH_CHANGED = "charter_launch_changed"
     # A ratified charter's loaded content does not hash to charter.ratified_sha256.
     CHARTER_DIGEST_MISMATCH = "charter_digest_mismatch"
+    # A ratified manifest's roster does not hash to charter.roster_sha256.
+    CHARTER_ROSTER_MISMATCH = "charter_roster_mismatch"
 
 
 class CredentialMissing(RuntimeError):

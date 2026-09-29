@@ -691,18 +691,38 @@ def test_a_matching_resume_continues(tmp_path, capsys):
     assert "charter_launch" not in capsys.readouterr().err
 
 
-def _ratified_copy(world, launch, tmp_path, *, edited_to=None):
-    """A copy of ``world`` whose charter states ``launch`` and carries the digest its
-    ratification recorded (``charter.ratified_sha256``); ``edited_to`` then rewrites
-    the launch and leaves that digest untouched, as an edit after ratification would."""
-    from factorylab.charter.provenance import charter_content, charter_digest
+def _reprice_a_seated_model(text):
+    """``text`` with one seated model's input price changed: a roster edit."""
+    import re
+
+    seated = load_manifest_text(text).assemblies[0].model_id
+    at = text.index(f'id = "{seated}"')
+    price = re.compile(r'input_usd_per_mtok = "[^"]*"').search(text, at)
+    return text[:price.start()] + 'input_usd_per_mtok = "999"' + text[price.end():]
+
+
+def load_manifest_text(text):
+    return manifest_from_dict(tomllib.loads(text))
+
+
+def _ratified_copy(world, launch, tmp_path, *, edited_to=None, roster=False,
+                   repriced=False):
+    """A copy of ``world`` whose charter states ``launch`` and carries the digests its
+    ratification recorded (``charter.ratified_sha256``, and with ``roster`` its
+    ``roster_sha256``); ``edited_to`` then rewrites the launch, and ``repriced`` a
+    seated model, leaving those digests untouched, as an edit after ratification would."""
+    from factorylab.charter.provenance import charter_content, charter_digest, roster_hash
 
     text = (Path(__file__).parents[2] / world).read_text()
     voted = text.replace("\n[charter]\n", f'\n[charter]\nlaunch = "{launch}"\n', 1)
     digest = charter_digest(charter_content(tomllib.loads(voted)["charter"]))
+    pin = f'roster_sha256 = "{roster_hash(load_manifest_text(voted))}"\n' if roster else ""
     final = text.replace("\n[charter]\n", f'\n[charter]\nlaunch = "{edited_to or launch}"\n'
-                         f'ratified_sha256 = "{digest}"\n', 1)
-    path = tmp_path / ("edited" if edited_to else "ratified") / Path(world).name
+                         f'ratified_sha256 = "{digest}"\n{pin}', 1)
+    if repriced:
+        final = _reprice_a_seated_model(final)
+    edited = edited_to or repriced
+    path = tmp_path / ("edited" if edited else "ratified") / Path(world).name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(final)
     return path
@@ -762,5 +782,55 @@ def test_resume_refuses_a_ratified_charter_edited_after_launch_and_the_unedited_
     assert main(["resume", "--world", str(edited), "--ledger", str(ledger)]) == 1
     assert capsys.readouterr().err.splitlines() == [
         "factorylab resume: charter_digest_mismatch"]
+    assert ledger.read_bytes() == before
+    assert main(["resume", "--world", str(ratified), "--ledger", str(ledger)]) == 0
+
+
+@pytest.mark.parametrize("world, launch", [(TESTNET, "rehearsal"),
+                                           (CAPITAL_LOOP, "capital-loop")])
+def test_a_ratified_roster_changed_after_ratification_is_refused_on_every_network(
+        world, launch, tmp_path, capsys):
+    """Codex on 2c65b63: the roster pin was enforced on mainnet only, so a capital-loop
+    world (testnet venue, mainnet USDC) launched a changed model under its ratification.
+    It is refused at load and by every launcher; the unedited artifact loads and passes
+    its launch."""
+    from factorylab.runtime.cli import ARGUMENT_EXIT, main
+    from factorylab.runtime.worlds import CharterRosterMismatch
+    from scripts import edition4_rehearsal as rehearsal
+
+    unedited = load_manifest(str(_ratified_copy(world, launch, tmp_path, roster=True)))
+    assert unedited.charter_roster_sha256 is not None and not unedited.exchange.mainnet
+    unedited.check_launch(launch)
+    changed = _ratified_copy(world, launch, tmp_path / "x", roster=True, repriced=True)
+    with pytest.raises(CharterRosterMismatch, match="charter_roster_mismatch"):
+        load_manifest(str(changed))
+    assert main(["run", "--world", str(changed), "--events", "1"]) == ARGUMENT_EXIT
+    assert capsys.readouterr().err.splitlines() == ["factorylab run: charter_roster_mismatch"]
+    report = rehearsal.run_rehearsal(changed, out=tmp_path / "rehearsed",
+                                     capital_loop=launch == "capital-loop", provider=object())
+    assert report["refusal"]["reason"] == "charter_roster_mismatch"
+    # A manifest built in code is refused at launch too.
+    from dataclasses import replace
+
+    with pytest.raises(CharterRosterMismatch):
+        replace(unedited, charter_roster_sha256="0" * 64).check_launch(launch)
+
+
+@pytest.mark.gate  # launches and resumes a world
+def test_resume_refuses_a_roster_changed_after_launch_and_the_unedited_one_runs(
+        tmp_path, capsys):
+    from factorylab.runtime.cli import main
+
+    ratified = _ratified_copy("worlds/scripted.toml", "run", tmp_path, roster=True)
+    ledger = tmp_path / "world.jsonl"
+    assert main(["run", "--world", str(ratified), "--events", "1", "--ledger",
+                 str(ledger)]) == 0
+    capsys.readouterr()
+    changed = _ratified_copy("worlds/scripted.toml", "run", tmp_path, roster=True,
+                             repriced=True)
+    before = ledger.read_bytes()
+    assert main(["resume", "--world", str(changed), "--ledger", str(ledger)]) == 1
+    assert capsys.readouterr().err.splitlines() == [
+        "factorylab resume: charter_roster_mismatch"]
     assert ledger.read_bytes() == before
     assert main(["resume", "--world", str(ratified), "--ledger", str(ledger)]) == 0

@@ -911,20 +911,29 @@ class WorldManifest:
             raise ValueError("mainnet requires charter.launch from the ratified export")
 
     def check_ratified_digest(self) -> None:
-        """Refuse a ratified charter whose loaded content is not the one ratified.
+        """Refuse a ratified charter whose loaded content or roster is not the one ratified.
 
-        Guarantees that where ``charter.ratified_sha256`` is present, whatever the
-        network, the charter as loaded (its cards, norms and ``charter.launch``)
-        hashes to it (``charter_digest_mismatch``): an edit after ratification, a
-        launch rebinding included, is not the voted charter. A charter with no
-        ratified digest claims nothing and is not compared.
+        Guarantees, whatever the network (a capital-loop world trades on testnet and
+        spends mainnet USDC): where ``charter.ratified_sha256`` is present, the charter
+        as loaded (its cards, norms and ``charter.launch``) hashes to it
+        (``charter_digest_mismatch``); where ``charter.roster_sha256`` is present, the
+        manifest's assemblies and models hash to it (``charter_roster_mismatch``). An
+        edit after ratification, a launch rebinding or a changed seat included, is not
+        what was voted. A charter that claims neither digest is not compared.
         """
-        if self.charter_ratified_sha256 is None:
-            return
-        if self.charter_content_sha256 != self.charter_ratified_sha256:
+        if (self.charter_ratified_sha256 is not None
+                and self.charter_content_sha256 != self.charter_ratified_sha256):
             raise CharterDigestMismatch(
                 "charter_digest_mismatch",
                 "the loaded charter's content digest is not charter.ratified_sha256")
+        if self.charter_roster_sha256 is not None:
+            from factorylab.charter.provenance import roster_hash
+
+            if roster_hash(self) != self.charter_roster_sha256:
+                raise CharterRosterMismatch(
+                    "charter_roster_mismatch",
+                    "this manifest's roster differs from the roster the charter was "
+                    "ratified on (charter.roster_sha256)")
 
     def check_launch(self, launch: str) -> None:
         """Refuse a launch its charter was not voted for (``CharterLaunchRefused``).
@@ -1359,9 +1368,6 @@ class WorldManifest:
             raise ValueError(f"look_ahead: a tape world lists no web route; {online} are")
 
     def validate(self) -> None:
-        # A ratified charter is the one voted, on every network (§I.b): its content,
-        # charter.launch included, hashes to the digest the ratification recorded.
-        self.check_ratified_digest()
         problem = self.read_share_problem() or self.storage_problem()
         if problem is not None:
             raise ValueError(problem)
@@ -1593,6 +1599,10 @@ class WorldManifest:
                 f"timing.min_ratio ({headroom['min_ratio']}) times the "
                 f"{headroom['diagnosis_windows']} windows (immune.k) stable failure is "
                 f"diagnosed in, {headroom['min_ratio'] * headroom['diagnosis_windows']}")
+        # A ratified charter is the one voted, on every network (§I.b): its content,
+        # charter.launch included, and its roster hash to the digests the ratification
+        # recorded. After the physics, so a world refused for another reason says that.
+        self.check_ratified_digest()
 
 
 def duration_ns(value: Any) -> int:
@@ -1624,6 +1634,10 @@ class CharterLaunchRefused(ValueError):
 
 class CharterDigestMismatch(CharterLaunchRefused):
     """A ratified charter was edited after ratification: it is not launched or resumed."""
+
+
+class CharterRosterMismatch(CharterLaunchRefused):
+    """A ratified charter's roster was changed after ratification: nothing is launched."""
 
 
 def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]:
