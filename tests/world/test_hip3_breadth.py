@@ -505,3 +505,43 @@ def test_a_dex_whose_funding_read_failed_holds_its_own_watermark_back(venue):
     ex._info.fail.clear()
     tick.on_tick(3 * hour)
     assert through("rates:xyz") == 3 * hour - 1
+
+
+def _probe(monkeypatch, capsys, fail=()):
+    import argparse
+    import json
+
+    from factorylab.runtime.cli import _cmd_probe
+
+    FakeInfo.n, FakeInfo.dexes = 2, {"xyz": USDC}
+    info = {}
+
+    class Recording(FakeInfo):
+        def __init__(self, *args, **kw):
+            super().__init__(*args, **kw)
+            self.fail.update(fail)
+            info["it"] = self
+
+    monkeypatch.setattr("hyperliquid.info.Info", Recording)
+    monkeypatch.delenv("HL_PRIVATE_KEY", raising=False)
+    args = argparse.Namespace(world="edition7-breadth-testnet", provider=None)
+    try:
+        code = _cmd_probe(args)
+    except Exception as exc:  # noqa: BLE001 - the probe's failure is the assertion
+        return None, exc, info.get("it")
+    return code, json.loads(capsys.readouterr().out), info["it"]
+
+
+def test_the_probe_reads_a_breadth_world_through_its_named_dexes(monkeypatch, capsys):
+    """Codex P2 on #178: factorylab probe on a breadth manifest probed a BTC/ETH fallback
+    without its dexes. It is built by the runtime's own dex-aware path."""
+    code, out, info = _probe(monkeypatch, capsys)
+    assert code == 0
+    assert info.perp_dexs_arg == ["", "xyz"]
+    assert out["dexes"] == {"xyz": {"markets": 2, "mids": 2, "rates": 2}}
+    assert out["mids"]["xyz:TSLA"] == "100"
+
+
+def test_a_broken_hip3_endpoint_fails_the_probe(monkeypatch, capsys):
+    _code, failure, _info = _probe(monkeypatch, capsys, fail={("metaAndAssetCtxs", "xyz")})
+    assert failure is not None and "xyz" in str(failure)

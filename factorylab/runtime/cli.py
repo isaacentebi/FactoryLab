@@ -287,10 +287,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     if m.exchange.kind != "hyperliquid":
         refuse("probe", Reason.NO_LIVE_VENUE)
         return ARGUMENT_EXIT
-    from factorylab.world.universe import explicit_markets
-
-    out = probe_hyperliquid(mainnet=m.exchange.mainnet,
-                            coins=explicit_markets(m.exchange.coins) or ("BTC", "ETH"))
+    # The runtime's own dex-aware construction: a broken HIP-3 endpoint fails the probe.
+    out = probe_hyperliquid(m.exchange)
     print(json.dumps(out, indent=2))
     return 0
 
