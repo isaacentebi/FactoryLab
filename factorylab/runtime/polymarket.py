@@ -84,6 +84,8 @@ PROSE_FIELDS = ("question", "description", "slug", "resolution_source", "outcome
 MAX_DEPTH = 20
 MAX_SEARCH_RESULTS = 10
 MAX_QUERY_CHARS = 200
+#: The venue name, the only words each venue kind's published texts differ in (``tool_specs``).
+VENUE_NAMES = {"live": "Polymarket's CLOB on Polygon", "fake": "the simulated Polymarket venue"}
 
 
 def coin_of(token_id: str) -> str:
@@ -99,9 +101,11 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
     A read of the public market API (or of the seeded simulated venue) pays no one,
     so it carries no price: the wallet moves only when money moves. What a write
     costs is the market's own, paid from and settled into the polymarket pot: the
-    price to the matched side and the market's fee, both real counterparties.
+    price to the matched side, a real counterparty; a maker pays no fee. The texts
+    are one for every venue kind apart from the venue's name (published = enforced
+    on each, and a rehearsal shows the world a live run lives in).
     """
-    live = getattr(spec, "venue", "fake") == "live"
+    venue = VENUE_NAMES["live" if getattr(spec, "venue", "fake") == "live" else "fake"]
     token = {"type": "string", "pattern": r"^[0-9]{1,100}$", "minLength": 1}
     decimal = {"type": ["string", "number"]}
     tools = {
@@ -141,14 +145,10 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
                 "venue takes BUY orders only: a position is held until its market "
                 "resolves, when each winning token pays 1 USDC and each losing token 0. "
                 "size is in tokens, price in USDC per token strictly between 0 and 1 on "
-                "the market's tick. A buy holds price x size USDC while it rests. An order "
-                "that fills on arrival pays the market's taker fee. " + (
-                    "The order is signed by the pot's wallet and sent to Polymarket's CLOB "
-                    "on Polygon as a GTC post-only order: it rests on the book as a maker, "
-                    "the venue rejects one that would cross, and a maker pays no fee. Its "
-                    "identity is its EIP-712 order hash. "
-                    "The pot's collateral is pUSD, Polymarket's USDC-backed token. "
-                    if live else "") + "Free to call.",
+                "the market's tick. A buy holds price x size USDC while it rests. The "
+                f"order is sent to {venue} as a GTC post-only order: it rests on the book "
+                "as a maker, the venue rejects one that would cross before it executes, "
+                "and a maker pays no fee. Free to call.",
                 {"token_id": token, "side": {"type": "string", "enum": ["buy"]},
                  "size": decimal, "price": decimal},
                 ["token_id", "side", "size", "price"],
@@ -227,10 +227,7 @@ class PolymarketSurface:
         # Whether the last reconciliation found money gone that the books do not explain
         # (live orders): no new risk until it agrees again.
         self.drifting = False
-        # The fees fills were charged (the simulated venue's takers; a live order is
-        # post-only and pays none): part of the principal the world has spent.
-        self.fees_paid = Decimal(0)
-        # A trade that contradicted the maker-only live venue (a taker leg, a fee):
+        # A trade that contradicted the maker-only venue (a taker leg, a fee):
         # buying stops for the world's life.
         self.contradicted = False
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
@@ -241,7 +238,7 @@ class PolymarketSurface:
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
               "opening", "token_markets", "open_reads", "through", "filled", "cursor",
-              "drifting", "fees_paid", "contradicted")
+              "drifting", "contradicted")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -1081,27 +1078,20 @@ def _open_exposure(account: dict) -> Decimal:
     return held + resting
 
 
-def taker_fee(market: dict, size: Decimal, price: Decimal) -> Decimal:
-    """The most a buy can pay in fees: the taker fee at the market's own rate."""
-    fees = market.get("fees") or {}
-    rate = _decimal(fees.get("rate")) if fees.get("enabled") else Decimal(0)
-    return size * (rate or Decimal(0)) * price * (1 - price)
-
-
 def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
             tool_id: str, args: dict, *, committed: Decimal = Decimal(0),
             window_count: int | None = None,
             principal_committed: Decimal = Decimal(0)) -> str | None:
     """Why this write would be refused before any intent, or None.
 
-    Guarantees new exposure is weighed against the polymarket pot alone: a buy
-    needs its notional and the taker fee it could pay in the pot's available
-    USDC (less ``committed``, what earlier writes of the same batch need); a sell
-    needs the tokens. It also enforces the manifest's caps (one order's notional,
-    the pot's open exposure, orders a window) and the market's own tick and
-    minimum order size. An order identical to one an earlier decision left
-    resting is not refused: the venue allows it and fees price it (Chapter II
-    rulings, R6). An unreadable pot refuses new risk and never a cancellation.
+    Guarantees new exposure is weighed against the polymarket pot alone: a buy needs its
+    notional in the pot's available USDC (less ``committed``, what earlier writes of the
+    same batch need): every order is post-only, so a maker pays no fee; a sell is
+    refused. It also enforces the manifest's caps (one order's notional, the pot's open
+    exposure, orders a window) and the market's own tick and minimum order size. An
+    order identical to one an earlier decision left resting is not refused: the venue
+    allows it (Chapter II rulings, R6). An unreadable pot refuses new risk and never a
+    cancellation.
     """
     spec = surface.spec
     if tool_id == "polymarket.cancel":
@@ -1151,11 +1141,9 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
         return MAKER_ONLY_REFUSAL
     if surface.live and surface.drifting:
         return DRIFT_REFUSAL
-    # A live order is post-only and never charged; the simulated venue's may take.
-    fee = Decimal(0) if surface.live else taker_fee(market, size, price)
     cap = spec.principal_micro
     if cap is not None and usd_to_micro(
-            principal_at_risk(surface) + principal_committed + notional + fee,
+            principal_at_risk(surface) + principal_committed + notional,
             rounding="ceil") > cap:
         return PRINCIPAL_REFUSAL
     exposure, available = _open_exposure(account), Decimal(account["usdc_available"])
@@ -1169,7 +1157,7 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     if usd_to_micro(exposure + committed + notional,
                     rounding="ceil") > spec.max_open_micro:
         return "open exposure would exceed [polymarket] max_open_usd"
-    if notional + fee + committed > available:
+    if notional + committed > available:
         return "order collateral exceeds the polymarket pot's available USDC"
     return None
 
@@ -1201,8 +1189,8 @@ def principal_at_risk(surface: PolymarketSurface) -> Decimal:
     Architect's decision on Sol's third review of #177: every buy that may have
     executed or may still execute (a placement not rejected: its size while it may
     still fill; once proven over, what it matched less its failed legs), at its limit
-    price, and every fee its fills were charged (a live order is post-only and pays
-    none; the simulated venue's takers do). It is the world's
+    price. Every order is post-only on every venue kind, so no fee enters it; a trade
+    that says otherwise halts buying (``MAKER_ONLY_REFUSAL``). It is the world's
     lifetime outlay: no resolution, payout or redemption gives room back (architect's
     decision on Sol's round-4 review), so once the cap is used, buying stops for the
     world's life. No wallet balance and no listing enters it, so no one's deposit,
@@ -1228,7 +1216,7 @@ def principal_at_risk(surface: PolymarketSurface) -> Decimal:
                 matched = Decimal(str(result.get("filled_size") or "0"))
             quantity = matched - Decimal(str(failed.get(order_id, "0")))
         total += max(Decimal(0), quantity) * Decimal(str(args["price"]))
-    return total + surface.fees_paid
+    return total
 
 
 #: The pot does not agree with its custodian: money left it that its books do not explain.
@@ -1252,15 +1240,14 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
     """(USDC the world's buys may still take, the world's booked inventory at cost).
 
     From the world's own durable records, never a venue listing (Astra P1 on #177): a
-    buy placement not rejected reserves its price, and the taker fee its schedule could
-    charge, on every quantity it may still fill or has matched that is not yet booked
-    from a CONFIRMED trade (its size while it rests or is unanswered, its matched size
-    once terminal); the booked inventory of each unresolved token is held at its
-    average cost (``LivePolymarket.poll``'s book). An order proven terminal reserves
-    only what it matched and is not yet booked: an acknowledged cancel (its matched
-    size as the cancel's read-back states it), or the poll's terminal read-back, which
-    requires every matched quantity booked (Codex P1 on #177: a cancelled buy's
-    notional stayed reserved forever).
+    buy placement not rejected reserves its price on every quantity it may still fill or
+    has matched that is not yet booked from a CONFIRMED trade (its size while it rests
+    or is unanswered, its matched size once terminal); the booked inventory of each
+    unresolved token is held at its average cost (``LivePolymarket.poll``'s book). An
+    order proven terminal reserves only what it matched and is not yet booked: an
+    acknowledged cancel (its matched size as the cancel's read-back states it), or the
+    poll's terminal read-back, which requires every matched quantity booked (Codex P1 on
+    #177: a cancelled buy's notional stayed reserved forever).
     """
     cancelled = _cancelled(surface)
     finished = set(surface.cursor.get("terminal", ()))
@@ -1300,8 +1287,7 @@ def batch_refusal(rt: Any, seat: str, handle: str,
 
     Guarantees a batch is weighed whole before any of it is submitted, and more
     strictly than one write alone: the collateral and exposure earlier buys in the
-    batch would need, their fees included, is counted against the later ones, and
-    the window cap counts
+    batch would need is counted against the later ones, and the window cap counts
     the batch's own orders, so no leg is submitted that the pot could not carry
     beside the others.
     """
@@ -1325,11 +1311,9 @@ def batch_refusal(rt: Any, seat: str, handle: str,
         if tool_id == "polymarket.place_limit":
             count += 1
             if args.get("side") == "buy":
-                size, price = Decimal(str(args["size"])), Decimal(str(args["price"]))
-                market = _write_market(rt, surface, args["token_id"]) or {}
-                fee = Decimal(0) if surface.live else taker_fee(market, size, price)
-                committed += size * price + fee
-                at_risk += size * price + fee
+                notional = Decimal(str(args["size"])) * Decimal(str(args["price"]))
+                committed += notional
+                at_risk += notional
     return None
 
 
@@ -1902,7 +1886,6 @@ def _settle_fill(rt: Any, event: dict) -> None:
         owner_handle = None
     else:
         surface.filled[order_id] = str(booked)
-    surface.fees_paid += Decimal(event["fee_usd"])
     if event.get("contradiction"):
         # A leg that contradicts the maker-only venue (a taker, a fee): it is drift the
         # books cannot explain, never a guessed fee, and it stops buying for the world's

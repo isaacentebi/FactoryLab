@@ -960,12 +960,56 @@ def test_every_live_order_is_post_only_and_one_that_would_cross_is_refused_by_th
 
     rt.polymarket.venue.target.send = watch
     crossing = buy(rt, server, collateral_decision(rt), price="0.45")  # the ask is 0.41
-    assert crossing["status"] == "rejected" and "crosses the book" in crossing["error"]
+    assert crossing["status"] == "rejected" and "order crosses book" in crossing["error"]
     assert server.fake._all_orders == {}
     assert buy(rt, server, collateral_decision(rt), price="0.30")["status"] == "resting"
     assert [p["postOnly"] for p in posted] == [True, True]
     description = rt.tool_specs["polymarket.place_limit"]["description"]
     assert "post-only" in description and "no fee" in description
+
+
+def test_the_simulated_and_live_venues_publish_one_order_physics():
+    """Architect's decision on #177: the simulated venue has the live venue's physics, so
+    a rehearsal shows the world a live run lives in, and published = enforced holds on
+    both. Every Polymarket tool renders the same on both apart from the venue's name,
+    and the world.read order section apart from the flag naming the venue kind."""
+    from tests.runtime.test_polymarket_surface import world
+
+    live, _server = live_world(principal="40", budget=7)
+    sim = world(principal_micro=40_000_000, order_requests_per_10s=7)
+    names = polymarket.VENUE_NAMES
+
+    def rendered(rt, venue):
+        return {tool: json.loads(json.dumps(spec).replace(names[venue], "<venue>"))
+                for tool, spec in rt.tool_specs.items() if tool.startswith("polymarket.")}
+
+    tools = rendered(live, "live")
+    assert set(polymarket.WRITES) | {polymarket.ACCOUNT, polymarket.OPEN_ORDERS} <= set(tools)
+    assert tools == rendered(sim, "fake")
+    assert names["live"] in live.tool_specs["polymarket.place_limit"]["description"]
+    assert names["fake"] in sim.tool_specs["polymarket.place_limit"]["description"]
+    live_facts, sim_facts = (rt.institution_section("admission")["tools"]["polymarket_orders"]
+                             for rt in (live, sim))
+    assert (live_facts.pop("live_orders"), sim_facts.pop("live_orders")) == (True, False)
+    assert live_facts == sim_facts
+    assert "every venue kind" in live_facts["rules"]["maker"]
+
+
+def test_a_simulated_crossing_order_is_rejected_before_it_executes():
+    """The simulated venue is post-only too: an order at or above the ask is the venue's
+    rejection, recorded as the intent's answer; nothing fills and no principal is used."""
+    from tests.runtime.test_polymarket_surface import buy as sim_buy
+    from tests.runtime.test_polymarket_surface import world
+
+    rt = world(principal_micro=40_000_000)
+    handle = collateral_decision(rt)
+    result = sim_buy(rt, handle, price="0.41")  # fake-1's ask is 0.41
+    assert result["status"] == "rejected"
+    assert result["error"] == "invalid post-only order: order crosses book"
+    assert rt.polymarket.venue.target.account()["positions"] == []
+    assert polymarket.principal_at_risk(rt.polymarket) == 0
+    polymarket.tick(rt)
+    assert not [i for i in rt.ledger._recovery_items() if i.get("kind") == "polymarket.fill"]
 
 
 def test_a_trade_that_contradicts_the_maker_only_venue_halts_buying():
