@@ -35,20 +35,28 @@ def _current_roster_sha256() -> str:
         tomllib.loads((WORLDS_DIR / f"{ROSTER}.toml").read_text())))
 
 
-def _funded(roster_sha256: str | None = None) -> dict:
+def _funded(roster_sha256: str | None = None, launch: str | None = "run") -> dict:
     """The drafting roster as a funded mainnet manifest carrying its ratified provenance.
 
     W4 (primitive audit F12) edited this roster: its judges now accept Exposure. The
     edition-1 ratification recorded the roster before that edit, so it no longer
     admits this roster (``test_the_edition1_ratification_refuses_the_edited_roster``);
     the admission path is exercised here against the charter it ratified and the
-    roster digest a re-ratification of today's roster would record.
+    roster digest a re-ratification of today's roster would record. The edition-1
+    export predates ``charter.launch``; a re-export states the launch its ballots read,
+    inside the charter digest (``launch``, default ``run``; None: the artifact as it is).
     """
+    from factorylab.charter.provenance import charter_content, charter_digest
+
     raw = tomllib.loads((WORLDS_DIR / f"{ROSTER}.toml").read_text())
     charter, metadata = _ratified()
+    ratified = metadata["charter_sha256"]
+    if launch is not None:
+        charter = {**charter, "launch": launch}
+        ratified = charter_digest(charter_content(charter))
     raw["name"] = "funded"
     raw["exchange"] = {**raw["exchange"], "mainnet": True, "client_namespace": uuid4().hex}
-    raw["charter"] = {**charter, "ratified_sha256": metadata["charter_sha256"],
+    raw["charter"] = {**charter, "ratified_sha256": ratified,
                       "roster_sha256": roster_sha256 or _current_roster_sha256()}
     return raw
 
@@ -77,6 +85,14 @@ def test_the_ratified_charter_and_its_roster_admit_the_funded_manifest():
     manifest = manifest_from_dict(_funded())
     assert manifest.exchange.mainnet is True
     assert len(manifest.charter.cards) == len(_ratified()[0]["cards"])
+
+
+def test_a_ratified_charter_that_states_no_launch_refuses_the_funded_manifest():
+    """The edition-1 artifact as exported names no launch: the ballots' rail is unknown."""
+    with pytest.raises(ValueError, match="charter.launch"):
+        manifest_from_dict(_funded(launch=None))
+    manifest = manifest_from_dict(_funded(launch="rehearsal"))
+    assert manifest.charter_launch == "rehearsal"
 
 
 def test_one_edited_card_refuses_the_funded_manifest():
