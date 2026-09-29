@@ -330,10 +330,22 @@ def test_one_run_reads_base_through_the_operator_s_rpc_only(tmp_path, monkeypatc
     assert len(w["venice"].paid) == 1 and "eth_call" in operator
 
 
+@pytest.fixture
+def terminal_sighup():
+    """SIGHUP as a terminal session leaves it (the default action), for a test that
+    stops a run with it: a suite launched under ``nohup`` inherits it ignored, which
+    the runner keeps ignored (``test_nohup_keeps_sighup_ignored_and_the_run_goes_on``)."""
+    previous = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
 @pytest.mark.gate  # the rehearsal's entry runs a world
 @pytest.mark.parametrize("name", ["SIGINT", "SIGTERM", "SIGHUP"])
 def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
-        tmp_path, monkeypatch, capsys, name):
+        tmp_path, monkeypatch, capsys, name, terminal_sighup):
     from scripts import edition4_rehearsal as rehearsal
 
     w = wired(tmp_path, monkeypatch)
@@ -382,7 +394,7 @@ def operator_main(w, monkeypatch, out):
 
 @pytest.mark.gate  # the rehearsal's entry runs a world
 def test_a_signal_as_the_finally_begins_or_during_the_report_cannot_skip_it(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, terminal_sighup):
     from scripts import edition4_rehearsal as rehearsal
 
     w = wired(tmp_path, monkeypatch)
