@@ -52,7 +52,8 @@ def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None
     server = FakeClob(fake if fake is not None else still_fake(), confirm=confirm)
     venue = clob.LivePolymarket(funder=signer.address, signature_type=0, budget=budget,
                                 signer=signer, send=server, identity=installed.identity,
-                                wall=wall or _Wall(), nonce=lambda: 7)
+                                wall=wall or _Wall(), nonce=lambda: 7,
+                                get=lambda url: server("GET", url, {}, None))
     venue.intent_of = installed.intent_of  # the runtime's own intents, as installed
     rt.polymarket.venue.target = venue
     if opened:
@@ -691,3 +692,60 @@ def test_a_resume_within_ten_seconds_sends_no_second_allowance():
     rt.polymarket.restore(saved)  # what a resume does
     with pytest.raises(clob.BudgetSpent):
         rt.polymarket.venue.target.budget.take()
+
+
+def _journaled_names(rt, server):
+    """Every call a live world journals through its Polymarket venue, over the order
+    path, its recoveries, the tick, a seat's reads and a kill."""
+    names = []
+    venue = rt.polymarket.venue
+    call = venue.journal.call
+
+    def recording(name, *args, **kwargs):
+        names.append(name)
+        return call(name, *args, **kwargs)
+
+    venue.journal = SimpleNamespace(call=recording, recovering=False)
+    handle = collateral_decision(rt)
+    server.lose_answer = True
+    order_id = buy(rt, server, handle)["order_id"]  # lost answer, recovered by lookup
+    buy(rt, server, collateral_decision(rt), price="0.45")  # fills on arrival
+    polymarket.tick(rt)
+    for tool, args in (("polymarket.search", {"query": "event"}),
+                       ("polymarket.market", {"market_id": "fake-1"}),
+                       ("polymarket.book", {"token_id": token(server)}),
+                       ("polymarket.positions", {}), ("polymarket.open_orders", {})):
+        rt._run_tool("seed-decider", handle, {"tool": tool, "args": args})
+    rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
+                                          "args": {"order_id": order_id}}, slot="tool:1")
+    polymarket.wind_down(rt)
+    return sorted(set(names))
+
+
+def test_every_live_polymarket_call_resumes_from_an_interrupted_journal():
+    """Codex P1 on #177: a crash between ``polymarket.drain_events``'s io.call and its
+    io.result made every resume refuse it as an unacknowledged external write. No live
+    call is journaled that a resume cannot complete: a read re-runs, an order or a
+    cancel completes uncertain for its intent to look up, never resent."""
+    rt, server = live_world()
+    names = _journaled_names(rt, server)
+    assert "polymarket.drain_events" not in names
+    assert {"polymarket.place", "polymarket.cancel", "polymarket.poll",
+            "polymarket.account", "polymarket.lookup"} <= set(names)
+    recorded = []
+
+    def append(item):
+        recorded.append(item)
+        return len(recorded) - 1
+
+    fingerprint = hashlib.sha256(canonical(encode(((), {})))).hexdigest()
+    for name in names:
+        journal = RecoveryJournal(SimpleNamespace(append=append), lambda: 0)
+        journal.active = journal.recovering = True
+        journal.tail = [{"kind": "io.call", "name": name, "input_hash": fingerprint,
+                         "seq": 0, "ts": 0}]
+        if name in ("polymarket.place", "polymarket.cancel"):
+            result = journal.call(name, lambda n=name: pytest.fail(f"{n} sent twice"), (), {})
+            assert result == {"status": "uncertain"}, name
+        else:
+            assert journal.call(name, lambda n=name: {"read": n}, (), {}) == {"read": name}

@@ -1420,8 +1420,16 @@ def _write(rt: Any, surface: PolymarketSurface, action_id: str, handle: str, too
             "status": "uncertain", "error": "write returned a non-object acknowledgement"})
         return _recover(rt, surface, client_id)
     answer = _record(rt, surface, client_id, result)
-    settle(rt, surface.venue.drain_events())
+    _drain(rt, surface)
     return answer
+
+
+def _drain(rt: Any, surface: PolymarketSurface) -> None:
+    """Settle what the simulated venue did during a write. The live venue's events come
+    only through ``poll`` (its ``drain_events`` answers nothing), so it is not called:
+    a crash inside it would leave the journal a call no resume completes (Codex P1)."""
+    if not surface.live:
+        settle(rt, surface.venue.drain_events())
 
 
 def _recover(rt: Any, surface: PolymarketSurface, client_id: str) -> dict[str, Any]:
@@ -1442,7 +1450,7 @@ def _recover(rt: Any, surface: PolymarketSurface, client_id: str) -> dict[str, A
     except Exception as exc:  # noqa: BLE001
         result = {"status": "uncertain", "error": f"recovery exception: {type(exc).__name__}"}
     answer = _record(rt, surface, client_id, result)
-    settle(rt, surface.venue.drain_events())
+    _drain(rt, surface)
     return answer
 
 

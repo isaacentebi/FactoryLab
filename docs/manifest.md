@@ -2513,7 +2513,11 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   or `delayed` is uncertain, and resolved by `GET /data/order/{hash}`, polled at most
   `UNCERTAIN_ORDER_POLLS` times; an order the CLOB does not know is uncertain, never
   rejected. A process death between `polymarket.place` (or `polymarket.cancel`) and its
-  answer resumes with the call uncertain (`RecoveryJournal.call`), never resent.
+  answer resumes with the call uncertain (`RecoveryJournal.call`), never resent. Every
+  other call the live venue journals is a read a resume re-runs (`order_identity`,
+  `poll`, `lookup`, `account`, `mark_book`, `write_market`, `write_market_of_token` and
+  the public reads); `drain_events`, which the live venue answers with nothing, is not
+  called on it.
 * **Fills.** Read from `/data/trades` for this world's orders only, each fill booked
   once, when its trade is CONFIRMED; a FAILED trade never. The poll's cursor is carried
   in and out of the journaled call and checkpointed. A fill that would take its order's

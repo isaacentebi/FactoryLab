@@ -323,6 +323,9 @@ class FakeClob:
                 "description": public["description"]}
 
     def _gamma(self, path: str, query: dict):
+        if path == "/public-search":
+            return {"events": [{"markets": [self._raw_market(m)
+                                            for m in self.fake._markets.values()]}]}
         if path.startswith("/markets/"):
             market = self.fake._markets.get(path.rsplit("/", 1)[1])
             if market is None:
