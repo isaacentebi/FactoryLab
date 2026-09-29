@@ -168,13 +168,44 @@ def scripted_runtime_run(_scripted_run_cache):
     return run
 
 
+@pytest.fixture(scope="session")
+def shared_result(_scripted_run_cache):
+    """``shared_result(key, factory)``: ``factory()``'s picklable result, computed once
+    per key per pytest invocation and shared by every xdist worker (the first to ask
+    runs it and publishes it; the others wait on the same POSIX lock and read it).
+
+    For an uninterrupted reference world several tests of one module compare against,
+    so each worker does not rerun it. The result is read afresh by each worker; a test
+    that mutates what it got changes nothing another worker reads.
+    """
+    directory = _scripted_run_cache / "shared-results"
+    memo = {}
+
+    def get(key, factory):
+        if key in memo:
+            return memo[key]
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{key}.pickle"
+        with (directory / f"{key}.lock").open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not path.exists():
+                temporary = path.with_suffix(".tmp")
+                temporary.write_bytes(pickle.dumps(factory(), protocol=pickle.HIGHEST_PROTOCOL))
+                temporary.replace(path)
+        memo[key] = pickle.loads(path.read_bytes())
+        return memo[key]
+
+    return get
+
+
 # Test tiers (see README "Try it" and AGENTS.md):
 #   check  the developer inner loop, the default; no test here runs a world
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
 #   soak   runs a world for thousands of events; its own tier, run with ``-m soak``
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
-_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run"})
+_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run",
+                                    "shared_result"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
 #: Functions outside ``tests/`` that run a world's loop when called: the loop's own entry
 #: and the operator rehearsal's (``scripts/edition4_rehearsal.run_rehearsal``).

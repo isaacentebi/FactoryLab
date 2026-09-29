@@ -139,10 +139,10 @@ def clock_manifest():
 
 
 @pytest.fixture(scope="module")
-def amended_uninterrupted():
-    return run_world(
-        clock_manifest(), events=140, seed=1, provider=ClockAmendmentProvider()
-    )
+def amended_uninterrupted(shared_result):
+    """The clock-amendment world's uninterrupted summary, run once for every worker."""
+    return shared_result("resume-clock-amendment-140", lambda: run_world(
+        clock_manifest(), events=140, seed=1, provider=ClockAmendmentProvider()))
 
 
 @pytest.mark.parametrize("stop", ["activation", "snapshot"])
