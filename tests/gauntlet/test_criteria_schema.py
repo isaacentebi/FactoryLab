@@ -969,6 +969,7 @@ KEYED_ASSIGN_ALLOWED: dict[tuple[str, str], str] = {
     ("i3c_niche_no_worse_than_noop", "noop_penalty"): "the least NOOP penalty per window "
                                                       "(a min)",
     ("expected_thrash_charges", "last"): "each router's previous draw: running state",
+    ("gain_acts", "fired"): "each router kind's latest gain-loop fire: running state",
     ("thrash_attributed", "emits"): "a contract id re-registered with a new version "
                                     "emits what its latest registration says",
     ("hand_over", "successor"): "the router succession, rewritten as _hand_over does",
