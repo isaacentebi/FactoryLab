@@ -1203,19 +1203,24 @@ def principal_at_risk(surface: PolymarketSurface) -> Decimal:
         if intent["operation"] != "polymarket.place_limit":
             continue
         result, args = intent["result"], intent["args"]
-        if result.get("status") == "rejected" or intent.get("terminal"):
-            continue
         order_id = str(intent.get("order_hash") or result.get("order_id"))
-        if order_id in finished:
-            quantity = Decimal(surface.filled.get(order_id, "0"))
+        # Never below what was booked from CONFIRMED trades, whatever any read-back
+        # says (Sol P1, round 5, on #177).
+        booked = Decimal(surface.filled.get(order_id, "0"))
+        size = Decimal(str(args["size"]))
+        if result.get("status") == "rejected" or intent.get("terminal"):
+            quantity = Decimal(0)
+        elif order_id in finished:
+            quantity = booked
         elif not _terminal(surface, intent):
-            quantity = Decimal(str(args["size"]))
+            quantity = size
         else:
-            matched = cancelled.get(order_id)
-            if matched is None:
-                matched = Decimal(str(result.get("filled_size") or "0"))
-            quantity = matched - Decimal(str(failed.get(order_id, "0")))
-        total += max(Decimal(0), quantity) * Decimal(str(args["price"]))
+            # A terminal order's matched quantity is the venue's statement or unknown,
+            # never 0: unknown counts its whole size.
+            matched = _matched(surface, intent, cancelled)
+            quantity = size if matched is None else matched - Decimal(str(
+                failed.get(order_id, "0")))
+        total += max(booked, quantity, Decimal(0)) * Decimal(str(args["price"]))
     return total
 
 
@@ -1230,10 +1235,36 @@ def _cancelled(surface: PolymarketSurface) -> dict[str, Decimal | None]:
     for intent in surface.intents.values():
         if (intent["operation"] == "polymarket.cancel"
                 and intent["result"].get("status") == "cancelled"):
-            matched = intent["result"].get("filled_size")
-            cancelled[str(intent["args"]["order_id"])] = (
-                None if matched is None else Decimal(str(matched)))
+            cancelled[str(intent["args"]["order_id"])] = _stated(
+                intent["result"].get("filled_size"))
     return cancelled
+
+
+def _stated(value: Any) -> Decimal | None:
+    """A quantity as the venue stated it, or None where it stated none, or one that is
+    not a finite non-negative decimal: unknown, never 0 (Sol P1, round 5, on #177)."""
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() and number >= 0 else None
+
+
+def _matched(surface: PolymarketSurface, intent: dict,
+             cancelled: dict[str, Decimal | None] | None = None) -> Decimal | None:
+    """What a placement matched by the venue's word: an acknowledged cancel's read-back,
+    else its own answer's; None where neither states it, or the statement exceeds the
+    order's size: unknown, which counts as the whole order wherever it may have
+    executed."""
+    order_id = str(intent.get("order_hash") or intent["result"].get("order_id"))
+    matched = (_cancelled(surface) if cancelled is None else cancelled).get(order_id)
+    if matched is None:
+        matched = _stated(intent["result"].get("filled_size"))
+    if matched is not None and matched > Decimal(str(intent["args"]["size"])):
+        return None
+    return matched
 
 
 def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
@@ -1261,17 +1292,16 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
             continue
         order_id = intent.get("order_hash") or result.get("order_id")
         booked = Decimal(surface.filled.get(str(order_id), "0"))
-        quantity = (Decimal(str(result.get("filled_size") or "0"))
-                    if result.get("status") in ("filled", "cancelled")
-                    else Decimal(str(args["size"])))
+        quantity = Decimal(str(args["size"]))
+        terminal = (result.get("status") in ("filled", "cancelled")
+                    or cancelled.get(str(order_id)) is not None)
         if str(order_id) in finished:
             quantity = booked
-        elif cancelled.get(str(order_id)) is not None:
-            quantity = cancelled[str(order_id)]
-        if result.get("status") in ("filled", "cancelled") or cancelled.get(
-                str(order_id)) is not None:
-            # A terminal order's legs that FAILED never settle (Sol P2 on #177).
-            quantity -= Decimal(str(surface.cursor.get("failed", {}).get(str(order_id), "0")))
+        elif terminal and _matched(surface, intent, cancelled) is not None:
+            # A terminal order's legs that FAILED never settle (Sol P2 on #177); an
+            # unstated matched quantity is unknown and reserves the whole order.
+            quantity = _matched(surface, intent, cancelled) - Decimal(str(
+                surface.cursor.get("failed", {}).get(str(order_id), "0")))
         remaining = max(Decimal(0), quantity - booked)
         reserved += remaining * Decimal(str(args["price"]))
     resolved = surface.cursor.get("resolved", {})
@@ -1509,6 +1539,7 @@ def tick(rt: Any) -> None:
                               "reason": type(exc).__name__, "ts": rt.clock.now_ns})
         else:
             surface.cursor = answer["cursor"]
+            _halt_on_contradiction(rt, surface)
             settle(rt, answer["events"])
             if answer.get("complete"):
                 # Every fill the venue confirmed through the cursor was handed over.
@@ -1520,6 +1551,19 @@ def tick(rt: Any) -> None:
     confirm_terminal(rt)
     mark(rt)
     reconcile(rt)
+
+
+def _halt_on_contradiction(rt: Any, surface: PolymarketSurface) -> None:
+    """Halt buying for the world's life on any trade leg the poll found contradicting the
+    post-only venue (a taker role, a fee), at any settlement status and on any sighting
+    (Sol P1, round 5, on #177). The legs are kept in the checkpointed cursor and the halt
+    in ``contradicted``; it is ledgered once, as drift, never as a booked fee."""
+    found = surface.cursor.get("contradictions") or {}
+    if found and not surface.contradicted:
+        surface.contradicted = True
+        rt.ledger.append({"kind": "polymarket.drift",
+                          "reason": "; ".join(sorted(set(found.values()))),
+                          "legs": sorted(found)[:20], "ts": rt.clock.now_ns})
 
 
 def _order_facts(market: dict | None) -> dict[str, Any]:
@@ -1607,10 +1651,10 @@ def _settle_cancels(rt: Any, surface: PolymarketSurface) -> None:
         placement = surface.intents[placement_id]
         if status == "cancelled":
             rt.consequences.cancel(order_id, rt.n)
-        if status in ("cancelled", "filled") and answer.get("filled_size") is not None:
+        if status in ("cancelled", "filled") and _stated(answer.get("filled_size")) is not None:
             surface.intents[placement_id] = {**placement, "result": {
                 **placement["result"], "status": status,
-                "filled_size": str(answer["filled_size"])}}
+                "filled_size": str(_stated(answer["filled_size"]))}}
         surface.intents[client_id] = {**surface.intents[client_id], "settled": True}
         rt.ledger.append({"kind": "polymarket.cancel_settled", "client_id": client_id,
                           "order_id": order_id, "result": dict(answer),
@@ -1640,13 +1684,14 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
         if token in resolved and order_id in surface.cursor.get("terminal", ()):
             continue
         result = intent["result"]
-        matched = Decimal(str(result.get("filled_size") or "0"))
+        matched = _matched(surface, intent, cancelled)
         status = result.get("status")
         if cancelled.get(order_id) is not None:
-            status, matched = "cancelled", cancelled[order_id]
+            status = "cancelled"
         # Whether the order can still change what the pot holds: it rests or is
-        # unanswered, or it matched more than is booked (Codex P2 on #177).
-        live = (status in ("resting", "uncertain")
+        # unanswered, it matched more than is booked (Codex P2 on #177), or what it
+        # matched is unknown.
+        live = (status in ("resting", "uncertain") or matched is None
                 or matched > Decimal(surface.filled.get(order_id, "0")) + Decimal(str(
                     surface.cursor.get("failed", {}).get(order_id, "0"))))
         orders[order_id] = {"token_id": token, "side": str(args["side"]), "open": live,
@@ -1686,14 +1731,24 @@ def confirm_terminal(rt: Any) -> None:
                       if surface.live else surface.venue.lookup(client_id))
         except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
             continue
-        if (answer.get("status") in ("filled", "cancelled", "rejected")
-                and answer.get("filled_size") is not None):
-            # What executed is what matched less the legs that FAILED, on every path
-            # to a confirmation (Sol P2 on #177): a failed leg never settles.
+        matched = _stated(answer.get("filled_size"))
+        if answer.get("status") in ("filled", "cancelled", "rejected") and matched is not None:
+            intent = surface.intents[client_id]
+            if answer["status"] in ("filled", "cancelled"):
+                # The venue's terminal word is the placement's (Sol P2, round 5, on
+                # #177): an order read back filled no longer pulls the fill read back.
+                surface.intents[client_id] = {**intent, "result": {
+                    **intent["result"], "status": answer["status"],
+                    "filled_size": str(matched)}}
+            # What executed is what matched less the legs that FAILED (Sol P2 on #177),
+            # and it is confirmed only once every matched leg is final, booked or
+            # failed (Sol P2, round 5): a leg still settling may yet fail.
             failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
-            executed = max(Decimal(0), Decimal(str(answer["filled_size"])) - failed)
+            booked = Decimal(surface.filled.get(order.order_id, "0"))
+            if matched - failed > booked:
+                continue
             rt.consequences.confirm_terminal(order.order_id, answer["status"],
-                                             str(executed), rt.n)
+                                             str(booked), rt.n)
     if not unsure:
         return
     # An order with unfilled liability whose placement's answer does not say it is over
@@ -1707,12 +1762,12 @@ def confirm_terminal(rt: Any) -> None:
             answer = surface.venue.lookup(client_id, order_id=order.order_id)
         except Exception:  # noqa: BLE001 - an unanswered read proves nothing
             continue
-        if answer.get("status") in ("filled", "cancelled") and answer.get(
-                "filled_size") is not None:
+        matched = _stated(answer.get("filled_size"))
+        if answer.get("status") in ("filled", "cancelled") and matched is not None:
             intent = surface.intents[client_id]
             surface.intents[client_id] = {**intent, "result": {
                 **intent["result"], "status": answer["status"],
-                "filled_size": str(answer["filled_size"])}}
+                "filled_size": str(matched)}}
             _release_terminal(rt, surface, order, client_id)
 
 
@@ -1733,9 +1788,11 @@ def _release_terminal(rt: Any, surface: PolymarketSurface, order: Any,
         return False
     failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
     booked = Decimal(surface.filled.get(order.order_id, "0"))
-    matched = _cancelled(surface).get(order.order_id)
+    matched = _matched(surface, intent)
     if matched is None:
-        matched = Decimal(str(intent["result"].get("filled_size") or "0"))
+        # Proven over, but what it matched is unknown: nothing is released, and its
+        # own status is read back again (``confirm_terminal``).
+        return False
     if matched - failed <= booked:
         rt.consequences.cancel(order.order_id, rt.n)
         rt.consequences.confirm_terminal(order.order_id, str(intent["result"].get(
@@ -2116,8 +2173,9 @@ def _unsettled(surface: PolymarketSurface) -> tuple[list[dict], list[str]]:
         if cancelled.get(order_id) is None and result.get("status") == "uncertain":
             unanswered.append(order_id)
             continue
-        matched = (cancelled[order_id] if cancelled.get(order_id) is not None
-                   else Decimal(str(result.get("filled_size") or "0")))
+        matched = _matched(surface, intent, cancelled)
+        if matched is None:
+            matched = Decimal(str(intent["args"]["size"]))  # unknown: all of it
         booked = Decimal(surface.filled.get(order_id, "0")) + Decimal(
             str(failed.get(order_id, "0")))
         if matched > booked:

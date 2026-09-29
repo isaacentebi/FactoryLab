@@ -64,6 +64,8 @@ class FakeClob:
         self.lose_cancel_answer = False  # the next DELETE /order executes, its answer lost
         self.orders_lag = False  # /data/orders does not list resting orders yet
         self.page_size: int | None = None  # rows a /data/trades page carries; None: all
+        self.order_answer = None  # rewrites each order row it answers (a field omitted, say)
+        self.position_row = None  # rewrites each /positions row
 
     # ---- the transport
 
@@ -100,9 +102,11 @@ class FakeClob:
             if self.fail_lookups:
                 self.fail_lookups -= 1
                 raise clob.PolymarketUnavailable("transport: TimeoutError")
-            return self._order(path.rsplit("/", 1)[1])
+            answer = self._order(path.rsplit("/", 1)[1])
+            return answer if self.order_answer is None else self.order_answer(answer)
         if path == "/data/orders":
-            return {"data": [self._order(h) for h, o in self.orders.items()
+            rewrite = self.order_answer or (lambda answer: answer)
+            return {"data": [rewrite(self._order(h)) for h, o in self.orders.items()
                              if o["pm"] in self.fake._orders and not self.orders_lag],
                     "next_cursor": clob.END_CURSOR}
         if path == "/data/trades" and "id" in query:
@@ -391,6 +395,8 @@ class FakeClob:
                          "avgPrice": str(position["avg_px"]), "outcomeIndex": side,
                          "outcome": self.fake._markets[market_id]["outcomes"][side],
                          "conditionId": self.fake._markets[market_id]["condition_id"]})
+        if self.position_row is not None:
+            rows = [self.position_row(row) for row in rows]
         offset, limit = int(query.get("offset", "0")), int(query.get("limit", "500"))
         if self.positions_page is not None:
             limit = min(limit, self.positions_page)  # a server may cap a page

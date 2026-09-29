@@ -34,7 +34,8 @@ Protocol facts, each read 2026-09-29 (Polymarket moved to CLOB V2 on 2026-04-28)
   https://docs.polymarket.com/resources/contracts, https://docs.polymarket.com/concepts/pusd
 * **Amounts.** Collateral and outcome tokens both carry six decimals. A BUY's maker
   amount is ``price x size`` USD and its taker amount ``size`` tokens (a SELL the
-  reverse; this venue signs BUYs only). Rounding per tick: ``ROUNDING``.
+  reverse; this venue signs BUYs only). Rounding per tick: ``polymarket.ROUNDING``
+  (``amount_refusal``, the one amount rule of both venue kinds).
   https://docs.polymarket.com/trading/place-orders
 * **Auth.** L1: EIP-712 ``ClobAuth(address address,string timestamp,uint256 nonce,string
   message)`` under ``{name: "ClobAuthDomain", version: "1", chainId: 137}``; ``GET
@@ -85,7 +86,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from decimal import ROUND_DOWN, Decimal
+from decimal import Decimal
 from typing import Any
 from urllib import error, parse, request
 
@@ -94,6 +95,7 @@ from factorylab.world.polymarket import (
     PolymarketReader,
     PolymarketRefused,
     PolymarketUnavailable,
+    amount_refusal,
     parse_book,
     payout,
 )
@@ -136,11 +138,6 @@ AUTH_MESSAGE = "This message attests that I control the given wallet"
 EXCHANGE_NAME, EXCHANGE_VERSION = "Polymarket CTF Exchange", "2"
 ZERO32 = "0x" + "00" * 32
 
-#: ROUNDING_CONFIG of the official clients: decimals of price, size and USD amount per tick.
-ROUNDING = {
-    "0.1": (1, 2, 3), "0.01": (2, 2, 4), "0.005": (3, 2, 5),
-    "0.0025": (4, 2, 6), "0.001": (3, 2, 5), "0.0001": (4, 2, 6),
-}
 #: A salt travels as a JSON number, so it stays within JavaScript's safe integers.
 MAX_SALT = 2 ** 53 - 1
 #: The page cursor that ends a CLOB listing.
@@ -220,17 +217,10 @@ def order_amounts(size: Decimal, price: Decimal, tick: Decimal) -> tuple[int, in
     off the market's tick, a size past two decimals, or an amount past the tick's
     decimals is refused (``PolymarketRefused``), never rounded into another order.
     """
-    rounding = ROUNDING.get(format(tick.normalize(), "f"))
-    if rounding is None:
-        raise PolymarketRefused(f"tick size {tick} is not one Polymarket publishes")
-    price_places, size_places, amount_places = rounding
-    if not tick <= price <= 1 - tick or price % tick:
-        raise PolymarketRefused(f"price is not on the market's {tick} tick inside (0, 1)")
-    if size <= 0 or size != size.quantize(Decimal(1).scaleb(-size_places), rounding=ROUND_DOWN):
-        raise PolymarketRefused(f"size must be positive with at most {size_places} decimals")
+    reason = amount_refusal(size, price, tick)
+    if reason is not None:
+        raise PolymarketRefused(reason)
     usd = price * size
-    if usd != usd.quantize(Decimal(1).scaleb(-amount_places), rounding=ROUND_DOWN):
-        raise PolymarketRefused(f"notional has more than {amount_places} decimals")
     shares, cash = int(size * UNIT), int(usd * UNIT)
     if Decimal(shares) != size * UNIT or Decimal(cash) != usd * UNIT:
         raise PolymarketRefused("amounts are not exact six-decimal units")
@@ -453,6 +443,27 @@ def _dec(value: Any) -> Decimal:
     if not number.is_finite():
         raise ValueError("not a finite decimal")
     return number
+
+
+#: The fields of a trade leg that state a fee charged on it (get-trades).
+FEE_FIELDS = ("fee_rate_bps", "fee", "fee_usd", "fees")
+
+
+def _contradiction(taker: bool, fee_bps: Any, row: dict[str, Any]) -> str | None:
+    """Why a leg of this world's contradicts the post-only venue, or None: it is the
+    trade's taker, or a fee is stated on it (an unreadable fee is a stated one)."""
+    if taker:
+        return "the venue reports this post-only order as a taker"
+    for value in (fee_bps, *(row.get(f) for f in FEE_FIELDS)):
+        if value in (None, ""):
+            continue
+        try:
+            if _dec(value) == 0:
+                continue
+        except (ValueError, ArithmeticError):
+            pass
+        return "the venue reports a fee on this maker fill"
+    return None
 
 
 #: The CLOB's order statuses, read as the runtime's.
@@ -745,12 +756,19 @@ class LivePolymarket(PolymarketReader):
         if not isinstance(answer, dict) or str(answer.get("id", "")).lower() != order_id.lower():
             return {"order_id": order_id, "status": "uncertain", "error": "order not observed"}
         status = ORDER_STATUS.get(str(answer.get("status", "")).upper())
-        try:
-            matched = _dec(answer.get("size_matched", "0"))
-        except (ValueError, ArithmeticError):
-            status = None
         if status is None:
             return {"order_id": order_id, "status": "uncertain", "error": "unknown order status"}
+        # What the order matched is the venue's statement or unknown, never 0 (Sol P1 on
+        # #177: an invented 0 erased known outlay): a read-back that omits it, or states
+        # one its own size or status contradicts, proves nothing.
+        try:
+            matched, size = _dec(answer["size_matched"]), _dec(answer["original_size"])
+        except (KeyError, ValueError, ArithmeticError):
+            return {"order_id": order_id, "status": "uncertain",
+                    "error": "order read-back states no matched size"}
+        if not 0 <= matched <= size or (status == "filled" and matched != size):
+            return {"order_id": order_id, "status": "uncertain",
+                    "error": "order read-back contradicts its own size"}
         if cancel:
             status = {"filled": "rejected", "resting": "uncertain"}.get(status, status)
         price = answer.get("price")
@@ -782,13 +800,15 @@ class LivePolymarket(PolymarketReader):
                     order["remaining"])
         positions = []
         for row in rows if isinstance(rows, list) else []:
-            token, size = str(row.get("asset", "")), _dec(row.get("size", "0"))
+            # A row missing its token, size, cost or outcome is unknown, never 0 (Sol P1
+            # on #177): the pot is then unreadable (``KeyError``), never smaller.
+            token, size = str(row["asset"]), _dec(row["size"])
             if not token or size <= 0:
                 continue
             position = {"token_id": token, "market_id": (markets or {}).get(token),
-                        "outcome_index": int(row.get("outcomeIndex", 0)),
+                        "outcome_index": int(row["outcomeIndex"]),
                         "outcome_name": row.get("outcome"), "size": str(size),
-                        "avg_px": str(_dec(row.get("avgPrice", "0"))),
+                        "avg_px": str(_dec(row["avgPrice"])),
                         "available": str(size - selling.get(token, Decimal(0)))}
             if resolved and token in resolved:
                 position["payout"] = str(resolved[token])
@@ -820,7 +840,8 @@ class LivePolymarket(PolymarketReader):
         for _ in range(MAX_TRADE_PAGES):
             page = self._l2("GET", "/data/orders", query={"next_cursor": cursor})
             for row in page.get("data", []) if isinstance(page, dict) else []:
-                size, matched = _dec(row["original_size"]), _dec(row.get("size_matched", "0"))
+                # An unstated matched size is unknown, never 0: the listing is unread.
+                size, matched = _dec(row["original_size"]), _dec(row["size_matched"])
                 orders.append({"order_id": str(row["id"]), "token_id": str(row["asset_id"]),
                                "side": "buy" if str(row["side"]).upper() == "BUY" else "sell",
                                "price": str(_dec(row["price"])), "size": str(size),
@@ -906,9 +927,25 @@ class LivePolymarket(PolymarketReader):
                 ended = True
                 break
         found, pending = [], []
+        contradictions = state.setdefault("contradictions", {})
         for trade in rows:
             status = str(trade.get("status", "")).upper().removeprefix("TRADE_STATUS_")
-            at = int(_dec(trade.get("match_time", "0")))
+            legs = []
+            if str(trade.get("taker_order_id", "")) in orders:
+                legs.append((str(trade["taker_order_id"]), trade.get("size"),
+                             trade.get("price"), True, trade.get("fee_rate_bps"), trade))
+            for maker in trade.get("maker_orders") or []:
+                if str(maker.get("order_id", "")) in orders:
+                    legs.append((str(maker["order_id"]), maker.get("matched_amount"),
+                                 maker.get("price"), False, maker.get("fee_rate_bps"), maker))
+            if not legs:
+                continue
+            # A trade of this world's is identified and timed by the venue's own
+            # statement, or it is unread (Sol P1 on #177): a missing id would merge two
+            # trades' legs, a missing time rewind the read to the epoch.
+            if trade.get("id") in (None, ""):
+                raise ValueError("a trade of this world's states no id")
+            trade_id, at = str(trade["id"]), int(_dec(trade["match_time"]))
             # The execution's instant: match_time_nano where the venue states it, else
             # only its second (Sol P0 on #177: never the trade id's lexical order).
             nano = trade.get("match_time_nano")
@@ -916,17 +953,17 @@ class LivePolymarket(PolymarketReader):
                 instant = int(_dec(nano)) if nano not in (None, "") else at * 1_000_000_000
             except (ValueError, ArithmeticError):
                 instant = at * 1_000_000_000
-            legs = []
-            if str(trade.get("taker_order_id", "")) in orders:
-                legs.append((str(trade["taker_order_id"]), trade.get("size"),
-                             trade.get("price"), True, trade.get("fee_rate_bps")))
-                # A leg as taker would contradict post-only (see ``_fill_event``).
-            for maker in trade.get("maker_orders") or []:
-                if str(maker.get("order_id", "")) in orders:
-                    legs.append((str(maker["order_id"]), maker.get("matched_amount"),
-                                 maker.get("price"), False, maker.get("fee_rate_bps")))
-            for order_id, size, price, taker, fee_bps in legs:
-                key = f"{trade.get('id')}:{order_id}:{int(taker)}"
+            for order_id, _size, _price, taker, fee_bps, row in legs:
+                # Every sighting of every leg, at any status and however often it was
+                # seen before, is read for what would contradict the post-only venue
+                # (Sol P1 on #177): a disclosure is never filtered out as a duplicate.
+                # It is kept in the cursor, which the runtime halts on; money is still
+                # booked from CONFIRMED trades alone.
+                reason = _contradiction(taker, fee_bps, row)
+                if reason:
+                    contradictions[f"{trade_id}:{order_id}:{int(taker)}"] = reason
+            for order_id, size, price, taker, fee_bps, _row in legs:
+                key = f"{trade_id}:{order_id}:{int(taker)}"
                 if key in state["seen"]:
                     continue
                 if status == TRADE_FAILED:
@@ -979,13 +1016,7 @@ class LivePolymarket(PolymarketReader):
         # A post-only order is never a taker and a maker is never charged: a leg that
         # says otherwise contradicts the published venue. It is reported, never booked
         # as a fee (architect's decision on Sol's round-4 review of #177).
-        try:
-            charged = fee_bps not in (None, "") and _dec(fee_bps) != 0
-        except (ValueError, ArithmeticError):
-            charged = True
-        contradiction = ("the venue reports this post-only order as a taker" if taker
-                         else "the venue reports a fee on this maker fill" if charged
-                         else None)
+        contradiction = _contradiction(taker, fee_bps, {})
         held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
         # A buy: the holding grows at its average cost; nothing is realised until the
         # token's resolution pays it.
@@ -1060,7 +1091,7 @@ class LivePolymarket(PolymarketReader):
             answer = self.lookup("", order_id=order_id)
             if answer["status"] not in ("cancelled", "filled", "rejected"):
                 continue
-            complete = _dec(answer.get("filled_size") or "0") <= _dec(
+            complete = _dec(answer["filled_size"]) <= _dec(
                 state.get("booked", {}).get(order_id, "0")) + _dec(
                 state.get("failed", {}).get(order_id, "0"))
             if answer["status"] == "cancelled" and order_id not in state.setdefault(
