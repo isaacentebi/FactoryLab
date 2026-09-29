@@ -18,11 +18,11 @@ writing to its peers' inputs, never to their system role.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
 from collections.abc import Callable
-from copy import deepcopy
 from dataclasses import KW_ONLY, dataclass, field, replace
 from decimal import Decimal
 from typing import Any
@@ -2015,3 +2015,63 @@ def _schema_definition(schema: Any, *, answer: bool = True) -> None:
             raise ValueError("anyOf must contain schemas")
         for alternative in schema["anyOf"]:
             _schema_definition(alternative, answer=answer)
+
+
+def deepcopy(value: Any, memo: dict | None = None) -> Any:
+    """``copy.deepcopy(value)``, faster on the JSON-shaped values contracts are built from.
+
+    Guarantees the value ``copy.deepcopy`` returns: an exact ``dict`` or ``list`` is
+    copied item by item (a dict's keys too), an exact ``str``, ``int``, ``float``,
+    ``bool`` or ``None`` is itself, a container reached twice is copied once and shared
+    as in the original (``memo``, keyed and kept as ``copy.deepcopy`` keys and keeps it:
+    each copied source is held alive in the memo, so a memo reused across calls never
+    answers for a recycled id), and anything else is ``copy.deepcopy`` with the same
+    memo. Every request's published contract is copied from the kernel's templates on
+    each call (Chapter II §II.b: the contract a request publishes is the one the kernel
+    enforces), so this is on every call's path.
+    """
+    return _copy_json(value, {} if memo is None else memo)
+
+
+_MISSING = object()
+
+
+def _keep_alive(value: Any, memo: dict) -> None:
+    """``copy._keep_alive``: hold ``value`` in the memo's own list, under ``id(memo)``."""
+    try:
+        memo[id(memo)].append(value)
+    except KeyError:
+        memo[id(memo)] = [value]
+
+
+def _copy_json(value: Any, memo: dict) -> Any:
+    kind = type(value)
+    if kind is dict:
+        key = id(value)
+        out = memo.get(key, _MISSING)
+        if out is not _MISSING:
+            return out
+        out = memo[key] = {}
+        for k, v in value.items():
+            t = type(v)
+            out[k if type(k) is str else _copy_json(k, memo)] = (
+                v if t is str or t is int or t is float or t is bool or v is None
+                else _copy_json(v, memo))
+        _keep_alive(value, memo)
+        return out
+    if kind is list:
+        key = id(value)
+        out = memo.get(key, _MISSING)
+        if out is not _MISSING:
+            return out
+        out = memo[key] = []
+        append = out.append
+        for v in value:
+            t = type(v)
+            append(v if t is str or t is int or t is float or t is bool or v is None
+                   else _copy_json(v, memo))
+        _keep_alive(value, memo)
+        return out
+    if kind is str or kind is int or kind is float or kind is bool or value is None:
+        return value
+    return copy.deepcopy(value, memo)

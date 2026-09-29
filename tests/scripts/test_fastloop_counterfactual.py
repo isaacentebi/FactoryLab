@@ -18,7 +18,10 @@ WORLD = Path(__file__).parents[2] / "worlds" / "edition6-capital-loop.toml"
 
 
 @pytest.mark.gate
-def test_the_scripted_edition6_world_grades_most_judges_by_the_world(tmp_path):
+# 150 ticks in the gate (30 past the horizon: 153 judge decisions, 0.23 of them graded by
+# the world against a bound of 0.10); the original 200 in the soak tier.
+@pytest.mark.parametrize("ticks", [150, pytest.param(200, marks=pytest.mark.soak)])
+def test_the_scripted_edition6_world_grades_most_judges_by_the_world(tmp_path, ticks):
     """Before the contract, a return that executed nothing had a world outcome only if it
     volunteered a counterfactual: a 60-tick run scored 0.279 of its judge decisions
     against the world (0.009 in a live 2.5 h run). With it, every compliant bare return
@@ -29,7 +32,6 @@ def test_the_scripted_edition6_world_grades_most_judges_by_the_world(tmp_path):
     can be."""
     from factorylab.runtime.worlds import load_manifest
 
-    ticks = 200
     card = fastloop.run("scripted", ticks, WORLD, tmp_path, cap_usd="2", seed=1)
     assert card["status"] == "completed", card.get("error")
     assert not any("counterfactual" in reason for reason in card["malformed_reasons"]), (

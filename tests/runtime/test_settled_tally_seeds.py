@@ -1,4 +1,4 @@
-"""The eligibility tally equals the scan over three seeds (wave 17b), slow tier.
+"""The eligibility tally equals the scan over three seeds (wave 17b), soak tier.
 
 Contract: committee eligibility, kept as a running tally at settlement, equals on every
 event the scan over every decision and account the world ever opened, released ones
@@ -11,7 +11,11 @@ import pytest
 
 from tests.runtime.test_settled_release import _world, tally_against_scan
 
-pytestmark = pytest.mark.slow
+# Soak, not slow: three 500-event worlds with the full scan beside every event (about
+# 90 s each) kill no process, which is what the slow tier is for. The per-PR gate keeps
+# the same check on seed 1's 150-event world (test_settled_release.py,
+# test_the_eligibility_tally_equals_the_scan_on_every_event).
+pytestmark = pytest.mark.soak
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

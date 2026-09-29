@@ -50,7 +50,8 @@ def _items(path, manifest=None):
 
 def _runtime(path, events, **kwargs):
     return Runtime(load_manifest("scripted"), events=events, seed=1,
-                   initial_balance_micro=None, ledger_path=str(path), router_gamma=.1,
+                   initial_balance_micro=None,
+                   ledger_path=None if path is None else str(path), router_gamma=.1,
                    **kwargs)
 
 
@@ -183,7 +184,7 @@ def test_a_large_answer_is_named_by_hash_and_stored_once(w60):
     assert len(files) == len({i["result_sha"] for i in named})
 
 
-def test_pruning_changes_nothing_any_reader_sees(w120, tmp_path, monkeypatch):
+def test_pruning_changes_nothing_any_reader_sees(w120, monkeypatch):
     """The retained state dropped at each boundary is unreachable: with and without the
     pruning, one manifest and seed write the same diary, snapshot references aside."""
     rt, pruned, expected = w120
@@ -193,8 +194,10 @@ def test_pruning_changes_nothing_any_reader_sees(w120, tmp_path, monkeypatch):
     slim = [e for e in rt.return_events.values() if "propensity" not in e.payload]
     assert len(slim) > len(rt.return_events) / 2
     monkeypatch.setattr(Runtime, "_prune_retained", lambda self: None)
-    kept = tmp_path / "w.jsonl"
-    summary = _run(kept, 120, provider=RecordedWriter())
+    # The unpruned world's diary is read in memory: the same items a diary file holds,
+    # recorded answers named by hash included, without a file's per-item writes.
+    unpruned = _runtime(None, 120, provider=RecordedWriter())
+    summary = unpruned.run()
 
     def comparable(items):
         return [{k: v for k, v in i.items() if k not in ("ts", "hash", "prev_hash")}
@@ -204,7 +207,7 @@ def test_pruning_changes_nothing_any_reader_sees(w120, tmp_path, monkeypatch):
         return {k: v for k, v in json.loads(json.dumps(summary, default=str)).items()
                 if k not in ("ledger_path", "ledger")}
 
-    assert comparable(_items(pruned)) == comparable(_items(kept))
+    assert comparable(_items(pruned)) == comparable(unpruned.ledger._recovery_items())
     assert plain(summary) == plain(expected)
 
 

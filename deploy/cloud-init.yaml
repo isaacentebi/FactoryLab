@@ -40,6 +40,11 @@ write_files:
       bash deploy/install.sh
       uv run --no-sync ruff check .
       uv run --no-sync pytest
+      # Before any world launch the soak tier passes on this exact release (AGENTS.md,
+      # Verify gate), then the whole gate, which requires that pass for the release's
+      # soak-required changes.
+      uv run --no-sync pytest -m soak -n 2
+      uv run --no-sync pytest -m gate -n 2
       chmod -R a+rX /opt/factorylab-python
       # Ubuntu restricts unprivileged user namespaces. Permit bwrap's setup,
       # then strip its children's capabilities with the upstream stacked profile.

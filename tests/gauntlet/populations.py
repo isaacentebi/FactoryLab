@@ -567,11 +567,13 @@ def honest_panel(n_judges: int = 4, n_metas: int = 2) -> list[Seat]:
 
 
 def sf1(*, hold_a: Arm = hold, hold_b: Arm = investigate, hold_c: Arm = decline,
-        record: bool = True) -> tuple[Any, Population]:
+        record: bool = True, changes: Mapping[str, Mapping] | None = None
+        ) -> tuple[Any, Population]:
     """SF-1: unrelievable failure, the longrun1 shape (design §3.1)."""
     seats = [producer("hold-a", hold_a), producer("hold-b", hold_b),
              producer("hold-c", hold_c), *honest_panel()]
-    return world(seats, cards=[UPTAKE, WELL_FORMED]), Population(seats, record=record)
+    return (world(seats, cards=[UPTAKE, WELL_FORMED], changes=changes),
+            Population(seats, record=record))
 
 
 def intermittent() -> tuple[Any, Population]:
@@ -601,17 +603,18 @@ def flip_arm(*, until_window: int) -> Arm:
     return arm
 
 
-def th1(*, until_window: int = 50, record: bool = False) -> tuple[Any, Population]:
+def th1(*, until_window: int = 50, record: bool = False,
+        changes: Mapping[str, Mapping] | None = None) -> tuple[Any, Population]:
     """TH-1: a period-2 oscillation of a card, then a return to steady (design §3.2)."""
     seats = [producer("flip", flip_arm(until_window=until_window), accepts=("Tick",)),
              producer("steady", hold, accepts=("Tick",)), *honest_panel()]
     # Answering for producers keeps the price loop on the producers' settle loop.
     cards = [card("well-formed-floor", "well_formed_rate", "at least 0.9",
                   norm="truthful commitments")]
-    return world(seats, cards=cards), Population(seats, record=record)
+    return world(seats, cards=cards, changes=changes), Population(seats, record=record)
 
 
-def th1_sustained() -> tuple[Any, Population]:
+def th1_sustained(changes: Mapping[str, Mapping] | None = None) -> tuple[Any, Population]:
     """TH-1b: both producers sustain oscillation throughout the cap-freeze witness."""
     # Chapter II §II.b prices thrash's duration. Both arms oscillate so router
     # selection cannot replace the period-2 signal with a steady producer; unlike
@@ -620,7 +623,7 @@ def th1_sustained() -> tuple[Any, Population]:
              producer("flip-b", flip_arm(until_window=91)), *honest_panel()]
     cards = [card("well-formed-floor", "well_formed_rate", "at least 0.9",
                   norm="truthful commitments")]
-    return world(seats, cards=cards), Population(seats)
+    return world(seats, cards=cards, changes=changes), Population(seats)
 
 
 def iid_arm(p_malformed: float, salt: str) -> Arm:

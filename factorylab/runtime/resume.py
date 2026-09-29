@@ -900,6 +900,8 @@ _DERIVED_STATE = {
     "Runtime._instruments_memo": "the venue's instrument listing, held for the tick that read it",
     "Runtime._mids_memo": "the venue's mid prices, held for the tick that read them",
     "Runtime._account_memo": "the venue account read, held for the tick that read it",
+    "Runtime._tradeable_memo": "the frozensets of the venue tools' tradeable coins and "
+                               "pairs, rebuilt whenever their counts change",
     "Runtime._peak_observed": "the window and tick whose position peak was already "
                               "observed; a venue write drops it and a restore re-reads",
     "Runtime._prefix_memo": "the rendered cacheable prompt prefix, keyed on what it renders",

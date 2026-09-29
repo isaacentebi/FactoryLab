@@ -11,6 +11,7 @@ import pytest
 from factorylab.versioning import live
 from scripts import gauntlet as g
 from tests.gauntlet import populations as P
+from tests.gauntlet.test_learning_death import LONG, SHORT, ld1_world
 
 pytestmark = pytest.mark.gate
 
@@ -106,9 +107,11 @@ def test_i10_the_thrash_price_lands_on_the_tier_that_moved(i10):
 # --- I-3, I-4, I-5 ------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def ld1(shared_run):
-    return shared_run("ld1", lambda: P.run(*P.ld1(at_window=10), events=350))
+@pytest.fixture(scope="module", params=[SHORT, LONG])
+def ld1(shared_run, request):
+    """LD-1's world, 150 events in the gate and 350 in the soak tier
+    (``test_learning_death.LD1_EVENTS``), shared with that module's run."""
+    return ld1_world(shared_run, request.param)
 
 
 def test_i3c_a_niche_decision_is_never_priced_above_a_noop(ld1):
