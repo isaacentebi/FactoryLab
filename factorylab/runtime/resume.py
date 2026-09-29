@@ -904,6 +904,8 @@ _RECEIPT_BOOKS = ("book.receipts", "consequences.receipts")
 # that made it; a restored runtime rebuilds it or reads afresh.
 _DERIVED_STATE = {
     "Runtime._instruments_memo": "the venue's instrument listing, held for the tick that read it",
+    "Runtime._tradeable_memo": "the tradeable perps and pairs, rebuilt from venue_tools "
+                               "whenever a registration changes their counts",
     "Runtime._mids_memo": "the venue's mid prices, held for the tick that read them",
     "Runtime._account_memo": "the venue account read, held for the tick that read it",
     "Runtime._peak_observed": "the window and tick whose position peak was already "
