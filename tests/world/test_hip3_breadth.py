@@ -394,3 +394,32 @@ def test_a_world_whose_read_share_cannot_cover_a_per_dex_read_is_refused_at_load
     manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "xyz:TSLA")))
     assert "cannot cover venue.funding at 40" in manifest.read_share_problem()
     assert base.read_share_problem() is None
+
+
+def test_a_price_cross_on_a_hip3_coin_fires_through_the_real_observation_path():
+    """Astra P2 on #178: a trigger's coin is normalised to upper case while the venue's
+    mids keep its own spelling (xyz:TSLA), so a HIP-3 crossing never fired."""
+    from dataclasses import replace
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.subscriptions import validate_trigger
+    from factorylab.runtime.worlds import load_manifest
+    from factorylab.world.exchange import FakeExchange
+    from factorylab.world.scripted import ScriptedProvider
+
+    base = load_manifest("scripted")
+    manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "xyz:TSLA"),
+                                              public_read_weight_per_minute=640))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(), exchange=FakeExchange())
+    seat = next(iter(rt.assemblies))
+    trigger = validate_trigger({"kind": "price_cross", "coin": "xyz:TSLA", "level": "100"})
+    rt.subscription_book.watch(seat, owner=None, trigger=trigger)
+    venue = rt.exchange.target
+    fired = []
+    for mid in ("99", "101"):
+        venue._mids["xyz:TSLA"] = Decimal(mid)
+        rt._evaluate_watchers()
+        fired.append([row["fired"] for row in rt.ledger.items()
+                      if row.get("kind") == "watcher.evaluated"][-1])
+    assert fired == [False, True]

@@ -176,6 +176,19 @@ def validate_trigger(value: Any) -> dict[str, Any]:
     return trigger
 
 
+def _by_coin(values: Any, coin: str) -> Any:
+    """``coin``'s value in ``values``, keyed in the venue's own spelling or in the upper
+    case a trigger is stored in: exact first, else the one key that matches it without
+    regard to case (a HIP-3 coin, ``xyz:TSLA``, is spelled in mixed case); None when
+    none or several do."""
+    values = values or {}
+    if coin in values:
+        return values[coin]
+    matches = [value for key, value in values.items()
+               if isinstance(key, str) and key.upper() == coin]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _sign(value: Decimal) -> int:
     return 0 if value == 0 else (1 if value > 0 else -1)
 
@@ -196,7 +209,7 @@ def evaluate_trigger(trigger: dict[str, Any], observed: dict[str, Any],
     if kind == "price_cross":
         coin = trigger["coin"]
         level = Decimal(trigger["level"])
-        now = _decimal((observed.get("mids") or {}).get(coin))
+        now = _decimal(_by_coin(observed.get("mids"), coin))
         before = _decimal((last or {}).get("mid"))
         seen = {"mid": None if now is None else str(now)}
         if now is not None and before is not None and (
@@ -205,7 +218,7 @@ def evaluate_trigger(trigger: dict[str, Any], observed: dict[str, Any],
                     "previous": str(before), "observed": str(now)}
     elif kind == "funding_sign":
         coin = trigger["coin"]
-        now = _decimal((observed.get("funding") or {}).get(coin))
+        now = _decimal(_by_coin(observed.get("funding"), coin))
         before = _decimal((last or {}).get("rate"))
         seen = {"rate": None if now is None else str(now)}
         if now is not None and before is not None and _sign(now) != _sign(before):
