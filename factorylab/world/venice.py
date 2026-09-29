@@ -156,6 +156,7 @@ class VeniceProvider:
         reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
         web_config: Mapping[str, Mapping[str, Any]] | None = None,
         schema_models: Iterable[str] = (),
+        strict_models: Iterable[str] = (),
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
@@ -169,6 +170,8 @@ class VeniceProvider:
         self._prices: dict[str, TokenPrice] = {}
         # The model ids whose manifest ``contract`` is ``json_schema`` (Chapter II §II.b).
         self._schema_models = frozenset(schema_models)
+        # The model ids whose ``contract`` is ``json_schema_strict`` (``strict_schema``).
+        self._strict_models = frozenset(strict_models)
 
     def _redact(self, body: str) -> str:
         """Operator error evidence excludes either credential accepted by this adapter."""
@@ -305,10 +308,13 @@ class VeniceProvider:
             **options,
         }
         # Venice speaks the OpenAI wire: a request for a JSON object says so there, and
-        # on a route whose manifest contract is json_schema it carries the schema.
+        # on a route whose manifest contract is json_schema (or json_schema_strict) it
+        # carries the schema.
         tier = req.model_id.partition("@")[0]
-        contract = response_format(req, schema_route=any(
-            k in self._schema_models for k in (req.model_id, tier, tier.removesuffix(":online"))))
+        keys = (req.model_id, tier, tier.removesuffix(":online"))
+        contract = response_format(
+            req, schema_route=any(k in self._schema_models for k in keys),
+            strict_route=any(k in self._strict_models for k in keys))
         if contract is not None:
             payload["response_format"] = contract
         if tools is not None:

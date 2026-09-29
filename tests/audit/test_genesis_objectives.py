@@ -33,7 +33,9 @@ INITIAL_KEYS = frozenset({"lens", "open_questions", "active_commitments"})
 #: reward contract, which is physics.
 ID_TERMS = ("constructor", "builder", "trader", "opportunity", "mechanism", "empirical",
             "fidelity", "calibration", "consequence", "base-rate", "countercase", "audit")
-EDITION6 = ("edition6-capital-loop", "edition6-testnet-rehearsal")
+#: The worlds that carry edition 6's roster: edition 6's own, and the edition 7 breadth
+#: draft, a copy of the edition 6 rehearsal that changes only its market universe.
+EDITION6 = ("edition6-capital-loop", "edition6-testnet-rehearsal", "edition7-breadth-testnet")
 
 
 def _edition6_xfail(reason):

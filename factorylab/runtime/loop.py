@@ -443,6 +443,8 @@ class Runtime(
             self._tick_treasury()
             self._classify_financing()  # a conversion confirmed this tick is spendable now
             self._reconcile_x402()
+            # A universe world's marks are its broadcast markets' (a no-op without one).
+            self._forget_unbroadcast_marks()
             if self.venue is not None:
                 # Mids and funding; fills come only through the fill cursor below.
                 observed = self.venue.on_tick(self.clock.now_ns)
@@ -1412,7 +1414,11 @@ class Runtime(
                 # that nothing here substitutes wallet equity, and nothing does.
                 payload["account"] = {"status": "unavailable", "reason": type(exc).__name__}
             try:
-                payload["mids"] = {c: str(m) for c, m in self._tick_mids().items()}
+                # The broadcast markets' mids alone (``_broadcast_markets``): a prompt's
+                # size never follows the venue's listing (Chapter II §IV.c); every other
+                # listed market's mid is one venue.mids read away.
+                payload["mids"] = {c: str(m) for c, m in
+                                   self._tick_mids(self._broadcast_markets()).items()}
             except RuntimeError as exc:  # VenueUnavailable and friends
                 # A price the venue would not give is weather, not death, and it is
                 # reported as unavailable rather than invented: the account read above

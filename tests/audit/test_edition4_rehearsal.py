@@ -583,3 +583,21 @@ def test_native_completion_launch_removes_seat_caps_without_disabling_reasoning(
     assert all(a.max_tokens is None for a in effective.assemblies)
     assert effective.models == original.models
     assert effective.charter == original.charter
+
+
+def test_the_prepaid_providers_carry_each_routes_contract(monkeypatch):
+    """Chapter II §II.b: a json_schema_strict route reaches both adapters as a strict
+    route, and a json_schema one as a schema route, through the rehearsal's builder."""
+    monkeypatch.setattr(rehearsal, "_load_dotenv", lambda: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("VENICE_API_KEY", "test-key-not-real")
+    monkeypatch.delenv("RESERVE_PRIVATE_KEY", raising=False)
+    manifest = load_manifest("edition6-testnet-rehearsal")
+    contracts = {"qwen/qwen3.8-flash": "json_schema_strict",
+                 "google/gemini-3.8-flash": "json_schema"}
+    manifest = replace(manifest, models=tuple(
+        replace(m, contract=contracts.get(m.id, m.contract)) for m in manifest.models))
+    provider = rehearsal.build_prepaid_provider(manifest)
+    for adapter in (provider.openrouter, provider.venice):
+        assert adapter._strict_models == frozenset({"qwen/qwen3.8-flash"})
+        assert adapter._schema_models == frozenset({"google/gemini-3.8-flash"})

@@ -53,7 +53,12 @@ def declined_trade(outputs: Mapping,
     """
     raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
     if isinstance(raw, str) and raw.count(":") >= 1:
-        side, coin = raw.split(":")[:2]
+        # ``side:coin``, where a HIP-3 coin carries its dex (``buy:xyz:TSLA``); a
+        # trailing size band (``buy:BTC:m``, the action-label form) is not the coin.
+        side, coin = raw.split(":", 1)
+        head, _, band = coin.rpartition(":")
+        if head and band.lower() in ("xs", "s", "m", "l", "xl"):
+            coin = head
         raw = {"side": side, "coin": coin}
     if not isinstance(raw, Mapping):
         return None

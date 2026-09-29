@@ -112,7 +112,12 @@ class InertVenue:
 
         self.name = "hyperliquid-mainnet" if spec.mainnet else "hyperliquid-testnet"
         self.base_url = constants.MAINNET_API_URL if spec.mainnet else constants.TESTNET_API_URL
-        self.coins, self.spot_pairs = spec.coins, spec.spot_pairs  # as live_exchange passes them
+        from factorylab.world.universe import explicit_markets, named_dexes
+
+        # As live_exchange passes them: explicit names, and the HIP-3 dexes named.
+        self.coins = explicit_markets(spec.coins)
+        self.spot_pairs = explicit_markets(spec.spot_pairs)
+        self.dexes = named_dexes(spec.coins)
 
 
 def _mirror_the_live_adapter() -> None:

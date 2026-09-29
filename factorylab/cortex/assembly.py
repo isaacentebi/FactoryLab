@@ -1082,6 +1082,21 @@ def with_counterfactual(schema: Any) -> Any:
     return {**schema, "properties": properties}
 
 
+#: The most listed coins a producing contract enumerates. A venue lists thousands of
+#: instruments (Hyperliquid testnet: about 1,500), and an enum of them in every producing
+#: request made a prompt's size follow the venue's listing (Chapter II §IV.c). Above it
+#: the coin is named by reference to the listing, and the kernel still refuses a coin
+#: the venue does not list (``runtime.grounded.counterfactual_refusal``).
+LISTED_ENUM_MAX = 64
+#: A counterfactual coin named by reference: the rule the kernel checks, stated.
+LISTED_COIN_BY_REFERENCE: dict[str, Any] = {
+    "type": "string",
+    "description": "a perp coin or spot pair the venue lists when the return is made: "
+                   "venue.instruments returns every one, world.read section markets this "
+                   "world's own; a coin the venue does not list is refused",
+}
+
+
 def producing_contract(shape: Any, *, listed: Any, answer_order: bool) -> Any:
     """The final answers a producing kind's ``shape`` admits, as the kernel enforces them.
 
@@ -1097,9 +1112,12 @@ def producing_contract(shape: Any, *, listed: Any, answer_order: bool) -> Any:
     - ``listed`` None: ``shape`` publishing ``COUNTERFACTUAL_FIELD``, not required;
     - ``listed`` empty: ``shape`` without the field, which then names no listed coin;
     - otherwise the union of (a) ``shape`` with ``counterfactual`` required, its coin
-      one of ``listed``, and, when ``answer_order`` (a kind that owns the answer order,
-      from a decision that may write), (b) ``shape`` with ``action`` ``"order"`` and
-      ``coin``, ``side`` and ``size`` required. A lone form is returned bare.
+      one of ``listed`` (an enum while ``listed`` holds at most ``LISTED_ENUM_MAX``
+      coins, else a string naming the listing, ``LISTED_COIN_BY_REFERENCE``, whose
+      membership the kernel checks with the same listing), and, when ``answer_order``
+      (a kind that owns the answer order, from a decision that may write), (b)
+      ``shape`` with ``action`` ``"order"`` and ``coin``, ``side`` and ``size``
+      required. A lone form is returned bare.
 
     A shape that is not an object answer is returned as a copy, unchanged.
     """
@@ -1112,12 +1130,16 @@ def producing_contract(shape: Any, *, listed: Any, answer_order: bool) -> Any:
     if listed is None:
         properties["counterfactual"] = deepcopy(COUNTERFACTUAL_FIELD)
         return {**shape, "properties": properties, "required": required}
-    listed = sorted(str(coin) for coin in listed)
+    # Counted before it is sorted: a listing above the bound is named by reference, and
+    # a request never sorts thousands of coins it will not enumerate (§IV.c).
+    listed = list(listed)
     if not listed:
         properties.pop("counterfactual", None)
         return {**shape, "properties": properties, "required": required}
     named = deepcopy(COUNTERFACTUAL_FIELD)
-    named["properties"]["coin"] = {"type": "string", "enum": listed}
+    named["properties"]["coin"] = ({"type": "string", "enum": sorted(map(str, listed))}
+                                   if len(listed) <= LISTED_ENUM_MAX
+                                   else deepcopy(LISTED_COIN_BY_REFERENCE))
     properties["counterfactual"] = named
     forms = [{**shape, "properties": properties, "required": [*required, "counterfactual"]}]
     if answer_order:

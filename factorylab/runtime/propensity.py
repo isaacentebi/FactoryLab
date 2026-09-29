@@ -138,9 +138,11 @@ def effect_label(tool: str, args: Any) -> str | None:
 def canonical_label(label: str) -> str:
     """Canonicalize only the published vocabulary; custom action ids remain exact."""
     parts = label.split(":")
-    if len(parts) == 3 and parts[0].lower() in ("buy", "sell") and parts[2].lower() in (
+    # ``side:coin:band``; a HIP-3 coin carries its dex (``buy:xyz:TSLA:m``), so the coin
+    # is every part between the side and the band.
+    if len(parts) >= 3 and parts[0].lower() in ("buy", "sell") and parts[-1].lower() in (
             "xs", "s", "m", "l", "xl"):
-        return f"{parts[0].lower()}:{parts[1].upper()}:{parts[2].lower()}"
+        return f"{parts[0].lower()}:{':'.join(parts[1:-1]).upper()}:{parts[-1].lower()}"
     if len(parts) == 2 and parts[0] in ("verdict", "conformity"):
         try:
             value = float(parts[1])

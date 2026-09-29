@@ -4,6 +4,7 @@
   "compute-continuity-roster",
   "edition6-capital-loop",
   "edition6-testnet-rehearsal",
+  "edition7-breadth-testnet",
   "kernel",
   "scripted",
   "scripted-crash",
@@ -2063,6 +2064,696 @@
    "status": "untriaged"
   },
   {
+   "id": "9f16b1d838ea",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "EVAL",
+   "path": "edition7-breadth-testnet/request/produce/you/working_state.state.lens",
+   "quote": "your starting prior is that reusable capability may be a valuable use of resources.",
+   "design_ref": "B1-7",
+   "status": "untriaged"
+  },
+  {
+   "id": "b263dd1bf08e",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "EVAL",
+   "path": "edition7-breadth-testnet/request/produce/you/working_state.state.lens",
+   "quote": "your starting prior is that the value of any use of resources depends on its best available alternative.",
+   "design_ref": "B3 (opportunity lens; Astra M-1)",
+   "status": "untriaged"
+  },
+  {
+   "id": "7570b6d7ca59",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "bf88b0ad839f",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "2dbe431b8754",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "d1e715aa7751",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "084153552876",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/request/#prose",
+   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "4286b78717b1",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/judge/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "99ab63072202",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/judge/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "549a4047e5fe",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/judge/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a63a6194ac4b",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/judge/base_capabilities/outcomes.preview_semantics",
+   "quote": "use outcome.get on an outcome_id to deliver one before acknowledging it",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "f2c2c9588b82",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/judge/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "d3a3c5582e5d",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/judge/request/#prose",
+   "quote": "give verdict 0-1 on the return against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "7a86535b39e0",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/meta/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "edd9ec161871",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/meta/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "510a8278301e",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/meta/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "4699bb8d3c46",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/meta/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "094b3c53e1e9",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/meta/request/#prose",
+   "quote": "assess the released representative verdict for conformity with the charter, using its window as context.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "626e8a259747",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "99bfa0673bb4",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "17e15da44b21",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/proposals[].description",
+   "quote": "give one assembly a learner over an action set it declares",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "c19bd951ab7a",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/proposals[].description",
+   "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a72d9dad3fbb",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/returns",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a765b0775f46",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/tools[].description",
+   "quote": "read an archived artifact by its sha256:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "7735211955a2",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/tools[].description",
+   "quote": "read any indexed body with outcome.get using its exact outcome_id.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "226e74933c94",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/tools[].description",
+   "quote": "read one current public institutional section by its directory handle.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "3eeaa5bbbc87",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/base_capabilities/tools[].description",
+   "quote": "read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "c10cfafb2302",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/inputs/continuation",
+   "quote": "return the final answer;",
+   "design_ref": "B1-5",
+   "status": "untriaged"
+  },
+  {
+   "id": "e14d82638fc1",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2d4e8906223c",
+   "world": "edition7-breadth-testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/produce/you/outcomes.preview_semantics",
+   "quote": "use outcome.get on an outcome_id to deliver one before acknowledging it",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "7aa10d5a0b8c",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "EVAL",
+   "path": "edition7-breadth-testnet/genesis/constructor/lens",
+   "quote": "your starting prior is that reusable capability may be a valuable use of resources.",
+   "design_ref": "B1-7",
+   "status": "untriaged"
+  },
+  {
+   "id": "7cf0c0ea5cbc",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "EVAL",
+   "path": "edition7-breadth-testnet/genesis/opportunity/lens",
+   "quote": "your starting prior is that the value of any use of resources depends on its best available alternative.",
+   "design_ref": "B3 (opportunity lens; Astra M-1)",
+   "status": "untriaged"
+  },
+  {
+   "id": "12694aea7679",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/a_return_may_include/about_handle",
+   "quote": "omit it to judge the delivered return.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "f0d09a6ef11f",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/capability_header",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "f01314deb37c",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/capability_header",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "6dd7ccdf5d6f",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "bc9154018f59",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/connectors/payment",
+   "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "7690fb03ddfb",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "fdcd962b981d",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "6666e9720177",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "44c05b2130cf",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/venue_listing",
+   "quote": "call the venue.instruments public read for the whole listing, and register a market proposal to trade one of them.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "92013b0b6b24",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/work/reward_shapes.conformity",
+   "quote": "return conformity (0 to 1) on the judged work.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "42cfab709674",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/work/reward_shapes.counter",
+   "quote": "return verdict (0 to 1) on the return a verdict judged.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "daae4bdb8bc9",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/institutions/work/reward_shapes.forecast",
+   "quote": "return forecasts:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "7570b6d7ca59",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "bf88b0ad839f",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "2dbe431b8754",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "d1e715aa7751",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "084153552876",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/counter/request/#prose",
+   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "8c890ea0bea8",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "baf4a2584e24",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "ad6ee27bbc20",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "8d0893fa5e0a",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "3b9b34613ee7",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "3c09e8745410",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "0c515bdf03dc",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "54513df10156",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "f4e7a892b83d",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "011871f64462",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "49fb5076c4d7",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "aafa73da5796",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "c94fbb653813",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "bd8978b7ef5c",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "4fc4e494651b",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "625ee5651563",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "0eb54aa0f86d",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/tools/artifact.get/description",
+   "quote": "read an archived artifact by its sha256:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "33e3789ce86a",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/tools/outcome.get/description",
+   "quote": "read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "40c71f5bf047",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/tools/outcome.list/description",
+   "quote": "read any indexed body with outcome.get using its exact outcome_id.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2d62014450fd",
+   "world": "edition7-breadth-testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition7-breadth-testnet/tools/world.read/description",
+   "quote": "read one current public institutional section by its directory handle.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "0796d64044d9",
    "world": "kernel",
    "surface": "static",
@@ -2293,11 +2984,11 @@
    "status": "untriaged"
   },
   {
-   "id": "fa538fa16cf9",
+   "id": "3083c56b862e",
    "world": "kernel",
    "surface": "static",
    "rule": "IMP",
-   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._institutional_block/da5cd330",
+   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._institutional_block/b947e8ec",
    "quote": "call the venue.instruments public read for the whole listing, and register a market proposal to trade one of them.",
    "design_ref": null,
    "status": "untriaged"

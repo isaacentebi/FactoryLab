@@ -35,6 +35,7 @@ REVIEWED = {
     # Named like a set elsewhere, but a tuple here: the scan matches attributes by name.
     ("cortex/schematics.py", "list(self.venue_tools.coins)"): "VenueTools.coins is a tuple",
     ("runtime/worlds.py", "list(self.exchange.coins)"): "ExchangeSpec.coins is a tuple",
+    ("world/recorder.py", '"selectors": {"coins": list(self.coins)'): "Recorder.coins is a tuple",
     ("runtime/governance.py", "for kind in prop.accepts:"):
         "a registration proposal's accepts is a tuple",
     ("runtime/governance.py", '"accepts": list(prop.accepts),'):

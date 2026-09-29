@@ -150,7 +150,7 @@ class VaultMixin:
         hold it would not state -- cannot justify moving collateral away.
         """
         try:
-            view = self._collateral_view(self.m.exchange.coins[0], "perp")
+            view = self._collateral_view(self.venue_tools.coins[0], "perp")
             stale = self._collateral_stale(view)
             if stale is not None:
                 return f"vault transfer refused: {stale}"

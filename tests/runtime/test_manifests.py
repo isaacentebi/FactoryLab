@@ -467,12 +467,21 @@ def test_a_models_contract_defaults_to_json_object_and_names_its_schema_routes()
     raw["models"][0].update(provider="openrouter", contract="json_schema")
     manifest = manifest_from_dict(raw)
     assert manifest.schema_contract_models() == frozenset({"m"})
+    assert manifest.strict_contract_models() == frozenset()
     assert manifest.manifest_hash() != manifest_from_dict(_base()).manifest_hash()
+    raw["models"][0].update(contract="json_schema_strict")
+    strict = manifest_from_dict(raw)
+    assert strict.strict_contract_models() == frozenset({"m"})
+    assert strict.schema_contract_models() == frozenset()
+    assert strict.manifest_hash() not in (manifest.manifest_hash(),
+                                          manifest_from_dict(_base()).manifest_hash())
 
 
 @pytest.mark.parametrize("provider,contract", [
     ("openrouter", "json"), ("openrouter", "strict"), ("openrouter", True),
     ("openrouter", None), ("x402", "json_schema"), ("fake", "json_schema"),
+    ("x402", "json_schema_strict"), ("fake", "json_schema_strict"),
+    ("openrouter", "json_schema_strict "),
 ])
 def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
     raw = _base()

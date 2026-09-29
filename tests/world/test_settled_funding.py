@@ -180,10 +180,13 @@ def test_sdk_unknown_book_market_stays_unavailable_until_metadata_recovers():
     assert venue.on_tick(H)
     assert calls == []
     info.name_to_coin["PURR/USDC"] = "@1"
+    # The tick reads no book (Chapter II §IV.c: a tick's cost never grows with the
+    # markets); a book is read when asked, and then the recovered metadata answers it.
     venue.on_tick(H + 1)
-    assert calls == [("/info", {"type": "l2Book", "coin": "@1"})]
+    assert calls == []
     assert exchange.order_book("PURR/USDC", 20) == {
         "coin": "PURR/USDC", "ts_ns": H, "bids": [], "asks": []}
+    assert calls == [("/info", {"type": "l2Book", "coin": "@1"})]
 
 
 def test_malformed_book_does_not_abort_tick_or_block_settlement_retry():
@@ -253,6 +256,12 @@ def test_malformed_oracle_context_never_becomes_a_mark(ctx):
     exchange._info = SimpleNamespace(meta_and_asset_ctxs=lambda: [
         {"universe": [{"name": "BTC"}]}, [ctx]])
     exchange._guarded = lambda name, call: call()
+    if not isinstance(ctx, dict) or "funding" not in ctx:
+        # A context that states no rate makes the answer incomplete: the read fails
+        # (Codex P1 on #178) and nothing, a mark least of all, is invented from it.
+        with pytest.raises(VenueUnavailable):
+            exchange.funding()
+        return
     assert all(row.mark is None for row in exchange.funding())
 
 

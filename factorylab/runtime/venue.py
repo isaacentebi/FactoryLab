@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import sys
 from decimal import Decimal
+from types import SimpleNamespace
 
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.shared import _to_plain
 from factorylab.settlement.lots import VENUE_FEE_MARKETS, WIND_DOWN, LotTable
+from factorylab.world import universe as universe_names
 from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.exchange import (
     AccountState,
@@ -27,6 +29,14 @@ from factorylab.world.exchange import (
 #: repeat forever. The kill wind-down's terminal reconciliation reads past it: a
 #: dying runtime asks once more, whatever the schedule already spent.
 UNCERTAIN_ORDER_POLLS = 5
+
+
+def _nonzero_usd(value) -> bool:
+    """Whether a venue payload's USD amount moves money (an unreadable amount does)."""
+    try:
+        return Decimal(str(value)) != 0
+    except ArithmeticError:
+        return True
 
 
 def _custody_of(market: str) -> str:
@@ -600,9 +610,23 @@ class VenueMixin:
                 self.consequences.ledger.append({"kind": "consequence.funding_boundary",
                                                  "coin": coin, "boundary_ns": boundary})
                 self.consequences.table = self.consequences.table.capture_funding(coin, boundary)
+        if getattr(self, "universe", None):
+            # The venue moves only what the world watches (Chapter II §IV.c): the same
+            # set the tick broadcasts, and whatever the venue itself holds.
+            self.exchange.watched = tuple(sorted(self._broadcast_markets()))
         events = self.exchange.advance(ts_ns)
         self.advance_through_ns = max(getattr(self, "advance_through_ns", None) or ts_ns,
                                       ts_ns)
+        if getattr(self, "universe", None):
+            # A simulated or recorded venue answers every market it lists; the world
+            # broadcasts the markets it is in play on, as the live tick does (Chapter
+            # II §IV.c). A price or a rate no broadcast market needs is not an event.
+            broadcast = set(self._broadcast_markets())
+            events = [we for we in events
+                      if we.payload.get("coin") in broadcast or not (
+                          we.kind is WorldEventKind.MARKET_MID
+                          or we.kind is WorldEventKind.FUNDING
+                          and not _nonzero_usd(we.payload.get("paid_usd", "0")))]
         return events
 
     def _stream_watermark(self, stream: str) -> int | float | None:
@@ -711,10 +735,129 @@ class VenueMixin:
         """
         tools = getattr(self, "venue_tools", None)
         if tools is None:
-            return (*self.m.exchange.coins, *self.m.exchange.spot_pairs)
+            seed = self._seed_spec()
+            return (*seed.coins, *seed.spot_pairs)
         return (*tools.coins, *tools.spot_pairs)
 
-    def _tick_mids(self) -> dict[str, Decimal]:
+    def _seed_spec(self) -> SimpleNamespace:
+        """The launch seed of trading permission: the pinned universe, else the manifest.
+
+        Guarantees the manifest's explicit coins and pairs when it names no selector,
+        and the lists its selectors resolved to at launch (``universe``, pinned in the
+        Launch ledger and every checkpoint) when it does; never a selector itself, and
+        never a list resolved again after launch (Chapter II §II: one world for life).
+        A world whose selectors were not resolved (a schematics render reads no venue)
+        seeds its explicit names alone.
+        """
+        pinned = getattr(self, "universe", None)
+        if pinned:
+            return SimpleNamespace(coins=tuple(pinned["coins"]),
+                                   spot_pairs=tuple(pinned["spot_pairs"]))
+        return SimpleNamespace(
+            coins=universe_names.explicit_markets(self.m.exchange.coins),
+            spot_pairs=universe_names.explicit_markets(self.m.exchange.spot_pairs))
+
+    def _forget_unbroadcast_marks(self) -> None:
+        """Drop the latest mid kept for a market the tick no longer broadcasts.
+
+        Guarantees, in a world with a universe, that a named trade never opens at the
+        last mid of a market that left the broadcast set hours ago (a seat could read
+        today's price and name the move it already saw): with no current mark, the
+        trade opens at the market's first mid at or after it is named (ruling R10-h),
+        and the market joins the broadcast by being named. A world without selectors
+        broadcasts every trading market every tick, and keeps every mark as before.
+        """
+        if not getattr(self, "universe", None):
+            return
+        keep = set(self._broadcast_markets())
+        for coin in [c for c in getattr(self, "venue_marks", {}) if c not in keep]:
+            del self.venue_marks[coin]
+
+    def _broadcast_markets(self) -> tuple[str, ...]:
+        """The markets whose venue facts the tick broadcasts: bounded by the world's own
+        activity, never by the size of its universe.
+
+        Chapter II §IV.c: neither the factory nor its control apparatus may be slower
+        than its environment, so a tick's cost may not grow with the number of markets
+        the venue lists. Guarantees, for a world whose manifest names no selector,
+        exactly its trading markets (``_trading_markets``: the manifest's markets and
+        every registration), as before. For a world with a universe: the manifest's
+        explicit markets, every registered market, and every market the world is in
+        play on -- a named trade or an open consequence that still reads it, on any
+        market the venue lists (the world may name a trade it may not make)
+        (``_fee_needs``), an instrument an open return holds or held
+        (``graded_instruments``), an order intent not yet released, and a position or
+        spot balance in the tick's account read. Every other market's price is one
+        batched ``venue.mids`` read away, and its book one ``venue.order_book``.
+        """
+        pinned = getattr(self, "universe", None)
+        if not pinned:
+            return self._trading_markets()
+        base, observable = self._broadcast_membership()
+        out = list(base)
+        in_play = set(self._fee_needs())
+        consequences = getattr(self, "consequences", None)
+        if consequences is not None:
+            in_play |= {coin for coin, _market in consequences.graded_instruments()}
+        in_play |= {str(intent["args"]["coin"])
+                    for intent in (getattr(self, "order_intents", None) or {}).values()
+                    if isinstance(intent.get("args"), dict) and intent["args"].get("coin")}
+        # An order the fill cursor still tracks (acknowledged, resting, not yet booked):
+        # its market's mid at a horizon marks the return that sent it.
+        in_play |= {str(order["coin"]) for order in (getattr(
+            getattr(self, "consequence_fills", None), "orders", None) or {}).values()
+                    if isinstance(order, dict) and order.get("coin")}
+        memo = getattr(self, "_account_memo", None)
+        account = memo[1] if memo is not None else None
+        if account is not None:
+            in_play |= {p.coin for p in account.positions if p.size}
+            in_play |= {f"{b.coin}/USDC" for b in account.spot_balances
+                        if b.coin != "USDC" and b.total}
+        out.extend(sorted(m for m in in_play if m in observable and m not in out))
+        return tuple(out)
+
+    def _tradeable_sets(self) -> tuple[frozenset[str], frozenset[str]]:
+        """The perps and pairs this world may trade, kept until a registration changes
+        them, so a membership test never walks the universe."""
+        tools = self.venue_tools
+        key = (len(tools.coins), len(tools.spot_pairs))
+        memo = self.__dict__.get("_tradeable_memo")
+        if memo is None or memo[0] != key:
+            memo = (key, frozenset(tools.coins), frozenset(tools.spot_pairs))
+            self.__dict__["_tradeable_memo"] = memo
+        return memo[1], memo[2]
+
+    def _broadcast_membership(self) -> tuple[tuple[str, ...], frozenset[str]]:
+        """The broadcast set's fixed part and the markets it may observe, built once.
+
+        Guarantees ``(base, observable)``: ``base`` the explicit and registered markets
+        in trading order, ``observable`` every market the world trades or the venue's
+        last listing names. Permission to trade is not the obligation to observe: a
+        named trade may name any market the venue lists (the counterfactual contract),
+        so a consequence that reads one is broadcast whether or not the world may trade
+        it; orders stay held to the pinned universe (venue tools), and nothing unlisted
+        is ever broadcast. Rebuilt only when a registration changes the trading markets
+        or a listing read may have changed the listing, so a call walks neither the
+        universe nor the listing (Chapter II §IV.c).
+        """
+        tools = getattr(self, "venue_tools", None)
+        schedule = getattr(self, "fee_schedule", None) or {}
+        key = (None if tools is None else (len(tools.coins), len(tools.spot_pairs)),
+               schedule.get("read_ns"), len(schedule.get("listed") or ()))
+        memo = self.__dict__.get("_broadcast_memo")
+        if memo is not None and memo[0] == key:
+            return memo[1], memo[2]
+        pinned = self.universe
+        markets = self._trading_markets()
+        selected = set(pinned["coins"]) | set(pinned["spot_pairs"])
+        explicit = (set(universe_names.explicit_markets(self.m.exchange.coins))
+                    | set(universe_names.explicit_markets(self.m.exchange.spot_pairs)))
+        base = tuple(m for m in markets if m not in selected or m in explicit)
+        observable = frozenset(markets) | frozenset(self._listed_instruments())
+        self.__dict__["_broadcast_memo"] = (key, base, observable)
+        return base, observable
+
+    def _tick_mids(self, markets=None) -> dict[str, Decimal]:
         """The venue's mid prices, read once for the tick that reads them.
 
         The same memo #89 gave the venue's instrument listing, for the same reason.
@@ -732,13 +875,29 @@ class VenueMixin:
         here. Everything a price has a consequence for — the tick broadcast, fills,
         funding, marking positions at a window boundary, a watcher's trigger, and the
         population's own paid ``venue.mids`` call — reads the venue itself.
+
+        ``markets``: the markets the caller needs. A simulated or recorded venue in a
+        world with a universe is asked for those alone, so the read's work follows the
+        world, not the listing (Chapter II §IV.c); a live venue answers every market in
+        one request whatever is asked, so it is read whole, once a tick. Guarantees the
+        mids of ``markets`` (every market when None) that the venue states.
         """
         tick = self.ticks_consumed
         memo = getattr(self, "_mids_memo", None)
-        if memo is None or memo[0] != tick:
+        if markets is not None and getattr(self, "universe", None) and not self.live:
+            wanted = set(markets)
+            if memo is None or memo[0] != tick or len(memo) == 2:
+                memo = (tick, {}, frozenset())
+            missing = tuple(sorted(wanted - memo[2]))
+            if missing:
+                memo = (tick, {**memo[1], **self.exchange.mids(missing)}, memo[2] | set(missing))
+                self._mids_memo = memo
+            return {m: memo[1][m] for m in sorted(wanted) if m in memo[1]}
+        if memo is None or memo[0] != tick or len(memo) > 2:
             memo = (tick, self.exchange.mids())
             self._mids_memo = memo
-        return dict(memo[1])
+        mids = dict(memo[1])
+        return mids if markets is None else {m: mids[m] for m in markets if m in mids}
 
     def _tick_account_observation(self) -> tuple[AccountState | None, str | None, int]:
         """One account read a tick, its failure included, as ``(account, reason, at_ns)``.
@@ -847,7 +1006,10 @@ class VenueMixin:
             if getattr(account, "stale", False):
                 return  # a peak is observed on a live account or not at all
             positions = account.positions
-            mids = self.exchange.mids() if positions else {}
+            # A universe world asks for its positions' mids alone (Chapter II §IV.c).
+            held = tuple(sorted({p.coin for p in positions if p.size}))
+            mids = ({} if not positions else self.exchange.mids(held)
+                    if getattr(self, "universe", None) else self.exchange.mids())
         except RuntimeError:
             return
         notionals: dict[str, Decimal] = {}
@@ -1295,7 +1457,7 @@ class VenueMixin:
         check weighs it: a perp order's initial margin at the venue's leverage, a spot
         buy's cost. Zero where the venue has not said enough to know."""
         try:
-            mids = self._tick_mids()
+            mids = self._tick_mids((coin,))
             mark = max(mids[coin], price or mids[coin])
             if "/" in coin:
                 return size * mark if is_buy else Decimal(0)
@@ -1631,7 +1793,7 @@ class VenueMixin:
         available: Decimal | None = None
         try:
             view = self._collateral_view(coin, "spot" if spot else "perp")
-            mids = self._tick_mids()
+            mids = self._tick_mids((coin,))
             mark = max(mids[coin], price or mids[coin])
             # What earlier writes of the same batch already take from this pool is
             # not free for this one: it rides as headroom (``venue_batch_refusal``).
