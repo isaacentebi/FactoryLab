@@ -2520,7 +2520,16 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   fills past its size is quarantined (`polymarket.fill_quarantined`,
   `consequence.quarantined`): its money is booked to the pot and owned by no decision.
   An order's account is released only once `GET /data/order` confirms it terminal with
-  no more filled than was booked (wave 17b).
+  no more filled than was booked (wave 17b). A placement released unresolved (its
+  answer and every scheduled lookup failed) is still looked up by its hash, two a tick
+  in turn, until the venue answers, and its fills are read meanwhile: a confirmed trade
+  binds it to its decision, whose late money it is. A listing of trades longer than
+  one poll's page bound is read over several polls from the page it stopped at; a
+  world's first read starts at its first tick, never at the wallet's history.
+* **Only what the world acquired is sold.** A sell fits the tokens this world's
+  confirmed fills hold, less its resting sells ("sell exceeds the tokens this world's
+  confirmed fills acquired"): a token the wallet held otherwise has no cost on the
+  pot's books and is the funder's, outside the world.
 * **Custody.** `claimed + unattributed == booked` on the pot's own books
   (`polymarket_custody` in the summary). Every debit names a real counterparty: a buy
   pays its price to the matched side (a token at cost, not a P&L), a taker fee is

@@ -25107,7 +25107,7 @@
         "rules",
         "live"
       ],
-      "value": "With live_orders, an order is a GTC limit order on Polymarket's CLOB, signed by the pot's wallet; its identity is its EIP-712 order hash, recorded with the intent before it is sent, and a lost answer is looked up by that hash and never sent again. A fill is booked once, when Polymarket reports its trade CONFIRMED; a fill beyond its order's size is booked to the pot owned by no decision. The pot's own requests (orders, cancels, lookups, fills, account, marks and a write's market read) are at most order_requests_per_10s in any sliding 10 s of wall time; one past it is not sent and reads as unavailable.",
+      "value": "With live_orders, an order is a GTC limit order on Polymarket's CLOB, signed by the pot's wallet; its identity is its EIP-712 order hash, recorded with the intent before it is sent, and a lost answer is looked up by that hash and never sent again. A fill is booked once, when Polymarket reports its trade CONFIRMED; a fill beyond its order's size is booked to the pot owned by no decision. A sell fits the tokens this world's confirmed fills acquired, less its resting sells, never tokens the wallet held otherwise. The pot's own requests (orders, cancels, lookups, fills, account, marks and a write's market read) are at most order_requests_per_10s in any sliding 10 s of wall time; one past it is not sent and reads as unavailable.",
       "enforced": [
         207
       ],
@@ -26792,7 +26792,7 @@
     },
     {
       "rule": "polymarket_orders.principal_micro",
-      "enforced": "factorylab/runtime/polymarket.py:1155 (principal_excess)",
+      "enforced": "factorylab/runtime/polymarket.py:1178 (principal_excess)",
       "published": "factorylab/cortex/admission_tools.py:308 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26816,7 +26816,7 @@
     },
     {
       "rule": "polymarket_orders.principal",
-      "enforced": "factorylab/runtime/polymarket.py:1155 (principal_excess)",
+      "enforced": "factorylab/runtime/polymarket.py:1178 (principal_excess)",
       "published": "factorylab/cortex/admission_tools.py:312 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26850,7 +26850,7 @@
     "factorylab/runtime/compute.py": "a0b0a5cac799e433071a590b6409016582b4c6affb30f106f05775a45723fd1c",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
-    "factorylab/runtime/polymarket.py": "8596ba511c949731dcc15f3639ee44d1b142c6da4873aca28d59990192e39105",
+    "factorylab/runtime/polymarket.py": "4a4682111f3f441068f93c8dd93b4d3da782ff09819203a9c31d0ba2a7166495",
     "factorylab/runtime/propensity.py": "cf32c2a547166dc2093853b0489b61ae8ad73872f4d9d089a0f822e8e76c6853",
     "factorylab/runtime/routing.py": "267b781ce62203279e17544891bf27c654e4c344e46f337528ca52cbb5b091c6",
     "factorylab/runtime/subscriptions.py": "618df166c01ba3a97d43516ef770d12f92e016d9e4788f14a5f0cf4e83de41d3",

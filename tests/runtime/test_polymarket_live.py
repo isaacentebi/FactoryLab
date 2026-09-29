@@ -381,3 +381,26 @@ def test_a_released_placement_s_confirmed_trade_binds_it_while_lookups_still_fai
     (fill,) = items(rt, "polymarket.fill")
     owned = [i for i in items(rt, "venue.settled") if i["reference"] == f"fill:{fill['order_id']}"]
     assert owned[0]["handle"] == handle
+
+
+def test_a_sale_of_tokens_this_world_never_acquired_is_refused():
+    """Codex P1 on #177: a funded wallet holding an outcome token at launch let a seat
+    sell it with no cost basis, so the whole proceeds booked as profit and the pot's own
+    holding went negative. Only what this world's confirmed fills acquired is sold."""
+    rt, server = live_world()
+    held = token(server)
+    server.fake._positions[held] = {"size": Decimal(10), "avg_px": Decimal("0.2")}
+    handle = collateral_decision(rt)
+    refused = buy(rt, server, handle, side="sell", size="5", price="0.39")
+    assert refused["status"] == "rejected" and "acquired" in refused["error"]
+    assert rt.polymarket.intents == {} and ("POST", "/order") not in server.calls
+    # What the world bought itself, once its fill is confirmed, it may sell.
+    buy(rt, server, handle, size="10", price="0.45", slot="tool:1")
+    polymarket.tick(rt)
+    sold = buy(rt, server, collateral_decision(rt), side="sell", size="5", price="0.39")
+    assert sold["status"] in ("filled", "uncertain", "resting")
+    polymarket.tick(rt)
+    sale = [f for f in items(rt, "polymarket.fill") if f["is_buy"] is False]
+    assert Decimal(sale[0]["realized_usd"]) == (Decimal("0.39") - Decimal("0.41")) * 5
+    too_many = buy(rt, server, collateral_decision(rt), side="sell", size="6", price="0.39")
+    assert too_many["status"] == "rejected" and "acquired" in too_many["error"]

@@ -318,7 +318,9 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "recorded with the intent before it is sent, and a lost answer is looked "
                 "up by that hash and never sent again. A fill is booked once, when "
                 "Polymarket reports its trade CONFIRMED; a fill beyond its order's size "
-                "is booked to the pot owned by no decision. The pot's own requests "
+                "is booked to the pot owned by no decision. A sell fits the tokens this "
+                "world's confirmed fills acquired, less its resting sells, never tokens "
+                "the wallet held otherwise. The pot's own requests "
                 "(orders, cancels, lookups, fills, account, marks and a write's market "
                 "read) are at most order_requests_per_10s in any sliding 10 s of wall "
                 "time; one past it is not sent and reads as unavailable.",

@@ -1134,7 +1134,30 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
                      if p["token_id"] == args["token_id"]), Decimal(0))
         if size > held:
             return "sell exceeds the tokens the polymarket pot holds"
+        if surface.live and size > acquired(surface, account, args["token_id"]):
+            return ACQUIRED_REFUSAL
     return None
+
+
+ACQUIRED_REFUSAL = "sell exceeds the tokens this world's confirmed fills acquired"
+
+
+def acquired(surface: PolymarketSurface, account: dict, token_id: str) -> Decimal:
+    """The tokens of ``token_id`` this world's own confirmed fills hold, less what its
+    resting sells already offer.
+
+    Codex P1 on #177: a live pot's wallet can hold tokens the world never bought (the
+    funder's, before launch). Selling one would have no cost basis on the pot's books,
+    book its whole proceeds as profit and take the world's holding negative, so only
+    what the world acquired is sold (essay II.II.b, the hard cast); the rest is the
+    funder's, outside the world.
+    """
+    book = surface.cursor.get("book", {}).get(str(token_id))
+    held = Decimal(book[0]) if book else Decimal(0)
+    offered = sum((Decimal(o["remaining"]) for o in account["open_orders"]
+                   if o["side"] == "sell" and o["token_id"] == str(token_id)
+                   and o["order_id"] in surface.order_ids), Decimal(0))
+    return held - offered
 
 
 PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
