@@ -2665,7 +2665,10 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   settled the same way, from its order's own status read by hash: cancelled, the
   order's unfilled liability and reservation are released. A listing of trades longer than
   one poll's page bound is read over several polls from the page it stopped at; a
-  world's first read starts at its first tick, never at the wallet's history.
+  world's read starts at the signed timestamp of its earliest order that may still fill
+  or has matched unbooked (by terminal evidence, booked fills and failed legs), less the
+  overlap, never at the wallet's history; an order over with nothing outstanding never
+  pulls the read back.
 * **Caps on the world's own records.** The venue's listings (balance, open orders,
   positions) are separate reads that lag each other, so a live buy's exposure and
   collateral also count every buy placement not yet booked from a CONFIRMED trade (its

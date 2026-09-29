@@ -849,9 +849,9 @@ class LivePolymarket(PolymarketReader):
         state = json.loads(json.dumps(cursor or {}))
         # Where a read starts is a durable fact, never the moment a poll happens to run
         # (Astra P0, Codex on #177): ``_fills`` holds it at or before the earliest order
-        # of this world not wholly booked, less the overlap. No fill of an order can
-        # precede the order's own signed timestamp, and a funded wallet's older history
-        # is never paged through.
+        # of this world that may still fill or has matched unbooked, less the overlap.
+        # No fill of an order can precede the order's own signed timestamp, and a funded
+        # wallet's older history is never paged through.
         state.setdefault("seen", {})
         state.setdefault("book", {})
         state.setdefault("resolved", {})
@@ -880,9 +880,11 @@ class LivePolymarket(PolymarketReader):
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]]) -> list[dict]:
         if not orders:
             return []
-        outstanding = [int(o["timestamp"]) // 1000 for oid, o in orders.items()
-                       if o.get("timestamp") is not None
-                       and _dec(state.get("booked", {}).get(oid, "0")) < _dec(o["size"])]
+        # Outstanding is what may still fill or has matched unbooked, by the runtime's
+        # terminal evidence, booked fills and failed legs (``open``), never merely
+        # booked below size (Sol P2 on #177: a cancelled order re-scanned history).
+        outstanding = [int(o["timestamp"]) // 1000 for o in orders.values()
+                       if o.get("timestamp") is not None and o.get("open", True)]
         if "page" not in state:
             floor = (min(outstanding) - TRADE_OVERLAP_S) if outstanding else None
             if "after" not in state:

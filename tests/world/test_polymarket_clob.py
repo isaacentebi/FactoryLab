@@ -544,3 +544,19 @@ def test_the_signing_boundary_never_signs_a_sell():
             venue.place(client_id="c-1", token_id=token, is_buy=is_buy, size=Decimal(10),
                         price=Decimal("0.30"))
     assert ("POST", "/order") not in server.calls
+
+
+def test_an_order_over_with_nothing_outstanding_never_pulls_the_read_back():
+    """Sol P2 on #177: a cancelled order with no fill stayed "outstanding" (booked below
+    its size), so every poll pulled the fill read back to its signing and re-scanned
+    history. What is outstanding is what the runtime's evidence says may still fill."""
+    venue, server = live_venue()
+    venue._credentials()
+    orders = {"0xold": {"token_id": _token(server), "side": "buy", "size": "10",
+                        "price": "0.30", "market_id": "fake-1", "timestamp": "1000",
+                        "open": False}}
+    answer = venue.poll(now_ns=10**12, cursor={"after": 800}, orders=orders)
+    assert answer["cursor"]["after"] == 800
+    orders["0xold"]["open"] = True  # still resting: its fills may yet come
+    answer = venue.poll(now_ns=10**12, cursor={"after": 800}, orders=orders)
+    assert answer["cursor"]["after"] == 0
