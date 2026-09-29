@@ -2154,21 +2154,16 @@ def _live_targets(surface: PolymarketSurface) -> list[str]:
 def _live_residual(surface: PolymarketSurface, account: dict | None) -> list[dict]:
     """What the world holds, bounded below by its own confirmed book (Sol P1 on #177):
     an unresolved token cannot leave the pot but by resolution (the venue takes BUY
-    orders only), so a listing that omits it proves nothing. A resolved token not yet
-    redeemed is what the world held when paid, as far as the listing, when read, still
-    shows it (a redemption takes it out)."""
+    orders only), so a listing that omits it proves nothing. A resolved token is what the
+    world held when it was paid, in custody until redeemed; no listing is evidence of a
+    redemption (Sol P1 on #177), and this venue reads no redemption evidence yet."""
     listed = {} if account is None else {p["token_id"]: p for p in sanitized(account)[
         "positions"]}
     rows = []
     resolved = surface.cursor.get("resolved", {})
     redeemable = surface.cursor.get("redeemable", {})
     for token, (size, avg) in sorted(surface.cursor.get("book", {}).items()):
-        own = Decimal(size)
-        if token in resolved:
-            own = Decimal(redeemable.get(token, "0"))
-            if account is not None:
-                own = min(own, Decimal(listed[token]["size"]) if token in listed
-                          else Decimal(0))
+        own = Decimal(redeemable.get(token, "0")) if token in resolved else Decimal(size)
         if own > 0:
             rows.append({"token_id": token, "market_id": surface.token_markets.get(token),
                          "outcome": (listed.get(token) or {}).get("outcome"),

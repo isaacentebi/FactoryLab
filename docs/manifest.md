@@ -2700,8 +2700,9 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   cancelled, rejected or read terminal), taken from its intents and never from a
   listing, each cancelled by its hash, each on its own, so one failed read or cancel
   never stops the next; the residual is bounded below by the world's own confirmed book
-  (an unresolved token cannot leave the pot but by resolution), so a listing's omission
-  never proves flat; matched but unconfirmed quantity is reported as `unsettled`
+  (an unresolved token cannot leave the pot but by resolution) and its resolved,
+  unredeemed custody (what it held when paid, kept until redemption evidence, which
+  this venue does not yet read), so a listing's omission never proves flat; matched but unconfirmed quantity is reported as `unsettled`
   exposure (`wind_down_pending`), and an order, a cancel or a read the venue has not
   answered reports `unknown`, never `flat`; its report counts only the world's orders and tokens, and
   `polymarket.open_orders` lists only the world's orders.

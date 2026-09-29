@@ -952,3 +952,20 @@ def test_a_resolution_s_payout_is_the_only_thing_that_returns_room():
     assert polymarket.principal_at_risk(rt.polymarket) == Decimal("-5.275")  # 10 paid
     assert buy(rt, server, collateral_decision(rt), size="5", price="0.10",
                market="fake-2")["status"] == "resting"
+
+
+def test_resolved_custody_stays_the_world_s_residual_until_it_is_redeemed():
+    """Sol P1 on #177: ten resolved winning tokens, unredeemed, missing from the listing
+    left the kill reporting flat. A listing's omission is no evidence of redemption."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 0)})
+    rt, server = live_world(fake=fake)
+    buy(rt, server, collateral_decision(rt), price="0.45")
+    polymarket.tick(rt)
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    polymarket.tick(rt)
+    server.hidden_positions = {token(server)}  # (the fake redeems at once; it is hidden)
+    rt.polymarket._account_memo = None
+    report = polymarket.wind_down(rt)
+    assert report["exposure_state"] == "wind_down_pending"
+    assert [p["size"] for p in report["residual"]] == ["10"]

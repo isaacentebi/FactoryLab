@@ -26850,7 +26850,7 @@
     "factorylab/runtime/compute.py": "4c9505ade970688c7fe540b07f110344ac405504294a156ffe3436bfb7e51814",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
-    "factorylab/runtime/polymarket.py": "88db7abc6978a35e6825d0aa29dce18f5bfa90e129ce27339c7e5d1b30cad628",
+    "factorylab/runtime/polymarket.py": "f28dec1e49649d6bee45b7705ad247f1a2cf73c580a5756be4d3a9a9e2a28227",
     "factorylab/runtime/propensity.py": "488c4992bdb4707ff1f2c64549995c629e8f55909dde38822ce9f5132fc00280",
     "factorylab/runtime/routing.py": "267b781ce62203279e17544891bf27c654e4c344e46f337528ca52cbb5b091c6",
     "factorylab/runtime/subscriptions.py": "2c096e82698cc03a7f5d7af70942b522b29a00c26611bb2830a0078456d93a6c",
