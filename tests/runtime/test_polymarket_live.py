@@ -25,7 +25,7 @@ from factorylab.world import polymarket_clob as clob
 from tests.helpers import collateral_decision
 from tests.runtime.test_loop import _consequence_runtime
 from tests.runtime.test_polymarket_surface import still_fake
-from tests.world.fake_clob import FakeClob, _Wall, make_signer
+from tests.world.fake_clob import OTHER, FakeClob, _Wall, make_signer
 
 
 def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None,
@@ -145,9 +145,11 @@ def test_the_pot_cannot_be_spent_twice():
     assert len(posts) == 1
 
 
-def test_a_manifest_pot_above_its_principal_cap_is_refused():
-    with pytest.raises(ValueError, match="exceeds polymarket.principal_usd"):
-        PolymarketSpec(enabled=True, collateral_micro=50_000_000, principal_micro=40_000_000)
+def test_a_simulated_pot_may_open_above_its_lifetime_commitment_cap():
+    """Sol P2 (round 7) on #177: the cap bounds signed commitments, not what the pot
+    holds, so a $50 simulated pot under a $3 cap loads, as the live one does."""
+    spec = PolymarketSpec(enabled=True, collateral_micro=50_000_000, principal_micro=3_000_000)
+    assert spec.collateral_micro > spec.principal_micro
 
 
 def test_a_lost_answer_is_recovered_by_hash_and_never_resent():
@@ -227,7 +229,7 @@ def test_a_fill_is_booked_once_when_confirmed_and_never_past_its_order():
     # booked to the pot, owned by no decision.
     server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED",
                            "match_time": signed_s(rt, order_id),
-                           "taker_order_id": "0xother", "size": "5", "price": "0.40",
+                           "taker_order_id": OTHER, "side": "SELL", "size": "5", "price": "0.40",
                            "maker_orders": [{"order_id": order_id, "matched_amount": "5",
                                              "price": "0.40", "side": "BUY"}]}]
     before = dict(rt.venue_deltas.get(handle, {}))
@@ -245,7 +247,8 @@ def test_unattributed_custody_is_what_no_return_owns_and_the_books_close():
     order_id = maker_fill(rt, server, handle)["order_id"]  # 10 at 0.40
     polymarket.tick(rt)
     server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED",
-                           "match_time": signed_s(rt, order_id), "taker_order_id": "0xo",
+                           "match_time": signed_s(rt, order_id), "taker_order_id": OTHER,
+                           "side": "SELL",
                            "size": "5", "price": "0.40", "maker_orders": [
                                {"order_id": order_id, "matched_amount": "5",
                                 "price": "0.40", "side": "BUY"}]}]
@@ -932,7 +935,8 @@ def test_a_cancelled_order_s_failed_legs_are_netted_before_it_is_confirmed():
     server.fake._all_orders[pm]["filled"] = Decimal(5)  # the venue matched 5 ...
     server.fake._all_orders[pm]["remaining"] = Decimal(5)
     server.extra_fills = [{"id": "t-failed", "status": "FAILED",  # ... and the leg failed
-                           "match_time": signed_s(rt, order_id), "taker_order_id": "0xo",
+                           "match_time": signed_s(rt, order_id), "taker_order_id": OTHER,
+                           "side": "SELL",
                            "size": "5", "price": "0.30", "maker_orders": [
                                {"order_id": order_id, "matched_amount": "5",
                                 "price": "0.30", "side": "BUY"}]}]
@@ -961,7 +965,7 @@ def test_every_live_order_is_post_only_and_one_that_would_cross_is_refused_by_th
 
     rt.polymarket.venue.target.send = watch
     crossing = buy(rt, server, collateral_decision(rt), price="0.45")  # the ask is 0.41
-    assert crossing["status"] == "rejected" and "order crosses book" in crossing["error"]
+    assert crossing["status"] == "rejected" and "crosses the book" in crossing["error"]
     assert server.fake._all_orders == {}
     assert buy(rt, server, collateral_decision(rt), price="0.30")["status"] == "resting"
     assert [p["postOnly"] for p in posted] == [True, True]
@@ -1020,6 +1024,7 @@ def test_a_trade_that_contradicts_the_maker_only_venue_halts_buying():
     order_id = buy(rt, server, collateral_decision(rt))["order_id"]
     server.extra_fills = [{"id": "t-x", "status": "CONFIRMED",
                            "match_time": signed_s(rt, order_id), "taker_order_id": order_id,
+                           "side": "BUY",
                            "size": "10", "price": "0.30", "fee_rate_bps": "500",
                            "maker_orders": []}]
     polymarket.tick(rt)
@@ -1048,7 +1053,8 @@ def test_a_discovered_partial_cancel_releases_its_unfilled_liability():
     pm = server.orders[order_id]["pm"]
     server.fake._all_orders[pm].update(filled=Decimal(5), remaining=Decimal(5))
     server.trades.append({"id": "t-5", "status": "CONFIRMED",
-                          "match_time": signed_s_of(intent), "taker_order_id": "0xo",
+                          "match_time": signed_s_of(intent), "taker_order_id": OTHER,
+                          "side": "SELL",
                           "size": "5", "price": "0.30", "maker_orders": [
                               {"order_id": order_id, "matched_amount": "5",
                                "price": "0.30", "side": "BUY"}]})
@@ -1067,7 +1073,7 @@ def _partial(rt, server, order_id, *, status="CONFIRMED", trade_id="t-5", size="
     server.fake._all_orders[pm].update(filled=Decimal(size),
                                        remaining=Decimal(10) - Decimal(size))
     row = {"id": trade_id, "status": status, "match_time": signed_s(rt, order_id),
-           "taker_order_id": "0xo", "size": size, "price": "0.30", "maker_orders": [
+           "taker_order_id": OTHER, "side": "SELL", "size": size, "price": "0.30", "maker_orders": [
                {"order_id": order_id, "matched_amount": size, "price": "0.30",
                 "side": "BUY"}]}
     server.trades.append(row)
@@ -1097,23 +1103,6 @@ def test_a_terminal_read_back_without_its_matched_size_erases_no_outlay():
     assert again["error"] == polymarket.PRINCIPAL_REFUSAL
 
 
-def test_a_read_back_missing_or_contradicting_its_matched_size_is_unknown():
-    venue = SimpleNamespace(_l2=None)
-    for answer in ({"id": "0xa", "status": "CANCELED", "original_size": "10"},
-                   {"id": "0xa", "status": "MATCHED", "original_size": "10",
-                    "size_matched": "4"},
-                   {"id": "0xa", "status": "CANCELED", "original_size": "10",
-                    "size_matched": "11"},
-                   {"id": "0xa", "status": "CANCELED", "size_matched": "5"}):
-        venue._l2 = lambda *_a, answer=answer, **_k: answer
-        read = clob.LivePolymarket.lookup(venue, "c", order_id="0xa")
-        assert read["status"] == "uncertain", answer
-    venue._l2 = lambda *_a, **_k: {"id": "0xa", "status": "CANCELED",
-                                   "original_size": "10", "size_matched": "5"}
-    read = clob.LivePolymarket.lookup(venue, "c", order_id="0xa")
-    assert (read["status"], read["filled_size"]) == ("cancelled", "5")
-
-
 def test_the_cap_is_every_signed_commitment_but_an_outright_refusal():
     """Whatever became of a placement, its size x limit stays committed; only the
     venue's outright refusal of the submission frees it."""
@@ -1138,6 +1127,7 @@ def test_a_taker_leg_at_any_trade_status_halts_buying(status):
     order_id = buy(rt, server, collateral_decision(rt))["order_id"]
     server.trades.append({"id": "t-x", "status": status,
                           "match_time": signed_s(rt, order_id), "taker_order_id": order_id,
+                          "side": "BUY",
                           "size": "10", "price": "0.30", "maker_orders": []})
     polymarket.tick(rt)
     assert rt.polymarket.contradicted
@@ -1225,13 +1215,13 @@ def test_a_venue_row_missing_a_quantity_is_unread_never_zero():
     venue = rt.polymarket.venue.target
     server.order_answer = lambda answer: {k: v for k, v in answer.items()
                                           if k != "size_matched"}
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         venue.account()
     server.order_answer = None
     server.fake._positions[token(server)] = {"size": Decimal(5), "avg_px": Decimal("0.3")}
     server.position_row = lambda position: {k: v for k, v in position.items()
                                             if k != "avgPrice"}
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         venue.account()
     polymarket.tick(rt)  # a new tick reads the pot afresh
     refused = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
@@ -1291,7 +1281,8 @@ def test_a_malformed_row_never_discards_a_contradiction_found_beside_it():
     row = _partial(rt, server, order_id)
     row["maker_orders"][0]["fee_rate_bps"] = "500"
     server.trades.append({"id": "t-bad", "status": "FAILED",
-                          "match_time": signed_s(rt, order_id), "taker_order_id": "0xo",
+                          "match_time": signed_s(rt, order_id), "taker_order_id": OTHER,
+                          "side": "SELL",
                           "size": "1", "price": "0.30", "maker_orders": [
                               {"order_id": order_id, "matched_amount": "garbage",
                                "price": "0.30", "side": "BUY"}]})
@@ -1331,3 +1322,107 @@ def test_a_placement_the_budget_cannot_send_is_refused_before_it_is_signed():
         assert polymarket.principal_at_risk(rt.polymarket) == 0
     finally:
         clob.order_signature = sign
+
+
+# --- Sol's round-7 review of #177, each scenario as a regression --------------------------
+
+
+def test_a_refusal_mixing_a_duplicate_keeps_the_commitment_and_the_target():
+    """#1: the venue accepts a $3 buy, then answers 400 with a duplicate beside a balance
+    error. That proves nothing: the order is uncertain, counted, and a cancel target."""
+    rt, server = live_world(principal="3")
+    server.post_error = clob.ClobHttpError(
+        400, {"error": "Duplicated", "detail": "not enough balance / allowance"})
+    result = buy(rt, server, collateral_decision(rt))
+    server.post_error = None
+    assert result["status"] != "rejected" and "venue_refused" not in result
+    assert polymarket.principal_at_risk(rt.polymarket) == Decimal(3)
+    again = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+                price="0.20")
+    assert again["error"] == polymarket.PRINCIPAL_REFUSAL
+    (placed,) = [i for i in rt.polymarket.intents.values()
+                 if i["operation"] == "polymarket.place_limit"]
+    assert placed["order_hash"] in polymarket._live_targets(rt.polymarket)
+
+
+@pytest.mark.parametrize("shape", ["null row", "null maker leg"])
+def test_a_malformed_row_type_never_erases_a_contradiction_beside_it(shape):
+    """#2: ``[null, charged own trade]`` or ``maker_orders=[null, charged leg]``: the read
+    is unread, and the halt found before parsing stands."""
+    rt, server = live_world()
+    order_id = buy(rt, server, collateral_decision(rt))["order_id"]
+    row = _partial(rt, server, order_id)
+    row["maker_orders"][0]["fee_rate_bps"] = "500"
+    if shape == "null row":
+        server.trades_rows = lambda rows: [None, *rows]
+    else:
+        row["maker_orders"].insert(0, None)
+    polymarket.tick(rt)
+    assert rt.polymarket.contradicted and order_id not in rt.polymarket.filled
+    refused = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+                  price="0.20")
+    assert refused["error"] == polymarket.MAKER_ONLY_REFUSAL
+
+
+@pytest.mark.parametrize("variant", ["upper taker", "upper charged maker", "feeRateBps"])
+def test_hash_case_and_fee_spelling_never_hide_a_contradiction(variant):
+    """#3: an upper-cased hash, or a fee under another key, still halts buying."""
+    rt, server = live_world()
+    order_id = buy(rt, server, collateral_decision(rt))["order_id"]
+    upper = "0x" + order_id[2:].upper()
+    if variant == "upper taker":
+        server.trades.append({"id": "t-x", "status": "MATCHED",
+                              "match_time": signed_s(rt, order_id), "taker_order_id": upper,
+                              "side": "BUY", "size": "10", "price": "0.30",
+                              "maker_orders": []})
+    else:
+        row = _partial(rt, server, order_id)
+        leg = row["maker_orders"][0]
+        leg["order_id"] = upper if variant == "upper charged maker" else order_id
+        leg["feeRateBps" if variant == "feeRateBps" else "fee_rate_bps"] = "500"
+    polymarket.tick(rt)
+    assert rt.polymarket.contradicted
+    refused = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+                  price="0.20")
+    assert refused["error"] == polymarket.MAKER_ONLY_REFUSAL
+
+
+def test_a_contradictory_acknowledgement_keeps_its_order_a_cancel_target():
+    """#4: ``success: false`` with a balance error, this order's id and ``status: live``,
+    while the order rests. It is uncertain; the kill cancels it though the listing lags."""
+    rt, server = live_world()
+    server.post_answer = lambda answer: {**answer, "success": False,
+                                         "errorMsg": "not enough balance / allowance"}
+    result = buy(rt, server, collateral_decision(rt))
+    server.post_answer = None
+    assert result["status"] != "rejected"
+    server.orders_lag = True
+    rt.polymarket._account_memo = None
+    polymarket.wind_down(rt)
+    assert ("DELETE", "/order") in server.calls and server.fake._orders == {}
+
+
+@pytest.mark.parametrize("paid", ["1.40", "0.50", "-0.30"])
+def test_an_impossible_fill_price_is_never_booked(paid):
+    """#5: a maker leg of this world's at $1.40, above its signed $0.30 limit, or below 0:
+    the page is malformed, nothing is booked and the cursor stays."""
+    rt, server = live_world()
+    order_id = buy(rt, server, collateral_decision(rt))["order_id"]
+    row = _partial(rt, server, order_id)
+    row["maker_orders"][0]["price"] = paid
+    before = json.loads(json.dumps(rt.polymarket.cursor))
+    polymarket.tick(rt)
+    assert order_id not in rt.polymarket.filled
+    for key in ("seen", "book", "booked", "after", "failed"):
+        assert rt.polymarket.cursor.get(key) == before.get(key), key
+
+
+def test_money_the_books_do_not_explain_halts_buying_whichever_way_it_moved():
+    """Architect's decision on Sol's round-7 review: unexplained money in either
+    direction means the books are wrong."""
+    rt, server = live_world()
+    server.fake._cash += Decimal(10)  # money arrived that no fill or payout explains
+    polymarket.tick(rt)
+    assert rt.polymarket.drifting
+    refused = buy(rt, server, collateral_decision(rt))
+    assert refused["error"] == polymarket.DRIFT_REFUSAL

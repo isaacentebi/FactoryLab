@@ -2413,9 +2413,9 @@ venue's writes. The keys, all fixed for the world's life:
 |---|---|---|
 | `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
 | `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes, with the live venue's order physics: every order is post-only, so a buy at or above the best ask is rejected before it executes (`invalid post-only order: order crosses book`), a resting buy fills at its own price once the walking ask meets it, and no fill is charged a fee (its listing states no fee schedule). A resolution pays nothing into spendable USDC: the tokens stay in the pot, resolved and worth their payout, as on the live venue, until a redemption neither venue makes by itself. The tools and the `world.read` order section render the same on both venues apart from the venue's name and `live_orders`. `live`: the public Gamma and CLOB read APIs, and with `orders = true` signed orders on the CLOB (`world/polymarket_clob.py`, `LivePolymarket`; "Live orders" below) |
-| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (a live pot is what its wallet holds) and above `principal_usd` |
+| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (a live pot is what its wallet holds); it may exceed `principal_usd`, which bounds signed commitments, never what the pot holds |
 | `orders` | `false` | live orders: registers the pot, its two reads and its two writes on the live venue. Refused with `venue = "fake"` (which always takes writes); requires `funder` and `principal_usd`; admitted only in the world named `funded`, under the same gate as a mainnet venue (`exchange.client_namespace`, the ratified charter and roster digests, `charter.launch`), because Polymarket's one network, Polygon, is real money |
-| `principal_usd` | absent | the cap on the world's lifetime signed commitments: `size x limit price` of every placement the world ever signed, forever (`principal_at_risk`). Nothing gives room back: no cancel, terminal read-back, matched size, failed leg, quarantine, resolution, payout or redemption, and no venue response field enters it. The one exception is an order the venue refused outright, an explicit 4xx error body answering its submission (the simulated venue's rejection is the same evidence): it never existed. A timeout, a 5xx, a 4xx that states nothing or a malformed acknowledgement counts in full, and the order stays uncertain and a cancellation target. A buy that would take the commitment past the cap is refused before any intent ("the polymarket pot holds more principal than [polymarket] principal_usd"); a cancellation never is. No wallet balance and no listing enters it, so nobody's deposit, withdrawal or omission makes room. Positive exact USD |
+| `principal_usd` | absent | the cap on the world's lifetime signed commitments: `size x limit price` of every placement the world ever signed, forever (`principal_at_risk`). Nothing gives room back: no cancel, terminal read-back, matched size, failed leg, quarantine, resolution, payout or redemption, and no venue response field enters it. The exceptions are orders that never existed: one the venue refused outright with a documented 4xx refusal (`polymarket_wire.refusal`; the simulated venue's rejection is the same evidence), and one refused locally before it was signed, because the request budget could not send it. A timeout, a 5xx or any other answer counts in full, and the order stays uncertain and a cancellation target. A buy that would take the commitment past the cap is refused before any intent ("the polymarket pot holds more principal than [polymarket] principal_usd"); a cancellation never is. No wallet balance and no listing enters it, so nobody's deposit, withdrawal or omission makes room. Positive exact USD |
 | `funder` | absent | the pot's wallet (lower-case 0x address), the orders' maker and the Data API's `user` |
 | `signature_type` | `0` | how the exchange verifies the pot's signature: 0 EOA (the key's own address must be `funder`), 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (a Deposit Wallet) |
 | `order_requests_per_10s` | `60` | the pot's own requests (orders, cancels, lookups, fills, its account, held tokens' marks and a write's market read) per sliding 10 s of wall time, each counted before it is sent; one past it is not sent. A resumed pot counts its whole allowance as sent at the resume, since the process that died may have sent it in its last 10 s. At most 200 (`/balance-allowance`'s published limit, the tightest endpoint these reach besides Gamma `/markets`), and with `orders`, `read_requests_per_10s + order_requests_per_10s` is at most 300, Gamma `/markets`' |
@@ -2644,18 +2644,30 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   order a durable intent names, rebuilt to that hash (`intent_of`); anything else is
   refused and nothing is sent. A kill's cancellations are intents too.
 * **Threat model.** The venue may be buggy, malformed, lagging or contradictory; the
-  operator is honest. So no venue answer is trusted where it would give principal room
-  (the cap counts every signed placement but an explicit refusal), a quantity the venue
+  operator is honest. So every answer the pot reads passes one door
+  (`world/polymarket_wire.py`): it is parsed against its documented shape (required
+  fields of exact types, hashes and addresses `0x` hex of their length and lower-cased
+  once, prices strictly inside (0, 1), sizes positive, statuses documented, a leg of
+  this world's a BUY at no more than its signed limit, no row that is not an object),
+  and one that does not conform is malformed whole: a read is unread (its cursor does
+  not move), an acknowledgement uncertain. No venue answer is trusted where it would
+  give principal room (the cap counts every signed placement but a documented refusal), a quantity the venue
   does not state is unknown and never 0, and a trade row of this world's that reports
   it as a taker or states a fee on it halts buying: the rows are scanned before any is
   parsed, and the halt is kept apart from the poll's cursor, so a malformed row read
-  beside it cannot erase it. Rows are scanned as the fill read returns them; a fee
-  disclosed later on a trade no longer read is caught by what it does to the pot: a
-  fee actually charged lowers the balance, the reconciliation drifts below zero and
-  buying stops. A deposit that exactly masks a hidden fee is out of scope.
-* **Uncertain, never resent.** A 5xx, a timeout, a lost answer, a 4xx that states no
-  error, an acknowledgement without an explicit `success`, `Duplicated`, `matched`
-  or `delayed` is uncertain, and resolved by `GET /data/order/{hash}`, polled at most
+  beside it cannot erase it; the scan matches this world's hashes in any case and
+  reads any key whose name contains "fee" holding anything but `0` or `"0"` as a
+  charge. Rows are scanned as the fill read returns them; a fee disclosed later on a
+  trade no longer read is caught by what it does to the pot: a fee actually charged
+  lowers the balance, the reconciliation drifts and buying stops. Money the books do
+  not explain halts buying whichever way it moved. A deposit that exactly masks a hidden fee is out of scope.
+* **Uncertain, never resent.** A placement's answer is `resting` only for a clean
+  acknowledgement (`success: true`, no error, this hash, `status: live`) and
+  `rejected` only for a documented refusal (`polymarket_wire.REFUSALS`, from
+  resources/error-codes: a 4xx whose body is exactly `{"error": text}`, the text one of
+  the documented refusals naming no other order, never a duplicate). Anything else, a
+  5xx, a timeout, a lost answer, `success: false`, `Duplicated`, `matched` or
+  `delayed`, is uncertain, and resolved by `GET /data/order/{hash}`, polled at most
   `UNCERTAIN_ORDER_POLLS` times; an order the CLOB does not know is uncertain, never
   rejected. A process death between `polymarket.place` (or `polymarket.cancel`) and its
   answer resumes with the call uncertain (`RecoveryJournal.call`), never resent. Every
@@ -2687,8 +2699,8 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   collateral also count every buy placement not yet booked from a CONFIRMED trade (its
   price on what it may still fill or has matched) and the booked
   inventory at cost; the positions listing is read page by page to an empty page (or the
-  pot is unavailable); and no buy is taken while the last reconciliation found money
-  gone that the books do not explain (`polymarket.drift` below zero; no
+  pot is unavailable); and no buy is taken while the last reconciliation found money,
+  gone or arrived, that the books do not explain (`polymarket.drift` either way; no
   allowance is made, so a real rounding mismatch shows as drift too). The reconciliation is
   against the custodian's own listing, never the larger of it and the world's book: a
   cost basis booked too high shows as drift, and a listing that lags holds new risk

@@ -224,7 +224,8 @@ class PolymarketSurface:
         # The live venue's fill and resolution cursor (``LivePolymarket.poll``): carried
         # in, returned, checkpointed, so a replay reads what the run read.
         self.cursor: dict[str, Any] = {}
-        # Whether the last reconciliation found money gone that the books do not explain
+        # Whether the last reconciliation found money, gone or arrived, the books do not
+        # explain
         # (live orders): no new risk until it agrees again.
         self.drifting = False
         # A trade that contradicted the maker-only venue (a taker leg, a fee):
@@ -324,6 +325,8 @@ def install(rt: Any) -> None:
     if live:
         # Chapter II §II.b: no order leaves this process without its durable intent.
         target.intent_of = lambda client_id: rt.polymarket.intents.get(client_id)
+        # An order read back is checked against the order this world signed.
+        target.order_of = lambda order_id: _signed(rt.polymarket, order_id)
     # registration -> [[wall ns, requests]] of its reads (and claim lookups) in the
     # sliding 10 s, each at the instant its last request was sent (``wall_now``).
     rt.polymarket_read_use = {}
@@ -1190,17 +1193,20 @@ def principal_at_risk(surface: PolymarketSurface) -> Decimal:
     commitments, ``size x limit`` of every placement the world ever signed, forever.
     Nothing gives room back: no cancel, terminal read-back, matched size, failed leg,
     quarantine or resolution, and no venue response field is trusted for it. The one
-    exception is a submission the venue refused outright (``venue_refused``: an explicit
-    4xx error body answering the POST, or the simulated venue's rejection): that order
-    never existed. A timeout, a 5xx or a malformed answer counts in full.
+    exceptions are orders that never existed: a submission the venue refused outright
+    (``venue_refused``: a documented 4xx refusal answering the POST, ``wire.refusal``, or
+    the simulated venue's rejection), and one refused locally before it was signed
+    (``unsigned``: the budget could not send it). A timeout, a 5xx or a malformed answer
+    counts in full.
     """
     return sum((Decimal(str(intent["args"]["size"])) * Decimal(str(intent["args"]["price"]))
                 for intent in surface.intents.values()
                 if intent["operation"] == "polymarket.place_limit"
-                and not intent["result"].get("venue_refused")), Decimal(0))
+                and not intent["result"].get("venue_refused")
+                and not intent["result"].get("unsigned")), Decimal(0))
 
 
-#: The pot does not agree with its custodian: money left it that its books do not explain.
+#: The pot does not agree with its custodian: money its books do not explain.
 DRIFT_REFUSAL = "the polymarket pot does not reconcile with its custodian"
 
 
@@ -1539,6 +1545,16 @@ def tick(rt: Any) -> None:
     reconcile(rt)
 
 
+def _signed(surface: PolymarketSurface, order_id: str) -> tuple[Decimal, Decimal] | None:
+    """The (size, limit) this world signed for an order hash, from its intent, or None."""
+    wanted = str(order_id).lower()
+    for intent in surface.intents.values():
+        if (intent["operation"] == "polymarket.place_limit"
+                and str(intent.get("order_hash") or "").lower() == wanted):
+            return Decimal(str(intent["args"]["size"])), Decimal(str(intent["args"]["price"]))
+    return None
+
+
 def _halt_on_contradiction(rt: Any, surface: PolymarketSurface,
                            found: dict[str, str]) -> None:
     """Halt buying for the world's life on any trade leg the poll found contradicting the
@@ -1858,10 +1874,12 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
               "held_at_cost": str(held), "drift": str(drift)}
     if abs(drift) > Decimal("0.000001"):
         rt.ledger.append({"kind": "polymarket.drift", **result, "ts": rt.clock.now_ns})
-    # Astra P1 on #177: money gone that the books do not explain leaves the pot's
-    # reconciliation unknown, and new exposure waits on it. No allowance is made (Sol
-    # P1: a blanket one hid real losses); a drift is never booked as a fee (Codex P1).
-    surface.drifting = drift < Decimal("-0.000001")
+    # Astra P1 on #177: money the books do not explain, gone or arrived, leaves the
+    # pot's reconciliation unknown, and new exposure waits on it (architect's decision
+    # on Sol's round-7 review: unexplained money in either direction means the books
+    # are wrong). No allowance is made (Sol P1: a blanket one hid real losses); a drift
+    # is never booked as a fee (Codex P1).
+    surface.drifting = abs(drift) > Decimal("0.000001")
     return result
 
 

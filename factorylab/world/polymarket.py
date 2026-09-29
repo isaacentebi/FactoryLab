@@ -744,7 +744,7 @@ class FakePolymarket:
             return self.lookup(client_id)
 
         def reject(reason: str) -> dict[str, Any]:
-            # The venue's refusal of the submission, as the live venue's explicit 4xx:
+            # The venue's refusal of the submission, as the live venue's documented 4xx:
             # the order never existed.
             result = {"order_id": None, "status": "rejected", "filled_size": "0",
                       "avg_px": None, "error": reason, "venue_refused": True}

@@ -174,7 +174,7 @@ def test_an_order_rests_or_is_read_back_by_its_hash_never_by_its_ack():
     venue.intent_of = {"c-2": crossing}.get
     # Post-only: an order that would cross the 0.41 ask is rejected by the venue.
     answer = _place(venue, token, price="0.45", client_id="c-2")
-    assert answer["status"] == "rejected" and "order crosses book" in answer["error"]
+    assert answer["status"] == "rejected" and "crosses the book" in answer["error"]
     server.match()  # the resting order fills as a maker
     looked = venue.lookup("c-1", order_id=intent["order_hash"])
     assert looked["status"] == "filled" and looked["filled_size"] == "10"
@@ -199,7 +199,9 @@ def test_a_lost_answer_is_looked_up_and_a_repeat_is_never_a_second_order():
 
 @pytest.mark.parametrize("failure,status", [
     (clob.ClobHttpError(503), "uncertain"), (PolymarketUnavailable("transport"), "uncertain"),
-    (clob.ClobHttpError(400, "price breaks the market's tick"), "rejected")])
+    (clob.ClobHttpError(400, {"error": "invalid post-only order: order crosses book"}),
+     "rejected"),
+    (clob.ClobHttpError(400, {"error": "invalid signature"}), "uncertain")])
 def test_what_an_order_answer_proves(failure, status):
     venue, server = live_venue()
     token, intent = _intent(venue, server, "c-1", price="0.30")
@@ -278,7 +280,8 @@ def test_a_fill_of_another_order_is_not_this_worlds():
     _place(venue, token)
     server.match()
     server.extra_fills = [{"id": "t-x", "status": "CONFIRMED", "match_time": "5",
-                           "taker_order_id": "0x" + "cd" * 32, "size": "99", "price": "0.5",
+                           "taker_order_id": "0x" + "cd" * 32,
+                           "side": "SELL", "size": "99", "price": "0.5",
                            "maker_orders": []}]
     events = venue.poll(now_ns=1, cursor={}, orders=_orders(intent, token))["events"]
     assert [e["order_id"] for e in events] == [intent["order_hash"]]
@@ -340,7 +343,8 @@ def test_a_trade_listed_late_is_read_and_nothing_is_booked_twice():
     assert len(first["events"]) == 1
     # A second leg of the order, matched earlier but listed only now, inside the overlap.
     server.extra_fills = [{"id": "t-late", "status": "MATCHED", "match_time": "4800",
-                           "taker_order_id": "0x" + "cd" * 32, "size": "1", "price": "0.4",
+                           "taker_order_id": "0x" + "cd" * 32,
+                           "side": "SELL", "size": "1", "price": "0.4",
                            "maker_orders": [{"order_id": intent["order_hash"],
                                              "matched_amount": "0", "price": "0.45",
                                              "side": "BUY"}]}]
@@ -361,7 +365,8 @@ def test_more_trade_pages_than_one_poll_reads_are_read_over_several_polls():
     server.page_size = 2
     pages = clob.MAX_TRADE_PAGES + 1
     server.trades = [{"id": f"t-{n}", "status": "CONFIRMED", "match_time": str(100 + n),
-                      "taker_order_id": "0x" + "cd" * 32, "size": "0.5", "price": "0.3",
+                      "taker_order_id": "0x" + "cd" * 32,
+                      "side": "SELL", "size": "0.5", "price": "0.3",
                       "maker_orders": [{"order_id": intent["order_hash"],
                                         "matched_amount": "0.5", "price": "0.3",
                                         "side": "BUY"}]}
@@ -425,7 +430,8 @@ def test_the_fake_verifies_a_deposit_wallet_order_and_refuses_a_wrong_owner():
     stranger.send = FakeClob(server.fake, owners={wallet: owner.address})
     token = _signed_intent(stranger, server)
     refused = _place(stranger, token, price="0.30")
-    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    # An undocumented refusal proves nothing: uncertain, never a freed commitment.
+    assert refused["status"] == "uncertain" and "HTTP 400" in refused["error"]
 
 
 @pytest.mark.parametrize("signature_type", [0, 3])
@@ -442,7 +448,8 @@ def test_a_corrupted_signature_is_refused_by_the_venue(monkeypatch, signature_ty
 
     monkeypatch.setattr(clob, "order_signature", corrupted)
     refused = _place(venue, token, price="0.30")
-    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    # An undocumented refusal proves nothing: uncertain, never a freed commitment.
+    assert refused["status"] == "uncertain" and "HTTP 400" in refused["error"]
     assert server.fake._all_orders == {}
 
 
@@ -455,7 +462,8 @@ def test_a_neg_risk_market_s_order_is_signed_for_the_neg_risk_exchange_and_no_ot
     server2.neg_risk_markets = {"fake-1"}
     token = _signed_intent(wrong, server2, neg_risk=False)  # signed for the other exchange
     refused = _place(wrong, token, price="0.30")
-    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    # An undocumented refusal proves nothing: uncertain, never a freed commitment.
+    assert refused["status"] == "uncertain" and "HTTP 400" in refused["error"]
 
 
 def test_a_matched_trade_moves_nothing_and_a_failed_one_leaves_nothing_behind():
@@ -491,13 +499,15 @@ def test_the_fake_refuses_a_corrupted_type_suffix_and_an_unauthorised_proxy_sign
 
     monkeypatch.setattr(clob, "order_signature", suffix_altered)
     refused = _place(venue, token, price="0.30")
-    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    # An undocumented refusal proves nothing: uncertain, never a freed commitment.
+    assert refused["status"] == "uncertain" and "HTTP 400" in refused["error"]
     monkeypatch.setattr(clob, "order_signature", real)
     proxy, server2 = live_venue(signer=make_signer(6), funder=wallet, signature_type=1,
                                 owners={wallet: owner.address})
     token = _signed_intent(proxy, server2)
     refused = _place(proxy, token, price="0.30")
-    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    # An undocumented refusal proves nothing: uncertain, never a freed commitment.
+    assert refused["status"] == "uncertain" and "HTTP 400" in refused["error"]
     authorised, server3 = live_venue(signer=owner, funder=wallet, signature_type=1)
     token = _signed_intent(authorised, server3)
     assert _place(authorised, token, price="0.30")["status"] == "resting"
@@ -508,11 +518,14 @@ def test_what_the_pot_holds_does_not_depend_on_the_order_buys_are_booked_in():
     the poll, page or instant each confirmed buy is read in: no chronology is needed."""
     venue, server = live_venue()
     token = _token(server)
-    orders = {f"0x{n}": {"token_id": token, "side": "buy", "size": "10", "price": price}
+    orders = {f"0x{n:064x}": {"token_id": token, "side": "buy", "size": "10", "price": price}
               for n, price in enumerate(("0.41", "0.61", "0.55"))}
     rows = [{"id": f"t-{n}", "status": "CONFIRMED", "match_time": "100",
-             "taker_order_id": f"0x{n}", "size": "10", "price": price, "fee_rate_bps": "0",
-             "maker_orders": []} for n, price in enumerate(("0.41", "0.61", "0.55"))]
+             "taker_order_id": "0x" + "cd" * 32, "side": "SELL", "size": "10",
+             "price": price, "maker_orders": [
+                 {"order_id": f"0x{n:064x}", "matched_amount": "10", "price": price,
+                  "side": "BUY", "fee_rate_bps": "0"}]}
+            for n, price in enumerate(("0.41", "0.61", "0.55"))]
     venue._credentials()
     books = []
     for order in (rows, rows[::-1], [rows[1]], [rows[2], rows[0]]):
@@ -560,3 +573,38 @@ def test_an_order_over_with_nothing_outstanding_never_pulls_the_read_back():
     orders["0xold"]["open"] = True  # still resting: its fills may yet come
     answer = venue.poll(now_ns=10**12, cursor={"after": 800}, orders=orders)
     assert answer["cursor"]["after"] == 0
+
+
+def test_an_expired_reservation_is_renewed_before_the_order_is_signed():
+    """Sol P2 (round 7) on #177: a slot reserved at admission that has slid out of the
+    budget's window no longer counts the send; it is taken again before signing, and
+    when none is left the placement is refused unsigned, never counted."""
+    clock = {"now": 1_790_000_000_000_000_000}
+    venue, server = live_venue(budget=2, wall=lambda: clock["now"])
+    token, intent = _intent(venue, server, "c-1", price="0.30")
+    venue.intent_of = {"c-1": intent}.get
+    venue._credentials()
+    venue.budget.stamps.clear()
+    venue.reserve_order_slot()
+    clock["now"] += 11 * 10**9  # an honest stall past the 10 s window
+    assert _place(venue, token, price="0.30")["status"] == "resting"
+    window = [s for s in venue.budget.stamps if s > clock["now"] - clock_window()]
+    assert len(window) == 1  # the send counts in the window it was sent in
+    token, second = _intent(venue, server, "c-2", price="0.20")
+    venue.intent_of = {"c-1": intent, "c-2": second}.get
+    venue.reserve_order_slot()
+    clock["now"] += 11 * 10**9
+    venue.budget.stamps = [clock["now"]] * 2  # the budget is spent when it is sent
+    signed = []
+    real = clob.order_signature
+    clob.order_signature = lambda *a, **k: signed.append(1) or real(*a, **k)
+    try:
+        refused = _place(venue, token, price="0.20", client_id="c-2")
+    finally:
+        clob.order_signature = real
+    assert refused["status"] == "rejected" and refused["unsigned"] is True
+    assert signed == []
+
+
+def clock_window():
+    return clob.BUDGET_WINDOW_NS

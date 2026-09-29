@@ -355,9 +355,6 @@ class PolymarketSpec:
         principal = self.principal_micro
         if principal is not None and (type(principal) is not int or principal <= 0):
             raise ValueError("polymarket.principal_usd must be positive exact USD")
-        if principal is not None and self.collateral_micro > principal:
-            # Chapter II §II.b, the hard cast: the pot never opens above its cap.
-            raise ValueError("polymarket.collateral_usd exceeds polymarket.principal_usd")
         from factorylab.world.polymarket_clob import (
             PUBLISHED_ORDER_REQUESTS_PER_10S,
             SIGNATURE_TYPES,

@@ -90,13 +90,13 @@ from decimal import Decimal
 from typing import Any
 from urllib import error, parse, request
 
+from factorylab.world import polymarket_wire as wire
 from factorylab.world.polymarket import (
     MAX_BODY_BYTES,
     PolymarketReader,
     PolymarketRefused,
     PolymarketUnavailable,
     amount_refusal,
-    parse_book,
     payout,
 )
 
@@ -342,15 +342,12 @@ def l2_headers(creds: Credentials, address: str, timestamp: int, method: str, pa
 
 
 class ClobHttpError(RuntimeError):
-    """A CLOB answer outside 2xx. ``status`` is the HTTP status; ``code`` a local reading
-    of the body (never the body itself); ``explicit`` whether the body stated an error
-    (by default, whether it was read as one)."""
+    """A CLOB answer outside 2xx. ``status`` is the HTTP status; ``body`` its parsed JSON
+    (or None), read only by ``polymarket_wire.refusal``, never put in any text."""
 
-    def __init__(self, status: int, code: str | None = None,
-                 explicit: bool | None = None) -> None:
-        super().__init__(f"HTTP {status}" + (f": {code}" if code else ""))
-        self.status, self.code = status, code
-        self.explicit = code is not None if explicit is None else explicit
+    def __init__(self, status: int, body: Any = None) -> None:
+        super().__init__(f"HTTP {status}")
+        self.status, self.body = status, body
 
 
 class _NoRedirect(request.HTTPRedirectHandler):
@@ -359,30 +356,13 @@ class _NoRedirect(request.HTTPRedirectHandler):
         return None
 
 
-#: Venue refusals read out of an answer's body, by what they say, as local reasons.
-REFUSALS = (("tick size", "price breaks the market's tick"),
-            ("lower than the minimum", "size below the market's minimum"),
-            ("not enough balance", "not enough balance / allowance"),
-            ("allowance", "not enough balance / allowance"),
-            ("duplicated", "duplicated"),
-            ("post_only_mode", "the matching engine accepts post-only orders only"),
-            ("closed", "market is closed"),
-            ("crosses book", "post-only order crosses the book"))
-
-
-def refusal_code(body: Any) -> str | None:
-    """A local reason for a venue refusal, read from its body; never the body's text."""
-    text = json.dumps(body).lower() if body is not None else ""
-    return next((reason for needle, reason in REFUSALS if needle in text), None)
-
-
 def http_send(method: str, url: str, headers: dict[str, str], body: str | None,
               timeout_s: int = 10) -> Any:
     """One bounded HTTPS request that returns parsed JSON, or raises locally.
 
     Guarantees at most ``timeout_s`` per socket operation, at most ``MAX_BODY_BYTES``
     read, no redirect followed, numbers parsed as ``Decimal``; a non-2xx answer is a
-    ``ClobHttpError`` carrying its status and a local reason, a transport failure a
+    ``ClobHttpError`` carrying its status and its parsed body, a transport failure a
     ``PolymarketUnavailable``; no body and no header is ever in an error.
     """
     data = None if body is None else body.encode()
@@ -399,9 +379,7 @@ def http_send(method: str, url: str, headers: dict[str, str], body: str | None,
             parsed = None
         finally:
             exc.close()
-        stated = isinstance(parsed, dict) and any(
-            isinstance(parsed.get(k), str) and parsed[k].strip() for k in ("error", "errorMsg"))
-        raise ClobHttpError(exc.code, refusal_code(parsed), stated) from None
+        raise ClobHttpError(exc.code, parsed) from None
     except (error.URLError, TimeoutError, OSError) as exc:
         raise PolymarketUnavailable(f"transport: {type(exc).__name__}") from None
     with response:
@@ -450,51 +428,6 @@ def _dec(value: Any) -> Decimal:
     return number
 
 
-#: The fields of a trade leg that state a fee charged on it (get-trades).
-FEE_FIELDS = ("fee_rate_bps", "fee", "fee_usd", "fees")
-
-
-def scan_contradictions(rows: Any, orders: Any) -> dict[str, str]:
-    """Every leg of this world's in raw trade ``rows`` that contradicts the post-only
-    venue: leg -> why. A leg is the trade's taker, or states a fee that is not a plain
-    zero (an unreadable one is stated). It reads each row as it came, at any settlement
-    status and on every sighting, and never raises: a malformed row beside a
-    contradiction cannot hide it (architect's decision on Sol's round-6 review of #177).
-    """
-    found: dict[str, str] = {}
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        trade = str(row.get("id"))
-        taker = row.get("taker_order_id")
-        if isinstance(taker, str) and taker in orders:
-            found[f"{trade}:{taker}:1"] = "the venue reports this post-only order as a taker"
-        makers = row.get("maker_orders")
-        for maker in makers if isinstance(makers, list) else []:
-            if not isinstance(maker, dict):
-                continue
-            order_id = maker.get("order_id")
-            if isinstance(order_id, str) and order_id in orders and any(
-                    _charged(maker.get(field)) for field in FEE_FIELDS):
-                found[f"{trade}:{order_id}:0"] = "the venue reports a fee on this maker fill"
-    return found
-
-
-def _charged(value: Any) -> bool:
-    """Whether a fee field states a charge: present and not a plain zero."""
-    if value is None or value == "":
-        return False
-    try:
-        return Decimal(str(value)) != 0
-    except (ArithmeticError, ValueError):
-        return True
-
-
-#: The CLOB's order statuses, read as the runtime's.
-ORDER_STATUS = {"LIVE": "resting", "MATCHED": "filled", "CANCELED": "cancelled",
-                "CANCELED_MARKET_RESOLVED": "cancelled", "INVALID": "rejected"}
-
-
 def _redeemable(state: dict[str, Any], token: str, size: Decimal) -> None:
     """Keep what of a resolved token the world held when it was paid: the tokens stay
     in the wallet until redeemed, beside any the funder holds (Codex P2 on #177)."""
@@ -517,8 +450,10 @@ class LivePolymarket(PolymarketReader):
       does not name exactly this order and its hash;
     * an order's identity is its EIP-712 hash, fixed before submission from the
       intent's fields and a salt derived from its identity (``order_identity``);
-    * an answer that did not arrive, a 5xx, a timeout or a ``Duplicated`` refusal is
-      ``uncertain`` and is resolved by ``lookup`` of the hash, never by resending;
+    * every answer is parsed at one door (``polymarket_wire``); an answer that is not a
+      clean acknowledgement or a documented refusal (a 5xx, a timeout, a duplicate,
+      a malformed one) is ``uncertain`` and is resolved by ``lookup`` of the hash,
+      never by resending;
     * a fill is reported once, when its trade is CONFIRMED, and a FAILED trade never.
     """
 
@@ -540,12 +475,15 @@ class LivePolymarket(PolymarketReader):
         self.key_env = key_env
         self._signer = signer
         self._creds: Credentials | None = None
-        # Submission slots taken at admission (``reserve_order_slot``), not yet sent.
-        self._reserved = 0
+        # The stamps of submission slots taken at admission (``reserve_order_slot``),
+        # oldest first, not yet sent.
+        self._reserved: list[int] = []
         #: () -> (namespace, launch nonce): the launch identity folded into every salt.
         self.identity = identity or (lambda: (None, None))
         #: client id -> its durable intent, or None; set by the runtime (``install``).
         self.intent_of = lambda _client_id: None
+        #: order hash -> its signed (size, limit), or None; set by the runtime.
+        self.order_of = lambda _order_id: None
 
     # ---- keys and credentials
 
@@ -585,7 +523,7 @@ class LivePolymarket(PolymarketReader):
         """
         self._credentials()
         self.budget.take()
-        self._reserved += 1
+        self._reserved.append(self.budget.stamps[-1])
 
     def _l2(self, method: str, path: str, *, query: dict | None = None,
             body: Any = None, reserved: bool = False) -> Any:
@@ -609,33 +547,25 @@ class LivePolymarket(PolymarketReader):
 
     def write_market(self, market_id: str) -> dict[str, Any]:
         """One market by id, read for a write's checks or a held token's resolution."""
-        from factorylab.world.polymarket import market_detail
-
         fresh = {self.CACHE_KEY: self.nonce()}
-        detail = market_detail(self._public(
+        return wire.market(self._public(
             f"{self.gamma_url}/markets/{parse.quote(market_id, safe='')}?"
             f"{parse.urlencode(fresh)}"))
-        if detail is None:
-            raise PolymarketUnavailable("market response has no tradable shape")
-        return detail
 
     def write_market_of_token(self, token_id: str) -> dict[str, Any] | None:
         """The market listing ``token_id``, looked up as ``market_of_token`` does."""
-        from factorylab.world.polymarket import market_detail
-
         for closed in ("true", None, "true"):
             query = {k: v for k, v in (("clob_token_ids", token_id), ("closed", closed),
                                        (self.CACHE_KEY, self.nonce())) if v is not None}
             raw = self._public(f"{self.gamma_url}/markets?{parse.urlencode(query)}")
-            for row in raw if isinstance(raw, list) else []:
-                detail = market_detail(row)
-                if detail and any(o["token_id"] == token_id for o in detail["outcomes"]):
+            for detail in wire.markets(raw):
+                if any(o["token_id"] == token_id for o in detail["outcomes"]):
                     return detail
         return None
 
     def mark_book(self, token_id: str) -> dict[str, Any]:
         """A held token's book at depth 1, read for its mark inside the pot's budget."""
-        return parse_book(self._public(
+        return wire.book(self._public(
             f"{self.clob_url}/book?{parse.urlencode({'token_id': token_id})}"), 1)
 
     # ---- orders
@@ -698,15 +628,18 @@ class LivePolymarket(PolymarketReader):
             raise PolymarketRefused("the intent's order does not rebuild to its hash")
         order_id = intent["order_hash"]
         # The submission's slot, taken before anything is signed: the one reserved at
-        # admission, else one now; a spent budget signs nothing.
+        # admission while it still counts in the budget's window, else one now (Sol P2,
+        # round 7: a reservation older than the window no longer counted the send). A
+        # spent budget signs and sends nothing, and the placement is refused locally:
+        # unsigned, it never counts against the cap.
+        stamp = self._reserved.pop(0) if self._reserved else None
         try:
             owner = self._credentials().key
-            if self._reserved:
-                self._reserved -= 1
-            else:
+            if stamp is None or stamp <= int(self.wall()) - BUDGET_WINDOW_NS:
                 self.budget.take()
         except BudgetSpent:
-            return self._rejected(order_id, "polymarket order request budget spent")
+            return {**self._rejected(order_id, "polymarket order request budget spent"),
+                    "unsigned": True}
         signature = order_signature(order, neg_risk, self.signer())
         body = {"order": {"salt": order["salt"], "maker": order["maker"],
                           "signer": order["signer"], "tokenId": order["tokenId"],
@@ -722,53 +655,22 @@ class LivePolymarket(PolymarketReader):
                 "owner": owner, "orderType": "GTC", "postOnly": True, "deferExec": False}
         try:
             answer = self._l2("POST", "/order", body=body, reserved=True)
-        except BudgetSpent:
-            return self._rejected(order_id, "polymarket order request budget spent")
         except ClobHttpError as exc:
-            if 400 <= exc.status < 500 and exc.explicit and exc.code != "duplicated":
-                # The venue's explicit refusal of the submission: the order never
-                # existed, so its commitment is never consumed (architect's decision on
-                # Sol's round-6 review of #177).
-                return {**self._rejected(order_id, exc.code or f"HTTP {exc.status}"),
-                        "venue_refused": True}
-            # A 5xx, a duplicate or a refusal that states nothing proves nothing.
+            reason = wire.refusal(exc.status, exc.body, order_id)
+            if reason is not None:
+                # The venue's documented refusal of the submission: the order never
+                # existed, so its commitment is never consumed (architect's decisions on
+                # Sol's round-6 and round-7 reviews of #177).
+                return {**self._rejected(order_id, reason), "venue_refused": True}
+            # Anything else proves nothing: a 5xx, a duplicate, an undocumented body.
             return {"order_id": order_id, "status": "uncertain",
                     "error": f"order answer: {exc}"}
-        return self._placed(order_id, size, answer)
+        return wire.ack(answer, order_id)
 
     @staticmethod
     def _rejected(order_id: str, reason: str) -> dict[str, Any]:
         return {"order_id": order_id, "status": "rejected", "filled_size": "0",
                 "avg_px": None, "error": reason}
-
-    def _placed(self, order_id: str, size: Decimal, answer: Any) -> dict[str, Any]:
-        if not isinstance(answer, dict):
-            return {"order_id": order_id, "status": "uncertain",
-                    "error": "order answer is not an object"}
-        # Only an explicit ``success: false`` with the venue's reason is a rejection;
-        # a missing or malformed field is uncertain (Sol P1, round 6, on #177), so the
-        # hash stays a cancellation target and is looked up, never forgotten.
-        stated = answer.get("errorMsg")
-        if answer.get("success") is False and isinstance(stated, str) and stated.strip():
-            code = refusal_code(stated)
-            if code == "duplicated":
-                return {"order_id": order_id, "status": "uncertain", "error": "duplicated"}
-            return self._rejected(order_id, code or "rejected by the venue")
-        if answer.get("success") is not True:
-            return {"order_id": order_id, "status": "uncertain",
-                    "error": "order answer states no outcome"}
-        if answer.get("orderID") and str(answer["orderID"]).lower() != order_id.lower():
-            return {"order_id": order_id, "status": "uncertain",
-                    "error": "venue answered another order id"}
-        status = answer.get("status")
-        if status == "live":
-            return {"order_id": order_id, "status": "resting", "filled_size": "0",
-                    "avg_px": None, "error": None}
-        # "matched" says the order took liquidity on arrival; how much of it, and whether
-        # the rest rests, is the order's own status, read back by its hash: an ACK is
-        # never a fill (fills are booked from CONFIRMED trades alone).
-        return {"order_id": order_id, "status": "uncertain",
-                "error": f"order status {str(status)[:20]} is read back by its hash"}
 
     def cancel(self, *, client_id: str, order_id: str) -> dict[str, Any]:
         """Cancel one resting order by its hash; refuses, sending nothing, without an intent."""
@@ -783,20 +685,21 @@ class LivePolymarket(PolymarketReader):
         except ClobHttpError as exc:
             if exc.status >= 500:
                 return {"order_id": order_id, "status": "uncertain", "error": str(exc)}
-            return {"order_id": order_id, "status": "rejected",
-                    "error": exc.code or f"HTTP {exc.status}"}
-        canceled = answer.get("canceled") if isinstance(answer, dict) else None
-        if isinstance(canceled, list) and order_id in canceled:
+            # A cancel refused leaves the order as it was: still a target.
+            return {"order_id": order_id, "status": "rejected", "error": str(exc)}
+        try:
+            outcome, why = wire.cancel_answer(answer, order_id)
+        except wire.Malformed as exc:
+            return {"order_id": order_id, "status": "uncertain", "error": str(exc)}
+        if outcome == "cancelled":
             return self.lookup(client_id, order_id=order_id, cancel=True)
-        refused = answer.get("not_canceled") if isinstance(answer, dict) else None
-        if isinstance(refused, dict) and order_id in refused:
-            return {"order_id": order_id, "status": "rejected",
-                    "error": refusal_code(refused[order_id]) or "order is not resting"}
+        if outcome == "not_canceled":
+            return {"order_id": order_id, "status": "rejected", "error": why}
         return {"order_id": order_id, "status": "uncertain",
-                "error": "cancel answer names neither outcome"}
+                "error": "cancel answer names both outcomes or neither"}
 
-    def lookup(self, client_id: str, *, order_id: str | None = None,
-               cancel: bool = False) -> dict[str, Any]:
+    def lookup(self, client_id: str, *, order_id: str | None = None, cancel: bool = False,
+               signed: tuple[Decimal, Decimal] | None = None) -> dict[str, Any]:
         """What the CLOB holds under an order hash, as the runtime reads an answer.
 
         An order the CLOB does not know (404) or did not answer for is ``uncertain``,
@@ -810,27 +713,18 @@ class LivePolymarket(PolymarketReader):
         except (ClobHttpError, PolymarketUnavailable) as exc:
             return {"order_id": order_id, "status": "uncertain",
                     "error": f"lookup: {type(exc).__name__}"}
-        if not isinstance(answer, dict) or str(answer.get("id", "")).lower() != order_id.lower():
-            return {"order_id": order_id, "status": "uncertain", "error": "order not observed"}
-        status = ORDER_STATUS.get(str(answer.get("status", "")).upper())
-        if status is None:
-            return {"order_id": order_id, "status": "uncertain", "error": "unknown order status"}
-        # What the order matched is the venue's statement or unknown, never 0 (Sol P1 on
-        # #177: an invented 0 erased known outlay): a read-back that omits it, or states
-        # one its own size or status contradicts, proves nothing.
+        # The read-back must be this order as it was signed (``order_of``): an answer
+        # that is not, or that contradicts itself, proves nothing, never 0.
         try:
-            matched, size = _dec(answer["size_matched"]), _dec(answer["original_size"])
-        except (KeyError, ValueError, ArithmeticError):
-            return {"order_id": order_id, "status": "uncertain",
-                    "error": "order read-back states no matched size"}
-        if not 0 <= matched <= size or (status == "filled" and matched != size):
-            return {"order_id": order_id, "status": "uncertain",
-                    "error": "order read-back contradicts its own size"}
+            read = wire.order(answer, expect=order_id,
+                              signed=signed if signed is not None else self.order_of(order_id))
+        except wire.Malformed as exc:
+            return {"order_id": order_id, "status": "uncertain", "error": str(exc)}
+        status, matched = read.status, read.matched
         if cancel:
             status = {"filled": "rejected", "resting": "uncertain"}.get(status, status)
-        price = answer.get("price")
         return {"order_id": order_id, "status": status, "filled_size": str(matched),
-                "avg_px": None if not matched else str(price), "error": None}
+                "avg_px": None if not matched else str(read.price), "error": None}
 
     # ---- the pot
 
@@ -842,69 +736,58 @@ class LivePolymarket(PolymarketReader):
         resolved token's payout, which a held token not yet redeemed is worth.
         """
         observed = int(self.wall())
-        balance = self._l2("GET", "/balance-allowance",
-                           query={"asset_type": "COLLATERAL",
-                                  "signature_type": self.signature_type})
-        usdc = _dec(balance["balance"]) / UNIT
-        orders = self._open_orders()
-        held = sum((_dec(o["price"]) * _dec(o["remaining"]) for o in orders
-                    if o["side"] == "buy"), Decimal(0))
-        rows = self._positions()
+        usdc = wire.balance(self._l2("GET", "/balance-allowance",
+                                     query={"asset_type": "COLLATERAL",
+                                            "signature_type": self.signature_type}))
+        listed = self._open_orders()
+        held = sum((o.price * (o.size - o.matched) for o in listed if o.side == "buy"),
+                   Decimal(0))
         selling: dict[str, Decimal] = {}
-        for order in orders:
-            if order["side"] == "sell":
-                selling[order["token_id"]] = selling.get(order["token_id"], 0) + _dec(
-                    order["remaining"])
+        for o in listed:
+            if o.side == "sell":
+                selling[o.token_id] = selling.get(o.token_id, Decimal(0)) + o.size - o.matched
         positions = []
-        for row in rows if isinstance(rows, list) else []:
-            # A row missing its token, size, cost or outcome is unknown, never 0 (Sol P1
-            # on #177): the pot is then unreadable (``KeyError``), never smaller.
-            token, size = str(row["asset"]), _dec(row["size"])
-            if not token or size <= 0:
+        for row in self._positions():
+            if row.size <= 0:
                 continue
-            position = {"token_id": token, "market_id": (markets or {}).get(token),
-                        "outcome_index": int(row["outcomeIndex"]),
-                        "outcome_name": row.get("outcome"), "size": str(size),
-                        "avg_px": str(_dec(row["avgPrice"])),
-                        "available": str(size - selling.get(token, Decimal(0)))}
-            if resolved and token in resolved:
-                position["payout"] = str(resolved[token])
+            position = {"token_id": row.token_id, "market_id": (markets or {}).get(row.token_id),
+                        "outcome_index": row.outcome_index, "outcome_name": row.outcome_name,
+                        "size": str(row.size), "avg_px": str(row.avg_px),
+                        "available": str(row.size - selling.get(row.token_id, Decimal(0)))}
+            if resolved and row.token_id in resolved:
+                position["payout"] = str(resolved[row.token_id])
             positions.append(position)
         positions.sort(key=lambda p: p["token_id"])
+        orders = [{"order_id": o.order_id, "token_id": o.token_id, "side": o.side,
+                   "price": str(o.price), "size": str(o.size),
+                   "remaining": str(o.size - o.matched)} for o in listed]
         return {"usdc": str(usdc), "usdc_available": str(usdc - held), "positions": positions,
                 "open_orders": orders, "observed_at_ns": observed}
 
-    def _positions(self) -> list[dict[str, Any]]:
+    def _positions(self) -> list[wire.Position]:
         """Every position the Data API lists for the funder, read to the listing's end
         (Astra P1 on #177: one page of 500 could truncate it); a listing longer than the
         page bound is unavailable, never a partial pot."""
-        rows: list = []
+        rows: list[wire.Position] = []
         # The listing ends at an empty page: a server may cap a page below the limit
         # asked for, so a short page is no proof of the end.
         for _ in range(MAX_TRADE_PAGES + 1):
-            batch = self._public(f"{self.data_url}/positions?" + parse.urlencode(
-                {"user": self.funder, "sizeThreshold": "0", "limit": str(POSITIONS_PAGE),
-                 "offset": str(len(rows))}))
-            if not isinstance(batch, list):
-                raise PolymarketUnavailable("positions answer is not a list")
+            batch = wire.positions_page(self._public(
+                f"{self.data_url}/positions?" + parse.urlencode(
+                    {"user": self.funder, "sizeThreshold": "0",
+                     "limit": str(POSITIONS_PAGE), "offset": str(len(rows))})))
             if not batch:
                 return rows
             rows.extend(batch)
         raise PolymarketUnavailable("positions did not fit the page bound")
 
-    def _open_orders(self) -> list[dict[str, str]]:
+    def _open_orders(self) -> list[wire.Order]:
         orders, cursor = [], FIRST_CURSOR
         for _ in range(MAX_TRADE_PAGES):
-            page = self._l2("GET", "/data/orders", query={"next_cursor": cursor})
-            for row in page.get("data", []) if isinstance(page, dict) else []:
-                # An unstated matched size is unknown, never 0: the listing is unread.
-                size, matched = _dec(row["original_size"]), _dec(row["size_matched"])
-                orders.append({"order_id": str(row["id"]), "token_id": str(row["asset_id"]),
-                               "side": "buy" if str(row["side"]).upper() == "BUY" else "sell",
-                               "price": str(_dec(row["price"])), "size": str(size),
-                               "remaining": str(size - matched)})
-            cursor = page.get("next_cursor") if isinstance(page, dict) else END_CURSOR
-            if not cursor or cursor == END_CURSOR:
+            page, cursor = wire.orders_page(self._l2("GET", "/data/orders",
+                                                     query={"next_cursor": cursor}))
+            orders.extend(page)
+            if cursor == END_CURSOR:
                 return orders
         raise PolymarketUnavailable("open orders did not fit the page bound")
 
@@ -951,8 +834,8 @@ class LivePolymarket(PolymarketReader):
             trial = json.loads(json.dumps(state))
             try:
                 found = step(trial)
-            except (PolymarketUnavailable, ClobHttpError, KeyError, TypeError, ValueError,
-                    ArithmeticError, StopIteration):
+            except Exception:  # noqa: BLE001 - an unread step moves no cursor; what the
+                # contradiction scan found is kept whatever failed after it
                 complete = False
                 continue
             state = trial
@@ -980,62 +863,39 @@ class LivePolymarket(PolymarketReader):
         # several polls: what was read is booked (the seen set keeps each leg once), the
         # page to resume at is kept in the cursor and ``after`` does not move until the
         # listing has been read to its end, so no row is skipped (Codex P1 on #177).
-        rows, page_cursor, ended = [], state.get("page", FIRST_CURSOR), False
+        signed = {h: (Decimal(o["size"]), Decimal(o["price"])) for h, o in orders.items()}
+        trades, page_cursor, ended = [], state.get("page", FIRST_CURSOR), False
         for _ in range(MAX_TRADE_PAGES):
             page = self._l2("GET", "/data/trades", query={
                 "maker_address": self.funder, "after": str(state["after"]),
                 "next_cursor": page_cursor})
-            batch = page.get("data", []) if isinstance(page, dict) else []
-            contradictions.update(scan_contradictions(batch, orders))
-            rows.extend(batch)
-            page_cursor = page.get("next_cursor") if isinstance(page, dict) else END_CURSOR
-            if not page_cursor or page_cursor == END_CURSOR:
+            # The raw page is scanned before it is parsed (``wire.scan_contradictions``).
+            contradictions.update(wire.scan_contradictions(page, orders))
+            batch, page_cursor = wire.trades_page(page, signed)
+            trades.extend(batch)
+            if page_cursor == END_CURSOR:
                 ended = True
                 break
         found, pending = [], []
-        for trade in rows:
-            status = str(trade.get("status", "")).upper().removeprefix("TRADE_STATUS_")
-            legs = []
-            if str(trade.get("taker_order_id", "")) in orders:
-                legs.append((str(trade["taker_order_id"]), trade.get("size"),
-                             trade.get("price"), True))
-            for maker in trade.get("maker_orders") or []:
-                if str(maker.get("order_id", "")) in orders:
-                    legs.append((str(maker["order_id"]), maker.get("matched_amount"),
-                                 maker.get("price"), False))
-            if not legs:
-                continue
-            # A trade of this world's is identified and timed by the venue's own
-            # statement, or it is unread (Sol P1 on #177): a missing id would merge two
-            # trades' legs, a missing time rewind the read to the epoch.
-            if trade.get("id") in (None, ""):
-                raise ValueError("a trade of this world's states no id")
-            trade_id, at = str(trade["id"]), int(_dec(trade["match_time"]))
-            # The execution's instant: match_time_nano where the venue states it, else
-            # only its second (Sol P0 on #177: never the trade id's lexical order).
-            nano = trade.get("match_time_nano")
-            try:
-                instant = int(_dec(nano)) if nano not in (None, "") else at * 1_000_000_000
-            except (ValueError, ArithmeticError):
-                instant = at * 1_000_000_000
-            for order_id, size, price, taker in legs:
-                key = f"{trade_id}:{order_id}:{int(taker)}"
+        for trade in trades:
+            for leg in trade.legs:
+                key = f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}"
                 if key in state["seen"]:
                     continue
-                if status == TRADE_FAILED:
+                if trade.status == TRADE_FAILED:
                     # A failed leg never settles; its quantity is kept, so the order's
                     # matched size, once terminal, is released by it (Sol P2 on #177).
-                    state["seen"][key] = at
+                    state["seen"][key] = trade.at
                     failed = state.setdefault("failed", {})
-                    failed[order_id] = str(_dec(failed.get(order_id, "0")) + _dec(size))
+                    failed[leg.order_id] = str(_dec(failed.get(leg.order_id, "0")) + leg.size)
                     continue
-                if status != TRADE_FINAL:
-                    pending.append(at)
+                if trade.status != TRADE_FINAL:
+                    pending.append(trade.at)
                     continue
-                state["seen"][key] = at
-                found.append({"instant": instant, "at": at, "key": key,
-                              "order_id": order_id, "size": _dec(size),
-                              "price": _dec(price)})
+                state["seen"][key] = trade.at
+                found.append({"instant": trade.instant, "at": trade.at, "key": key,
+                              "order_id": leg.order_id, "size": leg.size,
+                              "price": leg.price})
         # Every leg is a post-only buy: what the pot holds of a token and its average
         # cost do not depend on the order legs are booked in, and no fee is charged.
         events = []
@@ -1068,7 +928,7 @@ class LivePolymarket(PolymarketReader):
                     size: Decimal, price: Decimal, at: int) -> dict[str, Any]:
         token = order["token_id"]
         # No fee is ever booked: a post-only maker is never charged, and a leg that
-        # says otherwise halts buying instead (``scan_contradictions``).
+        # says otherwise halts buying instead (``wire.scan_contradictions``).
         held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
         # A buy: the holding grows at its average cost; nothing is realised until the
         # token's resolution pays it.
@@ -1139,7 +999,8 @@ class LivePolymarket(PolymarketReader):
         state["lookup_turn"] = start + 1
         for order_id in [waiting[(start + k) % len(waiting)]
                          for k in range(min(2, len(waiting)))]:
-            answer = self.lookup("", order_id=order_id)
+            answer = self.lookup("", order_id=order_id, signed=(
+                Decimal(orders[order_id]["size"]), Decimal(orders[order_id]["price"])))
             if answer["status"] not in ("cancelled", "filled", "rejected"):
                 continue
             complete = _dec(answer["filled_size"]) <= _dec(

@@ -19,6 +19,9 @@ from eth_account import Account
 from factorylab.world import polymarket_clob as clob
 from factorylab.world.polymarket import FakePolymarket
 
+#: Another order's hash: the taker of a trade this world's order made as a maker.
+OTHER = "0x" + "ee" * 32
+
 
 def make_signer(seed: int = 1) -> clob.Signer:
     """A throwaway signer, derived from a test seed: never a funded key."""
@@ -67,6 +70,8 @@ class FakeClob:
         self.order_answer = None  # rewrites each order row it answers (a field omitted, say)
         self.position_row = None  # rewrites each /positions row
         self.post_answer = None  # rewrites the answer to an executed POST /order
+        self.post_error = None  # raised after a POST /order executed (a lying refusal)
+        self.trades_rows = None  # rewrites the rows of each /data/trades page
 
     # ---- the transport
 
@@ -91,6 +96,8 @@ class FakeClob:
             answer = self._post(json.loads(body))
             if self.post_answer is not None:
                 answer = self.post_answer(answer)
+            if self.post_error is not None:
+                raise self.post_error
             if self.lose_answer:
                 self.lose_answer = False
                 raise clob.PolymarketUnavailable("transport: TimeoutError")
@@ -119,6 +126,8 @@ class FakeClob:
             rows = [t for t in self.trades + self.extra_fills
                     if int(t["match_time"]) > int(query.get("after", "0"))]
             self.extra_fills = []
+            if self.trades_rows is not None:
+                rows = self.trades_rows(rows)
             if self.page_size is None:
                 return {"data": rows, "next_cursor": clob.END_CURSOR}
             # The CLOB's cursor is a base64 offset ("MA==" is 0, "LTE=" is -1, the end).
@@ -229,7 +238,7 @@ class FakeClob:
         except Exception:  # noqa: BLE001 - a signature that does not parse is invalid
             valid = False
         if not valid:
-            raise clob.ClobHttpError(400, "invalid signature")
+            raise clob.ClobHttpError(400, {"error": "invalid signature"})
         return "0x" + bytes(digest).hex()
 
     def _post(self, body: dict) -> dict:
@@ -246,18 +255,19 @@ class FakeClob:
                                                  int(order["takerAmount"]))
             if price >= ask:
                 # "invalid post-only order: order crosses book" (resources/error-codes).
-                raise clob.ClobHttpError(400, "invalid post-only order: order crosses book")
+                raise clob.ClobHttpError(
+                    400, {"error": "invalid post-only order: order crosses book"})
         if digest in self.orders:
-            return {"success": False, "errorMsg": f"order {digest} is invalid. Duplicated.",
-                    "orderID": ""}
+            raise clob.ClobHttpError(400, {"error": f"order {digest} is invalid. Duplicated."})
         if signed["side"] != 0:
-            raise clob.ClobHttpError(400, "the fake takes BUY orders only")
+            raise clob.ClobHttpError(400, {"error": "the fake takes BUY orders only"})
         price, size = clob.order_price_size(int(order["makerAmount"]), int(order["takerAmount"]))
         before = len(self.fake._events)
         result = self.fake.place(client_id=digest, token_id=order["tokenId"],
                                  is_buy=signed["side"] == 0, size=size, price=price)
         if result["status"] == "rejected":
-            return {"success": False, "errorMsg": result["error"], "orderID": ""}
+            # The CLOB's refusal (resources/error-codes): an HTTP 400 {"error": text}.
+            raise clob.ClobHttpError(400, {"error": result["error"]})
         # A trade of an order is matched no earlier than the order was signed.
         self.orders[digest] = {"pm": result["order_id"],
                                "signed_s": int(order["timestamp"]) // 1000}
@@ -300,7 +310,7 @@ class FakeClob:
                    "match_time": str(max(1, event["ts_ns"] // 1_000_000_000,
                                          self.orders[digest]["signed_s"])),
                    "asset_id": event["token_id"], "maker_orders": []}
-            row.update(taker_order_id="0xother", size=event["size"], price=event["px"],
+            row.update(taker_order_id=OTHER, side="SELL", size=event["size"], price=event["px"],
                        fee_rate_bps="0",
                        maker_orders=[{"order_id": digest, "matched_amount": event["size"],
                                       "price": event["px"], "fee_rate_bps": "0",
