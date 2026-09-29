@@ -136,6 +136,33 @@ def test_th1_the_physics_prices_and_never_steers(th1):
     assert readings["S2"].ok and readings["S6"].ok
 
 
+# Per-PR witnesses of what only the long worlds show at the launch physics (soak): the
+# thrash integral held at the cap, and the release to an exact zero.
+
+#: TH-1b's frozen integral: both producers oscillate, and at ``tv_threshold`` 0.05 the
+#: volatility's violation is large and still moving, so the price reaches its bound by
+#: tick ~150 and the next update is taken at it (200 events).
+FROZEN_FAST = {"immune": {"tv_threshold": 0.05}}
+
+
+def test_th1b_at_the_cap_the_thrash_integral_is_held_in_a_short_world():
+    """Red when the thrash integral keeps integrating (or is cut) while the penalty sits
+    at the cap: a mutant that dropped the freeze for the thrash card moved it here."""
+    run = P.run(*P.th1_sustained(changes=FROZEN_FAST), events=200, instrument=False)
+    result = g.th1b2_frozen(run.events, run.manifest)
+    assert result.ok, result.evidence
+    assert result.evidence["held"] >= 1
+
+
+def test_th1e_the_thrash_price_releases_to_exactly_zero_in_a_short_world():
+    """TH-1e on a flip that stops at window 16: the flag clears and the price is an exact
+    0.0 within its kernel-exact release bound. Red under a decay that keeps a floor."""
+    run = P.run(*P.th1(until_window=16, record=True), events=120)
+    result = g.th1e_release(run.events, run.manifest, steady_from=16)
+    assert result.ok, result.evidence
+    assert result.evidence["peak"] > 0 and result.evidence["zero"] is not None
+
+
 # --- TH-2: refactoring faster than the correcting loop -----------------------------------
 
 

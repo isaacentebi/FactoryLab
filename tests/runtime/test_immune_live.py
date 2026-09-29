@@ -111,6 +111,78 @@ def test_the_thrash_price_integrates_the_duration_of_unsettledness_and_leaks_aft
     assert immune.thrash_penalty(rt)["penalty"] == 0
 
 
+def _thrash_window(rt, unsettled):
+    rt.n += 10
+    rt.stats.versions = {"unsettled": unsettled}
+    return immune.thrash_penalty(rt)
+
+
+def _thrash_updates(rt):
+    return [i for i in rt.ledger._recovery_items()
+            if i["kind"] == "price.update" and i["card_id"] == immune.THRASH_CARD]
+
+
+def _thrash_at_cap(rt):
+    """Drive the thrash price to its cap at a steady unsettledness of 0.9."""
+    cap = rt.m.prices.penalty_cap
+    for _ in range(60):
+        if _thrash_window(rt, 0.9)["penalty"] >= cap:
+            return
+    raise AssertionError("the thrash penalty never reached the cap")
+
+
+def test_at_the_cap_the_thrash_integral_is_held_across_successive_updates():
+    """Wave 16 R-E for the thrash price (TH-1b; the soak tier reads it in a 360-event
+    world): once the penalty sits at the cap, a volatility that rises past the bound and
+    stays there moves the integral on no update. Free, the integrator would be cut to
+    the new, lower bound; wound up, it would rise."""
+    rt = make_runtime()
+    _thrash_at_cap(rt)
+    held = _thrash_updates(rt)[-1]["i"]
+    for _ in range(3):
+        assert _thrash_window(rt, 1.0)["penalty"] == rt.m.prices.penalty_cap
+    rows = _thrash_updates(rt)[-3:]
+    assert all(row["integrator_frozen"] for row in rows)
+    assert [row["i"] for row in rows] == [held] * 3
+
+
+def test_once_thrash_settles_its_price_leaks_to_exactly_zero():
+    """TH-1e's release (soak tier: window 50 of a 300-event world): from the cap, the
+    price leaks ``decay`` a window to an exact 0.0, in the kernel's own float count of
+    windows and never later. A floor, however small, is never released."""
+    rt = make_runtime()
+    _thrash_at_cap(rt)
+    peak, decay = _thrash_updates(rt)[-1]["i"], rt.m.prices.decay
+    left, bound = peak, 0
+    while left > 0.0:
+        left, bound = max(0.0, left - decay), bound + 1
+    lambdas = [_thrash_window(rt, 0.1)["lambda"] for _ in range(bound)]
+    assert lambdas[-1] == 0.0 and all(later <= earlier for earlier, later
+                                      in zip(lambdas, lambdas[1:], strict=False))
+    assert _thrash_window(rt, 0.1)["lambda"] == 0.0
+
+
+def test_stable_failure_gain_holds_at_gamma_max_and_unwinds_only_when_cleared():
+    """SF-1e (soak tier: 228 events): each act of the organ on stable failure raises
+    every router's exploration one step to ``gamma_max`` and, at it, holds it act after
+    act; only a cleared attractor steps it back down, never below the seed."""
+    rt = make_runtime()
+    spec = rt.m.immune
+    seed = [immune.gamma(s.learner) for s in rt._all_router_states()]
+    steps = ceil((spec.gamma_max - max(seed)) / spec.gain_step)
+    history = []
+    for window in range(steps + 4):
+        rt.ticks_consumed += 20
+        immune._gain(rt, "stable_failure", window)
+        history.append([immune.gamma(s.learner) for s in rt._all_router_states()])
+    assert all(g == spec.gamma_max for g in history[steps])
+    assert history[steps:] == [history[steps]] * 4  # held through four more acts
+    for window in range(steps + 4, 2 * steps + 8):
+        rt.ticks_consumed += 20
+        immune._gain(rt, "cleared", window)
+    assert [immune.gamma(s.learner) for s in rt._all_router_states()] == seed
+
+
 def _draw(state, probs):
     from factorylab.learners.router import Sample
 

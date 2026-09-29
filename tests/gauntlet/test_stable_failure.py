@@ -166,6 +166,29 @@ def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1_long):
     assert sf1_long.rows("immune.gain")
 
 
+#: SF-1e's per-PR world: SF-1 with a four-times gain step, so the Tick router's gain
+#: reaches gamma_max at tick 33 of 120 and the organ acts on it at its cap four more
+#: times while the failure lasts (every 16 ticks). The launch step's world (228 events)
+#: is the soak tier's.
+SF1E_FAST = {"immune": {"gain_step": 0.2}}
+
+
+def test_sf1e_the_gain_reaches_its_bound_and_holds_through_successive_acts():
+    """Red when the gain unwinds at its cap (the mutant that stepped it down at 49, 81
+    and 113 failed here), when it never reaches the bound, or when it is not held."""
+    run = P.run(*P.sf1(changes=SF1E_FAST), events=120)
+    result = g.sf1e_gain(run.events, run.manifest)
+    assert result.ok, result.evidence
+    steps = [row["gamma_after"][0] for row in run.rows("immune.gain")
+             if row["router"] == "router:Tick"]
+    assert steps and steps[-1] == run.manifest["immune"]["gamma_max"]
+    acts = [row["tick"] for row in run.rows("immune.window") if row["acts"]]
+    at_cap = next(row["tick"] for row in run.rows("immune.gain")
+                  if row["router"] == "router:Tick"
+                  and row["gamma_after"][0] == run.manifest["immune"]["gamma_max"])
+    assert len([t for t in acts if t > at_cap]) >= 2  # held through successive acts
+
+
 def test_sf1f_the_registration_route_stays_open_and_the_reserve_accrues(sf1):
     result = g.sf1f_route_open(sf1.events, sf1.manifest)
     assert result.ok, result.evidence
