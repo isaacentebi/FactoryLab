@@ -1253,36 +1253,6 @@
    "status": "untriaged"
   },
   {
-   "id": "0158e689bfd7",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/vote/inputs/amendment.replace[].description",
-   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "dd5cdcaccbe3",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/vote/inputs/challenge.incumbent.description",
-   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "bb8f74f80485",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/vote/inputs/challenge.replacement.description",
-   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "f40731c3f714",
    "world": "edition6-capital-loop",
    "surface": "static",
@@ -1969,36 +1939,6 @@
    "rule": "IMP",
    "path": "edition6-testnet-rehearsal/request/vote/base_capabilities/#prose",
    "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "5f638a9ca0f5",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/vote/inputs/amendment.replace[].description",
-   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "3cdcdde5ce73",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/vote/inputs/challenge.incumbent.description",
-   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "1a4b0aa0cccb",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/vote/inputs/challenge.replacement.description",
-   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
    "design_ref": null,
    "status": "untriaged"
   },
