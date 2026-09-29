@@ -253,6 +253,7 @@ def _orders(intent, token):
 
 def test_a_fill_is_reported_once_when_final_and_a_failed_trade_never():
     venue, server = live_venue(confirm=False)
+    server.fake._markets["fake-1"]["fee_rate"] = Decimal("0.05")
     token, intent = _intent(venue, server, "c-1")
     venue.intent_of = {"c-1": intent}.get
     _place(venue, token)

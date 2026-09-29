@@ -237,7 +237,7 @@ def test_unattributed_custody_is_what_no_return_owns_and_the_books_close():
     server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED",
                            "match_time": signed_s(rt, order_id),
                            "taker_order_id": order_id, "size": "5", "price": "0.71",
-                           "maker_orders": []}]
+                           "fee_rate_bps": "500", "maker_orders": []}]
     polymarket.tick(rt)
     books = polymarket.custody_books(rt)
     assert books["claimed_micro"] + books["unattributed_micro"] == books["booked_micro"]
@@ -439,3 +439,56 @@ def test_a_fill_confirmed_after_its_market_resolved_is_booked_and_paid_once():
     paid = [i for i in items(rt, "venue.settled") if i["reference"].startswith("resolution:")]
     assert [i["amount"] for i in paid] == [5_900_000] and paid[0]["handle"] == handle
     assert Decimal(polymarket.reconcile(rt)["drift"]) == 0
+
+
+def test_a_fill_books_the_fee_its_execution_charged_not_the_admission_schedule():
+    """Astra P0 on #177: admission read a 5% rate, the venue charged 10% at match time,
+    and the pot booked 5%: the wallet moved by one amount and the books by another."""
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+
+    def raise_rate():
+        server.fake._markets["fake-2"]["fee_rate"] = Decimal("0.10")
+
+    server.on_post = raise_rate
+    buy(rt, server, handle, size="5", price="0.75", market="fake-2")
+    polymarket.tick(rt)
+    (fill,) = items(rt, "polymarket.fill")
+    assert Decimal(fill["fee_usd"]) == Decimal("0.10295")  # 5 x 0.10 x 0.71 x 0.29
+    assert Decimal(polymarket.reconcile(rt)["drift"]) == 0
+
+
+def test_a_fee_the_execution_does_not_state_is_reconciled_from_the_custodian():
+    rt, server = live_world()
+    polymarket.tick(rt)  # the pot's opening is read before any order, as a world's is
+    handle = collateral_decision(rt)
+    buy(rt, server, handle, size="5", price="0.75", market="fake-2")
+    for trade in server.trades:
+        trade.pop("fee_rate_bps")
+    polymarket.tick(rt)
+    (fill,) = items(rt, "polymarket.fill")
+    assert fill["fee_usd"] == "0" and items(rt, "polymarket.fee_unresolved")
+    # The same tick's reconciliation reads what the custodian was charged.
+    (closed,) = items(rt, "polymarket.fee_reconciled")
+    assert closed["amount"] == -51_480  # 5 x 0.05 x 0.71 x 0.29, as the balance shows
+    fees = [i for i in items(rt, "venue.settled") if i["reference"].startswith("fee:")]
+    assert [(i["amount"], i["handle"]) for i in fees] == [(-51_480, handle)]
+    assert Decimal(polymarket.reconcile(rt)["drift"]) == 0 and not rt.polymarket.open_fees
+    # While a fee is open the pot's reconciliation is unknown: no new exposure.
+    rt.polymarket.open_fees.append({"order_id": "0x1", "handle": handle, "size": "1",
+                                    "px": "0.5"})
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
+                  market="fake-1")
+    assert refused["status"] == "rejected" and refused["error"] == polymarket.FEE_OPEN_REFUSAL
+    rt.polymarket.open_fees.clear()
+    assert buy(rt, server, collateral_decision(rt), size="5", price="0.30",
+               market="fake-1")["status"] == "resting"
+
+
+def test_a_shortfall_no_open_fee_could_explain_closes_nothing():
+    rt, _server = live_world()
+    item = {"order_id": "0x1", "handle": None, "size": "1", "px": "0.5"}
+    rt.polymarket.open_fees.append(item)
+    polymarket._settle_open_fees(rt, rt.polymarket, Decimal("-2"))  # above 1 x 0.5 of cash
+    assert rt.polymarket.open_fees == [item] and items(rt, "polymarket.fee_unreconciled")
+    assert not items(rt, "polymarket.fee_reconciled")

@@ -222,6 +222,9 @@ class PolymarketSurface:
         # The live venue's fill and resolution cursor (``LivePolymarket.poll``): carried
         # in, returned, checkpointed, so a replay reads what the run read.
         self.cursor: dict[str, Any] = {}
+        # Fills whose fee their execution did not state (``execution_fee``): open until
+        # the custodian's balance settles them (``reconcile``); no new risk meanwhile.
+        self.open_fees: list[dict[str, Any]] = []
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
         self._account_memo: tuple | None = None
         # The market each write was last weighed against, by token (transient): the one
@@ -229,7 +232,7 @@ class PolymarketSurface:
         self.checked: dict[str, dict] = {}
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
-              "opening", "token_markets", "open_reads", "through", "filled", "cursor")
+              "opening", "token_markets", "open_reads", "through", "filled", "cursor", "open_fees")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -1119,6 +1122,8 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     if usd_to_micro(notional, rounding="ceil") > spec.max_order_micro:
         return "order notional exceeds [polymarket] max_order_usd"
     buy = args["side"] == "buy"
+    if buy and surface.open_fees:
+        return FEE_OPEN_REFUSAL
     if buy:
         above = principal_excess(surface, account)
         if above is not None:
@@ -1161,6 +1166,8 @@ def acquired(surface: PolymarketSurface, account: dict, token_id: str) -> Decima
 
 
 PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
+#: A fill whose fee its execution did not state leaves the pot's books unreconciled.
+FEE_OPEN_REFUSAL = "a polymarket fill's fee is not yet established; the pot is unreconciled"
 
 
 def held_at_cost(account: dict) -> Decimal:
@@ -1583,6 +1590,8 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
                           "reason": type(exc).__name__, "ts": rt.clock.now_ns})
         return None
     held = held_at_cost(account)
+    if surface.opening is not None and surface.open_fees:
+        _settle_open_fees(rt, surface, held - (surface.opening + surface.settled))
     if surface.opening is None:
         surface.opening = held - surface.settled
         rt.ledger.append({"kind": "polymarket.opening", "usdc": str(surface.opening),
@@ -1599,6 +1608,40 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
                           "principal_micro": surface.spec.principal_micro,
                           "ts": rt.clock.now_ns})
     return result
+
+
+def _settle_open_fees(rt: Any, surface: PolymarketSurface, drift: Decimal) -> None:
+    """Book the fees of fills whose execution did not state them, as the custodian shows.
+
+    The pot's shortfall against its own books (``-drift``, what left the wallet that the
+    books do not explain) is what those fills were charged: booked to the pot, each item
+    its share in proportion to ``size x p (1 - p)`` (the documented fee's shape), the
+    remainder of the integer split to the first. A shortfall the fills could not have
+    been charged (above their cash value: the exchange refuses a fee above what it
+    settles) closes nothing and stays open, ledgered. No shortfall: they were charged
+    nothing. The wallet moves by what moved, never by a schedule (Astra P0 on #177).
+    """
+    shortfall = max(Decimal(0), -drift)
+    items = surface.open_fees
+    ceiling = sum((Decimal(i["size"]) * Decimal(i["px"]) for i in items), Decimal(0))
+    if shortfall > ceiling:
+        rt.ledger.append({"kind": "polymarket.fee_unreconciled", "shortfall": str(shortfall),
+                          "ceiling": str(ceiling), "open": len(items), "ts": rt.clock.now_ns})
+        return
+    total = usd_to_micro(shortfall, rounding="nearest")
+    weights = [Decimal(i["size"]) * Decimal(i["px"]) * (1 - Decimal(i["px"])) for i in items]
+    whole = sum(weights, Decimal(0))
+    shares = [int(total * w / whole) if whole else 0 for w in weights]
+    if shares:
+        shares[0] += total - sum(shares)
+    surface.open_fees = []
+    for item, share in zip(items, shares, strict=True):
+        rt.ledger.append({"kind": "polymarket.fee_reconciled", "order_id": item["order_id"],
+                          "handle": item["handle"], "amount": -share,
+                          "ts": rt.clock.now_ns})
+        if share:
+            surface.settled -= Decimal(share) / 1_000_000
+            _book_pot(rt, -share, f"fee:{item['order_id']}", "exchange_pnl", item["handle"])
 
 
 #: A resolved token's book stream watermark: no book fact can follow a resolution.
@@ -1667,6 +1710,13 @@ def _settle_fill(rt: Any, event: dict) -> None:
         owner_handle = None
     else:
         surface.filled[order_id] = str(booked)
+    if event.get("fee_unresolved"):
+        # Astra P0 on #177: the execution did not state its fee. Nothing is debited from
+        # a schedule; the fee stays open until the custodian's balance shows it.
+        item = {"order_id": order_id, "handle": owner_handle, "size": str(event["size"]),
+                "px": str(event["px"])}
+        surface.open_fees.append(item)
+        rt.ledger.append({"kind": "polymarket.fee_unresolved", **item, "ts": rt.clock.now_ns})
     _book_pot(rt, delta, f"fill:{order_id}", "exchange_pnl", owner_handle)
     rt.consequences.observe("Fill", payload, rt.n)
     _tell(rt, owner_handle, {"kind": "polymarket_fill", "order_id": order_id,

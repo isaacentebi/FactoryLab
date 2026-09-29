@@ -258,6 +258,33 @@ def taker_fee(size: Decimal, price: Decimal, rate: Decimal, exponent: Decimal) -
     return value.quantize(Decimal("0.00001"))
 
 
+def execution_fee(size: Decimal, price: Decimal, taker: bool, fee_bps: Any,
+                  exponent: Any) -> Decimal | None:
+    """The fee one execution charged, from what the execution itself states, or None.
+
+    Astra P0 on #177: the operator sets the fee at match time, so a fill's fee is read
+    from its own trade (``fee_rate_bps``, get-trades), never from the schedule admission
+    saw. A maker leg is charged nothing (fees: "Makers are never charged fees"). A taker
+    leg's fee is ``size x fee_rate_bps / 10,000 x p (1 - p)`` to five decimals (the
+    documented formula) when the trade states its rate and the market's schedule is the
+    documented one (exponent 1); otherwise the execution does not establish it, and
+    None is returned: the fee stays open until the custodian's balance settles it
+    (``runtime/polymarket.py``, ``reconcile``), never a debit made up here.
+    """
+    if not taker:
+        try:
+            return Decimal(0) if fee_bps is None or _dec(fee_bps) == 0 else None
+        except (ValueError, ArithmeticError):
+            return None
+    try:
+        rate, power = _dec(fee_bps) / 10_000, _dec(exponent)
+    except (ValueError, ArithmeticError, TypeError):
+        return None
+    if power != 1 or rate < 0:
+        return None
+    return taker_fee(size, price, rate, power)
+
+
 # --- signing ------------------------------------------------------------------------------
 
 
@@ -880,12 +907,12 @@ class LivePolymarket(PolymarketReader):
             legs = []
             if str(trade.get("taker_order_id", "")) in orders:
                 legs.append((str(trade["taker_order_id"]), trade.get("size"),
-                             trade.get("price"), True))
+                             trade.get("price"), True, trade.get("fee_rate_bps")))
             for maker in trade.get("maker_orders") or []:
                 if str(maker.get("order_id", "")) in orders:
                     legs.append((str(maker["order_id"]), maker.get("matched_amount"),
-                                 maker.get("price"), False))
-            for order_id, size, price, taker in legs:
+                                 maker.get("price"), False, maker.get("fee_rate_bps")))
+            for order_id, size, price, taker, fee_bps in legs:
                 key = f"{trade.get('id')}:{order_id}:{int(taker)}"
                 if key in state["seen"]:
                     continue
@@ -896,11 +923,11 @@ class LivePolymarket(PolymarketReader):
                     pending.append(at)
                     continue
                 state["seen"][key] = at
-                found.append((at, key, order_id, _dec(size), _dec(price), taker))
+                found.append((at, key, order_id, _dec(size), _dec(price), taker, fee_bps))
         events = []
-        for at, _key, order_id, size, price, taker in sorted(found):
+        for at, _key, order_id, size, price, taker, fee_bps in sorted(found):
             events.append(self._fill_event(state, orders[order_id], order_id, size, price,
-                                           taker, at))
+                                           taker, at, fee_bps))
         if not ended:
             state["page"] = page_cursor
             state.setdefault("pending", [])
@@ -922,10 +949,10 @@ class LivePolymarket(PolymarketReader):
 
     @staticmethod
     def _fill_event(state: dict[str, Any], order: dict[str, str], order_id: str,
-                    size: Decimal, price: Decimal, taker: bool, at: int) -> dict[str, Any]:
+                    size: Decimal, price: Decimal, taker: bool, at: int,
+                    fee_bps: Any = None) -> dict[str, Any]:
         token, is_buy = order["token_id"], order["side"] == "buy"
-        fee = (taker_fee(size, price, _dec(order.get("fee_rate", "0")),
-                         _dec(order.get("fee_exponent", "1"))) if taker else Decimal(0))
+        fee = execution_fee(size, price, taker, fee_bps, order.get("fee_exponent", "1"))
         held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
         realized = Decimal(0)
         if is_buy:
@@ -940,8 +967,9 @@ class LivePolymarket(PolymarketReader):
         booked[order_id] = str(_dec(booked.get(order_id, "0")) + size)
         return {"kind": "fill", "order_id": order_id, "token_id": token,
                 "market_id": order.get("market_id"), "is_buy": is_buy, "size": str(size),
-                "px": str(price), "fee_usd": str(fee), "realized_usd": str(realized),
-                "ts_ns": at * 1_000_000_000}
+                "px": str(price), "fee_usd": "0" if fee is None else str(fee),
+                "realized_usd": str(realized), "ts_ns": at * 1_000_000_000,
+                **({"fee_unresolved": True} if fee is None else {})}
 
     def _resolutions(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                      now_ns: int) -> list[dict]:
