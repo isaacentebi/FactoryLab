@@ -276,8 +276,13 @@ def test_sf1b_an_unmeasured_card_stays_in_its_attractor():
 
 
 def _updates(card, triples):
-    return [{"kind": "price.update", "card_id": card, "lambda_after": lam, "violation": v,
-             "i": i, "window_end_event": 10 * n} for n, (lam, v, i) in enumerate(triples, 1)]
+    """Price updates ``(lambda_after, violation, i)``, each in force for the next window
+    (its ``lambda_before`` is the previous update's ``lambda_after``, as controller.py
+    ``observe`` writes it)."""
+    before = [0.0, *(lam for lam, _v, _i in triples)]
+    return [{"kind": "price.update", "card_id": card, "lambda_before": before[n - 1],
+             "lambda_after": lam, "violation": v, "i": i, "window_end_event": 10 * n}
+            for n, (lam, v, i) in enumerate(triples, 1)]
 
 
 def test_sf1c_the_integral_is_frozen_exactly_at_the_cap():
@@ -293,12 +298,12 @@ def test_sf1c_reads_only_runs_at_the_cap_and_restarts_across_an_uncapped_interva
     """Codex P2: after saturation the violation eases below the cap and the integral
     legitimately moves; that is no windup. A new run at the cap is read afresh, and a
     windup inside it still fails."""
-    eased = _updates("c", [(0.5, 1.0, 0.5), (0.5, 1.0, 0.5),   # at the cap, frozen
-                           (0.6, 0.5, 0.6), (0.7, 0.5, 0.7),   # eased: 0.3, 0.35 < 0.5
-                           (0.7, 1.0, 0.7), (0.7, 1.0, 0.7)])  # at the cap again, frozen
-    result = g.sf1c_anti_windup(eased, M, card="c")
+    steps = [(0.5, 1.0, 0.5), (0.5, 1.0, 0.5),   # at the cap, frozen
+             (0.6, 0.5, 0.6), (0.7, 0.5, 0.7),   # eased: 0.3, 0.35 < 0.5
+             (0.7, 1.0, 0.7), (0.7, 1.0, 0.7)]   # at the cap again, frozen
+    result = g.sf1c_anti_windup(_updates("c", steps), M, card="c")
     assert result.ok and result.evidence["runs"] == 2
-    winding = eased + _updates("c", [(0.9, 1.0, 0.9)])  # still at the cap, integral moved
+    winding = _updates("c", [*steps, (0.9, 1.0, 0.9)])  # still at the cap, integral moved
     assert g.sf1c_anti_windup(winding, M, card="c").status == g.FAIL
 
 

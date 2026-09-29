@@ -1207,28 +1207,98 @@ def update_windows(events: Iterable[Mapping]) -> dict[int, int]:
             if need(row, "window_end_event") in closes}
 
 
+#: The rows that move a card's integral outside ``price.update`` (controller.py): an
+#: adopted price becomes it (``set_price``), a ratchet raises it (``ratchet``), a
+#: redefinition restarts it (``redefine``).
+INTEGRAL_ROWS = frozenset({"price.proposed", "immune.price_ratchet", "price.redefined"})
+
+
+@dataclass(frozen=True)
+class HeldUpdate:
+    """A price update whose integrator the law holds, and the integral in force before it."""
+
+    row: Mapping
+    expected: float
+
+
+def held_updates(events: list[Mapping], card: str, ph: Physics) -> list[list[HeldUpdate]]:
+    """The card's runs of consecutive price updates whose integrator the published law
+    holds, each with the integral in force before it (``expected``).
+
+    The law (``world.adaptive_scoring``, the controller's recurrence; controller.py
+    ``_pid``): while ``v > 0``, with ``I_E = min(E, I)``, ``I' = I_E`` while ``lambda >=
+    B``, ``B = penalty_cap / v`` of the window just observed and ``lambda`` the price in
+    force while it ran (the row's ``lambda_before``: what its decisions bore). A window
+    whose price sat below its own bound (its penalty ``lambda · v`` below the cap) may
+    integrate up to ``B``, however close to it the update then sets the price: that
+    price is the update's output (``lambda_after``), not the penalty the window bore.
+    ``E`` is the largest ``B`` of the card's failure episode (its violating updates since
+    it last complied or was redefined, this one included). ``I`` is the previous
+    update's ``i``, moved by the rows between (``INTEGRAL_ROWS``): an adoption sets it to
+    its ``lambda_after``, a ratchet raises it by its ``step`` up to the bound of the last
+    violation, a redefinition restarts it at its ``declared`` price and ends the
+    episode. Float arithmetic is the controller's own (``ratio``, ``held_sum``)."""
+    from factorylab.charter.controller import held_sum, ratio
+
+    runs: list[list[HeldUpdate]] = []
+    current: list[HeldUpdate] = []
+    integral: float | None = None
+    episode, previous_v = 0.0, 0.0
+    for row in events:
+        kind = row.get("kind")
+        # Every emitter of these kinds names its card (controller.py).
+        if (kind != "price.update" and kind not in INTEGRAL_ROWS) \
+                or need(row, "card_id") != card:
+            continue
+        if kind == "price.proposed":
+            integral = need(row, "lambda_after")
+        elif kind == "immune.price_ratchet":
+            if integral is not None:
+                raised = held_sum(integral, need(row, "step"))
+                integral = min(ratio(ph.cap, previous_v), raised) if previous_v > 0 \
+                    else raised
+        elif kind == "price.redefined":
+            integral, episode, previous_v = need(row, "declared"), 0.0, 0.0
+        else:
+            v = need(row, "violation")
+            episode = max(episode, ratio(ph.cap, v)) if v > 0 else 0.0
+            if v > 0 and need(row, "lambda_before") >= ratio(ph.cap, v) \
+                    and integral is not None:
+                current.append(HeldUpdate(row, min(episode, integral)))
+            elif current:
+                runs.append(current)
+                current = []
+            integral, previous_v = need(row, "i"), v
+    if current:
+        runs.append(current)
+    return runs
+
+
 @criterion("SF-1c")
 def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
-    """SF-1c: once the penalty sits at ``penalty_cap``, the integral is exactly constant.
+    """SF-1c: while the penalty sits at ``penalty_cap``, the integral is exactly held.
 
     Wave 16 R-E (amended): "while the penalty sits at penalty_cap, λ's integrator
-    does not integrate (it is frozen)". Read only on runs of consecutive updates whose
-    penalty ``λ·v`` is at the cap (``capped_runs``): within each run the integral is
-    equal, not merely close, from one update to the next. A run ends at any update below
-    the cap (the violation eased, and the integral may then legitimately move) and a new
-    run starts at the next capped update.
-    """
+    does not integrate (it is frozen)". The penalty a window's decisions bore is the
+    price in force while it ran times its violation, so the held updates are the ones
+    whose ``lambda_before`` sits at the window's own bound (``held_updates``, the
+    published recurrence's ``lambda >= B``): each must leave the integral exactly where
+    it stood (``I_E``), equal, not merely close. A window whose price sat below its
+    bound integrates up to it, and an update that thereby sets the price at the bound
+    is not a held one: reading "at the cap" from the price the update set would call
+    that integration a windup."""
     ph = physics(manifest)
-    runs = [run for run in capped_runs(events, card, ph) if len(run) >= 2]
+    runs = held_updates(events, card, ph)
     if not runs:
-        return _unsupported("SF-1c", "the penalty never sat at the cap for two updates",
+        return _unsupported("SF-1c", "the penalty never sat at the cap while a window ran",
                             card=card)
     # ``price.update`` always carries the PID's integral ``i`` (controller.py ``_pid``
-    # terms): two rows without one are malformed, never "equal".
-    moved = [(need(a, "i"), need(b, "i")) for run in runs
-             for a, b in zip(run, run[1:], strict=False) if need(a, "i") != need(b, "i")]
+    # terms): a row without one is malformed, never "equal".
+    moved = [(held.expected, need(held.row, "i")) for run in runs for held in run
+             if need(held.row, "i") != held.expected]
     return _result("SF-1c", not moved, card=card, runs=len(runs),
-                   integrals=[[row.get("i") for row in run][:12] for run in runs[:3]],
+                   held=sum(len(run) for run in runs),
+                   integrals=[[need(held.row, "i") for held in run][:12] for run in runs[:3]],
                    moved=moved[:5])
 
 
@@ -1237,11 +1307,13 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     """SF-1d: sustained saturation is ledgered and its duration rises by one per window.
 
     Wave 16 R-E: "At saturation, ledger the fact and publish it to governance". Demanded
-    only once the penalty has sat at the cap for ``min_ratio`` consecutive updates (the
-    same partition as SF-1c: one capped update followed by uncapped ones is not
-    sustained saturation). Durations are read per saturation episode (A), as the kernel
-    writes them (R-E, R10-e): a saturated ratchet carries the failing attractor's own
-    duration, which kept counting from the ratchets before it, so an episode starts at
+    only once the penalty has sat at the cap for ``min_ratio`` consecutive updates
+    (``capped_runs``, at the price each update set: the organ's saturation gate reads the
+    price in force at its close, controller.py ``_at_cap``; one capped update followed by
+    uncapped ones is not sustained saturation). Durations are read per saturation
+    episode (A), as the kernel writes them (R-E, R10-e): a saturated ratchet carries the
+    failing attractor's own duration, which kept counting from the ratchets before it,
+    so an episode starts at
     whatever duration the attractor stood at, and each next row is the previous plus
     one at a later window (the organ's acting grid, not every window). A row whose
     duration does not continue the episode starts another; whether the duration fell
