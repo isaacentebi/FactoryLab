@@ -16,6 +16,7 @@ are test_retained_state_crash's, over 30 ticks).
 """
 
 import json
+import shutil
 from collections import deque
 from dataclasses import fields, is_dataclass
 from decimal import Decimal
@@ -119,19 +120,33 @@ def _summary(summary):
     return {k: v for k, v in summary.items() if k not in ("ledger_path", "ledger")}
 
 
+#: The late crash dies between two events inside this tick (after its first event that
+#: is not the Tick itself): nine tenths of the world, long after every early crash point.
+LATE_TICK = EVENTS * 9 // 10
+
+
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
     """One 100-tick scripted world, walked against a restored twin at every 150th event
-    (the walk reads; it writes nothing the world or its diary sees)."""
+    (the walk reads; it writes nothing the world or its diary sees).
+
+    It is also the late crash's prefix: a process that dies between events leaves on
+    disk exactly what its diary held then (every append is durable before it returns),
+    and this is that world event for event, so its diary directory copied between two
+    events inside ``LATE_TICK`` is what a death there leaves."""
     path = tmp_path_factory.mktemp("coverage") / "world.jsonl"
+    crashed = tmp_path_factory.mktemp("late-crash") / "world"
     rt = _runtime(path)
     original = rt._process_event
     differences: dict[str, tuple] = {}
     seen: set[str] = set()
-    stops = []
+    stops, late = [], {}
 
     def compare(event):
         result = original(event)
+        if rt.ticks_consumed >= LATE_TICK and str(event.kind) != "Tick" and not late:
+            shutil.copytree(path.parent, crashed)
+            late.update(n=rt.n, tick=rt.ticks_consumed, directory=crashed)
         if rt.n % 150 == 0:
             del rt._process_event  # the hook is this test's, not the world's
             try:
@@ -142,14 +157,14 @@ def world(tmp_path_factory):
             seen.update(present)
             for key in before.keys() | after.keys():
                 if before.get(key) != after.get(key):
-                    owner, attr, path = key
-                    differences.setdefault(f"{owner}.{attr}", (rt.n, path or "<runtime>"))
+                    owner, attr, path_ = key
+                    differences.setdefault(f"{owner}.{attr}", (rt.n, path_ or "<runtime>"))
         return result
 
     rt._process_event = compare
     summary = rt.run()
     return {"differences": differences, "seen": seen, "stops": stops, "n": rt.n,
-            "summary": _summary(summary), "items": _items(path)}
+            "summary": _summary(summary), "items": _items(path), "late": late}
 
 
 def test_every_attribute_a_world_carries_is_checkpointed_or_declared(world):
@@ -163,28 +178,15 @@ def test_every_attribute_a_world_carries_is_checkpointed_or_declared(world):
     assert not declared - seen, f"declared state no runtime carries: {declared - seen}"
 
 
-class Crash(BaseException):
-    """The process dies here: nothing after it runs, nothing catches it."""
-
-
 def test_a_late_crash_resumes_to_the_uninterrupted_run(world, tmp_path):
     """Killed between events at nine tenths of the world, long after every early
     crash point and after its reserve windows have closed many times, the world
-    resumes to the uninterrupted one's diary and summary."""
-    path = tmp_path / "world.jsonl"
-    rt = _runtime(path)
-    late = world["n"] * 9 // 10
-    process = rt._process_event
-
-    def die_late(event):
-        result = process(event)
-        if rt.n == late:
-            raise Crash
-        return result
-
-    rt._process_event = die_late
-    with pytest.raises(Crash):
-        rt.run()
+    resumes to the uninterrupted one's diary and summary. The crashed diary is the
+    shared world's own, copied at that instant (``world``)."""
+    late = world["late"]
+    assert late["tick"] == LATE_TICK and late["n"] < world["n"]
+    shutil.copytree(late["directory"], tmp_path / "world")
+    path = tmp_path / "world" / "world.jsonl"
     before = _items(path)
     summary = resume_world(load_manifest("scripted"), str(path))
     after = _items(path)
