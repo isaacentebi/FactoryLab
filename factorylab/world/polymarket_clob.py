@@ -926,6 +926,8 @@ class LivePolymarket(PolymarketReader):
             realized = (price - avg) * size
             held -= size
         state["book"][token] = [str(held), str(avg)]
+        booked = state.setdefault("booked", {})
+        booked[order_id] = str(_dec(booked.get(order_id, "0")) + size)
         return {"kind": "fill", "order_id": order_id, "token_id": token,
                 "market_id": order.get("market_id"), "is_buy": is_buy, "size": str(size),
                 "px": str(price), "fee_usd": str(fee), "realized_usd": str(realized),
@@ -940,6 +942,17 @@ class LivePolymarket(PolymarketReader):
         candidates = sorted(t for t in held | open_tokens
                             if t not in state["resolved"] and markets.get(t))
         events: list[dict[str, Any]] = []
+        facts = state.setdefault("resolution_facts", {})
+        # Inventory a trade confirmed after its market resolved (Astra P0 on #177): it is
+        # paid its token's payout once, when it is booked, never lost.
+        for token, paid in sorted(state["resolved"].items()):
+            size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
+            if size > 0 and token in facts:
+                state["book"][token] = ["0", str(avg)]
+                events.append({**facts[token], "kind": "resolution", "token_id": token,
+                               "payout": str(paid), "size": str(size),
+                               "realized_usd": str((_dec(paid) - avg) * size),
+                               "ts_ns": now_ns})
         if candidates:
             # One market read a poll, in turn: what the pot holds or has resting.
             token = candidates[state["turn"] % len(candidates)]
@@ -948,31 +961,42 @@ class LivePolymarket(PolymarketReader):
             paid = payout(market, token)
             if paid is not None:
                 state["resolved"][token] = str(paid)
+                outcome = next(o for o in market["outcomes"] if o["token_id"] == token)
+                facts[token] = {"market_id": markets[token],
+                                "condition_id": market.get("condition_id"),
+                                "outcome_index": outcome["outcome_index"],
+                                "outcome_name": outcome["outcome"]}
                 size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
                 if size > 0:
                     state["book"][token] = ["0", str(avg)]
-                    outcome = next(o for o in market["outcomes"] if o["token_id"] == token)
                     events.append({
-                        "kind": "resolution", "market_id": markets[token],
-                        "condition_id": market.get("condition_id"), "token_id": token,
-                        "outcome_index": outcome["outcome_index"],
-                        "outcome_name": outcome["outcome"], "payout": str(paid),
-                        "size": str(size), "realized_usd": str((paid - avg) * size),
-                        "ts_ns": now_ns})
+                        **facts[token], "kind": "resolution", "token_id": token,
+                        "payout": str(paid), "size": str(size),
+                        "realized_usd": str((paid - avg) * size), "ts_ns": now_ns})
         # A resolution cancels what rests on the market (CANCELED_MARKET_RESOLVED): each
-        # of this world's orders on a resolved token is read back until it is terminal,
-        # two a poll.
+        # of this world's orders on a resolved token is read back, two a poll, until the
+        # venue says it is terminal AND every quantity it matched is booked from a
+        # CONFIRMED trade (Astra P0 on #177): an order matched but not yet confirmed
+        # stays read, so its fill, and the payout of what it bought, are booked later.
         waiting = sorted(oid for oid, o in orders.items()
                          if o["token_id"] in state["resolved"] and oid not in state["terminal"])
-        for order_id in waiting[:2]:
+        start = state.get("lookup_turn", 0)
+        state["lookup_turn"] = start + 1
+        for order_id in [waiting[(start + k) % len(waiting)]
+                         for k in range(min(2, len(waiting)))]:
             answer = self.lookup("", order_id=order_id)
-            if answer["status"] == "cancelled":
-                state["terminal"].append(order_id)
+            if answer["status"] not in ("cancelled", "filled", "rejected"):
+                continue
+            complete = _dec(answer.get("filled_size") or "0") <= _dec(
+                state.get("booked", {}).get(order_id, "0"))
+            if answer["status"] == "cancelled" and order_id not in state.setdefault(
+                    "cancel_told", []):
+                state["cancel_told"].append(order_id)
                 events.append({"kind": "cancelled", "order_id": order_id,
                                "token_id": orders[order_id]["token_id"],
                                "market_id": markets.get(orders[order_id]["token_id"]),
                                "ts_ns": now_ns})
-            elif answer["status"] in ("filled", "rejected"):
+            if complete:
                 state["terminal"].append(order_id)
         return events
 

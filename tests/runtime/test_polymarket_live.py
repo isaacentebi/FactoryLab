@@ -404,3 +404,29 @@ def test_a_sale_of_tokens_this_world_never_acquired_is_refused():
     assert Decimal(sale[0]["realized_usd"]) == (Decimal("0.39") - Decimal("0.41")) * 5
     too_many = buy(rt, server, collateral_decision(rt), side="sell", size="6", price="0.39")
     assert too_many["status"] == "rejected" and "acquired" in too_many["error"]
+
+
+def test_a_fill_confirmed_after_its_market_resolved_is_booked_and_paid_once():
+    """Astra P0 on #177: the order's lookup said MATCHED, its trade was not yet CONFIRMED
+    when the market resolved; the order was retired, and the confirmed trade and its
+    payout were never booked."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 0)})
+    rt, server = live_world(fake=fake, confirm=False)
+    handle = collateral_decision(rt)
+    buy(rt, server, handle, price="0.45")  # crosses: MATCHED, not yet final
+    polymarket.tick(rt)
+    assert items(rt, "polymarket.fill") == []
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    polymarket.tick(rt)
+    polymarket.tick(rt)
+    server.settle("CONFIRMED")
+    for _ in range(3):
+        polymarket.tick(rt)
+    (fill,) = items(rt, "polymarket.fill")
+    assert fill["size"] == "10" and fill["px"] == "0.41"
+    (resolution,) = items(rt, "polymarket.resolution")
+    assert resolution["size"] == "10" and resolution["payout"] == "1"
+    paid = [i for i in items(rt, "venue.settled") if i["reference"].startswith("resolution:")]
+    assert [i["amount"] for i in paid] == [5_900_000] and paid[0]["handle"] == handle
+    assert Decimal(polymarket.reconcile(rt)["drift"]) == 0
