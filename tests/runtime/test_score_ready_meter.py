@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import decode, encode
 from tests.runtime.test_penalty_attribution import _producer, _rows, _runtime, _settle
 
@@ -101,8 +102,30 @@ def test_a_policy_decision_is_never_a_role_meters_sample(monkeypatch):
                 if name.startswith(("settle:", "scored:"))]
 
 
+def test_repeated_deferred_windows_each_close_their_meters_at_score_ready(monkeypatch):
+    """The runaway's own shape, cheaply: window after window, a producer decision's
+    score is fixed three ticks after it opened and its settlement waits for the close
+    ten ticks later. Every close settles it, and every sample of the role's settle
+    meter is the three ticks to score ready, never the growing wait for the close."""
+    rt = _runtime(monkeypatch)
+    for window in range(6):
+        opened = 10 + 20 * window
+        handle = _deferred_at(rt, opened=opened, ready=opened + 3)
+        rt.ticks_consumed = opened + 10 + window  # each wait for the close is longer
+        rt._close_price_window()
+        assert rt.queue.get(handle).status is SettleStatus.SETTLED
+        # The next window opens, as the reserve loop opens it after a close.
+        rt.window = MeasureWindow(rt.window.index + 1, rt.wallet.balance)
+    assert rt.clockwork.latencies["settle:producer"][-6:] == [3] * 6
+
+
+#: The runaway world's lengths: 60 events in the gate, the original 150 in soak.
+RUNAWAY = {60: (50, 12), 150: (100, 30)}
+
+
 @pytest.mark.gate
-def test_the_price_loop_does_not_run_away_when_every_producer_decision_defers():
+@pytest.mark.parametrize("events", [60, pytest.param(150, marks=pytest.mark.soak)])
+def test_the_price_loop_does_not_run_away_when_every_producer_decision_defers(events):
     """R16b-1: every producer decision's settlement waits for its window's close (the
     holds card, priced). Its meter closes at score ready, so the price period stays
     ``min_ratio × inner`` with a steady inner. Recording at the close instead (the
@@ -119,13 +142,14 @@ def test_the_price_loop_does_not_run_away_when_every_producer_decision_defers():
     seed = load_manifest("scripted")
     manifest = replace(seed, charter=replace(seed.charter, cards=(HOLDS,)),
                        charter_prices=((HOLDS.id, 0.8),))
-    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None,
+    rt = Runtime(manifest, events=events, seed=1, initial_balance_micro=None,
                  ledger_path=None, router_gamma=0.1)
     rt.run()
     items = rt.ledger._recovery_items()
-    assert sum(i["kind"] == "price.deferred" for i in items) > 50  # every one waits
+    deferred, closed = RUNAWAY[events]
+    assert sum(i["kind"] == "price.deferred" for i in items) > deferred  # every one waits
     loops = [i for i in items if i["kind"] == "clock.loop" and i["loop"] == "price"]
-    assert len(loops) >= 12
+    assert len(loops) >= closed
     timing = rt.m.timing
     for row in loops:
         bound = math.ceil(timing.min_ratio * (1 + timing.jitter_fraction) * row["inner_ticks"])
