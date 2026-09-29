@@ -500,3 +500,31 @@ def test_cost_basis_follows_execution_order_never_trade_ids(nanos):
     sale = next(e for e in answer["events"] if not e["is_buy"])
     assert Decimal(sale["realized_usd"]) == Decimal("0.80")  # (0.59 - 0.51) x 10
     assert answer["cursor"]["book"][token] == ["10", "0.51"]
+
+
+def test_the_fake_refuses_a_corrupted_type_suffix_and_an_unauthorised_proxy_signer(
+        monkeypatch):
+    """Sol P2 on #177: the fake accepted a type-3 signature whose ERC-7739 type string
+    was altered, and a type-1 order signed by an EOA that does not own the wallet."""
+    owner, wallet = make_signer(5), "0x" + "33" * 20
+    venue, server = live_venue(signer=owner, funder=wallet, signature_type=3)
+    token = _signed_intent(venue, server)
+    real = clob.order_signature
+
+    def suffix_altered(order, neg_risk, signer):
+        signature = bytearray(bytes.fromhex(real(order, neg_risk, signer)[2:]))
+        signature[129] ^= 0x01  # the first byte of the appended type string
+        return "0x" + signature.hex()
+
+    monkeypatch.setattr(clob, "order_signature", suffix_altered)
+    refused = _place(venue, token, price="0.30")
+    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    monkeypatch.setattr(clob, "order_signature", real)
+    proxy, server2 = live_venue(signer=make_signer(6), funder=wallet, signature_type=1,
+                                owners={wallet: owner.address})
+    token = _signed_intent(proxy, server2)
+    refused = _place(proxy, token, price="0.30")
+    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    authorised, server3 = live_venue(signer=owner, funder=wallet, signature_type=1)
+    token = _signed_intent(authorised, server3)
+    assert _place(authorised, token, price="0.30")["status"] == "resting"

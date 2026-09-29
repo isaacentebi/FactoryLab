@@ -26,6 +26,14 @@ def make_signer(seed: int = 1) -> clob.Signer:
     return clob.Signer(Account.from_key(key))
 
 
+#: The V2 order's EIP-712 type string, as the exchange contract states it (written here
+#: from ctf-exchange-v2 ``Structs.sol``, never taken from the code under test).
+ORDER_TYPE_STRING = (
+    "Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,"
+    "uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,"
+    "bytes32 builder)")
+
+
 class FakeClob:
     """The HTTP surface ``LivePolymarket.send`` talks to. ``calls`` records every request."""
 
@@ -191,14 +199,23 @@ class FakeClob:
                 plain = encode_typed_data(domain_data=typed["domain"],
                                           message_types={"Order": order_type},
                                           message_data=typed["message"])
+                # The whole ERC-7739 suffix: the app domain, the contents hash, the
+                # contents type string exactly, and its length.
                 valid = (recovered.lower() == self.owners.get(order["signer"].lower())
                          and order["maker"].lower() == order["signer"].lower()
-                         and raw[-2:] == (len(raw) - 65 - 64 - 2).to_bytes(2, "big")
                          and raw[65:97] == bytes(plain.header)
-                         and raw[97:129] == bytes(plain.body))
+                         and raw[97:129] == bytes(plain.body)
+                         and raw[129:-2] == ORDER_TYPE_STRING.encode()
+                         and raw[-2:] == len(ORDER_TYPE_STRING).to_bytes(2, "big"))
             else:
                 recovered = Account._recover_hash(digest, signature=raw)
-                valid = recovered.lower() == order["signer"].lower()
+                valid = recovered.lower() == order["signer"].lower() and len(raw) == 65
+                if int(order["signatureType"]) in (1, 2):
+                    # A proxy or a safe trades only for the EOA that owns it.
+                    valid = valid and self.owners.get(
+                        order["maker"].lower()) == order["signer"].lower()
+                elif int(order["signatureType"]) == 0:
+                    valid = valid and order["maker"].lower() == order["signer"].lower()
         except Exception:  # noqa: BLE001 - a signature that does not parse is invalid
             valid = False
         if not valid:
