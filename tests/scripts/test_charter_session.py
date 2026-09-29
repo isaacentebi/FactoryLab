@@ -689,3 +689,78 @@ def test_a_matching_resume_continues(tmp_path, capsys):
     assert resume_world(manifest, str(path))["manifest_hash"] == manifest.manifest_hash()
     assert main(["resume", "--world", str(world), "--ledger", str(path)]) == 0
     assert "charter_launch" not in capsys.readouterr().err
+
+
+def _ratified_copy(world, launch, tmp_path, *, edited_to=None):
+    """A copy of ``world`` whose charter states ``launch`` and carries the digest its
+    ratification recorded (``charter.ratified_sha256``); ``edited_to`` then rewrites
+    the launch and leaves that digest untouched, as an edit after ratification would."""
+    from factorylab.charter.provenance import charter_content, charter_digest
+
+    text = (Path(__file__).parents[2] / world).read_text()
+    voted = text.replace("\n[charter]\n", f'\n[charter]\nlaunch = "{launch}"\n', 1)
+    digest = charter_digest(charter_content(tomllib.loads(voted)["charter"]))
+    final = text.replace("\n[charter]\n", f'\n[charter]\nlaunch = "{edited_to or launch}"\n'
+                         f'ratified_sha256 = "{digest}"\n', 1)
+    path = tmp_path / ("edited" if edited_to else "ratified") / Path(world).name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(final)
+    return path
+
+
+def test_a_ratified_charter_edited_after_ratification_is_refused_on_every_network(tmp_path):
+    """Codex on e4ea1df: on a testnet manifest, a launch rewritten under an untouched
+    ratified digest was trusted. The loaded charter must hash to the ratified digest on
+    every network before any launch reads its charter.launch."""
+    from dataclasses import replace
+
+    from factorylab.runtime.worlds import CharterDigestMismatch
+
+    unedited = load_manifest(str(_ratified_copy(TESTNET, "rehearsal", tmp_path)))
+    assert unedited.charter_launch == "rehearsal" and not unedited.exchange.mainnet
+    unedited.check_launch("rehearsal")
+    edited = _ratified_copy(TESTNET, "rehearsal", tmp_path, edited_to="run")
+    with pytest.raises(CharterDigestMismatch, match="charter_digest_mismatch"):
+        load_manifest(str(edited))
+    # A manifest built in code, never through the load path, is refused at launch too.
+    rebound = replace(unedited, charter_launch="run", charter_content_sha256="0" * 64)
+    with pytest.raises(CharterDigestMismatch):
+        rebound.check_launch("run")
+
+
+def test_every_launcher_refuses_a_ratified_charter_edited_after_ratification(
+        tmp_path, capsys):
+    from factorylab.runtime.cli import ARGUMENT_EXIT, main
+    from scripts import edition4_rehearsal as rehearsal
+
+    edited = _ratified_copy(TESTNET, "rehearsal", tmp_path, edited_to="run")
+    assert main(["run", "--world", str(edited), "--events", "1"]) == ARGUMENT_EXIT
+    assert capsys.readouterr().err.splitlines() == ["factorylab run: charter_digest_mismatch"]
+    report = rehearsal.run_rehearsal(_ratified_copy(TESTNET, "run", tmp_path / "r",
+                                                    edited_to="rehearsal"),
+                                     out=tmp_path / "rehearsal", provider=object())
+    assert report["refusal"]["reason"] == "charter_digest_mismatch"
+    report = rehearsal.run_rehearsal(_ratified_copy(CAPITAL_LOOP, "rehearsal", tmp_path / "c",
+                                                    edited_to="capital-loop"),
+                                     out=tmp_path / "capital", capital_loop=True,
+                                     provider=object())
+    assert report["refusal"]["reason"] == "charter_digest_mismatch"
+
+
+@pytest.mark.gate  # launches and resumes a world
+def test_resume_refuses_a_ratified_charter_edited_after_launch_and_the_unedited_one_runs(
+        tmp_path, capsys):
+    from factorylab.runtime.cli import main
+
+    ratified = _ratified_copy("worlds/scripted.toml", "run", tmp_path)
+    ledger = tmp_path / "world.jsonl"
+    assert main(["run", "--world", str(ratified), "--events", "1", "--ledger",
+                 str(ledger)]) == 0
+    capsys.readouterr()
+    edited = _ratified_copy("worlds/scripted.toml", "run", tmp_path, edited_to="rehearsal")
+    before = ledger.read_bytes()
+    assert main(["resume", "--world", str(edited), "--ledger", str(ledger)]) == 1
+    assert capsys.readouterr().err.splitlines() == [
+        "factorylab resume: charter_digest_mismatch"]
+    assert ledger.read_bytes() == before
+    assert main(["resume", "--world", str(ratified), "--ledger", str(ledger)]) == 0

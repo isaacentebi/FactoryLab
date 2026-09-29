@@ -87,6 +87,8 @@ class Reason(StrEnum):
     CHARTER_LAUNCH_MISSING = "charter_launch_missing"
     # A resume's manifest names another charter.launch than the world launched with.
     CHARTER_LAUNCH_CHANGED = "charter_launch_changed"
+    # A ratified charter's loaded content does not hash to charter.ratified_sha256.
+    CHARTER_DIGEST_MISMATCH = "charter_digest_mismatch"
 
 
 class CredentialMissing(RuntimeError):

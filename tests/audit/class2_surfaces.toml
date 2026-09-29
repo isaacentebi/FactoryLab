@@ -554,6 +554,7 @@ sources = [
   "factorylab/runtime/worlds.py::WorldManifest._validate_look_ahead",
   "factorylab/runtime/worlds.py::WorldManifest._validate_tape",
   "factorylab/runtime/worlds.py::WorldManifest._validate_venice_network",
+  "factorylab/runtime/worlds.py::WorldManifest.check_ratified_digest",
   "factorylab/runtime/worlds.py::WorldManifest.look_ahead_refusal",
   "factorylab/runtime/worlds.py::WorldManifest.validate",
   "factorylab/runtime/worlds.py::WorldManifest.validate_price_fields",

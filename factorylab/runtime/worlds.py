@@ -910,6 +910,22 @@ class WorldManifest:
         if self.charter_launch is None:
             raise ValueError("mainnet requires charter.launch from the ratified export")
 
+    def check_ratified_digest(self) -> None:
+        """Refuse a ratified charter whose loaded content is not the one ratified.
+
+        Guarantees that where ``charter.ratified_sha256`` is present, whatever the
+        network, the charter as loaded (its cards, norms and ``charter.launch``)
+        hashes to it (``charter_digest_mismatch``): an edit after ratification, a
+        launch rebinding included, is not the voted charter. A charter with no
+        ratified digest claims nothing and is not compared.
+        """
+        if self.charter_ratified_sha256 is None:
+            return
+        if self.charter_content_sha256 != self.charter_ratified_sha256:
+            raise CharterDigestMismatch(
+                "charter_digest_mismatch",
+                "the loaded charter's content digest is not charter.ratified_sha256")
+
     def check_launch(self, launch: str) -> None:
         """Refuse a launch its charter was not voted for (``CharterLaunchRefused``).
 
@@ -921,6 +937,7 @@ class WorldManifest:
         """
         if launch not in CHARTER_LAUNCHES:
             raise ValueError(f"launch must be one of {', '.join(CHARTER_LAUNCHES)}")
+        self.check_ratified_digest()  # the stated launch is the ratified one, or refused
         if self.charter_launch is None:
             if self.charter_ratified_sha256 is not None:
                 raise CharterLaunchRefused(
@@ -1342,6 +1359,9 @@ class WorldManifest:
             raise ValueError(f"look_ahead: a tape world lists no web route; {online} are")
 
     def validate(self) -> None:
+        # A ratified charter is the one voted, on every network (§I.b): its content,
+        # charter.launch included, hashes to the digest the ratification recorded.
+        self.check_ratified_digest()
         problem = self.read_share_problem() or self.storage_problem()
         if problem is not None:
             raise ValueError(problem)
@@ -1600,6 +1620,10 @@ class CharterLaunchRefused(ValueError):
     def __init__(self, reason: str, detail: str):
         self.reason = reason
         super().__init__(f"{reason}: {detail}")
+
+
+class CharterDigestMismatch(CharterLaunchRefused):
+    """A ratified charter was edited after ratification: it is not launched or resumed."""
 
 
 def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]:
