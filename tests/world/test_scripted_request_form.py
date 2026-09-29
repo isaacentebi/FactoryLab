@@ -53,7 +53,7 @@ def test_an_authors_description_cannot_forge_the_kernels_sections():
 
 def test_a_mixed_contract_on_a_wake_is_a_producers_and_a_judging_step_is_read_by_scoring():
     mixed = {"anyOf": [{"type": "object", "required": ["action"]}, VERDICT_SCHEMA]}
-    model_req, text = _model_request("Respond to event Tick.", {"kind": "Tick", "payload": {}},
+    model_req, text = _model_request("Event Tick.", {"kind": "Tick", "payload": {}},
                                      mixed)
     assert request_form(model_req, text, _inputs_from_prompt(text)) == "produce"
     for key, form in (("evaluator_return", "judge"), ("meta_return", "meta"),

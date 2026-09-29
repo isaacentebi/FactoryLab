@@ -316,7 +316,7 @@ def _tick_payload(rt: Runtime, index: int) -> dict[str, Any]:
 
 def _subject_return() -> dict[str, Any]:
     return {
-        "description": "Respond to event Tick on clock.",
+        "description": "Event Tick on clock.",
         "inputs": {"kind": "Tick", "payload": {"index": 3}},
         "outputs": {"action": "hold",
                     "rationale": "Mids moved less than the spread since the last tick."},
@@ -404,7 +404,7 @@ def build_scenarios(rt: Runtime, candidate: str, seats: dict[str, str], *, sampl
     produce_schema = {"type": "object", "properties": {
         "action": {"type": "string"}, "propensity": {"type": "object"},
         "register": rt._register_schema()}, "required": ["action"]}
-    produce = rt._request(handle, "Respond to event Tick on clock.", produce_inputs,
+    produce = rt._request(handle, "Event Tick on clock.", produce_inputs,
                           produce_schema, DEADLINE_NS, CH_VERDICT)
     out.append(Scenario("produce", producer, "producer", CH_VERDICT, "ok", produce))
 

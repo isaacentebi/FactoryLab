@@ -39,7 +39,7 @@ def runtime(mode):
 
 def test_a_lifted_fold_leaves_a_pointer_in_inputs():
     fold = {"fills": [1], "events": 3}
-    req = Request("h", "Respond to event WorldUpdate on runtime.",
+    req = Request("h", "Event WorldUpdate on runtime.",
                   {"kind": "WorldUpdate", "payload": {"tick": 7, "since_you_last_woke": fold},
                    "world": {}}, {}, {"type": "object"}, 1, 1, None, "c", "x", "h")
     sections = dict(req.sections())
@@ -101,7 +101,7 @@ def test_the_wake_request_describes_itself_as_facts(monkeypatch):
     _unsettled_produce(rt)
     (req,) = captured
     text = req.description
-    assert text.startswith("Respond to event Tick on test.")
+    assert text.startswith("Event Tick on test.")
     assert "A return here is this seat's decision about this event" in text
     named = set(re.findall(r"world\.scoring\.([a-z_]+)", text))
     assert named and named <= set(rt._scoring_block())

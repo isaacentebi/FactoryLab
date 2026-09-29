@@ -61,7 +61,7 @@ def test_first_tier_judge_is_not_told_the_author_or_its_role(monkeypatch):
     req = captured[-1]
     producer = req.inputs["producer"]
     # C1: an event-neutral description, with no clause offered to the antagonist alone.
-    assert producer["description"] == f"Respond to event {event.payload['inputs']['kind']} " \
+    assert producer["description"] == f"Event {event.payload['inputs']['kind']} " \
         "on test."
     assert "payoff" not in json.dumps(producer)
     # P8: the propensity is rendered once, in the PROPENSITY block, never in INPUTS.

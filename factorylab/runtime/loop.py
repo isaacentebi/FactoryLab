@@ -1422,7 +1422,9 @@ class Runtime(
             # time it woke rather than to the last tick.
             payload["since_you_last_woke"] = self.subscription_book.take(
                 sample.chosen, now=self.tick_index)
-        description = f"Respond to event {ev.kind} on {ev.source}."
+        # The event as a fact, never an instruction to answer it (Chapter II §I.a,
+        # surfaces not strategies; §II.b, physics is enforced, not announced).
+        description = f"Event {ev.kind} on {ev.source}."
         # What a judge of this return is told it answered: the event, and no clause
         # that names the author's role (information audit C1).
         judged_description = description
