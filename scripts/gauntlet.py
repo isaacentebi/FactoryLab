@@ -1552,7 +1552,7 @@ def _metered(row: Mapping) -> bool:
     no meter for it (feedback.py ``_record_router_round`` returns early; Codex on
     2bc2d30). A row with no ``opened_tick`` key at all is an older diary's, not this."""
     return need(row, "action") != "NOOP" and not ("opened_tick" in row
-                                                  and row["opened_tick"] is None)
+                                                  and row.get("opened_tick") is None)
 
 
 def tick_clocked(events: list[Mapping]) -> bool:
