@@ -280,3 +280,24 @@ def test_a_live_tick_sends_the_same_requests_whatever_the_universe(venue, n):
     assert not any(kind == "l2Book" for kind, _ in sent)
     assert {name for kind, name in sent if kind == "fundingHistory"} == {"BTC", "xyz:TSLA"}
     assert sum(sent.values()) == 7
+
+
+@pytest.mark.parametrize("named,coin", [("buy:xyz:TSLA", "xyz:TSLA"), ("buy:BTC", "BTC"),
+                                        ("sell:BTC:m", "BTC"), ("buy:XYZ:tsla", "xyz:TSLA")])
+def test_a_named_trade_on_a_hip3_coin_keeps_its_dex(named, coin):
+    from factorylab.runtime.grounded import declined_trade
+
+    listed = ("BTC", "xyz:TSLA", "xyz:GOLD")
+    assert declined_trade({"counterfactual": named}, listed)["coin"] == coin
+    # The dex alone is not a market: it is never the coin a label names.
+    assert declined_trade({"counterfactual": "buy:xyz"}, listed) is None
+
+
+def test_a_hip3_label_canonicalizes_like_any_other():
+    from factorylab.runtime.propensity import canonical_label, effect_label
+
+    assert canonical_label("BUY:xyz:tsla:M") == "buy:XYZ:TSLA:m"
+    assert canonical_label("buy:btc:xl") == "buy:BTC:xl"
+    made = effect_label("venue.place_market", {"coin": "xyz:TSLA", "side": "buy",
+                                               "size": "0.5"})
+    assert canonical_label(made.lower()) == made
