@@ -1527,7 +1527,8 @@ def tick(rt: Any) -> None:
         # and resumes from the cursor its checkpoint holds.
         try:
             answer = surface.venue.poll(now_ns=rt.clock.now_ns, cursor=surface.cursor,
-                                        orders=_live_orders(surface))
+                                        orders=_live_orders(surface),
+                                        own=_signed_hashes(surface))
         except Exception as exc:  # noqa: BLE001 - an unread stream holds what waits on it
             rt.ledger.append({"kind": "polymarket.poll_unavailable",
                               "reason": type(exc).__name__, "ts": rt.clock.now_ns})
@@ -1548,14 +1549,27 @@ def tick(rt: Any) -> None:
     reconcile(rt)
 
 
-def _signed(surface: PolymarketSurface, order_id: str) -> tuple[Decimal, Decimal] | None:
-    """The (size, limit) this world signed for an order hash, from its intent, or None."""
+def _signed(surface: PolymarketSurface, order_id: str) -> Any:
+    """What this world signed for an order hash (``polymarket_wire.Signed``: its token,
+    size and limit), from its intent, or None."""
+    from factorylab.world.polymarket_wire import Signed
+
     wanted = str(order_id).lower()
     for intent in surface.intents.values():
         if (intent["operation"] == "polymarket.place_limit"
                 and str(intent.get("order_hash") or "").lower() == wanted):
-            return Decimal(str(intent["args"]["size"])), Decimal(str(intent["args"]["price"]))
+            args = intent["args"]
+            return Signed(str(args["token_id"]), Decimal(str(args["size"])),
+                          Decimal(str(args["price"])))
     return None
+
+
+def _signed_hashes(surface: PolymarketSurface) -> list[str]:
+    """Every order hash this world may have signed, from its durable intents alone:
+    acknowledged, uncertain, pending or released (Sol P1, round 8, on #177)."""
+    return sorted({str(intent["order_hash"]) for intent in surface.intents.values()
+                   if intent["operation"] == "polymarket.place_limit"
+                   and intent.get("order_hash")})
 
 
 #: Ticks between two ``polymarket.read_malformed`` rows of one reason: a stalled read is
@@ -2012,12 +2026,18 @@ def _settle_resolution(rt: Any, event: dict) -> None:
                          for handle, total in after.items()
                          if total != before.get(handle, 0)})
     # The venue's own realised figure for the redemption, booked once in the pot it
-    # landed in. Its owner is the one decision that held the token, when only one
-    # did; several holders share one unattributed row, and each is told its own
-    # FIFO share through the consequence book instead.
+    # landed in. The one decision that held the token owns only what its consequence
+    # lots realised; the rest (quarantined shares' profit, say) stays in the pot owned
+    # by no decision (Sol P2, round 8, on #177). Several holders share one unattributed
+    # row, and each is told its own FIFO share through the consequence book instead.
     rt.polymarket.settled += Decimal(event["realized_usd"])
-    _book_pot(rt, usd_to_micro(event["realized_usd"], rounding="nearest"),
-              f"resolution:{token}", "resolution", holders[0] if len(holders) == 1 else None)
+    total = usd_to_micro(event["realized_usd"], rounding="nearest")
+    owned = realized.get(holders[0], 0) if len(holders) == 1 else 0
+    if owned and (owned > 0) == (total > 0) and abs(owned) <= abs(total):
+        _book_pot(rt, owned, f"resolution:{token}", "resolution", holders[0])
+        total -= owned
+    _book_pot(rt, total, f"resolution:{token}:unattributed" if owned else
+              f"resolution:{token}", "resolution", None)
     for handle, micro in realized.items():
         _tell(rt, handle, {"kind": "polymarket_resolution", **facts,
                            "payout": event["payout"], "realized_micro": micro})

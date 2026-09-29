@@ -15,7 +15,9 @@ book) is parsed here, against its documented shape, into a record of exact types
 * a price is strictly inside (0, 1), a size positive, an amount a finite decimal (never
   a float: the transport parses numbers as ``Decimal``, and a bool is never a number);
 * a status is one of its documented values; a row that is not an object is malformed;
-* a leg of one of this world's orders is a BUY at no more than the order's signed limit.
+* a leg or read-back of one of this world's orders is fully determined by the order it
+  signed, but for its size: its token, BUY, and its signed limit price exactly (a maker
+  executes at its own price); its size positive and no more than the signed size.
 
 An answer that does not conform is ``Malformed`` as a whole: a read is then unread (the
 caller's cursor does not move) and a placement's acknowledgement uncertain (its
@@ -274,6 +276,15 @@ def cancel_answer(answer: Any, order_id: str) -> tuple[str, str | None]:
 
 
 @dataclass(frozen=True)
+class Signed:
+    """What this world signed for one order hash: its token, size and limit price."""
+
+    token_id: str
+    size: Decimal
+    limit: Decimal
+
+
+@dataclass(frozen=True)
 class Order:
     """One CLOB order (``OpenOrder``): lower-case hash, the runtime's status, BUY or
     SELL, its price, size and what it matched (``0 <= matched <= size``)."""
@@ -287,12 +298,11 @@ class Order:
     matched: Decimal
 
 
-def order(answer: Any, *, expect: str | None = None,
-          signed: tuple[Decimal, Decimal] | None = None) -> Order:
-    """One order read back. ``expect`` is the hash asked for; ``signed`` its signed
-    ``(size, limit)``, which the answer must agree with: a BUY of that size at no more
-    than that limit (Sol P1, round 6: an answer is checked against the signed order,
-    never against itself)."""
+def order(answer: Any, *, expect: str | None = None, signed: Signed | None = None) -> Order:
+    """One order read back. ``expect`` is the hash asked for; ``signed`` what this world
+    signed for it, which the answer must be exactly: a BUY of that token and size at
+    that limit (Sol P1, rounds 6 and 8: an answer is bound to the signed order, never
+    checked against itself)."""
     row = obj(answer, "order")
     stated = field(row, "id", "order")
     # An order asked for by its hash is this world's: it must be that hash; a listed
@@ -314,10 +324,10 @@ def order(answer: Any, *, expect: str | None = None,
                    matched=non_negative(field(row, "size_matched", "order"), "size_matched"))
     if record.matched > record.size or (status == "filled" and record.matched != record.size):
         raise Malformed("order matched size contradicts its size")
-    if signed is not None:
-        size, limit = signed
-        if record.side != "buy" or record.size != size or record.price > limit:
-            raise Malformed("order contradicts the order this world signed")
+    if signed is not None and (
+            record.side != "buy" or record.token_id != signed.token_id
+            or record.size != signed.size or record.price != signed.limit):
+        raise Malformed("order contradicts the order this world signed")
     return record
 
 
@@ -353,15 +363,20 @@ class Trade:
     legs: tuple[Leg, ...]
 
 
-def trades_page(answer: Any, ours: dict[str, tuple[Decimal, Decimal]]
-                ) -> tuple[list[Trade], str]:
+def trades_page(answer: Any, ours: dict[str, Signed]) -> tuple[list[Trade], str]:
     """A ``GET /data/trades`` page: the trades with a leg of one of ``ours`` (hash ->
-    signed ``(size, limit)``), and its ``next_cursor``. Every row and every maker leg is
+    what this world signed), and its ``next_cursor``. Every row and every maker leg is
     parsed, whoever's it is; another party's order id is any non-empty string, and a
-    leg is this world's only when its id is, in any case, a hash this world signed. A
-    leg of this world's must be a BUY at no more than its signed limit, of a positive
-    size no larger than its signed size (Sol P1, round 7: a $1.40 fill was booked; a
-    size in base units, 10^6 times the shares, is malformed, never booked)."""
+    leg is this world's only when its id is, in any case, a hash this world signed.
+
+    A leg of this world's is fully determined by its signed order but for its size
+    (architect's rule on Sol's round-8 review of #177): its token is the signed token,
+    it is a BUY at exactly the signed limit (a maker executes at its own price), and its
+    size is positive and no more than the signed size. Anything else is malformed,
+    never booked (Sol: a leg reported under another token's hash, or below its limit,
+    invented money; a size in base units, 10^6 times the shares, is malformed too).
+    The cumulative bound, what is booked plus a new leg, is kept where legs are booked
+    (``LivePolymarket._fills``)."""
     page = obj(answer, "trades page")
     own = {h.lower(): signed for h, signed in ours.items()}
     trades = []
@@ -385,7 +400,8 @@ def trades_page(answer: Any, ours: dict[str, tuple[Decimal, Decimal]]
         if side not in ("BUY", "SELL"):
             raise Malformed("trade side is not documented")
         if taker in own:
-            legs.append(_leg(taker, side, size, paid, own[taker], taker=True))
+            asset = token_id(field(row, "asset_id", "trade"), "trade asset_id")
+            legs.append(_leg(taker, asset, side, size, paid, own[taker], taker=True))
         for maker_raw in rows(field(row, "maker_orders", "trade"), "maker_orders"):
             maker = obj(maker_raw, "maker leg")
             maker_id = other_id(field(maker, "order_id", "maker leg"), "maker order_id")
@@ -395,8 +411,9 @@ def trades_page(answer: Any, ours: dict[str, tuple[Decimal, Decimal]]
             matched = positive(field(maker, "matched_amount", "maker leg"), "matched_amount")
             maker_price = price(field(maker, "price", "maker leg"), "maker price")
             if maker_id in own:
-                legs.append(_leg(maker_id, maker_side, matched, maker_price, own[maker_id],
-                                 taker=False))
+                asset = token_id(field(maker, "asset_id", "maker leg"), "maker asset_id")
+                legs.append(_leg(maker_id, asset, maker_side, matched, maker_price,
+                                 own[maker_id], taker=False))
         if legs:
             trades.append(Trade(trade_id, status, at, instant, tuple(legs)))
     return trades, cursor(field(page, "next_cursor", "trades page"))
@@ -412,10 +429,10 @@ def _seconds(value: Any, what: str) -> int:
     raise Malformed(f"{what} is not a time")
 
 
-def _leg(order_id: str, side: str, size: Decimal, paid: Decimal,
-         signed: tuple[Decimal, Decimal], *, taker: bool) -> Leg:
-    ordered, limit = signed
-    if side != "BUY" or paid > limit or size > ordered:
+def _leg(order_id: str, asset: str, side: str, size: Decimal, paid: Decimal,
+         signed: Signed, *, taker: bool) -> Leg:
+    if (asset != signed.token_id or side != "BUY" or paid != signed.limit
+            or size > signed.size):
         raise Malformed("a leg contradicts the order this world signed")
     return Leg(order_id, size, paid, taker)
 

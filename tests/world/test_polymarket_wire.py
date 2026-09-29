@@ -17,7 +17,7 @@ from factorylab.world import polymarket_wire as wire
 OURS = "0x" + "ab" * 32
 OTHER = "0x" + "ee" * 32
 TOKEN = "100000000000000000000"
-SIGNED = {OURS: (Decimal(10), Decimal("0.30"))}
+SIGNED = {OURS: wire.Signed(TOKEN, Decimal(10), Decimal("0.30"))}
 
 
 def _without(row, key):
@@ -100,6 +100,7 @@ GOOD_ORDER = {"id": OURS, "status": "CANCELED", "asset_id": TOKEN, "side": "BUY"
     {**GOOD_ORDER, "id": "0xo"}, {**GOOD_ORDER, "side": "SELL"},
     {**GOOD_ORDER, "side": "buy"}, {**GOOD_ORDER, "original_size": "1"},
     {**GOOD_ORDER, "price": "0.31"}, {**GOOD_ORDER, "asset_id": 100},
+    {**GOOD_ORDER, "price": "0.29"}, {**GOOD_ORDER, "asset_id": "100000000000000000001"},
 ])
 def test_an_order_read_back_that_does_not_conform_is_malformed(answer):
     with pytest.raises(wire.Malformed):
@@ -107,15 +108,16 @@ def test_an_order_read_back_that_does_not_conform_is_malformed(answer):
 
 
 def test_an_order_read_back_is_normalised_once():
-    read = wire.order({**GOOD_ORDER, "id": OURS.upper().replace("0X", "0x"), "price": "0.29",
+    read = wire.order({**GOOD_ORDER, "id": OURS.upper().replace("0X", "0x"), "price": "0.3",
                        "extra": {"anything": 1}}, expect=OURS, signed=SIGNED[OURS])
     assert (read.order_id, read.status, read.matched, read.price) == (
-        OURS, "cancelled", Decimal(5), Decimal("0.29"))
+        OURS, "cancelled", Decimal(5), Decimal("0.30"))
 
 
 # --- a trades page -----------------------------------------------------------------------
 
-LEG = {"order_id": OURS, "matched_amount": "5", "price": "0.30", "side": "BUY",
+LEG = {"order_id": OURS, "asset_id": TOKEN, "matched_amount": "5", "price": "0.30",
+       "side": "BUY",
        "fee_rate_bps": "0", "owner": "key-1"}
 TRADE = {"id": "t-1", "status": "CONFIRMED", "match_time": "100", "taker_order_id": OTHER,
          "side": "SELL", "size": "5", "price": "0.30", "fee_rate_bps": "100",
@@ -132,6 +134,18 @@ def _page(*rows, **extra):
     _page({**TRADE, "maker_orders": [None, LEG]}),         # Sol P1 (round 7) #2
     _page({**TRADE, "maker_orders": [{**LEG, "price": "1.40"}]}),  # Sol P1 (round 7) #5
     _page({**TRADE, "maker_orders": [{**LEG, "price": "0.31"}]}),  # above the limit
+    # Sol P1 (round 8): an own leg is its signed order but for its size.
+    _page({**TRADE, "maker_orders": [{**LEG, "price": "0.29"}]}),  # below the limit
+    _page({**TRADE, "maker_orders": [{**LEG, "price": "0.20"}]}),
+    _page({**TRADE, "maker_orders": [{**LEG, "asset_id": "100000000000000000001"}]}),
+    _page({**TRADE, "maker_orders": [_without(LEG, "asset_id")]}),
+    _page({**TRADE, "maker_orders": [{**LEG, "asset_id": 100000000000000000000}]}),
+    _page({**TRADE, "taker_order_id": OURS, "asset_id": "100000000000000000001",
+           "side": "BUY", "maker_orders": []}),
+    _page({**TRADE, "taker_order_id": OURS, "asset_id": TOKEN, "side": "SELL",
+           "maker_orders": []}),
+    _page({**TRADE, "taker_order_id": OURS, "asset_id": TOKEN, "side": "BUY",
+           "price": "0.25", "maker_orders": []}),
     _page({**TRADE, "maker_orders": [{**LEG, "price": "-0.30"}]}),
     _page({**TRADE, "maker_orders": [{**LEG, "matched_amount": "-5"}]}),
     _page({**TRADE, "maker_orders": [{**LEG, "matched_amount": "garbage"}]}),
@@ -152,6 +166,14 @@ def _page(*rows, **extra):
 def test_a_trades_page_that_does_not_conform_is_malformed_whole(page):
     with pytest.raises(wire.Malformed):
         wire.trades_page(page, SIGNED)
+
+
+def test_a_foreign_leg_is_not_bound_to_this_world_s_signed_order():
+    """Another party's leg may be any token, side and price: it never touches the books."""
+    trades, _ = wire.trades_page(_page({**TRADE, "maker_orders": [
+        {**LEG, "order_id": OTHER, "asset_id": "7", "side": "SELL", "price": "0.9"}]}),
+        SIGNED)
+    assert trades == []
 
 
 def test_a_trades_page_keeps_only_this_world_s_legs_normalised():

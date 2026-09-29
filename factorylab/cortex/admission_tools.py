@@ -343,8 +343,12 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "reports this world's order as a taker, or a fee on it, at any settlement "
                 "status and on any sighting, contradicts that, read from the raw trade rows before "
                 "any is parsed: it is recorded as drift, and buying stops for the world's "
-                "life. A fill beyond "
-                "its order's size is booked to the pot owned by no decision.",
+                "life. A leg of this world's order is that signed order but for its size: its "
+                "token, a BUY at exactly its limit; what is booked of an order never passes "
+                "its signed size. A leg that is not is malformed: the read stalls, "
+                "ledgered, and nothing of it is booked. At a resolution a decision owns only "
+                "what its own lots realised; the rest stays in the pot, owned by no "
+                "decision.",
                 "live": "With live_orders, an order is signed by the pot's wallet and sent to "
                 "Polymarket's CLOB; the pot's collateral is pUSD, Polymarket's USDC-backed "
                 "token. Its identity is its EIP-712 order hash, recorded with the intent "

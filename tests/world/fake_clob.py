@@ -312,7 +312,8 @@ class FakeClob:
                    "asset_id": event["token_id"], "maker_orders": []}
             row.update(taker_order_id=OTHER, side="SELL", size=event["size"], price=event["px"],
                        fee_rate_bps="0",
-                       maker_orders=[{"order_id": digest, "matched_amount": event["size"],
+                       maker_orders=[{"order_id": digest, "asset_id": event["token_id"],
+                                      "matched_amount": event["size"],
                                       "price": event["px"], "fee_rate_bps": "0",
                                       "side": "BUY" if event["is_buy"] else "SELL"}])
             self.trades.append(row)

@@ -225,17 +225,20 @@ def test_a_fill_is_booked_once_when_confirmed_and_never_past_its_order():
     (fill,) = items(rt, "polymarket.fill")
     assert fill["size"] == "10" and Decimal(fill["px"]) == Decimal("0.40")
     order_id = result["order_id"]
-    # The venue now reports a second execution of the same 10-token order: quarantined,
-    # booked to the pot, owned by no decision.
+    # The venue now reports a second execution of the same 10-token order: past its
+    # signed size, so the read is malformed (a visible stall), never booked
+    # (architect's rule on Sol's round-8 review).
     server.extra_fills = [{"id": "t-extra", "status": "CONFIRMED",
                            "match_time": signed_s(rt, order_id),
                            "taker_order_id": OTHER, "side": "SELL", "size": "5", "price": "0.40",
-                           "maker_orders": [{"order_id": order_id, "matched_amount": "5",
+                           "maker_orders": [{"order_id": order_id,
+                                             "asset_id": token(server), "matched_amount": "5",
                                              "price": "0.40", "side": "BUY"}]}]
     before = dict(rt.venue_deltas.get(handle, {}))
     polymarket.tick(rt)
-    assert items(rt, "polymarket.fill_quarantined")[0]["order_id"] == order_id
-    assert items(rt, "consequence.quarantined")
+    assert not items(rt, "polymarket.fill_quarantined")
+    assert [i["reason"] for i in items(rt, "polymarket.read_malformed")] == [
+        "a leg takes its order past its signed size"]
     assert rt.venue_deltas.get(handle, {}) == before
     assert rt.polymarket.filled[order_id] == "10"
 
@@ -250,9 +253,10 @@ def test_unattributed_custody_is_what_no_return_owns_and_the_books_close():
                            "match_time": signed_s(rt, order_id), "taker_order_id": OTHER,
                            "side": "SELL",
                            "size": "5", "price": "0.40", "maker_orders": [
-                               {"order_id": order_id, "matched_amount": "5",
+                               {"order_id": order_id,
+                                "asset_id": token(server), "matched_amount": "5",
                                 "price": "0.40", "side": "BUY"}]}]
-    polymarket.tick(rt)  # quarantined: past the order's 10
+    polymarket.tick(rt)  # past the order's 10: malformed, never booked
     rt.clock.now_ns = 10**15
     server.advance(10**15)
     polymarket.tick(rt)
@@ -938,7 +942,8 @@ def test_a_cancelled_order_s_failed_legs_are_netted_before_it_is_confirmed():
                            "match_time": signed_s(rt, order_id), "taker_order_id": OTHER,
                            "side": "SELL",
                            "size": "5", "price": "0.30", "maker_orders": [
-                               {"order_id": order_id, "matched_amount": "5",
+                               {"order_id": order_id,
+                                "asset_id": token(server), "matched_amount": "5",
                                 "price": "0.30", "side": "BUY"}]}]
     polymarket.tick(rt)
     rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
@@ -1024,6 +1029,7 @@ def test_a_trade_that_contradicts_the_maker_only_venue_halts_buying():
     order_id = buy(rt, server, collateral_decision(rt))["order_id"]
     server.extra_fills = [{"id": "t-x", "status": "CONFIRMED",
                            "match_time": signed_s(rt, order_id), "taker_order_id": order_id,
+                           "asset_id": token(server),
                            "side": "BUY",
                            "size": "10", "price": "0.30", "fee_rate_bps": "500",
                            "maker_orders": []}]
@@ -1056,7 +1062,8 @@ def test_a_discovered_partial_cancel_releases_its_unfilled_liability():
                           "match_time": signed_s_of(intent), "taker_order_id": OTHER,
                           "side": "SELL",
                           "size": "5", "price": "0.30", "maker_orders": [
-                              {"order_id": order_id, "matched_amount": "5",
+                              {"order_id": order_id,
+                               "asset_id": token(server), "matched_amount": "5",
                                "price": "0.30", "side": "BUY"}]})
     polymarket.tick(rt)  # the confirmed trade binds the order; 5 are booked
     server.fake.cancel(client_id="by-hand", order_id=pm)  # the rest is cancelled
@@ -1074,7 +1081,8 @@ def _partial(rt, server, order_id, *, status="CONFIRMED", trade_id="t-5", size="
                                        remaining=Decimal(10) - Decimal(size))
     row = {"id": trade_id, "status": status, "match_time": signed_s(rt, order_id),
            "taker_order_id": OTHER, "side": "SELL", "size": size, "price": "0.30", "maker_orders": [
-               {"order_id": order_id, "matched_amount": size, "price": "0.30",
+               {"order_id": order_id,
+                "asset_id": token(server), "matched_amount": size, "price": "0.30",
                 "side": "BUY"}]}
     server.trades.append(row)
     return row
@@ -1127,6 +1135,7 @@ def test_a_taker_leg_at_any_trade_status_halts_buying(status):
     order_id = buy(rt, server, collateral_decision(rt))["order_id"]
     server.trades.append({"id": "t-x", "status": status,
                           "match_time": signed_s(rt, order_id), "taker_order_id": order_id,
+                          "asset_id": token(server),
                           "side": "BUY",
                           "size": "10", "price": "0.30", "maker_orders": []})
     polymarket.tick(rt)
@@ -1284,7 +1293,8 @@ def test_a_malformed_row_never_discards_a_contradiction_found_beside_it():
                           "match_time": signed_s(rt, order_id), "taker_order_id": OTHER,
                           "side": "SELL",
                           "size": "1", "price": "0.30", "maker_orders": [
-                              {"order_id": order_id, "matched_amount": "garbage",
+                              {"order_id": order_id,
+                               "asset_id": token(server), "matched_amount": "garbage",
                                "price": "0.30", "side": "BUY"}]})
     for _ in range(2):
         polymarket.tick(rt)
@@ -1373,6 +1383,7 @@ def test_hash_case_and_fee_spelling_never_hide_a_contradiction(variant):
     if variant == "upper taker":
         server.trades.append({"id": "t-x", "status": "MATCHED",
                               "match_time": signed_s(rt, order_id), "taker_order_id": upper,
+                              "asset_id": token(server),
                               "side": "BUY", "size": "10", "price": "0.30",
                               "maker_orders": []})
     else:
@@ -1444,3 +1455,97 @@ def test_a_stalled_read_is_visible_once_per_reason_per_window():
     polymarket.tick(rt)
     assert len(items(rt, "polymarket.read_malformed")) == 2
     assert order_id not in rt.polymarket.filled
+
+
+# --- Sol's round-8 review of #177: a leg of ours is its signed order but for its size ------
+
+
+def test_a_leg_reported_under_another_token_s_hash_is_never_booked():
+    """#1: YES and NO buys rest at $0.30; only NO fills, but the venue reports YES's hash
+    on the leg, with ``asset_id`` NO. The leg is not the order YES signed: the read is
+    malformed and nothing is booked to YES."""
+    rt, server = live_world()
+    yes = buy(rt, server, collateral_decision(rt))["order_id"]
+    buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-1")
+    no = token(server, side=1)
+    server.trades.append({"id": "t-no", "status": "CONFIRMED",
+                          "match_time": signed_s(rt, yes), "taker_order_id": OTHER,
+                          "side": "SELL", "size": "10", "price": "0.30",
+                          "maker_orders": [{"order_id": yes, "asset_id": no,
+                                            "matched_amount": "10", "price": "0.30",
+                                            "side": "BUY"}]})
+    polymarket.tick(rt)
+    assert yes not in rt.polymarket.filled
+    assert items(rt, "polymarket.read_malformed")
+
+
+def test_a_maker_leg_below_its_limit_is_never_booked():
+    """#2: a maker executes at its own price: a leg of the $0.30 order reported at $0.20
+    would invent a dollar of profit. The read is malformed, never booked."""
+    rt, server = live_world()
+    order_id = buy(rt, server, collateral_decision(rt))["order_id"]
+    row = _partial(rt, server, order_id)
+    row["maker_orders"][0]["price"] = "0.20"
+    polymarket.tick(rt)
+    assert order_id not in rt.polymarket.filled
+    assert items(rt, "polymarket.read_malformed")
+
+
+def test_a_pending_uncertain_placement_s_charged_leg_halts_buying():
+    """#3: a placement whose answer was lost and whose lookups fail is not yet released,
+    so it is in no settlement set; a charged maker leg of it, read beside another order's
+    trades, still halts buying: the scan reads every hash the world may have signed."""
+    rt, server = live_world()
+    other = buy(rt, server, collateral_decision(rt))["order_id"]  # acknowledged, read
+    server.lose_answer = True
+    server.fail_lookups = 10**6
+    buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2", price="0.20")
+    (pending,) = [i for i in rt.polymarket.intents.values()
+                  if i["args"]["price"] == "0.20"]
+    assert pending["result"]["status"] == "uncertain" and not pending.get("unresolved")
+    assert pending["order_hash"] not in polymarket._live_orders(rt.polymarket)
+    server.trades.append({"id": "t-p", "status": "MATCHED",
+                          "match_time": signed_s(rt, other), "taker_order_id": OTHER,
+                          "side": "SELL", "size": "10", "price": "0.20",
+                          "maker_orders": [{"order_id": pending["order_hash"],
+                                            "asset_id": token(server, "fake-2"),
+                                            "matched_amount": "10", "price": "0.20",
+                                            "side": "BUY", "fee_rate_bps": "500"}]})
+    polymarket.tick(rt)
+    assert rt.polymarket.contradicted
+
+
+def test_a_resolution_attributes_only_what_the_decision_s_lots_realised(monkeypatch):
+    """#4: of a ten-share $0.30 order, five are booked to the decision's lot and five are
+    quarantined (the consequence book refused them). At a YES resolution the venue
+    realises $7; the decision owns the $3.50 its lot realised, and the other $3.50 stays
+    in the pot, owned by no decision."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 0)})
+    rt, server = live_world(fake=fake)
+    handle = collateral_decision(rt)
+    order_id = buy(rt, server, handle)["order_id"]
+    _partial(rt, server, order_id)
+    polymarket.tick(rt)  # 5 booked to the decision's lot
+    observe = rt.consequences.observe
+
+    def refuses(kind, payload, event):
+        if kind == "Fill":
+            raise ValueError("the consequence book refuses this fill")
+        return observe(kind, payload, event)
+
+    monkeypatch.setattr(rt.consequences, "observe", refuses)
+    _partial(rt, server, order_id, trade_id="t-6")
+    server.fake._all_orders[server.orders[order_id]["pm"]].update(
+        filled=Decimal(10), remaining=Decimal(0))
+    polymarket.tick(rt)  # 5 more: quarantined, owned by no decision
+    monkeypatch.setattr(rt.consequences, "observe", observe)
+    assert rt.polymarket.filled[order_id] == "10"
+    before = rt.venue_deltas.get(handle, {}).get("polymarket", 0)
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert rt.venue_deltas[handle]["polymarket"] - before == 3_500_000
+    rows = [i for i in items(rt, "venue.settled") if i["reason"] == "resolution"]
+    assert sum(i["amount"] for i in rows) == 7_000_000
+    assert [i["amount"] for i in rows if i["handle"] is None] == [3_500_000]

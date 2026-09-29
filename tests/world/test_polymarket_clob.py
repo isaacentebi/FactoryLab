@@ -247,8 +247,9 @@ def test_a_cancel_needs_its_intent_and_answers_what_the_venue_did():
 
 
 def _orders(intent, token):
-    return {intent["order_hash"]: {"token_id": token, "side": "buy", "size": "10",
-                                   "price": "0.40", "market_id": "fake-1"}}
+    return {intent["order_hash"]: {"token_id": token, "side": "buy",
+                                   "size": intent["args"]["size"],
+                                   "price": intent["args"]["price"], "market_id": "fake-1"}}
 
 
 def test_a_fill_is_reported_once_when_final_and_a_failed_trade_never():
@@ -367,7 +368,7 @@ def test_more_trade_pages_than_one_poll_reads_are_read_over_several_polls():
     server.trades = [{"id": f"t-{n}", "status": "CONFIRMED", "match_time": str(100 + n),
                       "taker_order_id": "0x" + "cd" * 32,
                       "side": "SELL", "size": "0.5", "price": "0.3",
-                      "maker_orders": [{"order_id": intent["order_hash"],
+                      "maker_orders": [{"order_id": intent["order_hash"], "asset_id": token,
                                         "matched_amount": "0.5", "price": "0.3",
                                         "side": "BUY"}]}
                      for n in range(2 * pages)]
@@ -523,7 +524,8 @@ def test_what_the_pot_holds_does_not_depend_on_the_order_buys_are_booked_in():
     rows = [{"id": f"t-{n}", "status": "CONFIRMED", "match_time": "100",
              "taker_order_id": "0x" + "cd" * 32, "side": "SELL", "size": "10",
              "price": price, "maker_orders": [
-                 {"order_id": f"0x{n:064x}", "matched_amount": "10", "price": price,
+                 {"order_id": f"0x{n:064x}", "asset_id": token, "matched_amount": "10",
+                  "price": price,
                   "side": "BUY", "fee_rate_bps": "0"}]}
             for n, price in enumerate(("0.41", "0.61", "0.55"))]
     venue._credentials()
@@ -608,3 +610,42 @@ def test_an_expired_reservation_is_renewed_before_the_order_is_signed():
 
 def clock_window():
     return clob.BUDGET_WINDOW_NS
+
+
+def test_a_slot_that_expires_while_signing_is_renewed_before_the_send():
+    """Sol P2 (round 8) on #177: a stall while signing slid the slot out of the window,
+    and the send went uncounted. The slot is checked again immediately before the send:
+    renewed, or, when none is left, the signed order is withheld, never sent, still
+    counted (it was signed) and no cancellation target."""
+    clock = {"now": 1_790_000_000_000_000_000}
+    venue, server = live_venue(budget=2, wall=lambda: clock["now"])
+    token, intent = _intent(venue, server, "c-1", price="0.30")
+    venue.intent_of = {"c-1": intent}.get
+    venue._credentials()
+    venue.budget.stamps.clear()
+    venue.reserve_order_slot()
+    real = clob.order_signature
+    spend = {"after": False}
+
+    def slow(*args, **kwargs):
+        clock["now"] += 11 * 10**9  # an honest stall while signing
+        if spend["after"]:  # and the budget spent by the time it is sent
+            venue.budget.stamps = [clock["now"]] * 2
+        return real(*args, **kwargs)
+
+    clob.order_signature = slow
+    try:
+        assert _place(venue, token, price="0.30")["status"] == "resting"
+        window = [s for s in venue.budget.stamps if s > clock["now"] - clob.BUDGET_WINDOW_NS]
+        assert len(window) == 1  # the send counts in the window it was sent in
+        token, second = _intent(venue, server, "c-2", price="0.20")
+        venue.intent_of = {"c-1": intent, "c-2": second}.get
+        venue.reserve_order_slot()
+        spend["after"] = True
+        posts = len([c for c in server.calls if c == ("POST", "/order")])
+        withheld = _place(venue, token, price="0.20", client_id="c-2")
+    finally:
+        clob.order_signature = real
+    assert withheld["status"] == "rejected" and withheld["withheld"] is True
+    assert "unsigned" not in withheld and "venue_refused" not in withheld
+    assert len([c for c in server.calls if c == ("POST", "/order")]) == posts

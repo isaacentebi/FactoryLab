@@ -428,6 +428,12 @@ def _dec(value: Any) -> Decimal:
     return number
 
 
+def _signed(order: dict[str, str]) -> wire.Signed:
+    """What this world signed for one of its orders, as the runtime's intent names it."""
+    return wire.Signed(str(order["token_id"]), Decimal(str(order["size"])),
+                       Decimal(str(order["price"])))
+
+
 def _redeemable(state: dict[str, Any], token: str, size: Decimal) -> None:
     """Keep what of a resolved token the world held when it was paid: the tokens stay
     in the wallet until redeemed, beside any the funder holds (Codex P2 on #177)."""
@@ -482,7 +488,8 @@ class LivePolymarket(PolymarketReader):
         self.identity = identity or (lambda: (None, None))
         #: client id -> its durable intent, or None; set by the runtime (``install``).
         self.intent_of = lambda _client_id: None
-        #: order hash -> its signed (size, limit), or None; set by the runtime.
+        #: order hash -> what this world signed for it (``wire.Signed``), or None; set by
+        #: the runtime.
         self.order_of = lambda _order_id: None
 
     # ---- keys and credentials
@@ -637,10 +644,22 @@ class LivePolymarket(PolymarketReader):
             owner = self._credentials().key
             if stamp is None or stamp <= int(self.wall()) - BUDGET_WINDOW_NS:
                 self.budget.take()
+                stamp = self.budget.stamps[-1]
         except BudgetSpent:
             return {**self._rejected(order_id, "polymarket order request budget spent"),
                     "unsigned": True}
         signature = order_signature(order, neg_risk, self.signer())
+        # The slot is checked again immediately before the send (Sol P2, round 8: a stall
+        # while signing let the slot slide out of the window): renewed if it did. If no
+        # slot is left, the signed order is not sent: it is withheld locally, never
+        # reached the venue and is no cancellation target, and, signed, it still counts
+        # against the cap.
+        if stamp <= int(self.wall()) - BUDGET_WINDOW_NS:
+            try:
+                self.budget.take()
+            except BudgetSpent:
+                return {**self._rejected(order_id, "polymarket order request budget spent"),
+                        "withheld": True}
         body = {"order": {"salt": order["salt"], "maker": order["maker"],
                           "signer": order["signer"], "tokenId": order["tokenId"],
                           "makerAmount": order["makerAmount"],
@@ -699,7 +718,7 @@ class LivePolymarket(PolymarketReader):
                 "error": "cancel answer names both outcomes or neither"}
 
     def lookup(self, client_id: str, *, order_id: str | None = None, cancel: bool = False,
-               signed: tuple[Decimal, Decimal] | None = None) -> dict[str, Any]:
+               signed: wire.Signed | None = None) -> dict[str, Any]:
         """What the CLOB holds under an order hash, as the runtime reads an answer.
 
         An order the CLOB does not know (404) or did not answer for is ``uncertain``,
@@ -794,7 +813,7 @@ class LivePolymarket(PolymarketReader):
     # ---- fills and resolutions
 
     def poll(self, *, now_ns: int, cursor: dict[str, Any],
-             orders: dict[str, dict[str, str]]) -> dict[str, Any]:
+             orders: dict[str, dict[str, str]], own: Any = ()) -> dict[str, Any]:
         """The pot's fills and resolutions since ``cursor``: ``{events, cursor,
         contradictions, malformed, complete}`` (``malformed``: why a read was unread).
 
@@ -827,7 +846,11 @@ class LivePolymarket(PolymarketReader):
         # round-6 review of #177): a read that fails later cannot erase them.
         contradictions: dict[str, str] = {}
         malformed: list[str] = []
-        for step in (lambda trial: self._fills(trial, orders, contradictions),
+        # The contradiction scan reads for every order hash this world may have signed
+        # (``own``, from its durable intents, uncertain ones included; Sol P1, round 8),
+        # never only the orders it settles.
+        scanned = {str(h).lower() for h in (*orders, *own)}
+        for step in (lambda trial: self._fills(trial, orders, contradictions, scanned),
                      lambda trial: self._resolutions(trial, orders, now_ns)):
             # Each step works on a copy and commits only whole: a read that failed half
             # way leaves the cursor where it was, and what it would have reported is
@@ -848,7 +871,7 @@ class LivePolymarket(PolymarketReader):
                 "malformed": malformed, "complete": complete and "page" not in state}
 
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
-               contradictions: dict[str, str]) -> list[dict]:
+               contradictions: dict[str, str], scanned: set[str]) -> list[dict]:
         if not orders:
             return []
         # Outstanding is what may still fill or has matched unbooked, by the runtime's
@@ -866,14 +889,14 @@ class LivePolymarket(PolymarketReader):
         # several polls: what was read is booked (the seen set keeps each leg once), the
         # page to resume at is kept in the cursor and ``after`` does not move until the
         # listing has been read to its end, so no row is skipped (Codex P1 on #177).
-        signed = {h: (Decimal(o["size"]), Decimal(o["price"])) for h, o in orders.items()}
+        signed = {h: _signed(o) for h, o in orders.items()}
         trades, page_cursor, ended = [], state.get("page", FIRST_CURSOR), False
         for _ in range(MAX_TRADE_PAGES):
             page = self._l2("GET", "/data/trades", query={
                 "maker_address": self.funder, "after": str(state["after"]),
                 "next_cursor": page_cursor})
             # The raw page is scanned before it is parsed (``wire.scan_contradictions``).
-            contradictions.update(wire.scan_contradictions(page, orders))
+            contradictions.update(wire.scan_contradictions(page, scanned))
             batch, page_cursor = wire.trades_page(page, signed)
             trades.extend(batch)
             if page_cursor == END_CURSOR:
@@ -895,6 +918,14 @@ class LivePolymarket(PolymarketReader):
                 if trade.status != TRADE_FINAL:
                     pending.append(trade.at)
                     continue
+                # What is booked of an order never passes its signed size (architect's
+                # rule on Sol's round-8 review): a leg that would is malformed, the read
+                # unread, never booked or quarantined.
+                booked = state.setdefault("booked", {})
+                booked_now = _dec(booked.get(leg.order_id, "0")) + sum(
+                    (f["size"] for f in found if f["order_id"] == leg.order_id), Decimal(0))
+                if booked_now + leg.size > signed[leg.order_id].size:
+                    raise wire.Malformed("a leg takes its order past its signed size")
                 state["seen"][key] = trade.at
                 found.append({"instant": trade.instant, "at": trade.at, "key": key,
                               "order_id": leg.order_id, "size": leg.size,
@@ -1002,8 +1033,7 @@ class LivePolymarket(PolymarketReader):
         state["lookup_turn"] = start + 1
         for order_id in [waiting[(start + k) % len(waiting)]
                          for k in range(min(2, len(waiting)))]:
-            answer = self.lookup("", order_id=order_id, signed=(
-                Decimal(orders[order_id]["size"]), Decimal(orders[order_id]["price"])))
+            answer = self.lookup("", order_id=order_id, signed=_signed(orders[order_id]))
             if answer["status"] not in ("cancelled", "filled", "rejected"):
                 continue
             complete = _dec(answer["filled_size"]) <= _dec(
