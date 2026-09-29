@@ -71,7 +71,7 @@ def test_no_population_authored_text_reaches_the_system_role():
     assert INJECTION in prefix  # the population's prose really is in the stable block
     for assembly in rt.assemblies.values():
         mreq = assembly.build_model_request(
-            request_for(rt, "Respond to event Tick on scripted.", {"index": 1}))
+            request_for(rt, "Event Tick on scripted.", {"index": 1}))
         # The system message is the assembly's own prompt, to the byte.
         assert mreq.system == assembly.spec.system_prompt
         assert INJECTION not in mreq.system and prefix not in mreq.system
