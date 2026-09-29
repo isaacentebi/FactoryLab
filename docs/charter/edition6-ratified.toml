@@ -1,7 +1,9 @@
-# roster_sha256 = 2dbe4b41e657a2a1dbe6c71145a06af9ef1c74ea64c2d273c48f99b59fa3abf6
-# charter_sha256 = b3fa16508315238f03726a600d20a4a58566c8fe80c9e290174b6c2f9478ac59
+# roster_sha256 = 2b14f1560c0c406e94c4f4dcba3436f59c1f3dd86300032fd31173e46a368b32
+# charter_sha256 = 27c9881f4ee2ed7e2a31821e6aa6fc4a490cdfb437398f36ab3fbb77c7cb34de
+# launch = capital-loop (scripts/edition4_rehearsal.py --capital-loop)
 [charter]
 edition = 1
+launch = "capital-loop"
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
@@ -11,72 +13,76 @@ norms = [
 ]
 
 [[charter.cards]]
-id = "independent-uptake"
+id = "consequence-success-floor"
 norm = "consequential usefulness"
-description = "Share of selected producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; assess only eligible settled outcomes and treat missing evidence as unmeasured."
+description = "Share of settled acting returns whose consequence yielded positive real payoff exceeding costs."
 units = "fraction"
-window = { kind = "windows", n = 25 }
-region = { rule = "at least", lo = 0.2 }
-observation = "revision_rate"
-answers_for = "producer"
-
-[[charter.cards]]
-id = "forecast-skill-floor"
-norm = "epistemic integrity"
-description = "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts, with unresolved commitments tracked separately by the existing censorship-bound card."
-units = "score difference"
-window = { kind = "forecasts", n = 25, per = "assembly" }
-region = { rule = "at least", lo = 0.0 }
-observation = "forecast_skill"
-answers_for = "all"
-
-[[charter.cards]]
-id = "avoidable-unresolved-ceiling"
-norm = "epistemic integrity"
-description = "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured."
-units = "fraction"
-window = { kind = "forecasts", n = 25, per = "assembly" }
-region = { rule = "at most", hi = 0.3 }
-observation = "avoidably_unresolved_share"
-answers_for = "all"
-
-[[charter.cards]]
-id = "compute-burn-ceiling"
-norm = "durable agency"
-description = "Total metered invocation compute plus retained-storage rent per closed window."
-units = "micro-USD per window"
-window = { kind = "windows", n = 25 }
-region = { rule = "at most", hi = 10000000.0 }
-observation = "burn_per_window"
-answers_for = "all"
-
-[[charter.cards]]
-id = "outsider-cost-discipline"
-norm = "bounded reciprocity"
-description = "Mean cost over all selected responses, failures included, including the retained-storage charge assigned to those responses but never counting storage as a response."
-units = "micro-USD per attempt"
-window = { kind = "returns", n = 25, per = "assembly" }
-region = { rule = "at most", hi = 1000000.0 }
-observation = "cost_per_attempt"
-answers_for = "all"
-
-[[charter.cards]]
-id = "independent-consequence"
-norm = "consequential usefulness"
-description = "Share of settled selected consequences that are paid off."
-units = "fraction"
-window = { kind = "windows", n = 10 }
-region = { rule = "at least", lo = 0.5 }
+window = { kind = "windows", n = 20 }
+region = { rule = "at least", lo = 0.4 }
 observation = "consequence_paid_off_rate"
 answers_for = "producer"
+lambda = 0.2
 
 [[charter.cards]]
-id = "well-formed-floor"
+id = "forecast-skill-baseline"
+norm = "epistemic integrity"
+description = "Mean skill difference of settled forecasts relative to the pre-outcome prevalence base rate."
+units = "score difference"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+region = { rule = "above", lo = 0.0 }
+observation = "forecast_skill"
+answers_for = "all"
+lambda = 0.15
+
+[[charter.cards]]
+id = "cost-per-attempt-limit"
+norm = "bounded reciprocity"
+description = "Mean metered expenditure per response attempt across all invocations, failed attempts included."
+units = "micro-USD per attempt"
+window = { kind = "returns", n = 30, per = "role" }
+region = { rule = "at most", hi = 500000.0 }
+observation = "cost_per_attempt"
+answers_for = "all"
+lambda = 0.1
+
+[[charter.cards]]
+id = "well-formed-integrity"
 norm = "fidelity"
-description = "Successful responses over selected invocation responses, including ballots, so a seat whose output mostly fails to parse cannot be credited on the fraction that happened to land."
+description = "Proportion of all invocations delivering well-formed schema-compliant returns."
 units = "fraction"
 window = { kind = "returns", n = 25, per = "assembly" }
-region = { rule = "at least", lo = 0.9 }
+region = { rule = "at least", lo = 0.95 }
 observation = "well_formed_rate"
 answers_for = "all"
 lambda = 0.2
+
+[[charter.cards]]
+id = "window-compute-burn-ceiling"
+norm = "durable agency"
+description = "Total metered compute spend across invocations in a closed window."
+units = "micro-USD per window"
+window = { kind = "windows", n = 25 }
+region = { rule = "at most", hi = 1000000.0 }
+observation = "burn_per_window"
+answers_for = "all"
+lambda = 0.2
+
+[[charter.cards]]
+id = "position-concentration-ceiling"
+norm = "durable agency"
+description = "Peak observed absolute marked notional on one coin relative to starting venue equity, assessed only when positions, marks and equity are available."
+units = "ratio"
+window = { kind = "windows", n = 10 }
+region = { rule = "at most", hi = 0.5 }
+observation = "position_concentration"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "evaluator-disagreement-ceiling"
+norm = "fidelity"
+description = "Mean disagreement among judges assessing the same return should remain limited, while treating insufficient multi-judge evidence as unmeasured."
+units = "score standard deviation"
+window = { kind = "windows", n = 10 }
+region = { rule = "at most", hi = 0.2 }
+observation = "evaluator_disagreement"
+answers_for = "evaluator"

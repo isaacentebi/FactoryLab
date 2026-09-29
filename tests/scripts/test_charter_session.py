@@ -458,7 +458,7 @@ def test_the_plain_runtime_still_refuses_the_capital_loop_world():
 
 def _bound(world, launch, tmp_path):
     """A copy of ``world`` whose charter states ``launch`` (``charter.launch``)."""
-    text = (Path(__file__).parents[2] / world).read_text()
+    text = _unpinned((Path(__file__).parents[2] / world).read_text())
     path = tmp_path / Path(world).name
     path.write_text(text.replace("\n[charter]\n", f'\n[charter]\nlaunch = "{launch}"\n', 1))
     return path
@@ -567,7 +567,7 @@ def test_the_rehearsal_runner_admits_a_charter_voted_for_it(capital_loop, tmp_pa
     voted = "capital-loop" if capital_loop else "rehearsal"
     path = tmp_path / "bound" / Path(source).name
     path.parent.mkdir()
-    path.write_text(Path(source).read_text().replace(
+    path.write_text(_unpinned(Path(source).read_text()).replace(
         "\n[charter]\n", f'\n[charter]\nlaunch = "{voted}"\n', 1))
     report = rehearsal.run_rehearsal(str(path), out=tmp_path / "runs" / "bound",
                                      capital_loop=capital_loop,
@@ -705,6 +705,14 @@ def load_manifest_text(text):
     return manifest_from_dict(tomllib.loads(text))
 
 
+
+def _unpinned(text: str) -> str:
+    """``text`` without a charter's own launch and ratification pins, so a test can state
+    the ones under test (edition6-capital-loop is pinned by its own ratification)."""
+    return "\n".join(line for line in text.split("\n")
+                     if not line.startswith(("launch = ", "ratified_sha256 = ",
+                                             "roster_sha256 = ")))
+
 def _ratified_copy(world, launch, tmp_path, *, edited_to=None, roster=False,
                    repriced=False):
     """A copy of ``world`` whose charter states ``launch`` and carries the digests its
@@ -713,7 +721,9 @@ def _ratified_copy(world, launch, tmp_path, *, edited_to=None, roster=False,
     seated model, leaving those digests untouched, as an edit after ratification would."""
     from factorylab.charter.provenance import charter_content, charter_digest, roster_hash
 
-    text = (Path(__file__).parents[2] / world).read_text()
+    # A world already pinned by its own ratification (edition6-capital-loop) states these
+    # keys itself; the copy restates them for the launch under test.
+    text = _unpinned((Path(__file__).parents[2] / world).read_text())
     voted = text.replace("\n[charter]\n", f'\n[charter]\nlaunch = "{launch}"\n', 1)
     digest = charter_digest(charter_content(tomllib.loads(voted)["charter"]))
     pin = f'roster_sha256 = "{roster_hash(load_manifest_text(voted))}"\n' if roster else ""
