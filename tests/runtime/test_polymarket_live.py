@@ -993,3 +993,24 @@ def test_a_cancelled_order_s_failed_legs_are_netted_before_it_is_confirmed():
         polymarket.tick(rt)
     (order,) = rt.consequences.table.orders
     assert order.remaining == 0 and order.executed == 0 and order.confirmed == 0
+
+
+def test_a_fee_its_trade_states_later_is_booked_once_and_lifts_the_halt():
+    """Sol P2 on #177: a CONFIRMED trade without fee_rate_bps later published its fee;
+    the poll never read that trade again (its leg was seen), so the fee stayed unbooked
+    and every buy stayed refused. The trade is read again until it states the fee."""
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    _unstated_fee_fill(rt, server, handle)
+    polymarket.tick(rt)
+    assert rt.polymarket.open_fees
+    for trade in server.trades:
+        trade["fee_rate_bps"] = "500"  # the venue now states it
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert rt.polymarket.open_fees == []
+    fees = [i for i in items(rt, "venue.settled") if i["reference"].startswith("fee:")]
+    assert [(i["amount"], i["handle"]) for i in fees] == [(-51_480, handle)]
+    assert Decimal(polymarket.reconcile(rt)["drift"]) == 0
+    assert buy(rt, server, collateral_decision(rt), size="5", price="0.30",
+               market="fake-1")["status"] == "resting"

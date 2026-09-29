@@ -105,6 +105,9 @@ class FakeClob:
             return {"data": [self._order(h) for h, o in self.orders.items()
                              if o["pm"] in self.fake._orders and not self.orders_lag],
                     "next_cursor": clob.END_CURSOR}
+        if path == "/data/trades" and "id" in query:
+            return {"data": [t for t in self.trades if t["id"] == query["id"]],
+                    "next_cursor": clob.END_CURSOR}
         if path == "/data/trades":
             rows = [t for t in self.trades + self.extra_fills
                     if int(t["match_time"]) > int(query.get("after", "0"))]

@@ -270,8 +270,9 @@ def execution_fee(size: Decimal, price: Decimal, taker: bool, fee_bps: Any,
     leg's fee is ``size x fee_rate_bps / 10,000 x p (1 - p)`` to five decimals (the
     documented formula) when the trade states its rate and the market's schedule is the
     documented one (exponent 1); otherwise the execution does not establish it, and
-    None is returned: the fee stays open until the custodian's balance settles it
-    (``runtime/polymarket.py``, ``reconcile``), never a debit made up here.
+    None is returned: the fee stays open, and its trade is read again until it states
+    the fee (``LivePolymarket._fees``); nothing is debited meanwhile, from a schedule
+    or from a balance.
     """
     if not taker:
         try:
@@ -895,6 +896,7 @@ class LivePolymarket(PolymarketReader):
         events: list[dict[str, Any]] = []
         complete = True
         for step in (lambda trial: self._fills(trial, orders),
+                     lambda trial: self._fees(trial, orders),
                      lambda trial: self._resolutions(trial, orders, now_ns)):
             # Each step works on a copy and commits only whole: a read that failed half
             # way leaves the cursor where it was, and what it would have reported is
@@ -946,10 +948,9 @@ class LivePolymarket(PolymarketReader):
             # only its second (Sol P0 on #177: never the trade id's lexical order).
             nano = trade.get("match_time_nano")
             try:
-                instant = (int(_dec(nano)), True) if nano not in (None, "") else (
-                    at * 1_000_000_000, False)
+                instant = int(_dec(nano)) if nano not in (None, "") else at * 1_000_000_000
             except (ValueError, ArithmeticError):
-                instant = (at * 1_000_000_000, False)
+                instant = at * 1_000_000_000
             legs = []
             if str(trade.get("taker_order_id", "")) in orders:
                 legs.append((str(trade["taker_order_id"]), trade.get("size"),
@@ -973,7 +974,7 @@ class LivePolymarket(PolymarketReader):
                     pending.append(at)
                     continue
                 state["seen"][key] = at
-                found.append({"instant": instant[0], "exact": instant[1], "at": at,
+                found.append({"instant": instant, "at": at, "trade_id": str(trade.get("id")),
                               "key": key, "order_id": order_id, "size": _dec(size),
                               "price": _dec(price), "taker": taker, "fee_bps": fee_bps})
         # Every leg is a buy (the venue takes BUY orders only): what the pot holds of a
@@ -984,6 +985,12 @@ class LivePolymarket(PolymarketReader):
                                      leg["size"], leg["price"], leg["taker"], leg["at"],
                                      leg["fee_bps"])
             event["ts_ns"] = leg["instant"]
+            if event.get("fee_unresolved"):
+                # The trade is read again, by its id, until it states its fee (``_fees``).
+                event["fee_key"] = leg["key"]
+                state.setdefault("fee_open", {})[leg["key"]] = {
+                    "trade_id": leg["trade_id"], "order_id": leg["order_id"],
+                    "size": str(leg["size"]), "price": str(leg["price"])}
             events.append(event)
         if not ended:
             state["page"] = page_cursor
@@ -1023,6 +1030,38 @@ class LivePolymarket(PolymarketReader):
                 "px": str(price), "fee_usd": "0" if fee is None else str(fee),
                 "realized_usd": "0", "ts_ns": at * 1_000_000_000,
                 **({"fee_unresolved": True} if fee is None else {})}
+
+    def _fees(self, state: dict[str, Any], orders: dict[str, dict[str, str]]) -> list[dict]:
+        """Each fee a booked leg's trade did not state, read again until it does.
+
+        Sol P2 on #177: a trade may state ``fee_rate_bps`` after its leg was booked,
+        and fill deduplication never reads it again. Each open fee is kept by its leg's
+        identity and its trade is read by id, two a poll in turn; once the trade states
+        the fee, one ``fee`` event is reported for it and the item is gone, so the fee
+        is booked exactly once.
+        """
+        open_fees = state.get("fee_open", {})
+        if not open_fees:
+            return []
+        keys = sorted(open_fees)
+        turn = state.get("fee_turn", 0)
+        state["fee_turn"] = turn + 1
+        events = []
+        for key in sorted({keys[(turn + k) % len(keys)] for k in range(min(2, len(keys)))}):
+            item = open_fees[key]
+            page = self._l2("GET", "/data/trades", query={"id": item["trade_id"]})
+            for trade in page.get("data", []) if isinstance(page, dict) else []:
+                if str(trade.get("taker_order_id", "")) != item["order_id"]:
+                    continue
+                order = orders.get(item["order_id"], {})
+                fee = execution_fee(_dec(item["size"]), _dec(item["price"]), True,
+                                    trade.get("fee_rate_bps"),
+                                    order.get("fee_exponent", "1"))
+                if fee is not None:
+                    del open_fees[key]
+                    events.append({"kind": "fee", "order_id": item["order_id"],
+                                   "fee_key": key, "fee_usd": str(fee)})
+        return sorted(events, key=lambda e: e["fee_key"])
 
     def _resolutions(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                      now_ns: int) -> list[dict]:

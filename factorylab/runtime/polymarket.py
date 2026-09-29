@@ -1851,6 +1851,8 @@ def settle(rt: Any, events: list[dict[str, Any]]) -> None:
             rt.consequences.cancel(str(event["order_id"]), rt.n)
         elif kind == "resolution":
             _settle_resolution(rt, event)
+        elif kind == "fee":
+            _settle_fee(rt, event)
 
 
 def _settle_fill(rt: Any, event: dict) -> None:
@@ -1896,9 +1898,10 @@ def _settle_fill(rt: Any, event: dict) -> None:
         # Astra P0 and Codex P1 on #177: the execution did not state its fee (get-trades
         # lists fee_rate_bps as optional). Nothing is debited, from a schedule or from
         # the balance (a drift cannot tell a fee from a deposit or a withdrawal): the fee
-        # stays an unresolved item, and no buy is taken while one is open (``refusal``).
+        # stays an unresolved item until its trade states it (``_settle_fee``), and no
+        # buy is taken while one is open (``refusal``).
         item = {"order_id": order_id, "handle": owner_handle, "size": str(event["size"]),
-                "px": str(event["px"])}
+                "px": str(event["px"]), "key": event.get("fee_key")}
         surface.open_fees.append(item)
         rt.ledger.append({"kind": "polymarket.fee_unresolved", **item, "ts": rt.clock.now_ns})
     try:
@@ -1917,6 +1920,27 @@ def _settle_fill(rt: Any, event: dict) -> None:
                              "side": "buy" if event["is_buy"] else "sell",
                              "size": event["size"], "px": event["px"],
                              "fee_usd": event["fee_usd"]})
+
+
+def _settle_fee(rt: Any, event: dict) -> None:
+    """Book, once, the fee a trade stated after its leg was booked (Sol P2 on #177).
+
+    The fee is its open item's: it is debited from the pot to that fill's owner, and the
+    item is gone, which lifts the buy halt when it was the last one. An event for an
+    item already settled books nothing.
+    """
+    surface = rt.polymarket
+    item = next((i for i in surface.open_fees if i.get("key") == event["fee_key"]), None)
+    if item is None:
+        return
+    surface.open_fees = [i for i in surface.open_fees if i is not item]
+    fee = Decimal(event["fee_usd"])
+    surface.settled -= fee
+    rt.ledger.append({"kind": "polymarket.fee_established", "order_id": item["order_id"],
+                      "handle": item["handle"], "fee_usd": event["fee_usd"],
+                      "ts": rt.clock.now_ns})
+    _book_pot(rt, -usd_to_micro(fee, rounding="nearest"), f"fee:{item['order_id']}",
+              "exchange_pnl", item["handle"])
 
 
 def _settle_resolution(rt: Any, event: dict) -> None:
