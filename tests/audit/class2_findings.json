@@ -63,36 +63,6 @@
    "status": "untriaged"
   },
   {
-   "id": "91f812568327",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/judge/inputs/producer.description",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "f26ec7bfa42e",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/judge/inputs/producer.description",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "c6d10d0ef885",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/judge/inputs/producer.description",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
    "id": "4ed870e99126",
    "world": "compute-continuity-roster",
    "surface": "rendered",
@@ -380,36 +350,6 @@
    "path": "compute-continuity-roster/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "d9cb328bce49",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/produce/request/#prose",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "a30ccc2edf2e",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/produce/request/#prose",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "7c39e416b338",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/produce/request/#prose",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -853,26 +793,6 @@
    "status": "untriaged"
   },
   {
-   "id": "2d3cde59e055",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/judge/inputs/producer.description",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "630db6dc7934",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/judge/inputs/producer.description",
-   "quote": "respond to event worldupdate on runtime.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
    "id": "6ccb94bebf0f",
    "world": "edition6-capital-loop",
    "surface": "rendered",
@@ -1050,26 +970,6 @@
    "path": "edition6-capital-loop/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "4d2743de4533",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/produce/request/#prose",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "ea91d3abe817",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/produce/request/#prose",
-   "quote": "respond to event worldupdate on runtime.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -1613,26 +1513,6 @@
    "status": "untriaged"
   },
   {
-   "id": "3d1f8cca46ee",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/judge/inputs/producer.description",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "5edd58ea1b7a",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/judge/inputs/producer.description",
-   "quote": "respond to event worldupdate on runtime.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
    "id": "4d0e1c6cb043",
    "world": "edition6-testnet-rehearsal",
    "surface": "rendered",
@@ -1810,26 +1690,6 @@
    "path": "edition6-testnet-rehearsal/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "93a96b63f8d1",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/produce/request/#prose",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "43b78bb45038",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/produce/request/#prose",
-   "quote": "respond to event worldupdate on runtime.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -2673,16 +2533,6 @@
    "status": "untriaged"
   },
   {
-   "id": "d19d1056761a",
-   "world": "kernel",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "kernel/seat_text/payload/factorylab:runtime:loop::Runtime._producer_step/e559ba58",
-   "quote": "respond to event {ev.kind} on {ev.source}.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
    "id": "3de76063149f",
    "world": "kernel",
    "surface": "static",
@@ -2790,36 +2640,6 @@
    "path": "scripted/request/judge/base_capabilities/outcomes.preview_semantics",
    "quote": "use outcome.get on an outcome_id to deliver one before acknowledging it",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "0e6a77ec4975",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/judge/inputs/producer.description",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "629002407eb4",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/judge/inputs/producer.description",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "f7819149892a",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/judge/inputs/producer.description",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -3100,36 +2920,6 @@
    "path": "scripted/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "de2870243ccc",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/produce/request/#prose",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "d3c9c26c8672",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/produce/request/#prose",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "a7fb9a18c436",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/produce/request/#prose",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -3513,36 +3303,6 @@
    "status": "untriaged"
   },
   {
-   "id": "619751b876a9",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/judge/inputs/producer.description",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "aab96f66373a",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/judge/inputs/producer.description",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "3bbed470bd48",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/judge/inputs/producer.description",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
    "id": "a027c6855aaf",
    "world": "scripted-crash",
    "surface": "rendered",
@@ -3820,36 +3580,6 @@
    "path": "scripted-crash/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "8b41546fdf3f",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/produce/request/#prose",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "e63316fd5bd4",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/produce/request/#prose",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "60d6cfcb2904",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/produce/request/#prose",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -4233,36 +3963,6 @@
    "status": "untriaged"
   },
   {
-   "id": "ce44f8c12d65",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/judge/inputs/producer.description",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "e65543822ad5",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/judge/inputs/producer.description",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "c68f776d5848",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/judge/inputs/producer.description",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
    "id": "fbe232286e80",
    "world": "testnet",
    "surface": "rendered",
@@ -4550,36 +4250,6 @@
    "path": "testnet/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "89fc44097ed1",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/produce/request/#prose",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "cc3bb313f2a2",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/produce/request/#prose",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "04b88e85dbbc",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/produce/request/#prose",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -4963,36 +4633,6 @@
    "status": "untriaged"
   },
   {
-   "id": "f963d7e5c70e",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/judge/inputs/producer.description",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "6cc9d4149ae3",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/judge/inputs/producer.description",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "61b84d1ac202",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/judge/inputs/producer.description",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
    "id": "e46055408b5e",
    "world": "testnet-10m-roster",
    "surface": "rendered",
@@ -5280,36 +4920,6 @@
    "path": "testnet-10m-roster/request/produce/outcome_contract/#prose",
    "quote": "omit final-answer fields you cannot fill yet.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "b48cd8f02fc7",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/produce/request/#prose",
-   "quote": "respond to event fill on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "e73fb8b25482",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/produce/request/#prose",
-   "quote": "respond to event marketmid on fake.",
-   "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "5a3ce8a273b6",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/produce/request/#prose",
-   "quote": "respond to event tick on clock.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {

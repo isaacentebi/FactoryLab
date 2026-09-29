@@ -684,7 +684,7 @@ def test_early_warning_is_shown_only_to_evaluators(multi_judged):
     assert warned == list(range(warned[0], warned[0] + len(warned)))
     assert len(fires) - 1 <= len(warned) <= len(fires)  # the first firing opens, closes none
     judged = [inputs for description, inputs in requests if description.startswith("Give")]
-    produced = [inputs for description, inputs in requests if description.startswith("Respond")]
+    produced = [inputs for description, inputs in requests if description.startswith("Event ")]
     assert judged and all(inputs["early_warning"]["window"] is not None for inputs in judged[-3:])
 
     def shown(value, key):
