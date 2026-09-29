@@ -71,15 +71,18 @@ class ReadAndForecastPolicy(SCRIPTED):
 
 
 @pytest.mark.gate
+# 100 ticks in the gate (the seeded market has resolved and a claim due after it has read
+# its payout by then); the original 150 in the soak tier.
+@pytest.mark.parametrize("ticks", [100, pytest.param(150, marks=pytest.mark.soak)])
 def test_the_edition6_world_reads_event_markets_and_settles_forecasts_on_them_offline(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, ticks):
     """Wave 9: edition 6 with its live reader answered by the simulated venue. The world
     loads, publishes the three reads and no write, jails the market text it read, and
     settles judges' event forecasts on the market's own price and resolution."""
     manifest = fastloop.simulation_manifest(EDITION6, 1)
     assert manifest.polymarket.enabled and manifest.polymarket.venue == "live"
     monkeypatch.setattr(fastloop, "PolicyProvider", ReadAndForecastPolicy)
-    card = fastloop.run("scripted", 150, EDITION6, tmp_path, cap_usd="2", seed=1)
+    card = fastloop.run("scripted", ticks, EDITION6, tmp_path, cap_usd="2", seed=1)
     assert card["status"] == "completed", card.get("error")
     text = Path(card["out"], "events.json").read_text()
     events = json.loads(text)
