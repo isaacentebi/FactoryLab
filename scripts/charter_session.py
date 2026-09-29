@@ -32,8 +32,13 @@ offline and deterministically. The card contract the ballots refer to is the wor
 own ``world.mechanics.committee.card_contract``. Nothing here touches a wallet, a venue
 or a ledger.
 
-    uv run python scripts/charter_session.py session --world W --out-dir D [--diary E]
+    uv run python scripts/charter_session.py session --world W --out-dir D [--diary E] \
+        --launch capital-loop|rehearsal|run
     uv run python scripts/charter_session.py report --diary work/.../events.json
+
+``--launch`` names the launch the charter is voted for; the world block is rendered for
+it and the evidence and the exported charter record it. A hybrid Venice world takes
+only ``capital-loop`` (and defaults to it); every other world must name one.
 """
 
 from __future__ import annotations
@@ -201,51 +206,78 @@ def survey_world(world: dict) -> dict:
         "proposal_shapes", "stable_prefix")}
 
 
-def launch_rail(manifest):
-    """The treasury rail contract a live world's launcher builds, as the world publishes it.
+#: The launches a charter can be voted for, and the command each one is.
+LAUNCHES = {
+    "capital-loop": "scripts/edition4_rehearsal.py --capital-loop",
+    "rehearsal": "scripts/edition4_rehearsal.py",
+    "run": "factorylab run",
+}
 
-    Guarantees the name, admitted directions and gas table of the rail a live seat of
-    ``manifest`` acts through at launch, and no key: a testnet Hyperliquid world
-    launches through ``scripts/edition4_rehearsal.py``. A hybrid Venice world is
-    funded only by ``--capital-loop`` (bootstrap refuses its treasury anywhere else,
-    and the plain runner strips it), which wraps its ``HybridRail`` in
-    ``CapitalLoopRail``: that funded launch is the one its charter is ratified for
-    (its manifest's [charter] note), so it is the one rendered. The runner wraps every
-    other testnet world's rail in ``DeniedTransferRail``. A mainnet world launches on
-    the rail bootstrap builds.
+
+def launch_mode(manifest, launch: str | None) -> str:
+    """The launch a session renders its world for, refused unless it is named and fits.
+
+    Guarantees a hybrid Venice world is voted for its funded launch alone,
+    ``capital-loop`` (bootstrap refuses its treasury anywhere else); every other world
+    names its launch, ``rehearsal`` or ``run``, with no default: the two install
+    different treasury rails, so they publish different ``treasury.transfer``
+    contracts, and a charter is ratified on the one its world will be launched with.
     """
+    if launch is not None and launch not in LAUNCHES:
+        raise ValueError(f"launch_refused: {launch!r} is not one of {', '.join(LAUNCHES)}")
+    if getattr(manifest.treasury, "venice_network", None) is not None:
+        if launch not in (None, "capital-loop"):
+            raise ValueError(f"launch_refused: a hybrid Venice world (treasury.venice_network) "
+                             f"launches only with --launch capital-loop, not {launch}")
+        return "capital-loop"
+    if launch is None:
+        raise ValueError("launch_required: name the launch this charter is voted for "
+                         "(--launch rehearsal or --launch run)")
+    return launch
+
+
+def launch_rail(manifest, launch: str):
+    """The treasury rail contract ``launch`` installs for ``manifest``, holding no key.
+
+    Guarantees the rail each launcher selects, by its own selection code: ``run`` is
+    ``bootstrap.rail_class`` of the manifest (``LiveRail`` with a reserve,
+    ``UnconfiguredRail`` without); ``rehearsal`` and ``capital-loop`` are the rehearsal
+    runner's ``effective_manifest`` (which refuses what the runner refuses) through
+    ``rail_class``, wrapped in the runner's own ``launch_guard``. Each is read as its
+    published contract (``InertRail``), never constructed.
+    """
+    from factorylab.runtime.bootstrap import rail_class
     from factorylab.runtime.published import InertRail
-    from factorylab.world.treasury import TRANSFER_DIRECTIONS, UnconfiguredRail
-    from factorylab.world.treasury_rails import HybridRail, LiveRail
-    from scripts.edition4_rehearsal import CapitalLoopRail, DeniedTransferRail
+    from scripts.edition4_rehearsal import effective_manifest, launch_guard
 
-    treasury = manifest.treasury
-    if not manifest.exchange.mainnet:
-        if treasury.venice_network == "base-mainnet" and treasury.reserve_address is not None:
-            # CapitalLoopRail reads its name and gas table through to the hybrid rail.
-            return InertRail(HybridRail.name, CapitalLoopRail.ALLOWED, HybridRail.GAS_BUDGETS)
-        return InertRail(DeniedTransferRail.name, DeniedTransferRail.ALLOWED)
-    if treasury.reserve_address is not None:
-        return InertRail(LiveRail.name, TRANSFER_DIRECTIONS, LiveRail.GAS_BUDGETS)
-    return InertRail(UnconfiguredRail.name, UnconfiguredRail.ALLOWED)
+    if launch == "run":
+        return InertRail.of(rail_class(manifest), testnet=not manifest.exchange.mainnet)
+    capital_loop = launch == "capital-loop"
+    launched = effective_manifest(manifest, native_completions=True, capital_loop=capital_loop)
+    rail = InertRail.of(rail_class(launched), testnet=not launched.exchange.mainnet)
+    return InertRail.published_by(launch_guard(capital_loop)(rail))
 
 
-def launch_world(manifest) -> dict:
-    """The world block a seat of ``manifest`` reads at launch: its public schematics.
+def launch_world(manifest, launch: str | None) -> dict:
+    """The world block a seat of ``manifest`` reads at ``launch``: its public schematics.
 
     Chapter II §I.b: guarantees the block is the launched runtime's own, and true. A
-    simulated world's is its runtime's over its own fake venue. A live world's is
-    rendered by the runtime's schematics-only path (``factorylab/runtime/published.py``)
-    over the manifest as given, with the rail its launcher builds (``launch_rail``): no
-    venue, rail or chain is read, signed to or written, and every observation that path
-    does not make (the account, the listing, the pots) is published as unavailable,
-    never as a fake venue's figures. Built on the manifest's catalogue, so it makes no
-    model call whichever provider the session's ballots then use.
+    simulated world's is its runtime's over its own fake venue (``run``, the one launch
+    it has). A live world's is rendered by the runtime's schematics-only path
+    (``factorylab/runtime/published.py``) over the manifest as given, with the rail
+    that launch installs (``launch_rail``): no venue, rail or chain is read, signed to
+    or written, and every observation that path does not make (the account, the
+    listing, the pots) is published as unavailable, never as a fake venue's figures.
+    Built on the manifest's catalogue, so it makes no model call whichever provider
+    the session's ballots then use.
     """
+    launch = launch_mode(manifest, launch)
     if manifest.exchange.kind != "fake":
         from factorylab.runtime.published import render_schematics
 
-        return render_schematics(manifest, rail=launch_rail(manifest))
+        return render_schematics(manifest, rail=launch_rail(manifest, launch))
+    if launch != "run":
+        launch_rail(manifest, launch)  # the rehearsal runner's own refusal
     from factorylab.runtime.loop import Runtime
     from factorylab.world.exchange import FakeExchange
 
@@ -498,13 +530,18 @@ def report_diaries(paths: list[Path]) -> dict:
 # --- the session ----------------------------------------------------------------------
 
 def session(manifest, provider, out_dir: Path, *, diaries: list[Path], seed: int | None,
-            world: dict | None = None) -> dict:
-    """(a) → (b) → (c), with (d) on the ballot when diaries are given; evidence is written."""
+            launch: str | None, world: dict | None = None) -> dict:
+    """(a) → (b) → (c), with (d) on the ballot when diaries are given; evidence is written.
+
+    The evidence and the exported charter's header name the launch the world block was
+    rendered for (``launch_mode``): the ratification is for that launch.
+    """
+    launch = launch_mode(manifest, launch)
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in ("charter.toml", "session.json"):
         if (out_dir / name).exists():
             raise FileExistsError(out_dir / name)
-    world = world if world is not None else launch_world(manifest)
+    world = world if world is not None else launch_world(manifest, launch)
     rng = random.Random(manifest.seed if seed is None else seed)
     calls: list[Call] = []
     report = report_diaries(diaries) if diaries else None
@@ -512,6 +549,7 @@ def session(manifest, provider, out_dir: Path, *, diaries: list[Path], seed: int
     passing = [(p.card, p.price) for p in proposals if p.problem is None]
     evidence: dict[str, Any] = {
         "world": manifest.name, "roster_sha256": roster_hash(manifest),
+        "launch": {"mode": launch, "command": LAUNCHES[launch]},
         "norms": norms_raw(manifest.charter.norms),
         "draft": {"seats": [s._asdict() for s in draft_seats], "proposals": [
             {"key": p.key, "proposer": p.proposer, "raw": p.raw, "price": p.price,
@@ -532,6 +570,7 @@ def session(manifest, provider, out_dir: Path, *, diaries: list[Path], seed: int
             with (out_dir / "charter.toml").open("x") as stream:
                 stream.write(f"# roster_sha256 = {evidence['roster_sha256']}\n")
                 stream.write(f"# charter_sha256 = {evidence['charter_sha256']}\n")
+                stream.write(f"# launch = {launch} ({LAUNCHES[launch]})\n")
                 stream.write(body)
     evidence["calls"] = [asdict(c) for c in calls]
     evidence["cost_micro"] = sum(c.cost_micro for c in calls)
@@ -567,6 +606,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="a scripted provider instead of model calls")
     run.add_argument("--cap-usd", default="2",
                      help="the prepaid admission cap on the live path's model bill")
+    run.add_argument("--launch", choices=tuple(LAUNCHES), default=None,
+                     help="the launch the charter is voted for; required unless the world "
+                          "is a hybrid Venice world, which launches only as capital-loop")
     rep = sub.add_parser("report", help="the λ-to-dollar report from rehearsal diaries")
     rep.add_argument("--diary", type=Path, action="append", required=True)
     args = parser.parse_args(argv)
@@ -576,13 +618,22 @@ def main(argv: list[str] | None = None) -> int:
     from factorylab.runtime.worlds import load_manifest
 
     manifest = load_manifest(args.world)
+    from factorylab.world.metering import UnbilledFailure
+
+    try:
+        launch = launch_mode(manifest, args.launch)
+        world = launch_world(manifest, launch)
+    except (ValueError, UnbilledFailure) as exc:  # refused before any call is made
+        parser.error(str(exc))
     if args.dry_run:
         provider = ScriptedCharterProvider(manifest)
     else:
         provider = prepaid_provider(manifest, args.cap_usd)
-    evidence = session(manifest, provider, args.out_dir, diaries=args.diary, seed=args.seed)
-    print(json.dumps({k: evidence.get(k) for k in ("world", "approved", "charter_sha256",
-                                                    "roster_sha256", "cost_micro")}))
+    evidence = session(manifest, provider, args.out_dir, diaries=args.diary, seed=args.seed,
+                       launch=launch, world=world)
+    print(json.dumps({k: evidence.get(k) for k in ("world", "launch", "approved",
+                                                    "charter_sha256", "roster_sha256",
+                                                    "cost_micro")}))
     return 0 if evidence["approved"] else 2
 
 

@@ -62,7 +62,7 @@ def test_the_dry_run_drafts_adopts_and_exports_a_charter_the_load_path_accepts(t
     diary.write_text(json.dumps(_diary()))
     out = tmp_path / "session"
     code = charter_session.main(["session", "--world", "scripted", "--out-dir", str(out),
-                                 "--dry-run", "--diary", str(diary)])
+                                 "--dry-run", "--diary", str(diary), "--launch", "run"])
     assert code == 0
     evidence = json.loads((out / "session.json").read_text())
     manifest = load_manifest("scripted")
@@ -78,8 +78,11 @@ def test_the_dry_run_drafts_adopts_and_exports_a_charter_the_load_path_accepts(t
     assert evidence["approved"] is True
     assert len(evidence["adopt"]["ballots"]) == manifest.committee.seats
     assert evidence["lambda_dollars"][str(diary)]["cards"]["cap"]["identified_windows"] == 3
-    # (c) The export binds the loaded cards and the roster that voted them.
+    # (c) The export binds the loaded cards and the roster that voted them, and both
+    # name the launch the world was rendered for.
     text = (out / "charter.toml").read_text()
+    assert evidence["launch"] == {"mode": "run", "command": "factorylab run"}
+    assert "# launch = run (factorylab run)\n" in text
     table = voted_charter(out / "charter.toml", manifest)
     assert table == tomllib.loads(text)["charter"]
     assert all("region" in card and "acceptable_region" not in card for card in table["cards"])
@@ -91,7 +94,7 @@ def test_the_dry_run_drafts_adopts_and_exports_a_charter_the_load_path_accepts(t
     # A second session into the same directory refuses to overwrite its evidence.
     with pytest.raises(FileExistsError):
         charter_session.main(["session", "--world", "scripted", "--out-dir", str(out),
-                              "--dry-run"])
+                              "--dry-run", "--launch", "run"])
 
 
 def test_the_report_command_reads_a_jsonl_diary(tmp_path, capsys):
@@ -108,7 +111,7 @@ def test_the_dry_run_runs_on_edition6(tmp_path):
     out = tmp_path / "edition6"
     world = Path(__file__).parents[2] / "worlds/edition6-testnet-rehearsal.toml"
     assert charter_session.main(["session", "--world", str(world), "--out-dir", str(out),
-                                 "--dry-run"]) == 0
+                                 "--dry-run", "--launch", "rehearsal"]) == 0
     evidence = json.loads((out / "session.json").read_text())
     manifest = load_manifest(str(world))
     assert evidence["approved"] is True
@@ -117,7 +120,8 @@ def test_the_dry_run_runs_on_edition6(tmp_path):
     table = voted_charter(out / "charter.toml", manifest)
     assert table["norms"][-1]["id"] == "fidelity"
     # The card contract is the world's own section, never request text.
-    world_block = charter_session.launch_world(manifest)
+    assert evidence["launch"]["mode"] == "rehearsal"
+    world_block = charter_session.launch_world(manifest, "rehearsal")
     assert "region {rule, lo, hi}" in world_block["mechanics"]["committee"]["card_contract"]
 
 
@@ -132,14 +136,32 @@ READ_ACCOUNTS = ("openrouter_credit", "venice_credit", "venue_perps", "venue_spo
                  "base_reserve")
 
 
-def _launched_block(world, tmp_path, monkeypatch):
-    """The block a live seat of ``world`` reads at launch, built as the rehearsal runner
-    builds it (``scripts/edition4_rehearsal.py``, ``_rehearse``): the prepaid-provider
-    slot, ``DeniedMarket``, a live Hyperliquid adapter, the live admission clock, and for
-    the hybrid world ``capital_loop=True`` and ``CapitalLoopRail`` over the hybrid rail,
-    otherwise ``DeniedTransferRail``. The wires are the capital-loop run test's honest
-    fakes: throwaway keys, never funded, and no byte leaves the process. Returns the
-    manifest it launched (the hybrid world's carries its throwaway reserve) and the block.
+def _world(case, wires):
+    """The manifest a case names: the hybrid world on the wires' throwaway reserve, the
+    testnet world, or the testnet world with that reserve configured (not hybrid)."""
+    from dataclasses import replace
+
+    if case == "capital":
+        return load_manifest(str(wires["world"]))
+    testnet = load_manifest(TESTNET)
+    if case == "testnet":
+        return testnet
+    return replace(testnet, treasury=replace(testnet.treasury,
+                                             reserve_address=wires["reserve"].address))
+
+
+def _launched_block(manifest, launch, tmp_path, *, as_launched=False):
+    """The block a live seat reads when ``launch`` starts ``manifest``, built by that
+    launch path's own code on the capital-loop run test's honest wire fakes (throwaway
+    keys, never funded; no byte leaves the process; ``wired`` must be installed).
+
+    ``run`` is ``factorylab run``'s construction: the Runtime bootstrap builds, its rail
+    ``bootstrap.rail_class``'s choice. ``rehearsal`` and ``capital-loop`` are
+    ``_rehearse``'s: the prepaid-provider slot, ``DeniedMarket``, the live admission
+    clock, ``capital_loop`` for the hybrid world, and the runner's ``launch_guard``
+    installed over the rail. ``as_launched`` builds on the runner's ``effective_manifest``
+    as ``_rehearse`` does (for the rail it installs); otherwise on the manifest as given,
+    which is what the session renders.
     """
     from factorylab.runtime.live import LiveClock
     from factorylab.runtime.loop import Runtime
@@ -147,39 +169,55 @@ def _launched_block(world, tmp_path, monkeypatch):
     from scripts.edition4_rehearsal import (
         Admission,
         AdmissionClock,
-        CapitalLoopRail,
         DeniedMarket,
-        DeniedTransferRail,
+        effective_manifest,
+        launch_guard,
     )
-    from tests.scripts.test_capital_loop_live_run import wired
 
-    wires = wired(tmp_path, monkeypatch)
-    capital_loop = world == CAPITAL_LOOP
-    manifest = load_manifest(str(wires["world"]) if capital_loop else world)
-    rt = Runtime(manifest, events=1, seed=manifest.seed, initial_balance_micro=None,
+    capital_loop = launch == "capital-loop"
+    launched = manifest
+    kwargs = {}
+    if launch != "run":
+        if as_launched:
+            launched = effective_manifest(manifest, native_completions=True,
+                                          capital_loop=capital_loop)
+        kwargs = {"market": DeniedMarket(), "kill_at_end": True, "capital_loop": capital_loop,
+                  "clock_source": AdmissionClock(LiveClock(launched.tick_interval_ns, 1),
+                                                 Admission(1_000_000, 1))}
+    rt = Runtime(launched, events=1, seed=launched.seed, initial_balance_micro=None,
                  ledger_path=str(tmp_path / "ledger.jsonl"), router_gamma=0.1,
-                 provider=charter_session.ManifestCatalogue(manifest), market=DeniedMarket(),
-                 exchange=HyperliquidExchange(mainnet=False),
-                 clock_source=AdmissionClock(LiveClock(manifest.tick_interval_ns, 1),
-                                             Admission(1_000_000, 1)),
-                 kill_at_end=True, capital_loop=capital_loop)
-    target = rt.treasury.rail.target
-    rt.treasury.rail.target = (CapitalLoopRail(target) if capital_loop
-                               else DeniedTransferRail(target))
+                 provider=charter_session.ManifestCatalogue(launched),
+                 exchange=HyperliquidExchange(mainnet=False), **kwargs)
+    if launch != "run":
+        rt.treasury.rail.target = launch_guard(capital_loop)(rt.treasury.rail.target)
     try:
-        return manifest, rt._world_block()
+        return rt._world_block()
     finally:
         rt._ledger_lock.close()
 
 
-@pytest.mark.parametrize("world", [CAPITAL_LOOP, TESTNET])
-def test_the_session_publishes_the_schematics_a_launched_seat_reads(world, tmp_path, monkeypatch):
+def _transfer(block):
+    """The published ``treasury.transfer`` entry and the directions it names, or None."""
+    tools = [t for t in block["tools"] if t["id"] == "treasury.transfer"]
+    if not tools:
+        return None, ()
+    named = tools[0]["description"].split("directions: ", 1)[1].split(".", 1)[0]
+    return tools[0], tuple(named.split(", "))
+
+
+@pytest.mark.parametrize("case, launch", [("capital", "capital-loop"), ("testnet", "rehearsal"),
+                                          ("testnet", "run"), ("reserve", "run")])
+def test_the_session_publishes_the_schematics_a_launched_seat_reads(
+        case, launch, tmp_path, monkeypatch):
     """Codex on #172: the session rendered the capital-loop world over a fake venue, and
     published the fake treasury's five transfer directions and its invented pots. The
     block is now the launched runtime's: every tool, contract and section a live seat of
-    the world reads at launch, the same, and its observations unread (§I.b)."""
-    manifest, launched = _launched_block(world, tmp_path, monkeypatch)
-    rendered = charter_session.launch_world(manifest)
+    the world reads at that launch, the same, and its observations unread (§I.b)."""
+    from tests.scripts.test_capital_loop_live_run import wired
+
+    manifest = _world(case, wired(tmp_path, monkeypatch))
+    launched = _launched_block(manifest, launch, tmp_path)
+    rendered = charter_session.launch_world(manifest, launch)
     assert set(rendered) == set(launched)
     assert rendered["tools"] == launched["tools"]
     for section in sorted(set(launched) - OBSERVED):
@@ -189,20 +227,67 @@ def test_the_session_publishes_the_schematics_a_launched_seat_reads(world, tmp_p
     assert ({k: v for k, v in rendered["world_resources"].items() if k not in unread}
             == {k: v for k, v in launched["world_resources"].items() if k not in unread})
     assert rendered["world_resources"]["trading_equity_usd"] is None
-    transfer = [t for t in rendered["tools"] if t["id"] == "treasury.transfer"]
-    if world == CAPITAL_LOOP:
-        # The runner admits the conversion alone (CapitalLoopRail), so only it is published.
-        assert [t["args"] for t in transfer] == [["direction", "reason", "usd"]]
-        assert "directions: to_venice." in transfer[0]["description"]
-    else:
-        assert transfer == []  # DeniedTransferRail admits no direction
 
 
-@pytest.mark.parametrize("world", [CAPITAL_LOOP, TESTNET])
-def test_the_session_invents_no_observation(world):
+@pytest.mark.parametrize("case, launch, directions", [
+    # CapitalLoopRail over HybridRail: the conversion alone.
+    ("capital", "capital-loop", ("to_venice",)),
+    # The rehearsal runner: DeniedTransferRail over the rail of its effective manifest.
+    ("testnet", "rehearsal", ()),
+    ("reserve", "rehearsal", ()),
+    # factorylab run: bootstrap's rail. UnconfiguredRail without a reserve, LiveRail with
+    # one (every direction but to_venice on a testnet venue).
+    ("testnet", "run", ("spot_to_perps", "perps_to_spot")),
+    ("reserve", "run", ("to_reserve", "to_venue", "spot_to_perps", "perps_to_spot")),
+])
+def test_each_launch_publishes_the_transfer_contract_its_launch_path_installs(
+        case, launch, directions, tmp_path, monkeypatch):
+    """Codex on 85dc6fa: a testnet world was always rendered on the runner's denied rail,
+    though ``factorylab run`` installs LiveRail or UnconfiguredRail. The session now
+    renders the rail of the launch it names, and it is the one that launch installs."""
+    from tests.scripts.test_capital_loop_live_run import wired
+
+    manifest = _world(case, wired(tmp_path, monkeypatch))
+    installed = _launched_block(manifest, launch, tmp_path, as_launched=True)
+    rendered = charter_session.launch_world(manifest, launch)
+    assert _transfer(rendered) == _transfer(installed)
+    assert _transfer(rendered)[1] == directions
+    assert rendered["compute_supply"] == installed["compute_supply"]
+
+
+def test_a_session_names_its_launch_and_a_hybrid_world_has_one(tmp_path, capsys):
+    """No default launch: a non-hybrid world without --launch is refused, and a hybrid
+    Venice world is refused any launch but capital-loop. Nothing is written."""
+    from scripts.edition4_rehearsal import RehearsalRefused
+
+    out = tmp_path / "session"
+    for world, launch, refusal in ((TESTNET, None, "launch_required"),
+                                   (CAPITAL_LOOP, "run", "launch_refused"),
+                                   (CAPITAL_LOOP, "rehearsal", "launch_refused")):
+        argv = ["session", "--world", world, "--out-dir", str(out), "--dry-run"]
+        with pytest.raises(SystemExit) as stopped:
+            charter_session.main(argv + ([] if launch is None else ["--launch", launch]))
+        assert stopped.value.code == 2 and refusal in capsys.readouterr().err
+        assert not out.exists()
+    with pytest.raises(ValueError, match="launch_required"):
+        charter_session.launch_world(load_manifest(TESTNET), None)
+    with pytest.raises(ValueError, match="launch_refused"):
+        charter_session.launch_world(load_manifest(CAPITAL_LOOP), "run")
+    # The runner refuses what it cannot launch: capital-loop needs a hybrid world, and
+    # neither runner mode runs a simulated one.
+    with pytest.raises(RehearsalRefused, match="capital_loop_requires_hybrid_venice_world"):
+        charter_session.launch_world(load_manifest(TESTNET), "capital-loop")
+    with pytest.raises(RehearsalRefused, match="testnet_hyperliquid_required"):
+        charter_session.launch_world(load_manifest("scripted"), "rehearsal")
+    assert charter_session.launch_mode(load_manifest(CAPITAL_LOOP), None) == "capital-loop"
+
+
+@pytest.mark.parametrize("world, launch", [(CAPITAL_LOOP, "capital-loop"),
+                                           (TESTNET, "rehearsal"), (TESTNET, "run")])
+def test_the_session_invents_no_observation(world, launch):
     """Custody, the pots, the account and the listing are published as unread, never as
     a zero or a fake venue's cash: the render reads no venue and no rail."""
-    block = charter_session.launch_world(load_manifest(world))
+    block = charter_session.launch_world(load_manifest(world), launch)
     custody = block["account"]["custody"]
     for name in READ_ACCOUNTS:
         account = custody[name]
@@ -278,12 +363,13 @@ def _tripwires(monkeypatch, tmp_path):
     return touched, ledgers
 
 
-@pytest.mark.parametrize("world", [CAPITAL_LOOP, TESTNET])
+@pytest.mark.parametrize("world, launch", [(CAPITAL_LOOP, "capital-loop"),
+                                           (TESTNET, "rehearsal"), (TESTNET, "run")])
 def test_the_render_calls_no_network_signs_nothing_and_writes_no_ledger(
-        world, tmp_path, monkeypatch):
+        world, launch, tmp_path, monkeypatch):
     manifest = load_manifest(str(Path(__file__).parents[2] / world))
     touched, ledgers = _tripwires(monkeypatch, tmp_path)
-    block = charter_session.launch_world(manifest)
+    block = charter_session.launch_world(manifest, launch)
     assert block["tools"] and touched == []
     assert ledgers and all(path is None for path in ledgers)  # the diary is in memory only
     assert list(tmp_path.iterdir()) == []  # nothing was written beside the process
@@ -306,7 +392,7 @@ def test_the_schematics_path_cannot_run_a_world():
     from factorylab.world.exchange import FakeExchange
 
     world = load_manifest(CAPITAL_LOOP)
-    rail = charter_session.launch_rail(world)
+    rail = charter_session.launch_rail(world, "capital-loop")
     assert isinstance(rail, InertRail) and rail.ALLOWED == ("to_venice",)
 
     def build(manifest=world, **changes):

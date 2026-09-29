@@ -144,6 +144,28 @@ class InertRail:
         self.name, self.ALLOWED = name, tuple(allowed)
         self.GAS_BUDGETS = dict(gas_budgets or {})
 
+    @classmethod
+    def of(cls, rail_class: type, *, testnet: bool) -> InertRail:
+        """The published contract of ``rail_class`` (``bootstrap.rail_class``'s choice)
+        on a testnet or mainnet venue: its name, ``ALLOWED`` and gas table.
+
+        ``ALLOWED`` is the rail's own code (``LiveRail``'s depends on its venue), read on
+        an instance its ``__init__`` never ran: it holds no exchange, no key and no
+        signer, carries only the venue's ``testnet`` fact, and is dropped here.
+        """
+        probe = object.__new__(rail_class)
+        probe.testnet = testnet
+        return cls(rail_class.name, probe.ALLOWED, getattr(rail_class, "GAS_BUDGETS", None))
+
+    @classmethod
+    def published_by(cls, rail: Any) -> InertRail:
+        """The contract a launcher's wrapper publishes over an ``InertRail``: its name,
+        its ``admitted_directions`` and the gas table it reads through, exactly as the
+        runtime reads them from the wrapped rail it installs."""
+        from factorylab.world.treasury import admitted_directions
+
+        return cls(rail.name, admitted_directions(rail), getattr(rail, "GAS_BUDGETS", None))
+
     def balances(self) -> dict:
         raise NotYetRead("treasury pots: not yet read; the schematics render reads no rail")
 

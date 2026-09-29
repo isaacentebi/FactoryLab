@@ -83,6 +83,25 @@ MAINNET_RAIL_REFUSED = (
     "transfers are booked in and a cancel can tell whether it has ended")
 
 
+def rail_class(manifest: WorldManifest) -> type:
+    """The treasury rail class a live world of ``manifest`` is built with.
+
+    The one selection (``BootstrapMixin``; ``scripts/charter_session.py`` renders its
+    published contract): ``UnconfiguredRail`` without a reserve; with one,
+    ``HybridRail`` for a hybrid capital-loop world, which buys real Venice credit on
+    Base mainnet and pays for it from the testnet pots through a shadow leg (II.IV),
+    and ``LiveRail`` otherwise.
+    """
+    from factorylab.world.treasury import UnconfiguredRail
+
+    if manifest.treasury.reserve_address is None:
+        return UnconfiguredRail
+    from factorylab.world.treasury_rails import HybridRail, LiveRail
+
+    hybrid = getattr(manifest.treasury, "venice_network", None) == "base-mainnet"
+    return HybridRail if hybrid else LiveRail
+
+
 def mainnet_rail(manifest: WorldManifest) -> bool:
     """Whether a live world's treasury rail signs with the mainnet reserve key: a
     reserve on a mainnet venue, or a hybrid rail's Venice leg on Base mainnet."""
@@ -351,13 +370,8 @@ class BootstrapMixin:
             if self.schematics_only:
                 # The launcher's rail as published, holding no key: no signer is built.
                 rail = _schematics_rail
-            elif manifest.treasury.reserve_address is not None:
-                from factorylab.world.treasury_rails import HybridRail, LiveRail
-
-                # A hybrid capital-loop rehearsal buys real Venice credit on Base mainnet
-                # and pays for it from the testnet pots through a shadow leg (II.IV).
-                hybrid = getattr(manifest.treasury, "venice_network", None) == "base-mainnet"
-                rail = (HybridRail if hybrid else LiveRail)(self.exchange, manifest.treasury)
+            elif (rail_kind := rail_class(manifest)) is not UnconfiguredRail:
+                rail = rail_kind(self.exchange, manifest.treasury)
                 # A Venice purchase is confirmed on the chain's debit; the diary's own
                 # metered spend since the purchase started is recorded beside the
                 # advisory balance so a lost acknowledgment stays explainable (C5).
