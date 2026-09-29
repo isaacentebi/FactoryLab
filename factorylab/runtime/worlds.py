@@ -134,8 +134,10 @@ class ModelTier:
     extra_body: tuple[tuple[str, Any], ...] = ()
     # How the route carries a request's I/O contract (Chapter II §II.b: physics is
     # enforced, not announced): "json_object" asks the host for JSON syntax alone;
-    # "json_schema" hands the contract to the host's constrained decoder. A transport
-    # fact about the route, fixed for the world's life.
+    # "json_schema" hands the contract to the host's constrained decoder;
+    # "json_schema_strict" hands it the part strict decoders compile, with strict
+    # decoding on (``openai_wire.strict_schema``). A transport fact about the route,
+    # fixed for the world's life.
     contract: str = "json_object"
     # The last day (UTC, "YYYY-MM-DD") the model's training data may cover, as its
     # provider states it; None when unknown. A world replaying a recorded tape refuses
@@ -144,7 +146,7 @@ class ModelTier:
 
 
 #: The ways a route may carry a request's contract (``ModelTier.contract``).
-MODEL_CONTRACTS = ("json_object", "json_schema")
+MODEL_CONTRACTS = ("json_object", "json_schema", "json_schema_strict")
 
 
 @dataclass(frozen=True)
@@ -822,8 +824,12 @@ class WorldManifest:
         return {m.id: dict(m.extra_body) for m in self.models if m.extra_body}
 
     def schema_contract_models(self) -> frozenset[str]:
-        """The model ids whose route carries the contract as a JSON schema."""
+        """The model ids whose route carries the contract as a JSON schema, not strict."""
         return frozenset(m.id for m in self.models if m.contract == "json_schema")
+
+    def strict_contract_models(self) -> frozenset[str]:
+        """The model ids whose route carries the contract as a strict JSON schema."""
+        return frozenset(m.id for m in self.models if m.contract == "json_schema_strict")
 
     def canonical_json(self) -> str:
         """Guarantees the manifest hashes every key the world runs under, at any value.
@@ -2156,10 +2162,10 @@ def _model_contract(model: dict) -> str:
     if value not in MODEL_CONTRACTS:
         raise ValueError(f"models.contract must be one of {', '.join(MODEL_CONTRACTS)}; "
                          f"{model.get('id')!r} has {value!r}")
-    if value == "json_schema" and model.get("provider") not in ("openrouter", "venice"):
+    if value != "json_object" and model.get("provider") not in ("openrouter", "venice"):
         # Only these adapters can carry a schema; anywhere else the key would be a
         # promise of enforcement that nothing keeps.
-        raise ValueError(f"models.contract json_schema needs an openrouter or venice "
+        raise ValueError(f"models.contract {value} needs an openrouter or venice "
                          f"route; {model.get('id')!r} is {model.get('provider', 'fake')!r}")
     return value
 
