@@ -366,6 +366,16 @@ class CapitalLoopRail:
         return getattr(self.rail, name)
 
 
+def launch_guard(capital_loop: bool) -> type:
+    """The wrapper this runner installs over the runtime's treasury rail before launch.
+
+    ``CapitalLoopRail`` on a capital-loop run (the hybrid rail's conversion alone),
+    ``DeniedTransferRail`` otherwise (every direction refused). ``_rehearse`` installs
+    it, and ``scripts/charter_session.py`` renders the contract it publishes.
+    """
+    return CapitalLoopRail if capital_loop else DeniedTransferRail
+
+
 def venue_snapshot(exchange: Any) -> dict[str, Any]:
     """Read balances, positions and open orders without submitting a venue operation."""
     target = getattr(exchange, "target", exchange)
@@ -956,6 +966,8 @@ def _rehearse(
     lock = None
     try:
         base = load_manifest(str(world))
+        # §I.b: its charter's ballots read the rail this launch installs (charter.launch).
+        base.check_launch("capital-loop" if capital_loop else "rehearsal")
         manifest = effective_manifest(
             base,
             prompt_mode=prompt_mode,
@@ -1188,12 +1200,13 @@ def _rehearse(
                 hybrid.now_s = lambda: now_ns() // 1_000_000_000
                 # Only the conversion is admitted; the CCTP exits and class moves are
                 # refused before signing, exactly as the denied rail refuses them.
-                runtime.treasury.rail.target = CapitalLoopRail(hybrid)
+                runtime.treasury.rail.target = launch_guard(capital_loop)(hybrid)
             else:
                 # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
                 # that rail still supports the venue's spot/perps class move. Replace its
                 # target before launch so every treasury direction is refused pre-signing.
-                runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
+                runtime.treasury.rail.target = launch_guard(capital_loop)(
+                    runtime.treasury.rail.target)
             from factorylab.runtime import polymarket
             from factorylab.runtime.live import wall_paced
 

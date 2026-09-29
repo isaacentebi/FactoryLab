@@ -53,6 +53,10 @@ def resume_reason(exc: Exception) -> Reason:
 
     if isinstance(exc, LiveReaderRefused):
         return Reason(exc.code)
+    from factorylab.runtime.worlds import CharterLaunchRefused
+
+    if isinstance(exc, CharterLaunchRefused):
+        return Reason(exc.reason)
     if isinstance(exc, GenesisMismatchError):
         return Reason.MANIFEST_MISMATCH
     if isinstance(exc, LedgerIntegrityError):
@@ -832,6 +836,10 @@ _RUNTIME_FIELDS = (
     # receiver (``witness_required``) or a different one (``witness_mismatch``), so
     # the veto belongs to the launched identity and not to a mutable variable.
     "witness_required", "witness_receiver",
+    # The launch the charter was voted for (charter.launch). Restore refuses a manifest
+    # that names another (``charter_launch_changed``); absent from an older checkpoint,
+    # whose world launched before the binding existed.
+    "charter_launch",
     # edition 3, C2
     # Thinking control: every seat's subscription, its sleep, the world it has not
     # read yet and each watcher's last observation, as one block of plain data
@@ -1336,6 +1344,7 @@ def restore_runtime(rt, state: dict) -> None:
     # here and not against the environment alone: a world that launched under a
     # receiver does not continue without one, or under another one (R3-C).
     check_witness_identity(saved_runtime)
+    check_charter_launch(saved_runtime, rt.m)
     # The archive is validated against the saved state, before any of it is
     # assigned: a world does not continue with a seat's memory or a seat's
     # outcomes missing, and a refusal must leave this runtime untouched.
@@ -1362,6 +1371,10 @@ def restore_runtime(rt, state: dict) -> None:
     if "retirement_order" not in saved_runtime:
         # An older checkpoint kept no retirement order: its retired ids, by id.
         rt.retirement_order = sorted(rt.retired_assemblies)
+    if "charter_launch" not in saved_runtime:
+        # Launched before charter.launch was bound: it launched under none, and its
+        # historical Launch (which named none) is what a replay reproduces.
+        rt.charter_launch = None
     rt.diary_id = diary
     rt.pending = {handle: p for handle, p in rt.pending.items()
                   if p.channel not in _RETIRED_PENDING}
@@ -1517,6 +1530,23 @@ def restore_runtime(rt, state: dict) -> None:
     for rows in rt.outcomes.items.values():
         for row in rows:
             row.setdefault("tick", rt.ticks_consumed)
+
+
+def check_charter_launch(saved_runtime: dict, manifest) -> None:
+    """Refuse a resume whose manifest names another charter.launch than the world's.
+
+    Chapter II §I.b: the ballots read one launch's rail (``WorldManifest.check_launch``).
+    ``charter.launch`` is admission provenance, outside the manifest hash the diary
+    binds, so the launched value is carried in the checkpoint and compared here, before
+    anything is restored: an edit after launch cannot rebind the world to another
+    launcher. A checkpoint from before the binding carries none and is not compared.
+    """
+    if "charter_launch" not in saved_runtime:
+        return
+    if saved_runtime["charter_launch"] != manifest.charter_launch:
+        raise ResumeError(f"this world launched under charter.launch "
+                          f"{saved_runtime['charter_launch']}; the manifest names "
+                          f"{manifest.charter_launch}", code="charter_launch_changed")
 
 
 def check_witness_identity(saved_runtime: dict) -> None:
@@ -1698,10 +1728,12 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
             "ts": state["clock_ns"],
         })
         raise ResumeError("the witness records this identity's kill", code="identity_killed")
-    # The witness requirement the world launched under, before any state is
-    # restored or any adapter contacted: unsetting the variable removes no veto.
+    # The witness requirement and the charter's launch the world launched under, before
+    # any state is restored or any adapter contacted: unsetting the variable removes
+    # no veto, and editing the manifest rebinds no launch.
     try:
         check_witness_identity(decode(state["runtime"]))
+        check_charter_launch(decode(state["runtime"]), manifest)
     except ResumeError as exc:
         ledger.append({
             "kind": "failed_resume", "reason": exc.code, "launch_nonce": launch_nonce,
@@ -1820,6 +1852,12 @@ def _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns):
     return rt
 
 
-def resume_world(manifest, ledger_path: str, **kwargs) -> dict:
-    """Continue the saved event budget and manifest, returning the ordinary final summary."""
+def resume_world(manifest, ledger_path: str, *, launch: str = "run", **kwargs) -> dict:
+    """Continue the saved event budget and manifest, returning the ordinary final summary.
+
+    ``launch`` is the launcher resuming (``factorylab resume`` is ``run``): a charter
+    voted for another launch is refused (``WorldManifest.check_launch``) before the
+    diary is opened.
+    """
+    manifest.check_launch(launch)
     return resume_runtime(manifest, ledger_path, **kwargs).run()

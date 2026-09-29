@@ -18,11 +18,17 @@ from factorylab.charter.provenance import charter_digest, roster_hash
 from factorylab.runtime.worlds import load_manifest, manifest_from_dict
 
 
-def voted_charter(path: Path, manifest) -> dict:
-    """Reject missing, altered, empty or differently surveyed charter artifacts."""
+def voted_charter(path: Path, manifest, launch: str | None = None) -> dict:
+    """Reject missing, altered, empty or differently surveyed charter artifacts.
+
+    The artifact's ``# launch`` line must name the launch its table's ``launch`` key
+    states (the digest covers the key), and, when ``launch`` is given, that launch: a
+    charter voted for one launch's rail is not prepared for another (§I.b).
+    """
     text = path.read_text()
     metadata = dict(re.findall(r"^# (roster_sha256|charter_sha256) = ([0-9a-f]{64})$",
                                text, re.MULTILINE))
+    stated = re.findall(r"^# launch = ([a-z-]+)(?: \(.*\))?$", text, re.MULTILINE)
     raw = tomllib.loads(text)
     charter = raw.get("charter")
     if not isinstance(charter, dict) or not charter.get("cards"):
@@ -31,13 +37,19 @@ def voted_charter(path: Path, manifest) -> dict:
         raise ValueError("charter survey roster differs from rehearsal roster")
     if metadata.get("charter_sha256") != charter_digest(charter):
         raise ValueError("charter differs from the survey export")
+    if stated != [charter.get("launch")]:
+        raise ValueError("charter launch line differs from the charter's launch")
+    if launch is not None and charter.get("launch") != launch:
+        raise ValueError(f"charter was voted for launch {charter.get('launch')}; "
+                         f"this is launch {launch}")
     return charter
 
 
 def preflight(world: Path, charter_path: Path) -> dict:
     """Require exact charter provenance and testnet-only execution before loading credentials."""
     manifest = load_manifest(str(world))
-    charter = voted_charter(charter_path, manifest)
+    # The live command below is ``factorylab run``.
+    charter = voted_charter(charter_path, manifest, "run")
     raw = tomllib.loads(world.read_text())
     # The manifest may carry the ratification's provenance digests beside the cards
     # (charter.ratified_sha256, charter.roster_sha256); the vote is on the cards.
@@ -74,7 +86,7 @@ def preflight(world: Path, charter_path: Path) -> dict:
 def prepare(base: Path, charter_path: Path, out: Path) -> dict:
     """Embed precisely the exported charter without changing its thresholds or sample windows."""
     manifest = load_manifest(str(base))
-    charter = voted_charter(charter_path, manifest)
+    charter = voted_charter(charter_path, manifest, "run")
     raw = tomllib.loads(base.read_text())
     if "charter" in raw:
         raise ValueError("base must be a drafting roster without an existing charter")

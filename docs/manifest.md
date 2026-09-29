@@ -174,6 +174,7 @@ settings".
 | `norm_house.signer` | Absent, or a 0x-prefixed 20-byte EVM address (stored lower-case) | Absent: no norm edition is possible | Launch cast, fixed for the world's life and hashed: the one key whose signature makes a norm edition valid (essay II.IV.a, the input layer's write permission is part of the hard kernel) |
 | `charter.edition` | Positive integer | `1` | The edition the world launches with; after 1 it requires `parent_charter_sha256` (charter audit P5) |
 | `charter.parent_charter_sha256` | 64 lowercase hex characters | Absent; required when `edition` is after 1 and refused at 1 | The content digest of the charter this one descends from. Part of the charter's content digest and of the manifest hash (`charter_parent_sha256`) |
+| `charter.launch` | `"capital-loop"`, `"rehearsal"` or `"run"` | Absent: every launch admitted, unless the charter is ratified (`ratified_sha256`), which then launches under none | The launch the charter was voted for (`scripts/charter_session.py session --launch`): `scripts/edition4_rehearsal.py --capital-loop`, `scripts/edition4_rehearsal.py`, or `factorylab run`. Each launches a different treasury rail, so the ballots read one `treasury.transfer` contract. Each launcher refuses any other (`charter_launch_mismatch`), and a ratified charter without it (`charter_launch_missing`); `factorylab resume` is the `run` launch. The launched value is carried in every checkpoint and in the Launch event, so a resume whose manifest names another `charter.launch` is refused before anything is restored (`charter_launch_changed`). Wherever `ratified_sha256` is present, on every network, the loaded charter must hash to it before any launch or resume reads `launch` (`charter_digest_mismatch`), and wherever `roster_sha256` is present, the manifest's assemblies and models must hash to it (`charter_roster_mismatch`): a capital-loop world trades on testnet and spends mainnet USDC. Part of the charter table, so of its content digest (`ratified_sha256`); admission provenance, so outside the manifest hash. A mainnet manifest requires it |
 | `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
@@ -1282,6 +1283,13 @@ set and its `[charter]` carries `ratified_sha256` and `roster_sha256`, the value
 the manifest's own assemblies and models to the second, so a funded launch cannot
 run an edited charter or a different roster. Both fields are admission provenance
 and are excluded from the canonical manifest hash; testnet manifests omit them.
+The `[charter]` of a mainnet manifest also states `launch`, the launch its ballots
+were rendered for; it is inside the `ratified_sha256` digest and outside the manifest
+hash, and `factorylab run` refuses a charter voted for another launch. A charter
+session renders the manifest the named launch hands its runtime (the rehearsal
+runner's effective manifest for `rehearsal` and `capital-loop`, the manifest as given
+for `run`); its `roster_sha256` is always the manifest as given, the world file the
+charter is written into and the load path hashes.
 
 Testnet `treasury.reserve_address` is the public checksummed address
 `0x1228e5620944a79D268Afc7522E00891526EdEBb`, not a placeholder.

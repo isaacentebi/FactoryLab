@@ -61,6 +61,7 @@ from factorylab.runtime.governance import GovernanceMixin
 from factorylab.runtime.live import LiveClock, Reconciler, wall_paced
 from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
+from factorylab.runtime.published import refuse_to_run
 from factorylab.runtime.resume import decode, encode, runtime_state
 from factorylab.runtime.routing import (
     JUDGING_SHAPES,
@@ -294,6 +295,7 @@ class Runtime(
         """Keep exclusive ledger ownership through the last runtime action or process death."""
         from factorylab.runtime import polymarket
 
+        refuse_to_run(self)  # a schematics-only runtime runs no world (runtime/published.py)
         try:
             # A live Polymarket reader is admitted, and holds the host's IP, before the
             # world's first event; an offline one takes nothing.
@@ -305,6 +307,7 @@ class Runtime(
 
     def _run(self) -> dict[str, Any]:
         """Continue the original source budget; restored internal events keep their ordering."""
+        refuse_to_run(self)
         if self.termination.final or (self.started and self._check_termination()):
             return self._summary()
         self.ledger.active = True
@@ -341,6 +344,7 @@ class Runtime(
 
     def _launch(self) -> None:
         """Publish Launch only after a recoverable pre-launch snapshot exists."""
+        refuse_to_run(self)
         self.bus.publish(
             Event(
                 "launch",
@@ -362,6 +366,10 @@ class Runtime(
                  # a world launched without one ledgers nothing, exactly as before.
                  **({"witness_required": True, "witness_receiver": self.witness_receiver}
                     if getattr(self, "witness_required", False) else {}),
+                 # The launch its charter was voted for; a world whose charter names
+                 # none ledgers nothing, exactly as before.
+                 **({"charter_launch": self.charter_launch}
+                    if getattr(self, "charter_launch", None) is not None else {}),
                  "manifest": json.loads(self.m.canonical_json())},
                 "kernel",
             )
@@ -373,6 +381,7 @@ class Runtime(
 
     def _process_event(self, ev: Event) -> bool:
         """Normal execution and recovery use identical transitions after a durable input item."""
+        refuse_to_run(self)
         previous_window = self.reserve_window_start
         self.n += 1
         self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
@@ -2000,6 +2009,8 @@ def run_world(
     the jail cannot start: the world block would promise tools that no proposal
     could ever obtain. Nothing is written before the refusal.
     """
+    # §I.b: its charter's ballots read the rail this launch installs (charter.launch).
+    manifest.check_launch("run")
     reason = jail_probe()
     if reason is not None:
         raise NoJail(f"this world offers population tools and the host has no jail: {reason}")

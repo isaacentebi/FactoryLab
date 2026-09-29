@@ -1060,10 +1060,14 @@ def main(argv: list[str] | None = None) -> int:
         from factorylab.kernel.ledger import LedgerBusyError
         from factorylab.runtime.bootstrap import MainnetRailRequiresALedger
         from factorylab.runtime.polymarket import LiveReaderRefused
+        from factorylab.runtime.worlds import CharterLaunchRefused
 
         try:
             _load_dotenv()
             return int(args.func(args))
+        except CharterLaunchRefused as exc:
+            refuse("run", Reason(exc.reason))
+            return ARGUMENT_EXIT
         except MainnetRailRequiresALedger:
             refuse("run", Reason.MAINNET_RAIL_REQUIRES_A_LEDGER)
             return ARGUMENT_EXIT

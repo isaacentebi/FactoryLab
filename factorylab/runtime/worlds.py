@@ -692,6 +692,11 @@ class WorldManifest:
     charter_ratified_sha256: str | None = None
     charter_roster_sha256: str | None = None
     charter_content_sha256: str | None = None
+    # The launch the charter was voted for (``CHARTER_LAUNCHES``): the launchers install
+    # different treasury rails, so a ballot saw one ``treasury.transfer`` contract.
+    # Part of the charter table, so of the digest a funded load verifies; admission
+    # provenance like the digests, so outside the manifest hash.
+    charter_launch: str | None = None
 
     # ---- derived
 
@@ -832,7 +837,7 @@ class WorldManifest:
         """
         payload = asdict(self)
         for name in ("charter_ratified_sha256", "charter_roster_sha256",
-                     "charter_content_sha256"):
+                     "charter_content_sha256", "charter_launch"):
             payload.pop(name)
         # A set, not a sequence: the same core whatever order the manifest listed it in.
         payload["evaluation"]["no_swap_regret_kinds"] = sorted(
@@ -902,6 +907,58 @@ class WorldManifest:
             raise ValueError("mainnet charter differs from the ratified charter digest")
         if roster_hash(self) != self.charter_roster_sha256:
             raise ValueError("mainnet roster differs from the roster the charter was ratified on")
+        if self.charter_launch is None:
+            raise ValueError("mainnet requires charter.launch from the ratified export")
+
+    def check_ratified_digest(self) -> None:
+        """Refuse a ratified charter whose loaded content or roster is not the one ratified.
+
+        Guarantees, whatever the network (a capital-loop world trades on testnet and
+        spends mainnet USDC): where ``charter.ratified_sha256`` is present, the charter
+        as loaded (its cards, norms and ``charter.launch``) hashes to it
+        (``charter_digest_mismatch``); where ``charter.roster_sha256`` is present, the
+        manifest's assemblies and models hash to it (``charter_roster_mismatch``). An
+        edit after ratification, a launch rebinding or a changed seat included, is not
+        what was voted. A charter that claims neither digest is not compared.
+        """
+        if (self.charter_ratified_sha256 is not None
+                and self.charter_content_sha256 != self.charter_ratified_sha256):
+            raise CharterDigestMismatch(
+                "charter_digest_mismatch",
+                "the loaded charter's content digest is not charter.ratified_sha256")
+        if self.charter_roster_sha256 is not None:
+            from factorylab.charter.provenance import roster_hash
+
+            if roster_hash(self) != self.charter_roster_sha256:
+                raise CharterRosterMismatch(
+                    "charter_roster_mismatch",
+                    "this manifest's roster differs from the roster the charter was "
+                    "ratified on (charter.roster_sha256)")
+
+    def check_launch(self, launch: str) -> None:
+        """Refuse a launch its charter was not voted for (``CharterLaunchRefused``).
+
+        Chapter II §I.b: a ballot read the ``treasury.transfer`` contract of one launch
+        (``scripts/charter_session.py --launch``), and each launcher installs its own
+        rail. Guarantees a charter carrying ``charter.launch`` starts only under that
+        launch, and a ratified charter (``charter.ratified_sha256``) that states none
+        starts under none. A world whose charter states neither launches as before.
+        """
+        if launch not in CHARTER_LAUNCHES:
+            raise ValueError(f"launch must be one of {', '.join(CHARTER_LAUNCHES)}")
+        self.check_ratified_digest()  # the stated launch is the ratified one, or refused
+        if self.charter_launch is None:
+            if self.charter_ratified_sha256 is not None:
+                raise CharterLaunchRefused(
+                    "charter_launch_missing",
+                    "this manifest carries a ratified charter (charter.ratified_sha256) that "
+                    "states no charter.launch")
+            return
+        if self.charter_launch != launch:
+            raise CharterLaunchRefused(
+                "charter_launch_mismatch",
+                f"this charter was ratified for launch {self.charter_launch}; this is "
+                f"launch {launch}")
 
     def _validate_endowment(self) -> None:
         """Locked backing is part of the initial balance and its tranches sum to it exactly."""
@@ -1542,6 +1599,10 @@ class WorldManifest:
                 f"timing.min_ratio ({headroom['min_ratio']}) times the "
                 f"{headroom['diagnosis_windows']} windows (immune.k) stable failure is "
                 f"diagnosed in, {headroom['min_ratio'] * headroom['diagnosis_windows']}")
+        # A ratified charter is the one voted, on every network (§I.b): its content,
+        # charter.launch included, and its roster hash to the digests the ratification
+        # recorded. After the physics, so a world refused for another reason says that.
+        self.check_ratified_digest()
 
 
 def duration_ns(value: Any) -> int:
@@ -1558,10 +1619,33 @@ def duration_ns(value: Any) -> int:
     return int(s)
 
 
+#: The launches a charter can be voted for: ``scripts/edition4_rehearsal.py
+#: --capital-loop``, ``scripts/edition4_rehearsal.py`` and ``factorylab run``.
+CHARTER_LAUNCHES = ("capital-loop", "rehearsal", "run")
+
+
+class CharterLaunchRefused(ValueError):
+    """A launch its charter was not voted for was refused; nothing started."""
+
+    def __init__(self, reason: str, detail: str):
+        self.reason = reason
+        super().__init__(f"{reason}: {detail}")
+
+
+class CharterDigestMismatch(CharterLaunchRefused):
+    """A ratified charter was edited after ratification: it is not launched or resumed."""
+
+
+class CharterRosterMismatch(CharterLaunchRefused):
+    """A ratified charter's roster was changed after ratification: nothing is launched."""
+
+
 def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]:
     """Explicit charter tables yield their edition and card-specific errors for invalid fields."""
     if not isinstance(raw, dict):
         raise ValueError("charter must be a table")
+    if raw.get("launch") is not None and raw["launch"] not in CHARTER_LAUNCHES:
+        raise ValueError(f"charter.launch must be one of {', '.join(CHARTER_LAUNCHES)}")
     for name in PROVENANCE_FIELDS:
         value = raw.get(name)
         if value is not None and (not isinstance(value, str)
@@ -1973,6 +2057,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter_ratified_sha256=(d.get("charter") or {}).get("ratified_sha256"),
         charter_roster_sha256=(d.get("charter") or {}).get("roster_sha256"),
         charter_content_sha256=charter_content_sha256,
+        charter_launch=(d.get("charter") or {}).get("launch"),
         charter_parent_sha256=(d.get("charter") or {}).get("parent_charter_sha256"),
         norm_house=_norm_house(d.get("norm_house")),
         evaluation=evaluation,
