@@ -136,18 +136,18 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
                 "size and what remains unfilled. Free.",
                 {}, [], [{}], 0),
             "polymarket.place_limit": (
-                "Place a good-until-cancelled limit order for outcome tokens of one "
-                "Polymarket market, paid from and settled into the polymarket pot. size is "
-                "in tokens, price in USDC per token strictly between 0 and 1 on the "
-                "market's tick. A buy holds price x size USDC while it rests; a sell holds "
-                "the tokens. An order that fills on arrival pays the market's taker fee. "
-                "When the market resolves, each winning token pays 1 USDC and each losing "
-                "token 0. " + (
+                "Place a good-until-cancelled limit order to buy outcome tokens of one "
+                "Polymarket market, paid from and settled into the polymarket pot. The "
+                "venue takes BUY orders only: a position is held until its market "
+                "resolves, when each winning token pays 1 USDC and each losing token 0. "
+                "size is in tokens, price in USDC per token strictly between 0 and 1 on "
+                "the market's tick. A buy holds price x size USDC while it rests. An order "
+                "that fills on arrival pays the market's taker fee. " + (
                     "The order is signed by the pot's wallet and sent to Polymarket's CLOB "
                     "on Polygon as a GTC order; its identity is its EIP-712 order hash. "
                     "The pot's collateral is pUSD, Polymarket's USDC-backed token. "
                     if live else "") + "Free to call.",
-                {"token_id": token, "side": {"type": "string", "enum": ["buy", "sell"]},
+                {"token_id": token, "side": {"type": "string", "enum": ["buy"]},
                  "size": decimal, "price": decimal},
                 ["token_id", "side", "size", "price"],
                 [{"token_id": "100000000000000000000", "side": "buy", "size": "10",
@@ -1085,8 +1085,7 @@ def taker_fee(market: dict, size: Decimal, price: Decimal) -> Decimal:
 
 def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
             tool_id: str, args: dict, *, committed: Decimal = Decimal(0),
-            window_count: int | None = None,
-            selling: Decimal = Decimal(0)) -> str | None:
+            window_count: int | None = None) -> str | None:
     """Why this write would be refused before any intent, or None.
 
     Guarantees new exposure is weighed against the polymarket pot alone: a buy
@@ -1103,6 +1102,11 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
         if args["order_id"] not in surface.order_ids:
             return "no order with that id was placed by this world"
         return None
+    if args.get("side") != "buy":
+        # Version 1 of the venue takes BUY orders only (the schema says so first): a
+        # sale's cost basis would rest on an execution order the venue reveals only
+        # piecemeal, so a position is held to its resolution.
+        return BUY_ONLY_REFUSAL
     size, price = _decimal(args.get("size")), _decimal(args.get("price"))
     if size is None or price is None or size <= 0 or not 0 < price < 1:
         return "size must be positive and price strictly between 0 and 1"
@@ -1137,90 +1141,30 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     notional = size * price
     if usd_to_micro(notional, rounding="ceil") > spec.max_order_micro:
         return "order notional exceeds [polymarket] max_order_usd"
-    buy = args["side"] == "buy"
-    if buy and surface.live and surface.drifting:
+    if surface.live and surface.drifting:
         return DRIFT_REFUSAL
-    if buy:
-        above = principal_excess(surface, account)
-        if above is not None:
-            return above
-        fee = taker_fee(market, size, price)
-        exposure, available = _open_exposure(account), Decimal(account["usdc_available"])
-        if surface.live:
-            # Astra P1 on #177: the venue's listings (open orders, positions, balance)
-            # are separate reads that lag each other; the world's own durable records
-            # (its intents not yet booked, its booked inventory) bound them from below.
-            reserved, book = local_commitments(surface)
-            exposure = max(exposure, reserved + book)
-            available = min(available, Decimal(account["usdc"]) - reserved)
-        if usd_to_micro(exposure + committed + notional,
-                        rounding="ceil") > spec.max_open_micro:
-            return "open exposure would exceed [polymarket] max_open_usd"
-        if notional + fee + committed > available:
-            return "order collateral exceeds the polymarket pot's available USDC"
-    else:
-        held = next((Decimal(p["available"]) for p in account["positions"]
-                     if p["token_id"] == args["token_id"]), Decimal(0))
-        # ``selling``: what earlier sells of the same batch offer of the token.
-        if size + selling > held:
-            return "sell exceeds the tokens the polymarket pot holds"
-        if surface.live and size + selling > acquired(surface, account, args["token_id"]):
-            return ACQUIRED_REFUSAL
+    above = principal_excess(surface, account)
+    if above is not None:
+        return above
+    fee = taker_fee(market, size, price)
+    exposure, available = _open_exposure(account), Decimal(account["usdc_available"])
+    if surface.live:
+        # Astra P1 on #177: the venue's listings (open orders, positions, balance)
+        # are separate reads that lag each other; the world's own durable records
+        # (its intents not yet booked, its booked inventory) bound them from below.
+        reserved, book = local_commitments(surface)
+        exposure = max(exposure, reserved + book)
+        available = min(available, Decimal(account["usdc"]) - reserved)
+    if usd_to_micro(exposure + committed + notional,
+                    rounding="ceil") > spec.max_open_micro:
+        return "open exposure would exceed [polymarket] max_open_usd"
+    if notional + fee + committed > available:
+        return "order collateral exceeds the polymarket pot's available USDC"
     return None
 
 
-ACQUIRED_REFUSAL = "sell exceeds the tokens this world's confirmed fills acquired"
-
-
-def acquired(surface: PolymarketSurface, account: dict, token_id: str) -> Decimal:
-    """The tokens of ``token_id`` this world's own confirmed fills hold, less what its
-    resting sells already offer.
-
-    Codex P1 on #177: a live pot's wallet can hold tokens the world never bought (the
-    funder's, before launch). Selling one would have no cost basis on the pot's books,
-    book its whole proceeds as profit and take the world's holding negative, so only
-    what the world acquired is sold (essay II.II.b, the hard cast); the rest is the
-    funder's, outside the world.
-    """
-    book = surface.cursor.get("book", {}).get(str(token_id))
-    held = Decimal(book[0]) if book else Decimal(0)
-    own = _own_hashes(surface)
-    listed = sum((Decimal(o["remaining"]) for o in account["open_orders"]
-                  if o["side"] == "sell" and o["token_id"] == str(token_id)
-                  and o["order_id"] in own), Decimal(0))
-    # The world's own records bound the listing from below (Sol P2 on #177): a sell
-    # the venue does not list yet (answer lost, listing lagging) still offers its tokens.
-    return held - max(listed, _local_sells(surface, str(token_id)))
-
-
-def _local_sells(surface: PolymarketSurface, token_id: str) -> Decimal:
-    """What this world's sell placements on ``token_id`` may still take from what it
-    holds: each one not rejected, on what it may still fill or has matched and not yet
-    booked (its size while it rests or is unanswered; once terminal its matched size less
-    its failed legs)."""
-    cancelled = _cancelled(surface)
-    failed = surface.cursor.get("failed", {})
-    total = Decimal(0)
-    for intent in surface.intents.values():
-        args = intent["args"]
-        if (intent["operation"] != "polymarket.place_limit" or args.get("side") != "sell"
-                or str(args.get("token_id")) != token_id):
-            continue
-        result = intent["result"]
-        if result.get("status") == "rejected" or intent.get("terminal"):
-            continue
-        order_id = str(intent.get("order_hash") or result.get("order_id"))
-        if cancelled.get(order_id) is not None:
-            quantity = cancelled[order_id] - Decimal(str(failed.get(order_id, "0")))
-        elif result.get("status") in ("filled", "cancelled"):
-            quantity = Decimal(str(result.get("filled_size") or "0")) - Decimal(
-                str(failed.get(order_id, "0")))
-        else:
-            quantity = Decimal(str(args["size"]))
-        total += max(Decimal(0), quantity - Decimal(surface.filled.get(order_id, "0")))
-    return total
-
-
+#: Version 1 of the venue: BUY orders only; a position is held to its resolution.
+BUY_ONLY_REFUSAL = "the polymarket venue takes BUY orders only"
 PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
 #: The live pot's opening, the baseline its reconciliation is measured from, is not read.
 OPENING_REFUSAL = "the polymarket pot's opening is not yet read"
@@ -1393,7 +1337,6 @@ def batch_refusal(rt: Any, seat: str, handle: str,
     """
     surface = rt.polymarket
     committed, placed = Decimal(0), set()
-    selling: dict[str, Decimal] = {}
     window, count = surface.window_orders
     count = count if window == rt.window.index else 0
     for index, (slot, tool_id, args) in enumerate(writes):
@@ -1405,16 +1348,12 @@ def batch_refusal(rt: Any, seat: str, handle: str,
             if key in placed:
                 return index, "the same order is placed twice in one batch"
             placed.add(key)
-        token = str(args.get("token_id"))
         reason = refusal(rt, surface, seat, handle, tool_id, args, committed=committed,
-                         window_count=count, selling=selling.get(token, Decimal(0)))
+                         window_count=count)
         if reason:
             return index, reason
         if tool_id == "polymarket.place_limit":
             count += 1
-            if args.get("side") == "sell":
-                # The tokens earlier sells of the batch offer (Sol P2 on #177).
-                selling[token] = selling.get(token, Decimal(0)) + Decimal(str(args["size"]))
             if args.get("side") == "buy":
                 size, price = Decimal(str(args["size"])), Decimal(str(args["price"]))
                 market = _write_market(rt, surface, args["token_id"]) or {}

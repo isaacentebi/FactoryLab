@@ -281,7 +281,6 @@ def test_an_unanswered_intent_is_polled_on_the_bounded_schedule_then_released():
 
 @pytest.mark.parametrize(("change", "reason", "resolved_ns"), [
     ({"size": "20", "price": "0.45"}, "available USDC", None),
-    ({"size": "10", "price": "0.45", "side": "sell"}, "tokens the polymarket pot holds", None),
     ({"size": "30", "price": "0.45"}, "max_order_usd", None),
     ({"size": "10", "price": "1.2"}, "strictly between 0 and 1", None),
     ({"size": "10", "price": "0.455"}, "tick", None),

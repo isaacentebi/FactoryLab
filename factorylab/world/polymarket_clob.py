@@ -635,6 +635,8 @@ class LivePolymarket(PolymarketReader):
         and ``place`` signs exactly it. Refuses an order the exchange would read
         differently from the one asked for (``order_amounts``).
         """
+        if not is_buy:
+            raise PolymarketRefused("the polymarket venue takes BUY orders only")
         tick = _dec(market["tick_size"])
         maker_amount, taker_amount = order_amounts(is_buy, size, price, tick)
         namespace, nonce = self.identity()
@@ -969,7 +971,15 @@ class LivePolymarket(PolymarketReader):
                 found.append({"instant": instant[0], "exact": instant[1], "at": at,
                               "key": key, "order_id": order_id, "size": _dec(size),
                               "price": _dec(price), "taker": taker, "fee_bps": fee_bps})
-        events = self._in_execution_order(state, orders, found)
+        # Every leg is a buy (the venue takes BUY orders only): what the pot holds of a
+        # token and its average cost do not depend on the order legs are booked in.
+        events = []
+        for leg in sorted(found, key=lambda leg: (leg["instant"], leg["key"])):
+            event = self._fill_event(state, orders[leg["order_id"]], leg["order_id"],
+                                     leg["size"], leg["price"], leg["taker"], leg["at"],
+                                     leg["fee_bps"])
+            event["ts_ns"] = leg["instant"]
+            events.append(event)
         if not ended:
             state["page"] = page_cursor
             state.setdefault("pending", [])
@@ -989,94 +999,24 @@ class LivePolymarket(PolymarketReader):
         state["after"] = max(0, after)
         return events
 
-    def _in_execution_order(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
-                            found: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Book confirmed legs in the order they executed, as the venue states it.
-
-        Sol P0 on #177: cost basis follows execution order, never trade ids. Legs are
-        ordered per token by their execution instant (``match_time_nano``). Legs whose
-        order the venue does not establish (the same instant, or the same second where
-        one of them states only its second) form one group, and no chronology is
-        invented for it: of the orderings that keep the holding nonnegative (buys first,
-        sales first, or buys above the running cost, sales, then the rest), the one
-        booked is the one that reports the least profit.
-        """
-        by_token: dict[str, list[dict[str, Any]]] = {}
-        for leg in found:
-            by_token.setdefault(orders[leg["order_id"]]["token_id"], []).append(leg)
-        booked: list[tuple[int, int, dict[str, Any]]] = []
-        for token, legs in sorted(by_token.items()):
-            legs.sort(key=lambda leg: (leg["instant"], leg["key"]))
-            groups: list[list[dict[str, Any]]] = []
-            for leg in legs:
-                last = groups[-1][-1] if groups else None
-                if last is not None and (
-                        leg["instant"] == last["instant"]
-                        or (not (leg["exact"] and last["exact"])
-                            and leg["at"] == last["at"])):
-                    groups[-1].append(leg)
-                else:
-                    groups.append([leg])
-            for group in groups:
-                for leg in self._least_profit(state, orders, token, group):
-                    event = self._fill_event(
-                        state, orders[leg["order_id"]], leg["order_id"], leg["size"],
-                        leg["price"], leg["taker"], leg["at"], leg["fee_bps"])
-                    event["ts_ns"] = leg["instant"]
-                    booked.append((group[0]["instant"], len(booked), event))
-        return [event for _instant, _n, event in sorted(booked, key=lambda b: b[:2])]
-
-    @staticmethod
-    def _least_profit(state: dict[str, Any], orders: dict[str, dict[str, str]], token: str,
-                      group: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if len(group) == 1:
-            return group
-        held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-        buys = [leg for leg in group if orders[leg["order_id"]]["side"] == "buy"]
-        sells = [leg for leg in group if orders[leg["order_id"]]["side"] != "buy"]
-        options = [buys + sells, sells + buys,
-                   [b for b in buys if b["price"] > avg] + sells
-                   + [b for b in buys if b["price"] <= avg]]
-
-        def realized(order: list[dict[str, Any]]) -> Decimal | None:
-            size, cost, total = held, avg, Decimal(0)
-            for leg in order:
-                if orders[leg["order_id"]]["side"] == "buy":
-                    cost = (size * cost + leg["size"] * leg["price"]) / (size + leg["size"])
-                    size += leg["size"]
-                else:
-                    if leg["size"] > size:
-                        return None
-                    total += (leg["price"] - cost) * leg["size"]
-                    size -= leg["size"]
-            return total
-
-        scored = [(realized(o), n, o) for n, o in enumerate(options)]
-        valid = [item for item in scored if item[0] is not None]
-        return min(valid)[2] if valid else options[0]
-
     @staticmethod
     def _fill_event(state: dict[str, Any], order: dict[str, str], order_id: str,
                     size: Decimal, price: Decimal, taker: bool, at: int,
                     fee_bps: Any = None) -> dict[str, Any]:
-        token, is_buy = order["token_id"], order["side"] == "buy"
+        token = order["token_id"]
         fee = execution_fee(size, price, taker, fee_bps, order.get("fee_exponent", "1"))
         held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-        realized = Decimal(0)
-        if is_buy:
-            total = held + size
-            avg = (held * avg + size * price) / total
-            held = total
-        else:
-            realized = (price - avg) * size
-            held -= size
-        state["book"][token] = [str(held), str(avg)]
+        # A buy: the holding grows at its average cost; nothing is realised until the
+        # token's resolution pays it.
+        total = held + size
+        avg = (held * avg + size * price) / total
+        state["book"][token] = [str(total), str(avg)]
         booked = state.setdefault("booked", {})
         booked[order_id] = str(_dec(booked.get(order_id, "0")) + size)
         return {"kind": "fill", "order_id": order_id, "token_id": token,
-                "market_id": order.get("market_id"), "is_buy": is_buy, "size": str(size),
+                "market_id": order.get("market_id"), "is_buy": True, "size": str(size),
                 "px": str(price), "fee_usd": "0" if fee is None else str(fee),
-                "realized_usd": str(realized), "ts_ns": at * 1_000_000_000,
+                "realized_usd": "0", "ts_ns": at * 1_000_000_000,
                 **({"fee_unresolved": True} if fee is None else {})}
 
     def _resolutions(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
@@ -1093,19 +1033,11 @@ class LivePolymarket(PolymarketReader):
         events: list[dict[str, Any]] = []
         facts = state.setdefault("resolution_facts", {})
 
-        def selling(token: str) -> bool:
-            # A sell of this world's on the token that may still have matched quantity
-            # not yet booked (Codex P1 on #177): what the pot holds of the token is not
-            # known until it is terminal and wholly booked, so no payout is sized yet.
-            return any(o["token_id"] == token and o["side"] == "sell"
-                       and oid not in state["terminal"] for oid, o in orders.items())
-
         # Inventory a trade confirmed after its market resolved (Astra P0 on #177): it is
-        # paid its token's payout once, when it is booked, never lost. A resolution is
-        # paid only once no sell of the token may still take from what it pays.
+        # paid its token's payout once, when it is booked, never lost.
         for token, paid in sorted(state["resolved"].items()):
             size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-            if size > 0 and token in facts and not selling(token):
+            if size > 0 and token in facts:
                 state["book"][token] = ["0", str(avg)]
                 _redeemable(state, token, size)
                 events.append({**facts[token], "kind": "resolution", "token_id": token,
@@ -1126,7 +1058,7 @@ class LivePolymarket(PolymarketReader):
                                 "outcome_index": outcome["outcome_index"],
                                 "outcome_name": outcome["outcome"]}
                 size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-                if size > 0 and not selling(token):
+                if size > 0:
                     state["book"][token] = ["0", str(avg)]
                     _redeemable(state, token, size)
                     events.append({

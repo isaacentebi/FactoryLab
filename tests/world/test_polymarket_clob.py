@@ -473,35 +473,6 @@ def test_a_matched_trade_moves_nothing_and_a_failed_one_leaves_nothing_behind():
     assert server.fake._positions[token]["size"] == 10
 
 
-def _legs(token, *rows):
-    return [{"id": trade_id, "status": "CONFIRMED", "match_time": "100",
-             "taker_order_id": order_id, "size": "10", "price": price, "fee_rate_bps": "0",
-             "maker_orders": [], **extra}
-            for trade_id, order_id, price, extra in rows]
-
-
-@pytest.mark.parametrize("nanos", [True, False])
-def test_cost_basis_follows_execution_order_never_trade_ids(nanos):
-    """Sol P0 on #177: fills were booked in trade-id order, so a buy with a lexically
-    later id than a sale made the sale look $1.00 more profitable. Executions follow
-    match_time_nano; within one instant the order is not invented: it is the one least
-    favourable to reported profit."""
-    venue, server = live_venue()
-    token = _token(server)
-    orders = {"0xbuy": {"token_id": token, "side": "buy", "size": "10", "price": "0.61"},
-              "0xsell": {"token_id": token, "side": "sell", "size": "10", "price": "0.59"}}
-    server.trades = _legs(token, ("t-9", "0xbuy", "0.61",
-                                  {"match_time_nano": "100000000001"} if nanos else {}),
-                          ("t-10", "0xsell", "0.59",
-                           {"match_time_nano": "100000000002"} if nanos else {}))
-    venue._credentials()
-    answer = venue.poll(now_ns=10**11, cursor={"after": 0, "book": {token: ["10", "0.41"]}},
-                        orders=orders)
-    sale = next(e for e in answer["events"] if not e["is_buy"])
-    assert Decimal(sale["realized_usd"]) == Decimal("0.80")  # (0.59 - 0.51) x 10
-    assert answer["cursor"]["book"][token] == ["10", "0.51"]
-
-
 def test_the_fake_refuses_a_corrupted_type_suffix_and_an_unauthorised_proxy_signer(
         monkeypatch):
     """Sol P2 on #177: the fake accepted a type-3 signature whose ERC-7739 type string
@@ -528,3 +499,27 @@ def test_the_fake_refuses_a_corrupted_type_suffix_and_an_unauthorised_proxy_sign
     authorised, server3 = live_venue(signer=owner, funder=wallet, signature_type=1)
     token = _signed_intent(authorised, server3)
     assert _place(authorised, token, price="0.30")["status"] == "resting"
+
+
+def test_what_the_pot_holds_does_not_depend_on_the_order_buys_are_booked_in():
+    """With BUY orders only, a token's holding and average cost are the same whatever
+    the poll, page or instant each confirmed buy is read in: no chronology is needed."""
+    venue, server = live_venue()
+    token = _token(server)
+    orders = {f"0x{n}": {"token_id": token, "side": "buy", "size": "10", "price": price}
+              for n, price in enumerate(("0.41", "0.61", "0.55"))}
+    rows = [{"id": f"t-{n}", "status": "CONFIRMED", "match_time": "100",
+             "taker_order_id": f"0x{n}", "size": "10", "price": price, "fee_rate_bps": "0",
+             "maker_orders": []} for n, price in enumerate(("0.41", "0.61", "0.55"))]
+    venue._credentials()
+    books = []
+    for order in (rows, rows[::-1], [rows[1]], [rows[2], rows[0]]):
+        server.trades = list(order)
+        cursor = venue.poll(now_ns=10**11, cursor={"after": 0}, orders=orders)["cursor"]
+        if len(order) < 3:  # the rest arrives in a later poll
+            server.trades = [r for r in rows if r not in order]
+            cursor = venue.poll(now_ns=10**11, cursor=cursor, orders=orders)["cursor"]
+        books.append(cursor["book"][token])
+    assert all(book == books[0] for book in books)
+    assert Decimal(books[0][0]) == 30
+    assert Decimal(books[0][1]) == (Decimal("0.41") + Decimal("0.61") + Decimal("0.55")) / 3

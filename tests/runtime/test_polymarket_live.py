@@ -397,30 +397,6 @@ def test_a_released_placement_s_confirmed_trade_binds_it_while_lookups_still_fai
     assert owned[0]["handle"] == handle
 
 
-def test_a_sale_of_tokens_this_world_never_acquired_is_refused():
-    """Codex P1 on #177: a funded wallet holding an outcome token at launch let a seat
-    sell it with no cost basis, so the whole proceeds booked as profit and the pot's own
-    holding went negative. Only what this world's confirmed fills acquired is sold."""
-    rt, server = live_world()
-    held = token(server)
-    server.fake._positions[held] = {"size": Decimal(10), "avg_px": Decimal("0.2")}
-    rt.polymarket._account_memo = None  # the funder's tokens, as the next read shows them
-    handle = collateral_decision(rt)
-    refused = buy(rt, server, handle, side="sell", size="5", price="0.39")
-    assert refused["status"] == "rejected" and "acquired" in refused["error"]
-    assert rt.polymarket.intents == {} and ("POST", "/order") not in server.calls
-    # What the world bought itself, once its fill is confirmed, it may sell.
-    buy(rt, server, handle, size="10", price="0.45", slot="tool:1")
-    polymarket.tick(rt)
-    sold = buy(rt, server, collateral_decision(rt), side="sell", size="5", price="0.39")
-    assert sold["status"] in ("filled", "uncertain", "resting")
-    polymarket.tick(rt)
-    sale = [f for f in items(rt, "polymarket.fill") if f["is_buy"] is False]
-    assert Decimal(sale[0]["realized_usd"]) == (Decimal("0.39") - Decimal("0.41")) * 5
-    too_many = buy(rt, server, collateral_decision(rt), side="sell", size="6", price="0.39")
-    assert too_many["status"] == "rejected" and "acquired" in too_many["error"]
-
-
 def test_a_fill_confirmed_after_its_market_resolved_is_booked_and_paid_once():
     """Astra P0 on #177: the order's lookup said MATCHED, its trade was not yet CONFIRMED
     when the market resolved; the order was retired, and the confirmed trade and its
@@ -627,54 +603,6 @@ def _foreign_resting_order(server, token_id):
     server.orders["0x" + "f0" * 32] = {"pm": placed["order_id"], "signed_s": 0}
     server.pm_to_hash[placed["order_id"]] = "0x" + "f0" * 32
     return placed["order_id"]
-
-
-def test_a_kill_cancels_only_this_world_s_orders():
-    """Codex P1 on #177: the wind-down cancelled every order the wallet had resting,
-    orders placed by hand or by another process included."""
-    rt, server = live_world()
-    own = buy(rt, server, collateral_decision(rt))["order_id"]
-    foreign = _foreign_resting_order(server, token(server))
-    rt.polymarket._account_memo = None
-    shown, _ = rt._run_tool("seed-decider", collateral_decision(rt),
-                            {"tool": "polymarket.open_orders", "args": {}})
-    assert [o["order_id"] for o in shown["open_orders"]] == [own]
-    report = polymarket.wind_down(rt)
-    assert foreign in server.fake._orders  # the foreign order still rests
-    assert server.orders[own]["pm"] not in server.fake._orders
-    assert report["cancelled"] == 1 and report["open_orders"] == 0
-    cancels = [i["order_id"] for i in items(rt, "polymarket.wind_down")]
-    assert cancels == [own]
-
-def test_a_sell_matched_before_resolution_and_confirmed_after_is_booked_once():
-    """Codex P1 on #177: a resting sell matched just before resolution; resolution paid
-    the whole book, the sell then confirmed, and the consequence book raised out of tick
-    after the pot had booked both the payout and the sale."""
-    fake = still_fake(resolutions={"fake-1": (10**15, 0)})
-    rt, server = live_world(fake=fake)
-    handle = collateral_decision(rt)
-    buy(rt, server, handle, price="0.45")  # 10 tokens at 0.41, confirmed
-    polymarket.tick(rt)
-    sell = buy(rt, server, collateral_decision(rt), side="sell", price="0.50",
-               slot="tool:1")
-    assert sell["status"] == "resting"
-    server.confirm = False
-    fake._markets["fake-1"]["mid"] = Decimal("0.60")  # the bid crosses the resting sell
-    server.advance(10**14)  # it matches: MINED, not yet final
-    rt.clock.now_ns = 10**15
-    server.advance(10**15)
-    polymarket.tick(rt)
-    polymarket.tick(rt)
-    server.settle("CONFIRMED")
-    for _ in range(3):
-        polymarket.tick(rt)  # nothing raises out of tick
-    sale = [f for f in items(rt, "polymarket.fill") if f["is_buy"] is False]
-    assert len(sale) == 1 and sale[0]["size"] == "10"
-    assert all(r["size"] == "0" for r in items(rt, "polymarket.resolution")) or not items(
-        rt, "polymarket.resolution")
-    paid = [i for i in items(rt, "venue.settled") if i["reference"].startswith("resolution:")]
-    assert paid == []  # nothing held at resolution once the sale is booked
-
 
 
 def test_a_fill_the_consequence_book_refuses_is_quarantined_never_raised(monkeypatch):
@@ -894,33 +822,41 @@ def test_a_failed_trade_releases_its_matched_quantity_once_the_order_is_terminal
         "filled", "resting")
 
 
-def _owns_ten(rt, server):
-    buy(rt, server, collateral_decision(rt), price="0.45", slot="tool:9")  # 10, confirmed
-    polymarket.tick(rt)
+@pytest.mark.parametrize("live", [True, False])
+def test_a_sell_is_refused_before_any_intent(live):
+    """The venue takes BUY orders only (architect's decision on Sol's re-review of #177): a
+    sale's cost basis would rest on an execution order the venue reveals only piecemeal.
+    Sol's scenarios each need a sale; each is refused before any intent, alone, in a
+    batch, and at the venue boundary, and nothing reaches the venue."""
+    if live:
+        rt, server = live_world()
+        token_id = token(server)
+    else:
+        from tests.runtime.test_polymarket_surface import token as fake_token
+        from tests.runtime.test_polymarket_surface import world
 
-
-def test_a_batch_of_sells_is_weighed_against_the_tokens_together():
-    """Sol P2 on #177: two sells of 10 against 10 owned tokens each passed alone, so the
-    batch was admitted whole and the venue could leave one leg standing."""
-    rt, server = live_world()
-    _owns_ten(rt, server)
+        rt, server = world(), None
+        token_id = fake_token(rt)
     handle = collateral_decision(rt)
-    sell = {"token_id": token(server), "side": "sell", "size": "10"}
-    refused = polymarket.batch_refusal(rt, "seed-decider", handle, [
-        ("tool:0", "polymarket.place_limit", {**sell, "price": "0.50"}),
-        ("tool:1", "polymarket.place_limit", {**sell, "price": "0.51"})])
-    assert refused is not None and refused[0] == 1
-
-
-def test_a_sell_counts_the_world_s_sells_the_venue_does_not_list_yet():
-    """Sol P2 on #177: a sell whose answer was lost is not among the world's listed
-    orders; a second sell of the same tokens was admitted against them."""
-    rt, server = live_world()
-    _owns_ten(rt, server)
-    server.lose_answer = True
-    server.fail_lookups = 10**6
-    buy(rt, server, collateral_decision(rt), side="sell", price="0.50")
-    server.orders_lag = True  # nor does the venue list it yet
-    rt.polymarket._account_memo = None
-    second = buy(rt, server, collateral_decision(rt), side="sell", price="0.51")
-    assert second["status"] == "rejected" and second["error"] == polymarket.ACQUIRED_REFUSAL
+    sell = {"tool": "polymarket.place_limit",
+            "args": {"token_id": token_id, "side": "sell", "size": "10", "price": "0.59"}}
+    refused = rt._run_tool("seed-decider", handle, sell)[0]
+    assert "invalid polymarket arguments" in refused["error"]
+    assert polymarket.refusal(rt, rt.polymarket, "seed-decider", handle,
+                              "polymarket.place_limit", sell["args"]) == (
+        polymarket.BUY_ONLY_REFUSAL)
+    batch = polymarket.batch_refusal(rt, "seed-decider", handle, [
+        ("tool:0", "polymarket.place_limit", {**sell["args"], "side": "buy",
+                                               "price": "0.30"}),
+        ("tool:1", "polymarket.place_limit", sell["args"])])
+    assert batch == (1, polymarket.BUY_ONLY_REFUSAL)
+    assert rt.polymarket.intents == {}
+    assert "sell" not in rt.tool_specs["polymarket.place_limit"]["args_schema"][
+        "properties"]["side"]["enum"]
+    assert "BUY orders only" in rt.tool_specs["polymarket.place_limit"]["description"]
+    if live:
+        assert ("POST", "/order") not in server.calls
+        with pytest.raises(clob.PolymarketRefused, match="BUY orders only"):
+            rt.polymarket.venue.target.order_identity(
+                client_id="c", token_id=token_id, is_buy=False, size=Decimal(10),
+                price=Decimal("0.59"), market={"tick_size": "0.01"})

@@ -301,7 +301,7 @@ def test_fake_resting_orders_hold_collateral_and_fill_as_maker_without_fee():
     assert fills and fills[0]["fee_usd"] == "0" and fills[0]["px"] == "0.60"
 
 
-def test_fake_refuses_off_tick_prices_small_orders_and_selling_what_it_lacks():
+def test_fake_refuses_off_tick_prices_small_orders_and_any_sale():
     fake = venue()
     token = yes(fake)
     for price, size, is_buy in ((Decimal("0.455"), Decimal(10), True),

@@ -303,14 +303,10 @@ class FakeClob:
         sign = -1 if undo else 1
         position = self.fake._positions.setdefault(
             event["token_id"], {"size": Decimal(0), "avg_px": Decimal(0)})
-        if event["is_buy"]:
-            self.fake._cash -= sign * (px * size + fee)
-            total = position["size"] + sign * size
-            cost = position["size"] * position["avg_px"] + sign * size * px
-            position["size"], position["avg_px"] = total, (cost / total if total else Decimal(0))
-        else:
-            self.fake._cash += sign * (px * size - fee)
-            position["size"] -= sign * size
+        self.fake._cash -= sign * (px * size + fee)  # every fill is a buy
+        total = position["size"] + sign * size
+        cost = position["size"] * position["avg_px"] + sign * size * px
+        position["size"], position["avg_px"] = total, (cost / total if total else Decimal(0))
 
     def settle(self, status: str = "CONFIRMED") -> None:
         """Every trade not yet final moves to ``status``: CONFIRMED moves its cash and
