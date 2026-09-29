@@ -1043,3 +1043,35 @@ def test_each_published_term_is_the_one_the_venue_enforces():
     fill = venue.fills(0)[-1]
     assert fill.fee == (fill.size * fill.px * Decimal(row["taker_fee_rate"])).quantize(
         Decimal("0.000001"))
+
+
+def test_the_published_leverage_rule_is_the_margin_the_venue_applies(monkeypatch):
+    """Codex P2 on #178: venue.set_leverage was published as cross-margin while an
+    isolated-only market is set isolated. The tool says the market's listed margin
+    decides; each listed market's margin is the one the adapter sends."""
+    from unittest.mock import Mock
+
+    from factorylab.world.exchange import HyperliquidExchange
+    from factorylab.world.venue_tools import VenueTools
+    from tests.world.test_hip3_breadth import USDC, FakeInfo
+
+    FakeInfo.n, FakeInfo.dexes = 2, {"xyz": USDC}
+    monkeypatch.setattr("hyperliquid.info.Info", FakeInfo)
+    monkeypatch.delenv("HL_PRIVATE_KEY", raising=False)
+    ex = HyperliquidExchange(address="0xabc", coins=("BTC",), dexes=("xyz",))
+    tools = VenueTools(ex, coins=("BTC",))
+    description = {spec.id: spec.description for spec in tools.contracts()}[
+        "venue.set_leverage"]
+    assert "margin" in description and "cross-margin" not in description
+    ex._exchange = Mock()
+    ex._exchange.update_leverage.return_value = {"status": "ok"}
+    margins = set()
+    for row in ex.instruments()["perp"]:
+        if row.get("delisted"):
+            continue
+        ex.set_leverage(row["coin"], 1)
+        _lev, _coin = ex._exchange.update_leverage.call_args.args
+        assert ex._exchange.update_leverage.call_args.kwargs["is_cross"] is (
+            row["margin"] == "cross"), row
+        margins.add(row["margin"])
+    assert margins == {"cross", "isolated"}

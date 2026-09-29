@@ -300,7 +300,8 @@ class VenueTools:
                 ["coin", "n"],
             ),
             ("open_orders", "Currently resting orders for the account.", {}, []),
-            ("positions", "Open signed positions and entry prices for the account.", {}, []),
+            ("positions", "Open signed positions and entry prices for the account, on every "
+             "perp dex the world reads, and its spot balances when it trades spot.", {}, []),
             (
                 "place_market",
                 "Place a market buy or sell; optionally reduce only. " + NO_GAS,
@@ -332,7 +333,9 @@ class VenueTools:
             ),
             (
                 "set_leverage",
-                "Set cross-margin leverage for a coin. " + NO_GAS,
+                "Set leverage for a perp coin, cross or isolated as the market's margin "
+                "in its instrument record states (margin: cross or isolated); leverage "
+                "above its max_leverage is refused. " + NO_GAS,
                 {
                     "coin": coin,
                     "market": market,
@@ -362,11 +365,14 @@ class VenueTools:
         # tells an assembly the rest of the listing is one call away.
         listings = {
             "instruments": "Every market the venue lists, with its lot size, tick size, "
-                           "minimum order value and this account's taker and maker fee "
-                           "rates. world.venue carries these records for the world's "
-                           "trading_markets only; this read returns the full listing.",
-            "mids": "Public venue mids for all listed markets.",
-            "funding": "Public venue funding for all listed markets.",
+                           "minimum order value, a perp's max_leverage and margin, and "
+                           "this account's taker and maker fee rates. world.venue carries "
+                           "these records for the markets the tick broadcasts; this read "
+                           "returns the full listing.",
+            "mids": "Public venue mids for all listed markets, every perp dex the world "
+                    "reads included.",
+            "funding": "Public venue funding for all listed perps, every perp dex the world "
+                       "reads included.",
         }
         for name, description in listings.items():
             self._specs[f"venue.{name}"] = ToolSpec(
