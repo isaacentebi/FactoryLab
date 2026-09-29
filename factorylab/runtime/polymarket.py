@@ -2026,12 +2026,14 @@ def _own_orders(surface: PolymarketSurface, orders: list[dict]) -> list[dict]:
 
 def _own_view(surface: PolymarketSurface, account: dict) -> dict:
     """A pot read cut to what is this world's: its own orders, and of each position no
-    more than its own confirmed fills hold (a resolved token's, what the wallet still
-    holds of the tokens this world traded). The simulated pot is the world's whole."""
+    more than its own confirmed fills hold (a resolved token's, what the world held when
+    it was paid, as far as the wallet still holds it). The simulated pot is the world's
+    whole."""
     if not surface.live:
         return account
     book = surface.cursor.get("book", {})
     resolved = surface.cursor.get("resolved", {})
+    redeemable = surface.cursor.get("redeemable", {})
     traded = {str(surface.intents[c]["args"]["token_id"]) for c in surface.order_ids.values()}
     positions = []
     for p in account["positions"]:
@@ -2039,8 +2041,11 @@ def _own_view(surface: PolymarketSurface, account: dict) -> dict:
         if token not in traded:
             continue
         size = Decimal(p["size"])
-        if token not in resolved:
-            size = min(size, Decimal(book.get(token, ("0", "0"))[0]))
+        # What this world holds: its booked inventory, or once resolved what it held
+        # when paid; the funder's own tokens of the same outcome are never its.
+        own = (Decimal(redeemable.get(token, "0")) if token in resolved
+               else Decimal(book.get(token, ("0", "0"))[0]))
+        size = min(size, own)
         if size > 0:
             positions.append({**p, "size": str(size)})
     return {**account, "positions": positions,

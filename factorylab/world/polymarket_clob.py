@@ -495,6 +495,13 @@ ORDER_STATUS = {"LIVE": "resting", "MATCHED": "filled", "CANCELED": "cancelled",
                 "CANCELED_MARKET_RESOLVED": "cancelled", "INVALID": "rejected"}
 
 
+def _redeemable(state: dict[str, Any], token: str, size: Decimal) -> None:
+    """Keep what of a resolved token the world held when it was paid: the tokens stay
+    in the wallet until redeemed, beside any the funder holds (Codex P2 on #177)."""
+    held = state.setdefault("redeemable", {})
+    held[token] = str(_dec(held.get(token, "0")) + size)
+
+
 class LivePolymarket(PolymarketReader):
     """The polymarket pot on Polymarket's CLOB: the ``FakePolymarket`` contract, live.
 
@@ -1020,6 +1027,7 @@ class LivePolymarket(PolymarketReader):
             size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
             if size > 0 and token in facts and not selling(token):
                 state["book"][token] = ["0", str(avg)]
+                _redeemable(state, token, size)
                 events.append({**facts[token], "kind": "resolution", "token_id": token,
                                "payout": str(paid), "size": str(size),
                                "realized_usd": str((_dec(paid) - avg) * size),
@@ -1040,6 +1048,7 @@ class LivePolymarket(PolymarketReader):
                 size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
                 if size > 0 and not selling(token):
                     state["book"][token] = ["0", str(avg)]
+                    _redeemable(state, token, size)
                     events.append({
                         **facts[token], "kind": "resolution", "token_id": token,
                         "payout": str(paid), "size": str(size),

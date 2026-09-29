@@ -749,3 +749,22 @@ def test_every_live_polymarket_call_resumes_from_an_interrupted_journal():
             assert result == {"status": "uncertain"}, name
         else:
             assert journal.call(name, lambda n=name: {"read": n}, (), {}) == {"read": name}
+
+
+def test_a_kill_after_resolution_reports_only_the_world_s_unredeemed_tokens():
+    """Codex P2 on #177: with the funder holding the same token before this world, the
+    wind-down reported the whole wallet position as the world's residual once the market
+    resolved."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 0)})
+    rt, server = live_world(fake=fake)
+    buy(rt, server, collateral_decision(rt), price="0.45")  # the world's 10 tokens
+    polymarket.tick(rt)
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    polymarket.tick(rt)
+    assert items(rt, "polymarket.resolution")
+    # On Polymarket the tokens stay in the wallet until redeemed; the funder holds 7 more.
+    server.fake._positions[token(server)] = {"size": Decimal(17), "avg_px": Decimal("0.3")}
+    rt.polymarket._account_memo = None
+    report = polymarket.wind_down(rt)
+    assert [p["size"] for p in report["residual"]] == ["10"]
