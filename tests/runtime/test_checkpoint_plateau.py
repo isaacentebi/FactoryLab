@@ -68,20 +68,41 @@ def _slope(values: list[float]) -> float:
 
 
 def _fit(columns: list[list[float]], y: list[float]) -> list[float]:
-    """Least-squares coefficients of ``y`` on ``columns`` (the normal equations); every
-    column must vary, or be the intercept, so the system is not singular."""
+    """Least-squares coefficients of ``y`` on ``columns``, rank-safe.
+
+    Columns are taken in order, each orthogonalised against those kept (modified
+    Gram-Schmidt); one whose remainder is negligible, a constant (the intercept aside)
+    or a combination of earlier ones, is dropped with coefficient 0, and the kept
+    columns are solved exactly on that basis. Guarantees an answer for any series:
+    dependent columns (retention falling as the world ages) never make it singular.
+    """
     n = len(columns)
-    rows = [[sum(a * b for a, b in zip(columns[i], columns[j], strict=True))
-             for j in range(n)]
-            + [sum(a * b for a, b in zip(columns[i], y, strict=True))] for i in range(n)]
-    for i in range(n):
-        pivot = max(range(i, n), key=lambda r: abs(rows[r][i]))
-        rows[i], rows[pivot] = rows[pivot], rows[i]
-        rows[i] = [v / rows[i][i] for v in rows[i]]
-        for r in range(n):
-            if r != i:
-                rows[r] = [a - rows[r][i] * b for a, b in zip(rows[r], rows[i], strict=True)]
-    return [row[n] for row in rows]
+    basis: list[list[float]] = []
+    triangle: list[list[float]] = []  # R of the thin QR, over the kept columns
+    kept: list[int] = []
+    for j, column in enumerate(columns):
+        rest = list(column)
+        weights = []
+        for q in basis:
+            w = sum(a * b for a, b in zip(q, rest, strict=True))
+            weights.append(w)
+            rest = [a - w * b for a, b in zip(rest, q, strict=True)]
+        norm = sum(a * a for a in rest) ** 0.5
+        scale = sum(a * a for a in column) ** 0.5
+        if norm <= 1e-9 * scale or norm == 0.0:
+            continue
+        basis.append([a / norm for a in rest])
+        triangle.append([*weights, norm])
+        kept.append(j)
+    projected = [sum(a * b for a, b in zip(q, y, strict=True)) for q in basis]
+    solved = [0.0] * len(kept)
+    for i in reversed(range(len(kept))):  # back-substitute R · b = Qᵀy
+        solved[i] = (projected[i] - sum(triangle[k][i] * solved[k]
+                                        for k in range(i + 1, len(kept)))) / triangle[i][i]
+    coefficients = [0.0] * n
+    for index, value in zip(kept, solved, strict=True):
+        coefficients[index] = value
+    return coefficients
 
 
 def _varies(values: list[float]) -> bool:
@@ -98,21 +119,18 @@ def _growth(retained: list[float], driver: list[float], sizes: list[float],
     block's whole checkpoint per retained decision. Unbounded, a fit can explain a leak
     that grows as retained decisions fall (one left behind by every completed decision)
     with a negative per-decision cost and read no growth at all. Where the bound binds,
-    the term is fixed at it and the rest refit. A column that does not vary (a perfectly
-    steady plateau) is left out of the fit rather than making it singular.
+    the term is fixed at it and the rest refit. A column that does not vary, or depends
+    on another (retention falling exactly as the world ages), is dropped by the rank-safe
+    fit (``_fit``), and the bound still applies.
     """
     ones = [1.0] * len(sizes)
     if not _varies(driver):
         return 0.0, 0.0
-    if _varies(retained):
-        _a, per_decision, per_step = _fit([ones, retained, driver], sizes)
-        if not 0.0 <= per_decision <= per_decision_max:
-            per_decision = min(max(per_decision, 0.0), per_decision_max)
-            rest = [y - per_decision * r for y, r in zip(sizes, retained, strict=True)]
-            _a, per_step = _fit([ones, driver], rest)
-    else:
-        per_decision = 0.0
-        _a, per_step = _fit([ones, driver], sizes)
+    _a, per_decision, per_step = _fit([ones, retained, driver], sizes)
+    if not 0.0 <= per_decision <= per_decision_max:
+        per_decision = min(max(per_decision, 0.0), per_decision_max)
+        rest = [y - per_decision * r for y, r in zip(sizes, retained, strict=True)]
+        _a, per_step = _fit([ones, driver], rest)
     return per_decision, per_step * (max(driver) - min(driver))
 
 
@@ -279,6 +297,21 @@ def test_a_perfectly_steady_plateau_is_no_leak_and_no_error():
     left out of the fit, not a singular system (Sol on #179: ZeroDivisionError)."""
     checkpoints = [(FROM + 100 * i, 3_300_000, 1000, 5 * i) for i in range(35)]
     assert plateau_problems(checkpoints) == []
+
+
+@pytest.mark.parametrize("leak", [0, 20_000], ids=["steady", "leaking"])
+def test_retention_that_falls_exactly_as_the_world_ages_is_fit_not_a_crash(leak):
+    """Sol's re-review of #179: 35 checkpoints whose retention falls one decision each as
+    age and completions rise, so the three columns are dependent though each varies.
+    The fit drops what depends on what came before it and keeps the bound: steady bytes
+    are no leak, and bytes that grow 20 KB a checkpoint are one."""
+    checkpoints = [(FROM + 100 * i, 3_300_000 + leak * i, 1000 - i, 5 * i)
+                   for i in range(35)]
+    problems = plateau_problems(checkpoints)
+    if leak:
+        assert problems and all(p.startswith("state leak") for p in problems)
+    else:
+        assert problems == []
 
 
 def test_bytes_per_decision_swing_with_activity_over_fixed_aggregates():
