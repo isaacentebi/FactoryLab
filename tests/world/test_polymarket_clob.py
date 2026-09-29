@@ -95,16 +95,30 @@ def test_the_signer_never_shows_its_key(monkeypatch):
     assert "not-a-key-0123" not in str(refused.value)
 
 
-def test_a_deposit_wallet_order_carries_the_erc7739_wrapper():
-    signer = make_signer(3)
+#: A Deposit Wallet (signature type 3) order signed by the official client's own code,
+#: py-clob-client-v2 ``order_utils/exchange_order_builder_v2.py`` (main, read 2026-09-29),
+#: run offline on this order with the test key 0x...03: the inner 65-byte signature for
+#: each exchange, and the order's contents hash. ERC-7739: the outer domain is the app's
+#: (the exchange's) and the TypedDataSign struct carries the wallet's own domain fields
+#: (https://eips.ethereum.org/EIPS/eip-7739).
+OFFICIAL_1271 = {
+    False: "0f0a25123b68904374da25d6785b36c3d43b396313484ceab5f3e8e4de7e0898"
+           "4bff0653060a2c963d7037f5f026803467c91f85dcc62078d7e3846132f28faf1b",
+    True: "0622e0bad0388072e13834d3550ccbd55d93257ba3a0e550b7641ad0162f690c"
+          "419784b9885583cc128735915b0c0c77a8bf3609f765bed72632849c1dddcb851b",
+}
+OFFICIAL_CONTENTS = "6b72994dbc4787d8dfc02b99140b31ce8d07d8d91a304a029dafa27831748171"
+
+
+@pytest.mark.parametrize("neg_risk", [False, True])
+def test_a_deposit_wallet_signature_is_the_official_clients_byte_for_byte(neg_risk):
+    signer = clob.Signer(Account.from_key("0x" + "03".rjust(64, "0")))
     wallet = "0x" + "22" * 20
     order = {**ONCHAIN_ORDER, "maker": wallet, "signer": wallet, "signatureType": 3}
-    signature = clob.order_signature(order, False, signer)
-    raw = bytes.fromhex(signature[2:])
-    assert len(raw) == 65 + 32 + 32 + len(clob.ORDER_TYPE) + 2
-    assert raw[65:97] == clob.domain_separator(False)
-    assert raw[-2:] == len(clob.ORDER_TYPE).to_bytes(2, "big")
-    assert raw[129:-2].decode() == clob.ORDER_TYPE
+    expected = ("0x" + OFFICIAL_1271[neg_risk] + clob.domain_separator(neg_risk).hex()
+                + OFFICIAL_CONTENTS + clob.ORDER_TYPE.encode().hex()
+                + len(clob.ORDER_TYPE).to_bytes(2, "big").hex())
+    assert clob.order_signature(order, neg_risk, signer) == expected
 
 
 # --- the order path ---------------------------------------------------------------------
@@ -368,3 +382,81 @@ def test_a_first_poll_starts_at_the_world_never_at_the_wallets_history():
     now_s = 1_790_000_000
     answer = venue.poll(now_ns=now_s * 10**9, cursor={}, orders=_orders(intent, token))
     assert answer["cursor"]["after"] == now_s - clob.TRADE_OVERLAP_S
+
+
+def _facts(neg_risk=False):
+    return {"tick_size": "0.01", "neg_risk": neg_risk,
+            "fees": {"enabled": True, "rate": "0.05", "exponent": "1"}}
+
+
+def _signed_intent(venue, server, *, neg_risk=False, price="0.30"):
+    token = _token(server)
+    identity = venue.order_identity(client_id="c-1", token_id=token, is_buy=True,
+                                    size=Decimal(10), price=Decimal(price),
+                                    market=_facts(neg_risk))
+    intent = {"handle": "decision-1", "client_id": "c-1",
+              "operation": "polymarket.place_limit",
+              "args": {"token_id": token, "side": "buy", "size": "10", "price": price},
+              "order_hash": identity["order_hash"], "order_identity": identity}
+    venue.intent_of = {"c-1": intent}.get
+    return token
+
+
+def test_the_fake_verifies_a_deposit_wallet_order_and_refuses_a_wrong_owner():
+    """Astra P2 on #177: the fake skipped type-3 verification. It now checks the ERC-7739
+    wrapper independently (eth_account's own EIP-712 encoder), against the wallet's owner."""
+    owner, wallet = make_signer(5), "0x" + "33" * 20
+    venue, server = live_venue(signer=owner, funder=wallet, signature_type=3)
+    token = _signed_intent(venue, server)
+    assert _place(venue, token, price="0.30")["status"] == "resting"
+    stranger, _ = live_venue(signer=make_signer(6), funder=wallet, signature_type=3)
+    stranger.send = FakeClob(server.fake, owners={wallet: owner.address})
+    token = _signed_intent(stranger, server)
+    refused = _place(stranger, token, price="0.30")
+    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+
+
+@pytest.mark.parametrize("signature_type", [0, 3])
+def test_a_corrupted_signature_is_refused_by_the_venue(monkeypatch, signature_type):
+    owner = make_signer(5)
+    funder = owner.address if signature_type == 0 else "0x" + "33" * 20
+    venue, server = live_venue(signer=owner, funder=funder, signature_type=signature_type)
+    token = _signed_intent(venue, server)
+    real = clob.order_signature
+
+    def corrupted(order, neg_risk, signer):
+        signature = real(order, neg_risk, signer)
+        return signature[:10] + ("0" if signature[10] != "0" else "1") + signature[11:]
+
+    monkeypatch.setattr(clob, "order_signature", corrupted)
+    refused = _place(venue, token, price="0.30")
+    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+    assert server.fake._all_orders == {}
+
+
+def test_a_neg_risk_market_s_order_is_signed_for_the_neg_risk_exchange_and_no_other():
+    venue, server = live_venue()
+    server.neg_risk_markets = {"fake-1"}
+    token = _signed_intent(venue, server, neg_risk=True)
+    assert _place(venue, token, price="0.30")["status"] == "resting"
+    wrong, server2 = live_venue()
+    server2.neg_risk_markets = {"fake-1"}
+    token = _signed_intent(wrong, server2, neg_risk=False)  # signed for the other exchange
+    refused = _place(wrong, token, price="0.30")
+    assert refused["status"] == "rejected" and refused["error"] == "invalid signature"
+
+
+def test_a_matched_trade_moves_nothing_and_a_failed_one_leaves_nothing_behind():
+    venue, server = live_venue(confirm=False)
+    token = _signed_intent(venue, server, price="0.45")
+    cash = server.fake._cash
+    _place(venue, token, price="0.45")
+    assert server.fake._cash == cash and server.fake._positions[token]["size"] == 0
+    server.settle("FAILED")
+    assert server.fake._cash == cash and server.fake._positions[token]["size"] == 0
+    token = _signed_intent(venue, server, price="0.46")
+    venue.intent_of("c-1")["client_id"] = "c-1"
+    _place(venue, token, price="0.46")
+    server.settle("CONFIRMED")
+    assert server.fake._cash == cash - Decimal("4.1")
+    assert server.fake._positions[token]["size"] == 10

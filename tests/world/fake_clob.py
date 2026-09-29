@@ -31,9 +31,18 @@ class FakeClob:
 
     SECRET = "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTAxMjM0NTY3OA=="
 
-    def __init__(self, fake: FakePolymarket, *, confirm: bool = True) -> None:
+    def __init__(self, fake: FakePolymarket, *, confirm: bool = True,
+                 owners: dict[str, str] | None = None) -> None:
         self.fake = fake
         self.confirm = confirm  # trades land CONFIRMED at once, else MATCHED until settle()
+        # A MATCHED trade moves nothing until it is CONFIRMED; a FAILED one never does:
+        # the effect of each trade not yet final, undone in the simulated pot until then.
+        self.effects: dict[str, dict] = {}
+        self.owners = {k.lower(): v.lower() for k, v in (owners or {}).items()}  # wallet -> EOA
+        self.neg_risk_markets: set[str] = set()  # markets whose orders the neg-risk exchange takes
+        self.on_post = None  # called just before an order executes (a fee change, say)
+        self.hidden_positions: set[str] = set()  # tokens the Data API does not list yet
+        self.positions_page: int | None = None  # rows a /positions page carries; None: all
         self.calls: list[tuple[str, str]] = []
         self.orders: dict[str, dict] = {}  # hash -> {"pm": fake id, ...}
         self.pm_to_hash: dict[str, str] = {}
@@ -92,6 +101,8 @@ class FakeClob:
             following = (base64.b64encode(str(end).encode()).decode() if end < len(rows)
                          else clob.END_CURSOR)
             return {"data": rows[start:end], "next_cursor": following}
+        if path == "/positions":
+            return self._positions(query)
         if path == "/balance-allowance":
             return {"balance": str(int(self.fake._cash * clob.UNIT)), "allowances": {}}
         raise AssertionError(f"unexpected request {method} {path}")
@@ -118,16 +129,79 @@ class FakeClob:
     def _market_of(self, token_id: str) -> dict:
         return self.fake._markets[self.fake._tokens[token_id][0]]
 
+    def _typed(self, order: dict, neg_risk: bool) -> dict:
+        """The order as EIP-712 typed data, built here from the published struct and
+        domain, never from the code under test."""
+        exchange = ("0xe2222d279d744050d28e00520010520000310F59" if neg_risk
+                    else "0xE111180000d2663C0091e4f400237545B87B996B")
+        return {"domain": {"name": "Polymarket CTF Exchange", "version": "2", "chainId": 137,
+                           "verifyingContract": exchange},
+                "message": {"salt": int(order["salt"]), "maker": order["maker"],
+                            "signer": order["signer"], "tokenId": int(order["tokenId"]),
+                            "makerAmount": int(order["makerAmount"]),
+                            "takerAmount": int(order["takerAmount"]),
+                            "side": 0 if order["side"] == "BUY" else 1,
+                            "signatureType": int(order["signatureType"]),
+                            "timestamp": int(order["timestamp"]),
+                            "metadata": bytes.fromhex(order["metadata"][2:]),
+                            "builder": bytes.fromhex(order["builder"][2:])}}
+
+    def _verify(self, order: dict, neg_risk: bool) -> str:
+        """The order's hash when its signature is valid for the exchange its market
+        routes to, else a 400 as the CLOB answers an invalid signature."""
+        from eth_account.messages import _hash_eip191_message, encode_typed_data
+
+        typed = self._typed(order, neg_risk)
+        order_type = [{"name": n, "type": t} for n, t in (
+            ("salt", "uint256"), ("maker", "address"), ("signer", "address"),
+            ("tokenId", "uint256"), ("makerAmount", "uint256"), ("takerAmount", "uint256"),
+            ("side", "uint8"), ("signatureType", "uint8"), ("timestamp", "uint256"),
+            ("metadata", "bytes32"), ("builder", "bytes32"))]
+        digest = _hash_eip191_message(encode_typed_data(
+            domain_data=typed["domain"], message_types={"Order": order_type},
+            message_data=typed["message"]))
+        raw = bytes.fromhex(order["signature"][2:])
+        try:
+            if int(order["signatureType"]) == 3:
+                # ERC-7739: the wallet's owner signs a TypedDataSign wrapping the order
+                # under the exchange's domain, the wallet as verifying contract.
+                wrapper = _hash_eip191_message(encode_typed_data(
+                    domain_data=typed["domain"],
+                    message_types={"TypedDataSign": [
+                        {"name": "contents", "type": "Order"}, {"name": "name", "type": "string"},
+                        {"name": "version", "type": "string"},
+                        {"name": "chainId", "type": "uint256"},
+                        {"name": "verifyingContract", "type": "address"},
+                        {"name": "salt", "type": "bytes32"}], "Order": order_type},
+                    message_data={"contents": typed["message"], "name": "DepositWallet",
+                                  "version": "1", "chainId": 137,
+                                  "verifyingContract": order["signer"], "salt": bytes(32)}))
+                recovered = Account._recover_hash(wrapper, signature=raw[:65])
+                plain = encode_typed_data(domain_data=typed["domain"],
+                                          message_types={"Order": order_type},
+                                          message_data=typed["message"])
+                valid = (recovered.lower() == self.owners.get(order["signer"].lower())
+                         and order["maker"].lower() == order["signer"].lower()
+                         and raw[-2:] == (len(raw) - 65 - 64 - 2).to_bytes(2, "big")
+                         and raw[65:97] == bytes(plain.header)
+                         and raw[97:129] == bytes(plain.body))
+            else:
+                recovered = Account._recover_hash(digest, signature=raw)
+                valid = recovered.lower() == order["signer"].lower()
+        except Exception:  # noqa: BLE001 - a signature that does not parse is invalid
+            valid = False
+        if not valid:
+            raise clob.ClobHttpError(400, "invalid signature")
+        return "0x" + bytes(digest).hex()
+
     def _post(self, body: dict) -> dict:
         order = body["order"]
         assert body["orderType"] == "GTC" and body["owner"] == "key-1"
         signed = {**order, "side": 0 if order["side"] == "BUY" else 1}
-        neg_risk = False
-        digest = clob.order_hash(signed, neg_risk)
-        if order["signatureType"] != 3:
-            recovered = Account._recover_hash(bytes.fromhex(digest[2:]),
-                                              signature=bytes.fromhex(order["signature"][2:]))
-            assert recovered.lower() == order["signer"].lower(), "order signature"
+        market = self.fake._tokens.get(order["tokenId"], (None,))[0]
+        digest = self._verify(order, market in self.neg_risk_markets)
+        if self.on_post is not None:
+            self.on_post()
         if digest in self.orders:
             return {"success": False, "errorMsg": f"order {digest} is invalid. Duplicated.",
                     "orderID": ""}
@@ -171,25 +245,51 @@ class FakeClob:
             if event["kind"] != "fill":
                 continue
             digest = self.pm_to_hash[event["order_id"]]
+            rate = self._market_of(event["token_id"])["fee_rate"]
             row = {"id": f"t-{len(self.trades) + 1}", "status":
                    "CONFIRMED" if self.confirm else "MATCHED",
                    "match_time": str(max(1, event["ts_ns"] // 1_000_000_000)),
                    "asset_id": event["token_id"], "maker_orders": []}
             if taker:
+                # The execution's own fee rate, in basis points (get-trades).
                 row.update(taker_order_id=digest, size=event["size"], price=event["px"],
-                           side="BUY" if event["is_buy"] else "SELL")
+                           side="BUY" if event["is_buy"] else "SELL",
+                           fee_rate_bps=str(int(rate * 10_000)))
             else:
                 row.update(taker_order_id="0xother", size=event["size"], price=event["px"],
+                           fee_rate_bps="0",
                            maker_orders=[{"order_id": digest, "matched_amount": event["size"],
-                                          "price": event["px"],
+                                          "price": event["px"], "fee_rate_bps": "0",
                                           "side": "BUY" if event["is_buy"] else "SELL"}])
             self.trades.append(row)
+            if not self.confirm:
+                self.effects[row["id"]] = event
+                self._move(event, undo=True)
+
+    def _move(self, event: dict, *, undo: bool) -> None:
+        """Apply (or undo) one fill's cash and inventory in the simulated pot."""
+        size, px, fee = (Decimal(event[k]) for k in ("size", "px", "fee_usd"))
+        sign = -1 if undo else 1
+        position = self.fake._positions.setdefault(
+            event["token_id"], {"size": Decimal(0), "avg_px": Decimal(0)})
+        if event["is_buy"]:
+            self.fake._cash -= sign * (px * size + fee)
+            total = position["size"] + sign * size
+            cost = position["size"] * position["avg_px"] + sign * size * px
+            position["size"], position["avg_px"] = total, (cost / total if total else Decimal(0))
+        else:
+            self.fake._cash += sign * (px * size - fee)
+            position["size"] -= sign * size
 
     def settle(self, status: str = "CONFIRMED") -> None:
-        """Every trade not yet final moves to ``status``."""
+        """Every trade not yet final moves to ``status``: CONFIRMED moves its cash and
+        inventory, FAILED moves nothing, ever."""
         for trade in self.trades:
             if trade["status"] not in ("CONFIRMED", "FAILED"):
                 trade["status"] = status
+                event = self.effects.pop(trade["id"], None)
+                if event is not None and status == "CONFIRMED":
+                    self._move(event, undo=False)
 
     def advance(self, now_ns: int) -> list:
         """Move the simulated book; what fills now fills resting (maker) orders."""
@@ -207,7 +307,8 @@ class FakeClob:
                 "active": public["active"], "closed": public["closed"],
                 "acceptingOrders": public["accepting_orders"], "enableOrderBook": True,
                 "orderPriceMinTickSize": public["tick_size"],
-                "orderMinSize": public["min_order_size"], "negRisk": False,
+                "orderMinSize": public["min_order_size"],
+                "negRisk": public["market_id"] in self.neg_risk_markets,
                 "feesEnabled": public["fees"]["enabled"],
                 "feeSchedule": {"rate": public["fees"]["rate"], "exponent": "1",
                                 "takerOnly": True},
@@ -232,31 +333,37 @@ class FakeClob:
         book = self.fake.order_book(token_id, 5)
         return {"asset_id": token_id, "market": book["condition_id"],
                 "bids": book["bids"], "asks": book["asks"], "tick_size": book["tick_size"],
-                "min_order_size": book["min_order_size"], "neg_risk": False}
+                "min_order_size": book["min_order_size"],
+                "neg_risk": self.fake._tokens[token_id][0] in self.neg_risk_markets}
 
     def _positions(self, query: dict) -> list:
         rows = []
         for token, position in sorted(self.fake._positions.items()):
-            if position["size"] <= 0:
+            if position["size"] <= 0 or token in self.hidden_positions:
                 continue
             market_id, side = self.fake._tokens[token]
             rows.append({"asset": token, "size": str(position["size"]),
                          "avgPrice": str(position["avg_px"]), "outcomeIndex": side,
                          "outcome": self.fake._markets[market_id]["outcomes"][side],
                          "conditionId": self.fake._markets[market_id]["condition_id"]})
+        if self.positions_page is not None:
+            offset, limit = int(query.get("offset", "0")), int(query.get("limit", "500"))
+            return rows[offset:offset + min(limit, self.positions_page)]
         return rows
 
 
 def live_venue(fake: FakePolymarket | None = None, *, signer=None, budget: int = 200,
-               wall=None, **clob_args):
+               wall=None, signature_type: int = 0, funder: str | None = None, **clob_args):
     """A ``LivePolymarket`` wired to a ``FakeClob``: (venue, fake clob)."""
     from tests.runtime.test_polymarket_surface import still_fake
 
     fake = fake if fake is not None else still_fake()
-    server = FakeClob(fake, **clob_args)
     signer = signer or make_signer()
+    funder = funder or signer.address
+    clob_args.setdefault("owners", {funder: signer.address})
+    server = FakeClob(fake, **clob_args)
     clock = wall or _Wall()
-    venue = clob.LivePolymarket(funder=signer.address, signature_type=0, budget=budget,
+    venue = clob.LivePolymarket(funder=funder, signature_type=signature_type, budget=budget,
                                 signer=signer, send=server, identity=lambda: ("ns", "nonce"),
                                 wall=clock, nonce=lambda: 7)
     return venue, server
