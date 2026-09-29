@@ -155,48 +155,117 @@ def test_a_check_test_that_steps_a_one_event_world_fails_under_the_guard(request
     request.node.stash[_STEPPED_A_WORLD] = False
 
 
-def test_a_change_to_the_kernel_pricing_or_recovery_requires_soak_and_a_doc_does_not():
-    changed = ["factorylab/kernel/ledger.py", "factorylab/runtime/settled.py",
-               "factorylab/runtime/resume.py", "factorylab/runtime/loop.py",
-               "factorylab/runtime/governance.py", "tests/gauntlet/test_thrash.py",
-               "factorylab/learners/exp3.py", "README.md", "factorylab/world/venice.py",
-               "tests/runtime/test_resume.py"]
-    assert soak_required(changed) == changed[:7]
+def test_every_owner_of_checkpointed_state_requires_soak_and_a_doc_does_not():
+    """The soak-required modules are read from the code: each that writes something the
+    checkpoint carries (Sol on #179: the fee-history, measured-consequence and forecast
+    releases were missing from a hand list), beside the kernel, the learners, the
+    version organ, the checkpoint and the gauntlet."""
+    owners = ["factorylab/runtime/venue.py", "factorylab/runtime/markets.py",
+              "factorylab/settlement/forecast.py", "factorylab/runtime/settled.py",
+              "factorylab/runtime/loop.py", "factorylab/runtime/governance.py",
+              "factorylab/runtime/pricing.py", "factorylab/runtime/immune.py",
+              "factorylab/runtime/routing.py", "factorylab/charter/controller.py",
+              "factorylab/runtime/resume.py", "factorylab/kernel/ledger.py",
+              "factorylab/learners/exp3.py", "factorylab/versioning/versions.py",
+              "tests/gauntlet/test_thrash.py", "scripts/gauntlet.py"]
+    others = ["README.md", "AGENTS.md", "factorylab/world/venice.py",
+              "factorylab/cortex/sandbox.py", "tests/runtime/test_resume.py",
+              "factorylab/runtime/worlds.py"]
+    assert soak_required(owners + others) == owners
 
 
-def test_a_whole_gate_on_a_soak_required_change_fails_until_soak_passed_on_its_tree(
-        tmp_path, monkeypatch):
-    """The soak tier, enforced: a whole soak run that passes records its tree; a whole
-    gate run on a tree that changed a soak-required path fails until that record holds
-    its tree, and a change to no such path passes."""
+def _soak_session(tmp_path, *, marks, tiers, collected, passed, status=None, **options):
     from types import SimpleNamespace
 
     from tests import conftest
 
-    trees = iter(["tree-a", "tree-a", "tree-a", "tree-a", "tree-b", "tree-b"])
+    plugin = conftest._SoakRequirement(tmp_path)
+    plugin._record = lambda: tmp_path / "passes"
+    option = SimpleNamespace(**{"keyword": "", "markexpr": marks, **options})
+    config = SimpleNamespace(args_source=pytest.Config.ArgsSource.TESTPATHS, option=option)
+    session = SimpleNamespace(config=config, exitstatus=status or pytest.ExitCode.OK)
+    plugin.pytest_sessionstart(session)
+    plugin.collected = set(collected)
+    for nodeid in passed:
+        plugin.pytest_runtest_logreport(SimpleNamespace(
+            when="call", passed=True, nodeid=nodeid, factorylab_tier=tiers))
+    if not passed:  # a setup report: the tier ran, no test body did
+        plugin.pytest_runtest_logreport(SimpleNamespace(
+            when="setup", passed=True, nodeid="t", factorylab_tier=tiers))
+    plugin.pytest_sessionfinish(session)
+    return session.exitstatus, plugin
+
+
+def test_a_soak_pass_is_recorded_only_for_the_whole_tier_every_test_passing(
+        tmp_path, monkeypatch):
+    """Sol on #179: --setup-only recorded a pass for a soak test that asserts False. A
+    tree is certified only by a whole soak run in which every collected test's call
+    passed, on one tree from start to end."""
+    from tests import conftest
+
+    monkeypatch.setattr(conftest, "_tree_hash", lambda root: "tree-a")
+    ids = ["tests/a.py::soak_one", "tests/a.py::soak_two"]
+    record = tmp_path / "passes"
+    for options in ({"setuponly": True}, {"collectonly": True}, {"keyword": "one"},
+                    {"deselect": ["tests/a.py::soak_two"]}, {"ignore": ["tests/b.py"]},
+                    {"lf": True}, {"exitfirst": True}):
+        _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids,
+                      **options)
+        assert not record.exists(), options
+    _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=[],
+                  setuponly=False)
+    _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids[:1])
+    _soak_session(tmp_path, marks="soak or slow", tiers="soak", collected=ids, passed=ids)
+    assert not record.exists()
+    trees = iter(["tree-a", "tree-b"])  # edited while it ran
     monkeypatch.setattr(conftest, "_tree_hash", lambda root: next(trees))
+    _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids)
+    assert not record.exists()
+    monkeypatch.setattr(conftest, "_tree_hash", lambda root: "tree-a")
+    _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids)
+    assert record.read_text() == "tree-a\n"
+
+
+def test_a_whole_gate_on_a_soak_required_change_fails_until_soak_passed_on_its_tree(
+        tmp_path, monkeypatch):
+    """A whole gate run on a tree that changed a soak-required path fails until that
+    tree is certified, fails when the tree changes while it runs (Sol on #179), and a
+    change to no such path passes."""
+    from tests import conftest
+
+    tree = {"now": "tree-a"}
+    monkeypatch.setattr(conftest, "_tree_hash", lambda root: tree["now"])
     changed = ["factorylab/kernel/ledger.py", "README.md"]
     monkeypatch.setattr(conftest, "_changed_since_main", lambda root: changed)
+    ids = ["tests/a.py::soak_one"]
 
-    def run(marks, tiers):
-        plugin = conftest._SoakRequirement(tmp_path)
-        plugin._record = lambda: tmp_path / "passes"
-        config = SimpleNamespace(
-            args_source=pytest.Config.ArgsSource.TESTPATHS,
-            option=SimpleNamespace(keyword="", markexpr=marks),
-            pluginmanager=SimpleNamespace(get_plugin=lambda name: SimpleNamespace(tiers=tiers)))
-        session = SimpleNamespace(config=config, exitstatus=pytest.ExitCode.OK)
-        plugin.pytest_sessionstart(session)
-        plugin.pytest_sessionfinish(session)
-        return session.exitstatus, plugin
+    def gate():
+        return _soak_session(tmp_path, marks="gate", tiers="gate", collected=["g"],
+                             passed=["g"])
 
-    status, plugin = run("gate", {"gate": 900.0})
+    status, plugin = gate()
     assert status == pytest.ExitCode.TESTS_FAILED and "ledger.py" in plugin.problem
-    status, _ = run("soak", {"soak": 1000.0})  # records tree-a
-    assert status == pytest.ExitCode.OK and (tmp_path / "passes").read_text() == "tree-a\n"
-    status, _ = run("gate", {"gate": 900.0})
-    assert status == pytest.ExitCode.OK
-    status, _ = run("gate", {"gate": 900.0})  # tree-b: soak never passed on it
-    assert status == pytest.ExitCode.TESTS_FAILED
+    _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids)
+    assert gate()[0] == pytest.ExitCode.OK
+    tree["now"] = "tree-b"  # never certified
+    assert gate()[0] == pytest.ExitCode.TESTS_FAILED
     changed[:] = ["README.md"]
-    assert run("gate", {"gate": 900.0})[0] == pytest.ExitCode.OK
+    assert gate()[0] == pytest.ExitCode.OK
+    # Certified at the start, edited before the end: no one tree's result.
+    tree["now"] = "tree-a"
+    changed[:] = ["factorylab/kernel/ledger.py"]
+    from types import SimpleNamespace
+
+    plugin = conftest._SoakRequirement(tmp_path)
+    plugin._record = lambda: tmp_path / "passes"
+    session = SimpleNamespace(
+        config=SimpleNamespace(args_source=pytest.Config.ArgsSource.TESTPATHS,
+                               option=SimpleNamespace(keyword="", markexpr="gate")),
+        exitstatus=pytest.ExitCode.OK)
+    plugin.pytest_sessionstart(session)
+    plugin.pytest_runtest_logreport(SimpleNamespace(when="call", passed=True, nodeid="g",
+                                                    factorylab_tier="gate"))
+    tree["now"] = "tree-c"
+    plugin.pytest_sessionfinish(session)
+    assert session.exitstatus == pytest.ExitCode.TESTS_FAILED
+    assert "changed while the gate ran" in plugin.problem

@@ -160,19 +160,24 @@ uv run pytest -m soak -n 2
 ```
 
 Running the soak tier is REQUIRED, and its output is returned with the gate's:
-- for any change under `factorylab/kernel/`;
-- for any change to pricing (`factorylab/runtime/pricing.py`,
-  `factorylab/charter/controller.py`), the immune system (`factorylab/runtime/immune.py`,
-  `factorylab/versioning/`), the router or learners (`factorylab/runtime/routing.py`,
-  `factorylab/learners/`), retention, recovery or the loop
-  (`factorylab/runtime/settled.py`, `factorylab/runtime/resume.py`,
-  `factorylab/runtime/loop.py`, `factorylab/runtime/governance.py`), or the gauntlet
+- for any change to a module that owns checkpointed state: one that sets, deletes,
+  prunes or releases something the checkpoint carries (read from the code by
+  `checkpoint_state_owners` in `tests/conftest.py`: today every runtime mixin that
+  retains or prunes state, the settlement and charter books, `runtime/venue.py`'s fee
+  history, `runtime/markets.py`'s measured consequences, `settlement/forecast.py`'s
+  released forecasts);
+- for any change under `factorylab/kernel/`, `factorylab/learners/`,
+  `factorylab/versioning/`, to `factorylab/runtime/resume.py`, or to the gauntlet
   (`tests/gauntlet/`, `scripts/gauntlet.py`);
 - before any world launch;
 - on request.
 
-It is enforced: a whole soak run that passes records its tree hash (in the git common
-directory, `factorylab-soak-passes`), and a whole gate run (`-m gate` or
-`-m "check or gate"`, no file arguments, no `-k`) on a tree that changed one of these
-paths since `origin/main` fails until the soak tier has passed on that exact tree
-(`SOAK_REQUIRED_PATHS`, `tests/conftest.py`). Run soak first, then the whole gate.
+It is enforced locally. A soak run certifies its tree (appends the tree hash, uncommitted
+and untracked files included, to `factorylab-soak-passes` in the git common directory)
+only when it is the whole tier (`-m soak`, no file arguments, no `-k`, `--deselect`,
+`--ignore`, `--lf`, `--ff`, `-x`, `--collect-only` or `--setup-only`), every test it
+collected passed its call, and the tree did not change while it ran. A whole gate run
+(`-m gate` or `-m "check or gate"`, no file arguments, no `-k`) on a tree that changed a
+required path since `origin/main` fails until that exact tree is certified, and fails if
+the tree changed while it ran. Run soak first, then the whole gate. This guards against
+honest mistakes, not forgery: the record is plain text a person could write.
