@@ -238,10 +238,10 @@ def _exited_by(proc, deadline: float) -> bool:
             descriptor = None
         if descriptor is not None:
             try:
-                select.select([descriptor], [], [], remaining)
+                exited = bool(select.select([descriptor], [], [], remaining)[0])
             finally:
                 os.close(descriptor)
-            return proc.poll() is not None
+            return _reaped(proc, exited)
     if hasattr(select, "kqueue"):
         queue = select.kqueue()
         try:
@@ -249,17 +249,27 @@ def _exited_by(proc, deadline: float) -> bool:
                                   flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
                                   fflags=select.KQ_NOTE_EXIT)
             try:
-                queue.control([event], 1, remaining)
+                exited = bool(queue.control([event], 1, remaining))
             except ProcessLookupError:
-                pass  # it has already exited: there is nothing left to watch
+                exited = True  # it has already exited: there is nothing left to watch
         finally:
             queue.close()
-        return proc.poll() is not None
+        return _reaped(proc, exited)
     try:
         proc.wait(timeout=remaining)
     except subprocess.TimeoutExpired:
         return False
     return True
+
+
+def _reaped(proc, exited: bool) -> bool:
+    """Reap ``proc`` once the kernel said it exited (the notice can precede the moment a
+    non-blocking wait sees it, so this wait blocks, briefly); otherwise only if it has.
+    """
+    if exited:
+        proc.wait()
+        return True
+    return proc.poll() is not None
 
 
 def run_python(
