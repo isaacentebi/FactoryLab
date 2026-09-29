@@ -462,13 +462,6 @@ class BootstrapMixin:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
-        if self.live:
-            # Chapter II §III.b: an independent pre-execution account anchors fills.
-            try:
-                account = self.exchange.account()
-                self.consequence_fills.initialize(account, now_ns=self.clock.now_ns)
-            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
-                pass  # FillCursor retries; venue writes await an account anchor.
         # Every answered venue read is kept for the rest of its tick, so an identical
         # seat read is answered without a request (``ComputeMixin._tick_answer``).
         self._tick_reads = None
@@ -494,6 +487,15 @@ class BootstrapMixin:
                                   manifest.exchange.spot_pairs))},
                 "coins": list(coins), "spot_pairs": list(pairs)})
         seed_markets(self.exchange, self._seed_spec())
+        if self.live:
+            # Chapter II §III.b: an independent pre-execution account anchors fills. Read
+            # after the universe is seeded, so the adapter reads every book the world
+            # may trade (a */USDC universe's spot book included) at its anchor.
+            try:
+                account = self.exchange.account()
+                self.consequence_fills.initialize(account, now_ns=self.clock.now_ns)
+            except (RuntimeError, ValueError, AttributeError, ArithmeticError):
+                pass  # FillCursor retries; venue writes await an account anchor.
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
             LiveVenue(self.exchange, ledger=self.ledger,

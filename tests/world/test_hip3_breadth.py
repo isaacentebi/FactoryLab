@@ -92,7 +92,8 @@ class FakeInfo:
 
     def spot_user_state(self, address):
         self._count("spotClearinghouseState")
-        return {"balances": [{"coin": "USDC", "total": "10", "hold": "0"}]}
+        return {"balances": getattr(self, "spot", None)
+                or [{"coin": "USDC", "total": "10", "hold": "0"}]}
 
     def open_orders(self, address, dex=""):
         self._count("openOrders", dex)
@@ -545,3 +546,31 @@ def test_the_probe_reads_a_breadth_world_through_its_named_dexes(monkeypatch, ca
 def test_a_broken_hip3_endpoint_fails_the_probe(monkeypatch, capsys):
     _code, failure, _info = _probe(monkeypatch, capsys, fail={("metaAndAssetCtxs", "xyz")})
     assert failure is not None and "xyz" in str(failure)
+
+
+def test_a_spot_only_universe_anchors_its_launch_account_with_the_spot_book(monkeypatch):
+    """Codex P1 on #178: a manifest selecting only */USDC built the adapter with no spot
+    pair, and the pre-execution account baseline was read before the universe was
+    seeded, so it skipped the spot book: balances held at launch later looked like
+    unexplained changes. The universe is resolved and seeded first."""
+    from dataclasses import replace
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+    from factorylab.world.scripted import ScriptedProvider
+
+    FakeInfo.n, FakeInfo.dexes = 2, {}
+    monkeypatch.setattr("hyperliquid.info.Info", FakeInfo)
+    monkeypatch.delenv("HL_PRIVATE_KEY", raising=False)
+    ex = HyperliquidExchange(address="0xabc", coins=(), spot_pairs=())
+    ex._info.spot = [{"coin": "USDC", "total": "10", "hold": "0"},
+                     {"coin": "PURR", "total": "5", "hold": "0"}]
+    base = load_manifest("edition7-breadth-testnet")
+    manifest = replace(base, exchange=replace(base.exchange, coins=("*",)),
+                       assemblies=tuple(replace(a, max_tokens=1024) for a in base.assemblies))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(), exchange=ex)
+    (baseline,) = [item for item in rt.ledger.items()
+                   if item.get("kind") == "consequence.fill_baseline"]
+    assert baseline["positions"] == {"spot:PURR": "5"}
+    assert baseline["cash_micro_usd"]["spot"] == 10_000_000
