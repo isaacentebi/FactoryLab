@@ -956,7 +956,11 @@ class LivePolymarket(PolymarketReader):
                 if key in state["seen"]:
                     continue
                 if status == TRADE_FAILED:
+                    # A failed leg never settles; its quantity is kept, so the order's
+                    # matched size, once terminal, is released by it (Sol P2 on #177).
                     state["seen"][key] = at
+                    failed = state.setdefault("failed", {})
+                    failed[order_id] = str(_dec(failed.get(order_id, "0")) + _dec(size))
                     continue
                 if status != TRADE_FINAL:
                     pending.append(at)
@@ -1144,7 +1148,8 @@ class LivePolymarket(PolymarketReader):
             if answer["status"] not in ("cancelled", "filled", "rejected"):
                 continue
             complete = _dec(answer.get("filled_size") or "0") <= _dec(
-                state.get("booked", {}).get(order_id, "0"))
+                state.get("booked", {}).get(order_id, "0")) + _dec(
+                state.get("failed", {}).get(order_id, "0"))
             if answer["status"] == "cancelled" and order_id not in state.setdefault(
                     "cancel_told", []):
                 state["cancel_told"].append(order_id)

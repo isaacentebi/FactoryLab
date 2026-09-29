@@ -2676,6 +2676,9 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   against the custodian's own listing, never the larger of it and the world's book: a
   cost basis booked too high shows as drift, and a listing that lags holds new risk
   until it catches up.
+* **Failed legs.** A leg whose trade FAILED is never booked; its quantity is kept, and
+  once the order is terminal (filled or cancelled) its matched size less its failed
+  legs is what stays reserved or counts as unsettled.
 * **Execution order.** Confirmed legs are booked per token in the order they executed
   (`match_time_nano`), never by trade id. Legs whose order the venue does not
   establish (one instant, or one second where a leg states only its second) are booked

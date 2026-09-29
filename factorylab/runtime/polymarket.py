@@ -1314,6 +1314,10 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
             quantity = booked
         elif cancelled.get(str(order_id)) is not None:
             quantity = cancelled[str(order_id)]
+        if result.get("status") in ("filled", "cancelled") or cancelled.get(
+                str(order_id)) is not None:
+            # A terminal order's legs that FAILED never settle (Sol P2 on #177).
+            quantity -= Decimal(str(surface.cursor.get("failed", {}).get(str(order_id), "0")))
         price = Decimal(str(args["price"]))
         identity = intent.get("order_identity") or {}
         rate = Decimal(str(identity.get("fee_rate") or "0"))
@@ -1710,7 +1714,8 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
         # Whether the order can still change what the pot holds: it rests or is
         # unanswered, or it matched more than is booked (Codex P2 on #177).
         live = (status in ("resting", "uncertain")
-                or matched > Decimal(surface.filled.get(order_id, "0")))
+                or matched > Decimal(surface.filled.get(order_id, "0")) + Decimal(str(
+                    surface.cursor.get("failed", {}).get(order_id, "0"))))
         orders[order_id] = {"token_id": token, "side": str(args["side"]), "open": live,
                             "size": str(args["size"]), "price": str(args["price"]),
                             "market_id": surface.token_markets.get(token),

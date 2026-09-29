@@ -879,3 +879,16 @@ def test_an_unstated_fee_counts_against_the_principal_cap_at_its_most():
     refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
                   market="fake-1")
     assert refused["status"] == "rejected" and refused["error"] == polymarket.PRINCIPAL_REFUSAL
+
+
+def test_a_failed_trade_releases_its_matched_quantity_once_the_order_is_terminal():
+    """Sol P2 on #177: a fully matched buy whose trade FAILED kept its $4.50 reserved,
+    so under a $5 cap every later buy of the same size was refused for good."""
+    rt, server = live_world(max_open_micro=5_000_000, confirm=False)
+    buy(rt, server, collateral_decision(rt), price="0.45")  # matched, not yet final
+    server.settle("FAILED")
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert polymarket.local_commitments(rt.polymarket)[0] == 0
+    assert buy(rt, server, collateral_decision(rt), price="0.45")["status"] in (
+        "filled", "resting")
