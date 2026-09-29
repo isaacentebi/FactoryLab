@@ -23,23 +23,53 @@ pytestmark = pytest.mark.gate
 UPTAKE = P.UPTAKE["id"]
 
 
+#: Two lengths of each world. The per-PR gate reads the shortest in which the organ
+#: flags the failure and prices it: SF-1 at 100 events (detected, ratcheted by duration
+#: on the organ's loop, anti-windup, escalation, route open, physics), the transient
+#: world with its relief at windows 12-31 at 150 (the flag clears and the duration
+#: restarts from one), each red under its matched mutant below. The soak tier
+#: (``-m soak``) reads the original lengths too, and alone runs SF-1e, whose Tick gain
+#: reaches its bound and must be seen held for two organ opportunities (228 events).
+SHORT, LONG = "short", pytest.param("long", marks=pytest.mark.soak)
+SF1_EVENTS = {"short": 100, "long": 228}
+
+
+def _sf1(shared_run, length):
+    events = SF1_EVENTS[length]
+    # §II.b: retain two organ opportunities after the Tick gain reaches its cap (long).
+    return shared_run(f"sf1-{events}", lambda: P.run(*P.sf1(), events=events))
+
+
+@pytest.fixture(scope="module", params=[SHORT, LONG])
+def sf1(shared_run, request):
+    return _sf1(shared_run, request.param)
+
+
 @pytest.fixture(scope="module")
-def sf1(shared_run):
-    # §II.b: retain two organ opportunities after the Tick gain reaches its cap.
-    return shared_run("sf1", lambda: P.run(*P.sf1(), events=228))
+def sf1_long(shared_run):
+    return _sf1(shared_run, "long")
 
 
-def _transient_world():
+#: The transient world's relief windows and length. Long: hold-a relieves for twenty
+#: windows from window 30. (Four sufficed while the price loop ran away and its windows
+#: grew to hundreds of ticks; at the steady cadence a window is four ticks, and the
+#: organ's horizon needs the relief to outlast it before the flag clears, wave 16b.)
+#: Short: the same twenty windows from window 12, so the clear and the restart fall
+#: inside 150 events.
+TRANSIENT = {"short": (range(12, 32), 150), "long": (range(30, 50), 250)}
+
+
+def _transient_world(length="long"):
     """SF-1 with one transient resolution: hold-a registers observations for twenty
-    windows. (Four sufficed while the price loop ran away and its windows grew to
-    hundreds of ticks; at the steady cadence a window is four ticks, and the organ's
-    horizon needs the relief to outlast it before the flag clears, wave 16b.)"""
-    return P.sf1(hold_a=P.relieving_in(range(30, 50), P.hold, "relief"))
+    windows (``TRANSIENT``)."""
+    return P.sf1(hold_a=P.relieving_in(TRANSIENT[length][0], P.hold, "relief"))
 
 
-@pytest.fixture(scope="module")
-def transient(shared_run):
-    return shared_run("sf1-transient", lambda: P.run(*_transient_world(), events=250))
+@pytest.fixture(scope="module", params=[SHORT, LONG])
+def transient(shared_run, request):
+    windows, events = TRANSIENT[request.param]
+    return shared_run(f"sf1-transient-{windows.start}-{events}",
+                      lambda: P.run(*_transient_world(request.param), events=events))
 
 
 # --- SF-1: unrelievable failure --------------------------------------------------------
@@ -101,8 +131,9 @@ def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     assert result.ok, result.evidence
 
 
-def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
-    mutant = P.run(*_transient_world(), events=250, patches=[
+@pytest.mark.parametrize("length", [SHORT, LONG])
+def test_sf1b_negative_control_without_the_reset_the_transient_world_fails(length):
+    mutant = P.run(*_transient_world(length), events=TRANSIENT[length][1], patches=[
         (PriceController, "end_failure", lambda self, card_id, *, window: None)])
     result = g.sf1b_ratchet_cadence(mutant.events, mutant.manifest)
     assert result.status == g.FAIL
@@ -123,15 +154,16 @@ def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
 # terminal tick (R16b-2; Astra on #157): a scored round deferred to its window's close
 # is sampled at score ready, no longer lost at the close, so the loop is short enough
 # that its gain bound lies within the shortened world.
-def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
+@pytest.mark.soak  # the Tick gain reaches its bound and is held only in 228 events
+def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1_long):
     """No router unwound while flagged or missed a bound the run covered, and the Tick
     router, whose own loop is the organ's, reached gamma_max. The judges' routers step on
     a 12-window loop, so their bounds (1 + 9 × 12 windows) lie beyond this world:
     SF-1e reads them as unsupported, never as a pass."""
-    result = g.sf1e_gain(sf1.events, sf1.manifest)
+    result = g.sf1e_gain(sf1_long.events, sf1_long.manifest)
     assert result.status != g.FAIL, result.evidence
     assert result.evidence["reached"]["router:Tick"]["window"] is not None
-    assert sf1.rows("immune.gain")
+    assert sf1_long.rows("immune.gain")
 
 
 def test_sf1f_the_registration_route_stays_open_and_the_reserve_accrues(sf1):

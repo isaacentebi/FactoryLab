@@ -22,9 +22,30 @@ pytestmark = pytest.mark.gate
 NS = 1_000_000_000
 
 
+#: Two lengths of LD-1's world. The per-PR gate reads 150 events, the shortest in which
+#: the newcomer registers (window 10), is woken three times inside its trial on the
+#: niche's funds, and is offered and priced on it: LD-1a, b, c, d and LD-2, each red
+#: under its matched mutant (the unfunded control below). The soak tier (``-m soak``)
+#: reads the original 350 too, and alone runs LD-1e and LD-1f, which read a whole
+#: quarantined tail and are unsupported before it.
+SHORT, LONG = "short", pytest.param("long", marks=pytest.mark.soak)
+LD1_EVENTS = {"short": 150, "long": 350}
+
+
+def ld1_world(shared_run, length):
+    """LD-1's world at ``length`` (``LD1_EVENTS``), run once per invocation."""
+    events = LD1_EVENTS[length]
+    return shared_run(f"ld1-{events}", lambda: P.run(*P.ld1(at_window=10), events=events))
+
+
+@pytest.fixture(scope="module", params=[SHORT, LONG])
+def ld1(shared_run, request):
+    return ld1_world(shared_run, request.param)
+
+
 @pytest.fixture(scope="module")
-def ld1(shared_run):
-    return shared_run("ld1", lambda: P.run(*P.ld1(at_window=10), events=350))
+def ld1_long(shared_run):
+    return ld1_world(shared_run, "long")
 
 
 def _registered(run, seat="newcomer"):
@@ -95,18 +116,20 @@ def test_ld1d_niche_decisions_bear_no_penalty_even_while_a_ratchet_runs(ld1):
     assert result.ok, result.evidence
 
 
-def test_ld1e_learning_death_is_flagged_only_for_a_quarantined_frontier(ld1):
+@pytest.mark.soak  # a quarantined tail of the 350-event world; unsupported before it
+def test_ld1e_learning_death_is_flagged_only_for_a_quarantined_frontier(ld1_long):
     """LD-1e reads both ways: a frontier held at its exploration floor for a whole tail is
     flagged within H; a frontier that keeps offering the newcomer above it is not."""
-    result = g.ld1e_detection(ld1.events, ld1.manifest)
+    result = g.ld1e_detection(ld1_long.events, ld1_long.manifest)
     if result.status == g.UNSUPPORTED:
-        assert not g.flagged(ld1.events, "learning_death")
+        assert not g.flagged(ld1_long.events, "learning_death")
     else:
         assert result.ok, result.evidence
 
 
-def test_ld1f_gain_is_held_while_learning_death_is_flagged(ld1):
-    assert g.ld1f_hold(ld1.events, ld1.manifest).status != g.FAIL
+@pytest.mark.soak  # as LD-1e: the gain hold is read on the 350-event world's tail
+def test_ld1f_gain_is_held_while_learning_death_is_flagged(ld1_long):
+    assert g.ld1f_hold(ld1_long.events, ld1_long.manifest).status != g.FAIL
 
 
 def test_ld1_every_draw_is_the_routers_own_and_the_physics_never_steers(ld1):
