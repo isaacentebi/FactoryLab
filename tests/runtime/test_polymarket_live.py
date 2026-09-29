@@ -548,6 +548,21 @@ def test_money_gone_that_the_books_do_not_explain_stops_new_exposure_until_it_ag
     assert buy(rt, server, collateral_decision(rt))["status"] == "resting"
 
 
+def test_a_cancelled_buy_releases_its_reservation():
+    """Codex P1 on #177: a cancelled buy's placement stayed resting in the pot's own
+    records, its notional reserved forever: place and cancel enough and every buy fails."""
+    rt, server = live_world(max_open_micro=5_000_000)
+    polymarket.tick(rt)
+    for cycle in range(3):
+        handle = collateral_decision(rt)
+        order_id = buy(rt, server, handle)["order_id"]  # 10 x 0.30 rests: $3 of $5
+        cancel = rt._run_tool("seed-decider", handle, {
+            "tool": "polymarket.cancel", "args": {"order_id": order_id}}, slot="tool:1")[0]
+        assert cancel["status"] == "cancelled", cycle
+    assert polymarket.local_commitments(rt.polymarket) == (Decimal(0), Decimal(0))
+    assert buy(rt, server, collateral_decision(rt))["status"] == "resting"
+
+
 def test_a_placement_rejected_after_its_intent_is_not_polled():
     """Codex P2 on #177: a placement the pot's budget rejected entered the world's orders
     and was looked up and read for fills for the world's life."""

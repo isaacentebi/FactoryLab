@@ -1231,8 +1231,20 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
     charge, on every quantity it may still fill or has matched that is not yet booked
     from a CONFIRMED trade (its size while it rests or is unanswered, its matched size
     once terminal); the booked inventory of each unresolved token is held at its
-    average cost (``LivePolymarket.poll``'s book).
+    average cost (``LivePolymarket.poll``'s book). An order proven terminal reserves
+    only what it matched and is not yet booked: an acknowledged cancel (its matched
+    size as the cancel's read-back states it), or the poll's terminal read-back, which
+    requires every matched quantity booked (Codex P1 on #177: a cancelled buy's
+    notional stayed reserved forever).
     """
+    cancelled: dict[str, Decimal | None] = {}
+    for intent in surface.intents.values():
+        if (intent["operation"] == "polymarket.cancel"
+                and intent["result"].get("status") == "cancelled"):
+            matched = intent["result"].get("filled_size")
+            cancelled[str(intent["args"]["order_id"])] = (
+                None if matched is None else Decimal(str(matched)))
+    finished = set(surface.cursor.get("terminal", ()))
     reserved = Decimal(0)
     for intent in surface.intents.values():
         args = intent["args"]
@@ -1246,6 +1258,10 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
         quantity = (Decimal(str(result.get("filled_size") or "0"))
                     if result.get("status") in ("filled", "cancelled")
                     else Decimal(str(args["size"])))
+        if str(order_id) in finished:
+            quantity = booked
+        elif cancelled.get(str(order_id)) is not None:
+            quantity = cancelled[str(order_id)]
         price = Decimal(str(args["price"]))
         identity = intent.get("order_identity") or {}
         rate = Decimal(str(identity.get("fee_rate") or "0"))
