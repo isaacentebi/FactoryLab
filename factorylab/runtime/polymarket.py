@@ -222,6 +222,9 @@ class PolymarketSurface:
         # The live venue's fill and resolution cursor (``LivePolymarket.poll``): carried
         # in, returned, checkpointed, so a replay reads what the run read.
         self.cursor: dict[str, Any] = {}
+        # Whether the last reconciliation found money gone that the books do not explain
+        # (live orders): no new risk until it agrees again.
+        self.drifting = False
         # Fills whose fee their execution did not state (``execution_fee``): open until
         # the custodian's balance settles them (``reconcile``); no new risk meanwhile.
         self.open_fees: list[dict[str, Any]] = []
@@ -232,7 +235,8 @@ class PolymarketSurface:
         self.checked: dict[str, dict] = {}
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
-              "opening", "token_markets", "open_reads", "through", "filled", "cursor", "open_fees")
+              "opening", "token_markets", "open_reads", "through", "filled", "cursor", "open_fees",
+              "drifting")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -1124,15 +1128,25 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     buy = args["side"] == "buy"
     if buy and surface.open_fees:
         return FEE_OPEN_REFUSAL
+    if buy and surface.live and surface.drifting:
+        return DRIFT_REFUSAL
     if buy:
         above = principal_excess(surface, account)
         if above is not None:
             return above
         fee = taker_fee(market, size, price)
-        if usd_to_micro(_open_exposure(account) + committed + notional,
+        exposure, available = _open_exposure(account), Decimal(account["usdc_available"])
+        if surface.live:
+            # Astra P1 on #177: the venue's listings (open orders, positions, balance)
+            # are separate reads that lag each other; the world's own durable records
+            # (its intents not yet booked, its booked inventory) bound them from below.
+            reserved, book = local_commitments(surface)
+            exposure = max(exposure, reserved + book)
+            available = min(available, Decimal(account["usdc"]) - reserved)
+        if usd_to_micro(exposure + committed + notional,
                         rounding="ceil") > spec.max_open_micro:
             return "open exposure would exceed [polymarket] max_open_usd"
-        if notional + fee + committed > Decimal(account["usdc_available"]):
+        if notional + fee + committed > available:
             return "order collateral exceeds the polymarket pot's available USDC"
     else:
         held = next((Decimal(p["available"]) for p in account["positions"]
@@ -1194,10 +1208,70 @@ def principal_excess(surface: PolymarketSurface, account: dict) -> str | None:
     cap = getattr(surface.spec, "principal_micro", None)
     if cap is None:
         return None
-    principal = held_at_cost(account) - surface.settled
+    held = held_at_cost(account)
+    if surface.live:
+        # A token the positions listing does not show yet (index lag, truncation) is
+        # still the world's: each token counts at the larger of the two valuations.
+        held = Decimal(account["usdc"]) + _live_tokens_value(surface, account)
+    principal = held - surface.settled
     if usd_to_micro(principal, rounding="ceil") > cap:
         return PRINCIPAL_REFUSAL
     return None
+
+
+#: The pot does not agree with its custodian: money left it that its books do not explain.
+DRIFT_REFUSAL = "the polymarket pot does not reconcile with its custodian"
+
+
+def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
+    """(USDC the world's buys may still take, the world's booked inventory at cost).
+
+    From the world's own durable records, never a venue listing (Astra P1 on #177): a
+    buy placement not rejected reserves its price, and the taker fee its schedule could
+    charge, on every quantity it may still fill or has matched that is not yet booked
+    from a CONFIRMED trade (its size while it rests or is unanswered, its matched size
+    once terminal); the booked inventory of each unresolved token is held at its
+    average cost (``LivePolymarket.poll``'s book).
+    """
+    reserved = Decimal(0)
+    for intent in surface.intents.values():
+        args = intent["args"]
+        if intent["operation"] != "polymarket.place_limit" or args.get("side") != "buy":
+            continue
+        result = intent["result"]
+        if result.get("status") == "rejected" or intent.get("terminal"):
+            continue
+        order_id = intent.get("order_hash") or result.get("order_id")
+        booked = Decimal(surface.filled.get(str(order_id), "0"))
+        quantity = (Decimal(str(result.get("filled_size") or "0"))
+                    if result.get("status") in ("filled", "cancelled")
+                    else Decimal(str(args["size"])))
+        price = Decimal(str(args["price"]))
+        identity = intent.get("order_identity") or {}
+        rate = Decimal(str(identity.get("fee_rate") or "0"))
+        remaining = max(Decimal(0), quantity - booked)
+        reserved += remaining * price * (1 + rate * (1 - price))
+    resolved = surface.cursor.get("resolved", {})
+    book = sum((Decimal(size) * Decimal(avg)
+                for token, (size, avg) in surface.cursor.get("book", {}).items()
+                if token not in resolved), Decimal(0))
+    return reserved, book
+
+
+def _live_tokens_value(surface: PolymarketSurface, account: dict) -> Decimal:
+    """Each token at the larger of what the positions listing and the world's own book
+    say of it: a lagging or truncated listing never makes the pot look smaller."""
+    listed: dict[str, Decimal] = {}
+    for p in account["positions"]:
+        paid = p.get("payout")
+        listed[p["token_id"]] = Decimal(p["size"]) * (
+            Decimal(paid) if paid is not None else Decimal(p["avg_px"]))
+    resolved = surface.cursor.get("resolved", {})
+    for token, (size, avg) in surface.cursor.get("book", {}).items():
+        value = Decimal(size) * (Decimal(resolved[token]) if token in resolved
+                                 else Decimal(avg))
+        listed[token] = max(listed.get(token, Decimal(0)), value)
+    return sum(listed.values(), Decimal(0))
 
 
 def batch_refusal(rt: Any, seat: str, handle: str,
@@ -1589,7 +1663,8 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
         rt.ledger.append({"kind": "polymarket.reconcile_unavailable",
                           "reason": type(exc).__name__, "ts": rt.clock.now_ns})
         return None
-    held = held_at_cost(account)
+    held = (Decimal(account["usdc"]) + _live_tokens_value(surface, account) if surface.live
+            else held_at_cost(account))
     if surface.opening is not None and surface.open_fees:
         _settle_open_fees(rt, surface, held - (surface.opening + surface.settled))
     if surface.opening is None:
@@ -1601,6 +1676,9 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
               "held_at_cost": str(held), "drift": str(drift)}
     if abs(drift) > Decimal("0.000001"):
         rt.ledger.append({"kind": "polymarket.drift", **result, "ts": rt.clock.now_ns})
+    # Astra P1 on #177: money gone that the books do not explain leaves the pot's
+    # reconciliation unknown, and new exposure waits on it.
+    surface.drifting = drift < Decimal("-0.000001")
     above = principal_excess(surface, account)
     if above is not None:
         result["principal_exceeded"] = True

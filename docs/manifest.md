@@ -2526,6 +2526,14 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   binds it to its decision, whose late money it is. A listing of trades longer than
   one poll's page bound is read over several polls from the page it stopped at; a
   world's first read starts at its first tick, never at the wallet's history.
+* **Caps on the world's own records.** The venue's listings (balance, open orders,
+  positions) are separate reads that lag each other, so a live buy's exposure and
+  collateral also count every buy placement not yet booked from a CONFIRMED trade (its
+  price and possible taker fee on what it may still fill or has matched) and the booked
+  inventory at cost; the principal counts each token at the larger of the listing and
+  that inventory; the positions listing is read page by page to an empty page (or the
+  pot is unavailable); and no buy is taken while the last reconciliation found money
+  gone that the books do not explain (`polymarket.drift` below zero).
 * **Only what the world acquired is sold.** A sell fits the tokens this world's
   confirmed fills hold, less its resting sells ("sell exceeds the tokens this world's
   confirmed fills acquired"): a token the wallet held otherwise has no cost on the

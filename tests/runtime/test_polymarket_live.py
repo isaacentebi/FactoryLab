@@ -492,3 +492,57 @@ def test_a_shortfall_no_open_fee_could_explain_closes_nothing():
     polymarket._settle_open_fees(rt, rt.polymarket, Decimal("-2"))  # above 1 x 0.5 of cash
     assert rt.polymarket.open_fees == [item] and items(rt, "polymarket.fee_unreconciled")
     assert not items(rt, "polymarket.fee_reconciled")
+
+
+def test_the_exposure_cap_holds_while_the_venue_s_listings_lag():
+    """Astra P1 on #177: a filled buy left the open orders before the positions listing
+    showed it, so a second identical buy passed a $5 cap: $8.20 held against it."""
+    rt, server = live_world(max_open_micro=5_000_000)
+    polymarket.tick(rt)
+    token_id = token(server)
+    server.hidden_positions = {token_id}  # the Data API has not indexed the fill yet
+    assert buy(rt, server, collateral_decision(rt), price="0.45")["status"] == "filled"
+    second = buy(rt, server, collateral_decision(rt), price="0.45")
+    assert second["status"] == "rejected" and "max_open_usd" in second["error"]
+    polymarket.tick(rt)  # booked from its confirmed trade: still held at cost
+    third = buy(rt, server, collateral_decision(rt), price="0.45")
+    assert third["status"] == "rejected" and "max_open_usd" in third["error"]
+
+
+def test_the_principal_cap_counts_what_the_world_holds_while_the_listing_lags():
+    """Astra P1 on #177: inventory absent from the positions listing (index lag or
+    truncation) left principal under the cap in the check while it was over it."""
+    rt, server = live_world(fake=still_fake(start_usdc=Decimal(35)), principal="40",
+                            max_order_micro=30_000_000)
+    polymarket.tick(rt)
+    assert buy(rt, server, collateral_decision(rt), size="30",
+               price="0.45")["status"] == "filled"  # $12.30 of the pot's $35 is tokens
+    polymarket.tick(rt)
+    server.hidden_positions = {token(server)}
+    server.fake._cash += Decimal("10")  # a deposit: $45 of principal against a $40 cap
+    polymarket.tick(rt)
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30", market="fake-3")
+    assert refused["status"] == "rejected" and refused["error"] == polymarket.PRINCIPAL_REFUSAL
+
+
+def test_a_positions_listing_is_read_to_its_end_or_the_pot_is_unavailable():
+    rt, server = live_world()
+    polymarket.tick(rt)
+    buy(rt, server, collateral_decision(rt), price="0.45")
+    buy(rt, server, collateral_decision(rt), price="0.75", market="fake-2", size="5")
+    server.positions_page = 1
+    rt.polymarket._account_memo = None
+    account = rt.polymarket.account(rt)
+    assert len(account["positions"]) == 2
+
+
+def test_money_gone_that_the_books_do_not_explain_stops_new_exposure_until_it_agrees():
+    rt, server = live_world()
+    polymarket.tick(rt)
+    server.fake._cash -= Decimal(5)  # leaves the wallet, explained by nothing booked
+    polymarket.tick(rt)
+    refused = buy(rt, server, collateral_decision(rt))
+    assert refused["status"] == "rejected" and refused["error"] == polymarket.DRIFT_REFUSAL
+    server.fake._cash += Decimal(5)
+    polymarket.tick(rt)
+    assert buy(rt, server, collateral_decision(rt))["status"] == "resting"

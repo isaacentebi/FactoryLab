@@ -349,10 +349,10 @@ class FakeClob:
                          "avgPrice": str(position["avg_px"]), "outcomeIndex": side,
                          "outcome": self.fake._markets[market_id]["outcomes"][side],
                          "conditionId": self.fake._markets[market_id]["condition_id"]})
+        offset, limit = int(query.get("offset", "0")), int(query.get("limit", "500"))
         if self.positions_page is not None:
-            offset, limit = int(query.get("offset", "0")), int(query.get("limit", "500"))
-            return rows[offset:offset + min(limit, self.positions_page)]
-        return rows
+            limit = min(limit, self.positions_page)  # a server may cap a page
+        return rows[offset:offset + limit]
 
 
 def live_venue(fake: FakePolymarket | None = None, *, signer=None, budget: int = 200,

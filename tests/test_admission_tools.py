@@ -227,7 +227,7 @@ def test_polymarket_principal_and_order_budget_are_enforced_at_their_published_b
         enabled=True, principal_micro=40_000_000, order_requests_per_10s=7))
     facts = tool_admission_schematics(manifest)["polymarket_orders"]
     cap = facts["principal_micro"]
-    surface = SimpleNamespace(spec=manifest.polymarket, settled=Decimal(0))
+    surface = SimpleNamespace(spec=manifest.polymarket, settled=Decimal(0), live=False)
 
     def pot(usdc, tokens="0", avg="0.5"):
         return {"usdc": usdc, "positions": [{"size": tokens, "avg_px": avg}]}

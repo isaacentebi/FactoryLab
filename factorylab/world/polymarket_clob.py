@@ -146,6 +146,8 @@ TRADE_FINAL, TRADE_FAILED = "CONFIRMED", "FAILED"
 #: Seconds a fill poll re-reads before the newest trade it has seen, for a trade the
 #: venue lists after a later one; the seen set keeps each one booked once.
 TRADE_OVERLAP_S = 600
+#: Positions a Data API page is asked for (its own maximum is 500).
+POSITIONS_PAGE = 500
 #: Pages one poll reads at most; more leaves the stream incomplete for the next poll.
 MAX_TRADE_PAGES = 5
 
@@ -788,8 +790,7 @@ class LivePolymarket(PolymarketReader):
         orders = self._open_orders()
         held = sum((_dec(o["price"]) * _dec(o["remaining"]) for o in orders
                     if o["side"] == "buy"), Decimal(0))
-        rows = self._public(f"{self.data_url}/positions?" + parse.urlencode(
-            {"user": self.funder, "sizeThreshold": "0", "limit": "500"}))
+        rows = self._positions()
         selling: dict[str, Decimal] = {}
         for order in orders:
             if order["side"] == "sell":
@@ -811,6 +812,24 @@ class LivePolymarket(PolymarketReader):
         positions.sort(key=lambda p: p["token_id"])
         return {"usdc": str(usdc), "usdc_available": str(usdc - held), "positions": positions,
                 "open_orders": orders, "observed_at_ns": observed}
+
+    def _positions(self) -> list[dict[str, Any]]:
+        """Every position the Data API lists for the funder, read to the listing's end
+        (Astra P1 on #177: one page of 500 could truncate it); a listing longer than the
+        page bound is unavailable, never a partial pot."""
+        rows: list = []
+        # The listing ends at an empty page: a server may cap a page below the limit
+        # asked for, so a short page is no proof of the end.
+        for _ in range(MAX_TRADE_PAGES + 1):
+            batch = self._public(f"{self.data_url}/positions?" + parse.urlencode(
+                {"user": self.funder, "sizeThreshold": "0", "limit": str(POSITIONS_PAGE),
+                 "offset": str(len(rows))}))
+            if not isinstance(batch, list):
+                raise PolymarketUnavailable("positions answer is not a list")
+            if not batch:
+                return rows
+            rows.extend(batch)
+        raise PolymarketUnavailable("positions did not fit the page bound")
 
     def _open_orders(self) -> list[dict[str, str]]:
         orders, cursor = [], FIRST_CURSOR
