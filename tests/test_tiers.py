@@ -17,6 +17,7 @@ from tests.conftest import (
     _check_limit_problem,
     _files_over_budget,
     _stepped_a_world_problem,
+    _tiers_over_budget,
     _world_functions,
 )
 
@@ -128,6 +129,13 @@ def test_a_gate_file_over_its_budget_fails_unless_it_is_excepted_by_name():
     assert _files_over_budget(spent, 60.0, {"tests/c.py": "why it cannot be smaller"}) == {
         "tests/a.py": 61.0}
     assert _files_over_budget(spent, None, {}) == {}
+
+
+def test_a_tier_over_its_total_budget_fails_and_the_budget_can_be_switched_off():
+    spent = {"gate": 600.0, "slow": 300.0, "check": 900.0}
+    assert _tiers_over_budget(spent, {"gate": 560.0, "slow": 560.0}) == {"gate": 600.0}
+    assert _tiers_over_budget({"gate": 560.0}, {"gate": 560.0}) == {}
+    assert _tiers_over_budget(spent, {"gate": 560.0}, enabled=False) == {}
 
 
 @pytest.mark.check  # deliberately: the guard must catch a check test that steps a world

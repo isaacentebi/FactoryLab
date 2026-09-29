@@ -9,6 +9,7 @@ import os
 import pickle
 import resource
 import shutil
+import tempfile
 from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 
@@ -22,6 +23,70 @@ from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
+
+#: Directories a test module made at import, for the whole session: removed at its end
+#: (``_TemporaryDirectories``), in each process that imported the module.
+_SESSION_DIRECTORIES: list[Path] = []
+
+
+def session_directory(prefix: str) -> Path:
+    """A fresh directory that lives until this test session ends, then is removed.
+
+    For a module-level stand-in file (a fixture cannot run at import); anything a test
+    makes for itself belongs in ``tmp_path``.
+    """
+    path = Path(tempfile.mkdtemp(prefix=prefix))
+    _SESSION_DIRECTORIES.append(path)
+    return path
+
+
+class _TemporaryDirectories:
+    """Every directory ``tempfile.mkdtemp`` made in this process during the run (a
+    ``TemporaryDirectory`` makes its own through it) must be gone when the session ends:
+    a test run leaves nothing behind in the system temporary directory. Session
+    directories are removed first; any other survivor fails the run, named.
+    """
+
+    def __init__(self):
+        self.made: list[str] = []
+        self.original = None
+        self.left: list[str] = []
+
+    def pytest_configure(self, config):
+        self.original = original = tempfile.mkdtemp
+        made = self.made
+
+        def recorded(*args, **kwargs):
+            path = original(*args, **kwargs)
+            made.append(path)
+            return path
+
+        tempfile.mkdtemp = recorded
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_sessionfinish(self, session):
+        for path in _SESSION_DIRECTORIES:
+            shutil.rmtree(path, ignore_errors=True)
+        _SESSION_DIRECTORIES.clear()
+        if self.original is not None:
+            tempfile.mkdtemp = self.original
+        self.left = sorted({*self.left, *(path for path in self.made
+                                           if os.path.exists(path))})
+        if hasattr(session.config, "workeroutput"):  # an xdist worker tells its controller
+            session.config.workeroutput["factorylab_left"] = self.left
+        if self.left and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_testnodedown(self, node, error):
+        """The controller hears what each xdist worker left behind."""
+        self.left.extend(getattr(node, "workeroutput", {}).get("factorylab_left", ()))
+
+    def pytest_terminal_summary(self, terminalreporter):
+        for path in self.left:
+            terminalreporter.write_line(
+                f"FAILED temporary directory left behind: {path} (use tmp_path, a "
+                "TemporaryDirectory context, or tests.conftest.session_directory)", red=True)
 
 
 def _manifest_with_changes(manifest, changes):
@@ -223,6 +288,13 @@ CHECK_WALL_CEILING_S = 10.0
 # the reason it cannot be smaller.
 GATE_FILE_BUDGET_ENV = "FACTORYLAB_GATE_FILE_BUDGET_S"
 GATE_FILE_BUDGET_DEFAULT_S = 60.0
+#: Each tier's whole serial CPU (setup, call and teardown of every test in it, summed
+#: across workers). The per-file budget above bounds no total; this does. At ``-n 2``
+#: a tier's wall is about half its serial cost, so these keep the gate and slow tiers
+#: under five minutes: a run whose tier spends more fails, naming the files that cost
+#: most. ``FACTORYLAB_TIER_BUDGET_S=off`` disables it (a profiled or instrumented run).
+TIER_BUDGET_ENV = "FACTORYLAB_TIER_BUDGET_S"
+TIER_BUDGETS_S = {"gate": 560.0, "slow": 560.0}
 GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
     # Serial CPU on the integrated tree (lanes E, M, P and #149, #154, #155 merged).
     "tests/gauntlet/test_thrash.py": (
@@ -533,6 +605,15 @@ def _files_over_budget(cpu_by_file: dict[str, float], budget_s: float | None,
             if s > budget_s and path not in exceptions}
 
 
+def _tiers_over_budget(cpu_by_tier: dict[str, float], budgets: dict[str, float],
+                       enabled: bool = True) -> dict[str, float]:
+    """The tiers whose summed serial CPU is over their budget (none when disabled)."""
+    if not enabled:
+        return {}
+    return {tier: s for tier, s in cpu_by_tier.items()
+            if tier in budgets and s > budgets[tier]}
+
+
 _PHASE_CPU = pytest.StashKey[dict]()
 _PHASE_WALL = pytest.StashKey[dict]()
 
@@ -629,8 +710,8 @@ def pytest_runtest_makereport(item, call):
     report = yield
     report.factorylab_cpu_s = item.stash.get(_PHASE_CPU, {}).get(call.when, 0.0)
     item.stash.setdefault(_PHASE_WALL, {})[call.when] = report.duration
-    report.factorylab_tier = ("gate" if item.get_closest_marker("gate")
-                              else "check" if item.get_closest_marker("check") else None)
+    report.factorylab_tier = next((tier for tier in ("gate", "check", "slow", "soak")
+                                   if item.get_closest_marker(tier)), None)
     if report.when != "call" or not report.passed or report.factorylab_tier != "check":
         return report
     problem = _stepped_a_world_problem(item) or _check_limit_problem(
@@ -649,29 +730,42 @@ def pytest_runtest_makereport(item, call):
 class _GateBudget:
     """Sums each gate file's serial CPU from the reports and fails a run whose file is
     over the budget: a slow world is shrunk, shared or excepted by name, never let creep.
+    Sums each tier's serial CPU too and fails a run whose tier is over its budget.
     """
 
     def __init__(self):
         self.cpu: dict[str, float] = {}
         self.wall: dict[str, float] = {}
         self.over: dict[str, float] = {}
+        self.tiers: dict[str, float] = {}
+        self.tiers_over: dict[str, float] = {}
+        self.slow_files: dict[str, float] = {}
 
     def pytest_runtest_logreport(self, report):
-        if getattr(report, "factorylab_tier", None) != "gate":
-            return
+        tier = getattr(report, "factorylab_tier", None)
+        cpu = report.factorylab_cpu_s or 0.0
+        if tier is not None:
+            self.tiers[tier] = self.tiers.get(tier, 0.0) + cpu
         path = report.nodeid.split("::", 1)[0]
-        self.cpu[path] = self.cpu.get(path, 0.0) + (report.factorylab_cpu_s or 0.0)
+        if tier == "slow":
+            self.slow_files[path] = self.slow_files.get(path, 0.0) + cpu
+        if tier != "gate":
+            return
+        self.cpu[path] = self.cpu.get(path, 0.0) + cpu
         self.wall[path] = self.wall.get(path, 0.0) + report.duration
 
     def pytest_sessionfinish(self, session):
         self.over = _files_over_budget(
             self.cpu, _seconds_from_env(GATE_FILE_BUDGET_ENV, GATE_FILE_BUDGET_DEFAULT_S),
             GATE_FILE_BUDGET_EXCEPTIONS)
-        if self.over and session.exitstatus == pytest.ExitCode.OK:
+        self.tiers_over = _tiers_over_budget(
+            self.tiers, TIER_BUDGETS_S, _seconds_from_env(TIER_BUDGET_ENV, 1.0) is not None)
+        if (self.over or self.tiers_over) and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
     def pytest_terminal_summary(self, terminalreporter):
         if not self.cpu:
+            self._tier_summary(terminalreporter)
             return
         write = terminalreporter.write_line
         terminalreporter.section("gate files by serial CPU")
@@ -684,11 +778,25 @@ class _GateBudget:
             write(f"FAILED gate budget: {path} used {cpu:.1f}s of CPU, over the "
                   f"{GATE_FILE_BUDGET_ENV} budget; shrink or share its world, or list it "
                   "in GATE_FILE_BUDGET_EXCEPTIONS with the reason", red=True)
+        self._tier_summary(terminalreporter)
+
+    def _tier_summary(self, terminalreporter):
+        write = terminalreporter.write_line
+        for tier, cpu in sorted(self.tiers_over.items()):
+            files = self.cpu if tier == "gate" else self.slow_files
+            top = ", ".join(f"{path} {s:.0f}s" for path, s in
+                            sorted(files.items(), key=lambda kv: -kv[1])[:5])
+            write(f"FAILED {tier} tier budget: its tests used {cpu:.1f}s of CPU, over "
+                  f"TIER_BUDGETS_S[{tier!r}] = {TIER_BUDGETS_S[tier]:.0f}s (about twice "
+                  f"the -n 2 wall target); the costliest files: {top}", red=True)
 
 
 def pytest_configure(config):
-    # Every process that runs tests watches its worlds.
+    # Every process that runs tests watches its worlds and its temporary directories.
     config.pluginmanager.register(_WorldGuard(), "factorylab-world-guard")
+    directories = _TemporaryDirectories()
+    # Registered while configuring: pytest calls its (historic) pytest_configure now.
+    config.pluginmanager.register(directories, "factorylab-temporary-directories")
     # Only the process that sees every report judges the budget: the controller under
     # xdist, or the one process without it.
     if not hasattr(config, "workerinput"):

@@ -387,21 +387,25 @@ def render_dynamic(name: str, *, ticks: int = 60) -> Rendered:
     from factorylab.runtime.loop import Runtime
 
     manifest = simulated_manifest(name)
-    directory = Path(tempfile.mkdtemp(prefix="class2-"))
-    runtime = Runtime(manifest, events=ticks, seed=manifest.seed, initial_balance_micro=None,
-                      ledger_path=str(directory / "ledger.jsonl"), router_gamma=0.1,
-                      provider=Recording(WORLDS / f"{name}.toml"), kill_at_end=True)
-    surface = getattr(runtime, "polymarket", None)
-    if surface is not None and not surface.writes:
-        # As fastloop does: a live-read world's reads are answered by the simulated venue.
-        from factorylab.runtime.polymarket import simulate_reads
+    # The diary is the render's scratch: removed with its directory once the run ends.
+    with tempfile.TemporaryDirectory(prefix="class2-") as scratch:
+        directory = Path(scratch)
+        runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
+                          initial_balance_micro=None,
+                          ledger_path=str(directory / "ledger.jsonl"), router_gamma=0.1,
+                          provider=Recording(WORLDS / f"{name}.toml"), kill_at_end=True)
+        surface = getattr(runtime, "polymarket", None)
+        if surface is not None and not surface.writes:
+            # As fastloop does: a live-read world's reads are answered by the simulated
+            # venue.
+            from factorylab.runtime.polymarket import simulate_reads
 
-        simulate_reads(runtime)
-    try:
-        runtime.run()
-        rendered.status = "completed"
-    except Exception as exc:  # noqa: BLE001 - what was rendered before a failure still counts
-        rendered.status = f"failed: {type(exc).__name__}: {exc}"[:300]
+            simulate_reads(runtime)
+        try:
+            runtime.run()
+            rendered.status = "completed"
+        except Exception as exc:  # noqa: BLE001 - what was rendered before a failure counts
+            rendered.status = f"failed: {type(exc).__name__}: {exc}"[:300]
     # What the kernel writes is kernel text whoever else says it too; read only for a
     # completed run (a failed one is refused whole by ``require_complete``).
     kernel = ({t for _p, t in render_static(name)} | {t for _p, t in render_seat_text()}

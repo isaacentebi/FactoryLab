@@ -11,12 +11,12 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from scripts import class2_audit as tool
+from tests.conftest import session_directory
 
 WORLD = "scripted"
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +27,7 @@ ESSAY_TEXT = "\n".join([
     "Preface", "I. On Factories and Darkness", "Class 1, Class 2 and Class 3 (stand-in).",
     "II. The Human and the Loop", "Not quoted.", "CHAPTER II", "THE DARK STACK (stand-in)",
     "CHAPTER III", "Not quoted either."])
-ESSAY = Path(tempfile.mkdtemp(prefix="class2-essay-")) / "essay.md"
+ESSAY = session_directory("class2-essay-") / "essay.md"
 ESSAY.write_text(ESSAY_TEXT + "\n")
 
 
