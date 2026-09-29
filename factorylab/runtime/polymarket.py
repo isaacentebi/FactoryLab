@@ -1222,7 +1222,9 @@ def principal_excess(surface: PolymarketSurface, account: dict) -> str | None:
         # A token the positions listing does not show yet (index lag, truncation) is
         # still the world's: each token counts at the larger of the two valuations.
         held = Decimal(account["usdc"]) + _live_tokens_value(surface, account)
-    principal = held - surface.settled
+    # A fee its trade did not state may have left the pot unbooked: counted at its most,
+    # it can never make room for principal past the cap (Sol P1 on #177).
+    principal = held - surface.settled + open_fee_reserve(surface)
     if usd_to_micro(principal, rounding="ceil") > cap:
         return PRINCIPAL_REFUSAL
     return None

@@ -865,3 +865,17 @@ def test_a_kill_with_matched_unconfirmed_quantity_is_not_flat():
     report = polymarket.wind_down(rt)
     assert report["exposure_state"] == "wind_down_pending"
     assert [(u["size"], u["booked"]) for u in report["unsettled"]] == [("10", "0")]
+
+
+def test_an_unstated_fee_counts_against_the_principal_cap_at_its_most():
+    """Sol P1 on #177: an unstated fee left the pot's value short by the fee with
+    nothing settled; a deposit of the fee then fit under the cap, taking the principal
+    contributed past it."""
+    rt, server = live_world(principal="50")
+    _unstated_fee_fill(rt, server, collateral_decision(rt))
+    polymarket.tick(rt)
+    server.fake._cash += Decimal("0.05148")  # a deposit of exactly the fee
+    polymarket.tick(rt)
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
+                  market="fake-1")
+    assert refused["status"] == "rejected" and refused["error"] == polymarket.PRINCIPAL_REFUSAL
