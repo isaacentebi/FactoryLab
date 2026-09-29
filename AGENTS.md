@@ -151,3 +151,19 @@ only the specific `gate` files for what you changed; do not run the whole gate
 and a `check` test whose call uses over 2 s of CPU (or over 10 s of wall time) fails with a message telling you to mark it
 `@pytest.mark.gate`. Run it before you return. Return the list of changed files, the gate output
 verbatim, and any decision you made that the task did not specify.
+
+The `soak` tier holds the long runs: the checkpoint plateau (5,000 events) and the
+original, long lengths of the gauntlet's worlds, whose short lengths run in the gate.
+
+```
+uv run pytest -m soak -n 2
+```
+
+Running the soak tier is REQUIRED, and its output is returned with the gate's:
+- for any change under `factorylab/kernel/`;
+- for any change to pricing (`factorylab/runtime/pricing.py`,
+  `factorylab/charter/controller.py`), the immune system (`factorylab/runtime/immune.py`,
+  `factorylab/versioning/`), the router or learners (`factorylab/runtime/routing.py`,
+  `factorylab/learners/`), or the gauntlet (`tests/gauntlet/`, `scripts/gauntlet.py`);
+- before any world launch;
+- on request.

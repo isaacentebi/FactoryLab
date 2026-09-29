@@ -267,7 +267,10 @@ def shared_result(_scripted_run_cache):
 #   check  the developer inner loop, the default; no test here runs a world
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
-#   soak   runs a world for thousands of events; its own tier, run with ``-m soak``
+#   soak   the long runs (``-m soak``): the checkpoint plateau and the gauntlet's long
+#          worlds, whose short lengths run in gate. REQUIRED for any change under
+#          factorylab/kernel, to pricing, the immune system, the router or learners, or
+#          the gauntlet; before any world launch; on request (AGENTS.md, Verify gate)
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
 _SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run",
                                     "shared_result"})
