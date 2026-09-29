@@ -1141,6 +1141,10 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     notional = size * price
     if usd_to_micro(notional, rounding="ceil") > spec.max_order_micro:
         return "order notional exceeds [polymarket] max_order_usd"
+    if surface.open_fees:
+        # Sol P1 on #177: a fee its trade did not state has no bound valid at its
+        # execution, so no principal is added until it is established.
+        return FEE_OPEN_REFUSAL
     if surface.live and surface.drifting:
         return DRIFT_REFUSAL
     above = principal_excess(surface, account)
@@ -1163,6 +1167,8 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     return None
 
 
+#: A fill whose fee its trade did not state: its amount is not established.
+FEE_OPEN_REFUSAL = "a polymarket fill's fee is not established"
 #: Version 1 of the venue: BUY orders only; a position is held to its resolution.
 BUY_ONLY_REFUSAL = "the polymarket venue takes BUY orders only"
 PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
@@ -1199,9 +1205,7 @@ def principal_excess(surface: PolymarketSurface, account: dict) -> str | None:
         # A token the positions listing does not show yet (index lag, truncation) is
         # still the world's: each token counts at the larger of the two valuations.
         held = Decimal(account["usdc"]) + _live_tokens_value(surface, account)
-    # A fee its trade did not state may have left the pot unbooked: counted at its most,
-    # it can never make room for principal past the cap (Sol P1 on #177).
-    principal = held - surface.settled + open_fee_reserve(surface)
+    principal = held - surface.settled
     if usd_to_micro(principal, rounding="ceil") > cap:
         return PRINCIPAL_REFUSAL
     return None
@@ -1209,21 +1213,6 @@ def principal_excess(surface: PolymarketSurface, account: dict) -> str | None:
 
 #: The pot does not agree with its custodian: money left it that its books do not explain.
 DRIFT_REFUSAL = "the polymarket pot does not reconcile with its custodian"
-
-
-def _most_fee(surface: PolymarketSurface, order_id: str, event: dict) -> Decimal:
-    """The most the market's published schedule, as the order's intent recorded it, can
-    charge one fill: ``size x rate x (p (1 - p))^exponent``, rounded up to 5 decimals;
-    an exponent that is not a whole number is bounded by ``size x rate``."""
-    from decimal import ROUND_CEILING
-
-    client_id = surface.order_ids.get(order_id)
-    identity = (surface.intents[client_id].get("order_identity") or {}) if client_id else {}
-    rate = Decimal(str(identity.get("fee_rate") or "0"))
-    exponent = Decimal(str(identity.get("fee_exponent") or "1"))
-    size, px = Decimal(str(event["size"])), Decimal(str(event["px"]))
-    shape = (px * (1 - px)) ** int(exponent) if exponent == int(exponent) else Decimal(1)
-    return (size * rate * shape).quantize(Decimal("0.00001"), rounding=ROUND_CEILING)
 
 
 #: What one share's cost may differ by between the Data API's ``avgPrice`` and the
@@ -1238,11 +1227,6 @@ def _listing_tolerance(surface: PolymarketSurface, account: dict) -> Decimal:
         return Decimal(0)
     return sum((Decimal(p["size"]) for p in account["positions"]), Decimal(0)) * (
         AVG_PRICE_TOLERANCE)
-
-
-def open_fee_reserve(surface: PolymarketSurface) -> Decimal:
-    """What the unresolved fee items could have charged, all together."""
-    return sum((Decimal(str(i.get("reserve", "0"))) for i in surface.open_fees), Decimal(0))
 
 
 def _cancelled(surface: PolymarketSurface) -> dict[str, Decimal | None]:
@@ -1304,8 +1288,7 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
     book = sum((Decimal(size) * Decimal(avg)
                 for token, (size, avg) in surface.cursor.get("book", {}).items()
                 if token not in resolved), Decimal(0))
-    # A fee its trade did not state may have been charged: its most is held for good.
-    return reserved + open_fee_reserve(surface), book
+    return reserved, book
 
 
 def _live_tokens_value(surface: PolymarketSurface, account: dict) -> Decimal:
@@ -1804,8 +1787,7 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     # Astra P1 on #177: money gone that the books do not explain leaves the pot's
     # reconciliation unknown, and new exposure waits on it; the most the open fees could
     # have charged is explained by them (Codex P1: a drift is never booked as a fee).
-    surface.drifting = drift < -(Decimal("0.000001") + open_fee_reserve(surface)
-                                 + _listing_tolerance(surface, account))
+    surface.drifting = drift < -(Decimal("0.000001") + _listing_tolerance(surface, account))
     above = principal_excess(surface, account)
     if above is not None:
         result["principal_exceeded"] = True
@@ -1885,10 +1867,9 @@ def _settle_fill(rt: Any, event: dict) -> None:
         # Astra P0 and Codex P1 on #177: the execution did not state its fee (get-trades
         # lists fee_rate_bps as optional). Nothing is debited, from a schedule or from
         # the balance (a drift cannot tell a fee from a deposit or a withdrawal): the fee
-        # stays an unresolved item for the world's life, and it holds the most the
-        # market's schedule, as its intent recorded it, could charge the fill.
+        # stays an unresolved item, and no buy is taken while one is open (``refusal``).
         item = {"order_id": order_id, "handle": owner_handle, "size": str(event["size"]),
-                "px": str(event["px"]), "reserve": str(_most_fee(surface, order_id, event))}
+                "px": str(event["px"])}
         surface.open_fees.append(item)
         rt.ledger.append({"kind": "polymarket.fee_unresolved", **item, "ts": rt.clock.now_ns})
     try:
@@ -2004,10 +1985,8 @@ def custody_books(rt: Any) -> dict[str, int]:
     claimed = sum(surface.claims.values())
     return {"booked_micro": surface.booked, "claimed_micro": claimed,
             "unattributed_micro": surface.booked - claimed,
-            # Fills whose fee their trade did not state, and the most it could be.
-            "unresolved_fees": len(surface.open_fees),
-            "unresolved_fee_reserve_micro": usd_to_micro(open_fee_reserve(surface),
-                                                         rounding="ceil")}
+            # Fills whose fee their trade did not state.
+            "unresolved_fees": len(surface.open_fees)}
 
 
 def _tell(rt: Any, handle: str | None, outcome: dict[str, Any]) -> None:

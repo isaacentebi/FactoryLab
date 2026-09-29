@@ -464,21 +464,6 @@ def test_a_fee_its_trade_does_not_state_is_never_taken_from_a_balance_change():
     assert items(rt, "polymarket.drift") and rt.polymarket.drifting
 
 
-def test_an_unstated_fee_holds_the_most_its_schedule_could_charge_and_blocks_nothing():
-    rt, server = live_world()
-    handle = collateral_decision(rt)
-    _unstated_fee_fill(rt, server, handle)
-    polymarket.tick(rt)
-    # 5 x 0.05 x 0.71 x 0.29 at the schedule its intent recorded, rounded up.
-    assert rt.polymarket.open_fees[0]["reserve"] == "0.05148"
-    reserved, _book = polymarket.local_commitments(rt.polymarket)
-    assert reserved == Decimal("0.05148")
-    # The fee it may have charged explains the drift it leaves: nothing is blocked.
-    assert not rt.polymarket.drifting
-    assert buy(rt, server, collateral_decision(rt), size="5", price="0.30",
-               market="fake-1")["status"] == "resting"
-
-
 def test_the_exposure_cap_holds_while_the_venue_s_listings_lag():
     """Astra P1 on #177: a filled buy left the open orders before the positions listing
     showed it, so a second identical buy passed a $5 cap: $8.20 held against it."""
@@ -557,8 +542,8 @@ def test_no_order_is_taken_before_the_pot_s_opening_is_read():
     for trade in server.trades:
         trade.pop("fee_rate_bps")
     polymarket.tick(rt)
-    # The fee stays open, never closed from the balance, and never blocks a buy.
-    assert len(rt.polymarket.open_fees) == 1 and not rt.polymarket.drifting
+    # The fee stays open, never closed from the balance.
+    assert len(rt.polymarket.open_fees) == 1
 
 
 def test_a_cancelled_buy_releases_its_reservation():
@@ -795,20 +780,6 @@ def test_a_kill_with_matched_unconfirmed_quantity_is_not_flat():
     assert [(u["size"], u["booked"]) for u in report["unsettled"]] == [("10", "0")]
 
 
-def test_an_unstated_fee_counts_against_the_principal_cap_at_its_most():
-    """Sol P1 on #177: an unstated fee left the pot's value short by the fee with
-    nothing settled; a deposit of the fee then fit under the cap, taking the principal
-    contributed past it."""
-    rt, server = live_world(principal="50")
-    _unstated_fee_fill(rt, server, collateral_decision(rt))
-    polymarket.tick(rt)
-    server.fake._cash += Decimal("0.05148")  # a deposit of exactly the fee
-    polymarket.tick(rt)
-    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
-                  market="fake-1")
-    assert refused["status"] == "rejected" and refused["error"] == polymarket.PRINCIPAL_REFUSAL
-
-
 def test_a_failed_trade_releases_its_matched_quantity_once_the_order_is_terminal():
     """Sol P2 on #177: a fully matched buy whose trade FAILED kept its $4.50 reserved,
     so under a $5 cap every later buy of the same size was refused for good."""
@@ -860,3 +831,23 @@ def test_a_sell_is_refused_before_any_intent(live):
             rt.polymarket.venue.target.order_identity(
                 client_id="c", token_id=token_id, is_buy=False, size=Decimal(10),
                 price=Decimal("0.59"), market={"tick_size": "0.01"})
+
+
+def test_no_buy_is_taken_while_any_fee_is_unestablished():
+    """Sol P1 on #177: the unstated-fee bound came from the admission-time schedule; the
+    venue charged 10% where admission read 5%, a deposit of the difference cleared the
+    drift, and a buy took principal past the cap. No bound is guessed any more: while a
+    fee its trade did not state is open, no buy is taken."""
+    rt, server = live_world(principal="50")
+
+    def raise_rate():
+        server.fake._markets["fake-2"]["fee_rate"] = Decimal("0.10")
+
+    server.on_post = raise_rate
+    _unstated_fee_fill(rt, server, collateral_decision(rt))
+    polymarket.tick(rt)
+    server.fake._cash += Decimal("0.05147")
+    polymarket.tick(rt)
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
+                  market="fake-1")
+    assert refused["status"] == "rejected" and refused["error"] == polymarket.FEE_OPEN_REFUSAL
