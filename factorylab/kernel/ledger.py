@@ -111,7 +111,11 @@ def _plain(value):
     if kind is dict:
         return _plain_mapping(value)
     if kind is list or kind is tuple:
-        return [_plain(item) for item in value]
+        # A leaf of an exact builtin type is what ``_plain`` would return for it (an
+        # ASCII string is its own ``utf8_text``); taken inline, it spares a call.
+        return [item if (leaf := type(item)) is int or leaf is float or leaf is bool
+                or item is None or (leaf is str and item.isascii()) else _plain(item)
+                for item in value]
     if isinstance(value, str):
         return utf8_text(value)
     if is_dataclass(value) and not isinstance(value, type):
@@ -129,7 +133,11 @@ def _plain_mapping(value):
     for key in value:
         if type(key) is not str and not isinstance(key, str):
             raise TypeError("JSON object keys must be strings")
-    return {utf8_text(key): _plain(item) for key, item in value.items()}
+    # Exact-type leaves inline, as in ``_plain``'s sequences: the same values, fewer calls.
+    return {key if type(key) is str and key.isascii() else utf8_text(key):
+            item if (leaf := type(item)) is int or leaf is float or leaf is bool
+            or item is None or (leaf is str and item.isascii()) else _plain(item)
+            for key, item in value.items()}
 
 
 def canonical(value) -> bytes:

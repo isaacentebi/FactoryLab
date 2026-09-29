@@ -22,6 +22,7 @@ inbox items) are in ``test_settled_release_units.py``, in the check tier.
 """
 
 import json
+import shutil
 from collections import Counter
 from dataclasses import replace
 from fractions import Fraction
@@ -160,10 +161,24 @@ def tally_against_scan(monkeypatch, rt):
     return summary, rows
 
 
+#: The crash probe dies in the first release pass at or after this world tick, after
+#: ``CRASH_AFTER`` of that pass's releases: a late pass, so its resume replays a few
+#: ticks rather than most of the world (at tick 141 the pass releases about 300).
+CRASH_TICK = 140
+CRASH_AFTER = 39
+
+
 @pytest.fixture(scope="module")
 def runs(tmp_path_factory):
     """The module's two worlds, each run once: release live (on a diary file, with the
     eligibility tally and the full scan recorded after every event), and release off.
+
+    The released world is also the crash probe's prefix. A process that dies leaves
+    on disk exactly what its diary held at that instant (every append is durable
+    before it returns, and nothing else is written on the way out), and this world
+    is the probe's world event for event, so the diary directory copied in the middle
+    of a late release pass (``CRASH_TICK``, ``CRASH_AFTER``) is the state a death
+    there leaves; the probe resumes that copy.
 
     Over 10 s (about 75 s, once per xdist worker that runs this module): the
     diary-equality and tally-equals-scan contracts need a world long enough to release
@@ -173,8 +188,22 @@ def runs(tmp_path_factory):
     """
     patch = pytest.MonkeyPatch()
     path = tmp_path_factory.mktemp("released") / "w.jsonl"
+    crashed = tmp_path_factory.mktemp("crashed") / "w"
+    passes, crash = Counter(), {}
+    release_one = settled.SettledMixin._release_one
+
+    def copying(self, handle, live):
+        if self.ticks_consumed >= CRASH_TICK and crash.get("n", self.n) == self.n:
+            if passes[self.n] == CRASH_AFTER and not crash:
+                shutil.copytree(path.parent, crashed)
+                crash.update(n=self.n, tick=self.ticks_consumed, released=passes[self.n])
+        passes[self.n] += 1
+        return release_one(self, handle, live)
+
+    patch.setattr(settled.SettledMixin, "_release_one", copying)
     released = _world(path=path)
     summary, rows = tally_against_scan(patch, released)
+    crash.update(directory=crashed, pass_total=passes[crash["n"]] if crash else 0)
     patch.setattr(settled.SettledMixin, "_release_settled",
                   lambda self: (self._drain_finalized(), [])[1])
     try:
@@ -183,7 +212,7 @@ def runs(tmp_path_factory):
     finally:
         patch.undo()
     return {"released": released, "summary": summary, "rows": rows, "path": path,
-            "kept": kept, "kept_summary": kept_summary}
+            "kept": kept, "kept_summary": kept_summary, "crash": crash}
 
 
 def test_release_changes_nothing_any_reader_sees(runs):
@@ -318,10 +347,6 @@ def test_a_judge_naming_a_released_handle_is_refused(runs):
                        "about_handle": gone}
 
 
-class Crash(BaseException):
-    """The process dies here: nothing after it runs, nothing catches it."""
-
-
 def _final_queue(path):
     manifest = json.loads(load_manifest("scripted").canonical_json())
     ledger = Ledger.open_read_only(path, manifest=manifest)
@@ -337,34 +362,26 @@ def _settlements(path):
             if i["kind"] == "decision.settle"]
 
 
-def test_a_crash_in_a_release_pass_resumes_to_the_uninterrupted_run(runs, tmp_path,
-                                                                     monkeypatch):
-    """Die in the middle of a boundary's release pass (after the 40th decision released),
+def test_a_crash_in_a_release_pass_resumes_to_the_uninterrupted_run(runs, tmp_path):
+    """Die in the middle of a boundary's release pass (after its 39th decision released),
     before the checkpoint names it: the resume replays from the previous checkpoint and
     releases exactly what the uninterrupted run (the module's released world) released.
     The other crash points around a boundary (the checkpoint's own write protocol, the
     archive's collection) are ``test_retained_state_crash.py``'s, whose worlds release.
 
-    Over 10 s (about 45 s): a crash probe must run its world to the crash and resume it
-    to the end; the uninterrupted reference is the module's shared run.
+    The crashed diary is the released world's own, copied at that instant (``runs``).
     """
-    seen, n = [0], 40
-    target = "_release_one"
-    original = getattr(settled.SettledMixin, target)
-
-    def dying(self, *args, **kwargs):
-        seen[0] += 1
-        if seen[0] == n:
-            raise Crash
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(settled.SettledMixin, target, dying)
-    path = tmp_path / "w.jsonl"
-    with pytest.raises(Crash):
-        _world(path=path).run()
-    monkeypatch.undo()
+    crash = runs["crash"]
+    assert crash, f"no release pass at or after tick {CRASH_TICK}"
+    # Died mid-pass: releases before it in the pass, and the pass went on to release more.
+    assert crash["tick"] >= CRASH_TICK and crash["released"] == CRASH_AFTER
+    assert crash["pass_total"] > CRASH_AFTER + 1
+    directory = tmp_path / "crashed"
+    shutil.copytree(crash["directory"], directory)
+    path = directory / runs["path"].name
     summary = _plain(resume_world(load_manifest("scripted"), str(path)))
     expected = _plain(runs["summary"])
+    assert summary["stats"]["resumes"] == 1
     summary["stats"]["resumes"] = expected["stats"]["resumes"]
     assert summary == expected
     assert _final_queue(path) == _final_queue(runs["path"])

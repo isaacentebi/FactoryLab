@@ -25,11 +25,32 @@ pytestmark = pytest.mark.gate
 
 UNTIL = 50  # the window after which flip is steady
 
+#: Two lengths of each world. The per-PR gate reads the shortest in which the detector
+#: fires and its response (price, charge, gap) is applied, each checked red under the
+#: matched mutant below: TH-1 at 100 events (flagged, priced, charged, never on the
+#: frontier), TH-2 at 100, TH-3 at 150 (two charter boundaries). The soak tier
+#: (``-m soak``) reads the original lengths too, and alone runs what only a long run
+#: shows: TH-1e's release after flip is steady (window 50 of 300 events), TH-1b's
+#: frozen integral (360), TH-1f's priority and TH-4's null (300-event statistics).
+SHORT, LONG = "short", pytest.param("long", marks=pytest.mark.soak)
+TH1_EVENTS = {"short": 100, "long": 300}
+
+
+def _th1(shared_run, length):
+    events = TH1_EVENTS[length]
+    return shared_run(f"th1-{events}", lambda: P.run(
+        *P.th1(until_window=UNTIL, record=True), events=events))
+
+
+@pytest.fixture(scope="module", params=[SHORT, LONG])
+def th1(shared_run, request):
+    return _th1(shared_run, request.param)
+
 
 @pytest.fixture(scope="module")
-def th1(shared_run):
-    return shared_run("th1", lambda: P.run(*P.th1(until_window=UNTIL, record=True),
-                                           events=300))
+def th1_long(shared_run):
+    """TH-1's 300-event world, for what only a long run shows (soak tier)."""
+    return _th1(shared_run, "long")
 
 
 def _cycle_start(run):
@@ -70,6 +91,7 @@ def th1_sustained(shared_run):
                                                     instrument=False))
 
 
+@pytest.mark.soak  # the cap is reached and held only in a 360-event world
 def test_th1b_the_thrash_integral_is_frozen_at_the_cap(th1_sustained):
     result = g.th1b2_frozen(th1_sustained.events, th1_sustained.manifest)
     assert result.ok, result.evidence
@@ -94,13 +116,15 @@ def test_th1d_no_charge_reaches_the_frontier_the_niche_or_a_frontier_noop(th1):
     assert result.evidence["charged"] > 0
 
 
-def test_th1e_once_flip_is_steady_the_flag_clears_and_the_price_leaks_away(th1):
-    result = g.th1e_release(th1.events, th1.manifest, steady_from=UNTIL)
+@pytest.mark.soak  # flip is steady from window 50: the release tail needs 300 events
+def test_th1e_once_flip_is_steady_the_flag_clears_and_the_price_leaks_away(th1_long):
+    result = g.th1e_release(th1_long.events, th1_long.manifest, steady_from=UNTIL)
     assert result.ok, result.evidence
 
 
-def test_th1f_where_thrash_and_stable_failure_coincide_gain_moves_down(th1):
-    result = g.th1f_priority(th1.events, th1.manifest)
+@pytest.mark.soak  # unsupported before both flags coincide, late in the 300 events
+def test_th1f_where_thrash_and_stable_failure_coincide_gain_moves_down(th1_long):
+    result = g.th1f_priority(th1_long.events, th1_long.manifest)
     assert result.status != g.FAIL, result.evidence
 
 
@@ -112,12 +136,40 @@ def test_th1_the_physics_prices_and_never_steers(th1):
     assert readings["S2"].ok and readings["S6"].ok
 
 
+# Per-PR witnesses of what only the long worlds show at the launch physics (soak): the
+# thrash integral held at the cap, and the release to an exact zero.
+
+#: TH-1b's frozen integral: both producers oscillate, and at ``tv_threshold`` 0.05 the
+#: volatility's violation is large and still moving, so the price reaches its bound by
+#: tick ~150 and the next update is taken at it (200 events).
+FROZEN_FAST = {"immune": {"tv_threshold": 0.05}}
+
+
+def test_th1b_at_the_cap_the_thrash_integral_is_held_in_a_short_world():
+    """Red when the thrash integral keeps integrating (or is cut) while the penalty sits
+    at the cap: a mutant that dropped the freeze for the thrash card moved it here."""
+    run = P.run(*P.th1_sustained(changes=FROZEN_FAST), events=200, instrument=False)
+    result = g.th1b2_frozen(run.events, run.manifest)
+    assert result.ok, result.evidence
+    assert result.evidence["held"] >= 1
+
+
+def test_th1e_the_thrash_price_releases_to_exactly_zero_in_a_short_world():
+    """TH-1e on a flip that stops at window 16: the flag clears and the price is an exact
+    0.0 within its kernel-exact release bound. Red under a decay that keeps a floor."""
+    run = P.run(*P.th1(until_window=16, record=True), events=120)
+    result = g.th1e_release(run.events, run.manifest, steady_from=16)
+    assert result.ok, result.evidence
+    assert result.evidence["peak"] > 0 and result.evidence["zero"] is not None
+
+
 # --- TH-2: refactoring faster than the correcting loop -----------------------------------
 
 
-@pytest.fixture(scope="module")
-def th2(shared_run):
-    return shared_run("th2", lambda: P.run(*P.th2(every=3), events=150))
+@pytest.fixture(scope="module", params=[SHORT, LONG])
+def th2(shared_run, request):
+    events = {"short": 100, "long": 150}[request.param]
+    return shared_run(f"th2-{events}", lambda: P.run(*P.th2(every=3), events=events))
 
 
 def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop(th2):
@@ -168,7 +220,8 @@ def _ignore_lifespans(original):
 
 
 def test_th2_negative_control_an_organ_blind_to_lifespans_fails():
-    mutant = P.run(*P.th2_reversion(), events=150,
+    # The seat's short lifespans are read (and misread by the mutant) by event 100.
+    mutant = P.run(*P.th2_reversion(), events=100,
                    # Wave 16: the organ diagnoses through ``versions.organ_step``, which
                    # calls the module's own ``diagnose``.
                    patches=[(versions, "diagnose", _ignore_lifespans(versions.diagnose))])
@@ -179,9 +232,10 @@ def test_th2_negative_control_an_organ_blind_to_lifespans_fails():
 # --- TH-3: iatrogenic thrash from population governance -----------------------------------
 
 
-@pytest.fixture(scope="module")
-def th3(shared_run):
-    return shared_run("th3", lambda: P.run(*P.th3(), events=300))
+@pytest.fixture(scope="module", params=[SHORT, LONG])
+def th3(shared_run, request):
+    events = {"short": 150, "long": 300}[request.param]
+    return shared_run(f"th3-{events}", lambda: P.run(*P.th3(), events=events))
 
 
 def test_th3_charter_revisions_stand_min_ratio_slowest_loops_apart(th3):
@@ -200,6 +254,7 @@ def test_th3_negative_control_a_cadence_that_is_always_ready_fails():
 # --- TH-4: the null in a world ----------------------------------------------------------
 
 
+# TH-4 is a statistic: the world's flag rate against a synthetic null over 300 events.
 @pytest.fixture(scope="module")
 def th4(shared_run):
     return shared_run("th4", lambda: P.run(*P.th4(), events=300))
@@ -226,6 +281,7 @@ def _synthetic_null(physics, windows, seeds=12):
     return flagged, total
 
 
+@pytest.mark.soak  # a flag rate over a 300-event world against a synthetic null
 def test_th4_iid_behaviour_in_a_world_is_flagged_no_more_than_the_synthetic_null(th4):
     """Astra H-1: the bound is the one-sided Clopper–Pearson 95% upper bound of the
     synthetic rate, not a hand-tuned multiple. If the world is flagged more, the window
@@ -235,6 +291,7 @@ def test_th4_iid_behaviour_in_a_world_is_flagged_no_more_than_the_synthetic_null
     assert result.ok, result.evidence
 
 
+@pytest.mark.soak  # reads the 300-event th4 world
 def test_sweep_th4_reports_its_defining_criterion(th4, capsys, monkeypatch):
     """Codex on b7ae050: ``sweep --population th4`` reports TH-4, the population's own
     (population-only) criterion, beside the generic replay, with the synthetic null
@@ -256,6 +313,8 @@ def test_sweep_th4_reports_its_defining_criterion(th4, capsys, monkeypatch):
     assert any(line.split()[-1] == "BIND" for line in lines)
 
 
-def test_th4_negative_control_a_period_two_world_exceeds_the_null(th1):
-    synthetic = _synthetic_null(th1.physics, len(g.windows(th1.events)))
-    assert g.th4_null(th1.events, th1.manifest, synthetic=synthetic).status == g.FAIL
+@pytest.mark.soak  # TH-4's control: the 300-event period-two world's rate
+def test_th4_negative_control_a_period_two_world_exceeds_the_null(th1_long):
+    synthetic = _synthetic_null(th1_long.physics, len(g.windows(th1_long.events)))
+    assert g.th4_null(th1_long.events, th1_long.manifest,
+                      synthetic=synthetic).status == g.FAIL

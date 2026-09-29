@@ -306,12 +306,13 @@ it is fixed for the world's life is in [docs/manifest.md](docs/manifest.md).
 `uv run factorylab --help` lists the rest: validating a manifest, resuming, killing,
 publishing the wake, reading a dead world's diary, versioning it.
 
-Tests come in three tiers, assigned in `tests/conftest.py`:
+Tests come in four tiers, assigned in `tests/conftest.py`:
 
 ```bash
 uv run pytest                                             # check: no world runs, about 40 s
 uv run pytest -m gate -n 2 tests/gauntlet/test_learning_death.py  # gate: tests that run a world; name the files your change touches
 uv run pytest -m slow tests/audit/test_a1_composition.py  # slow: the tier that kills and resumes real processes
+uv run pytest -m soak -n 2                                # soak: the long runs (AGENTS.md says when it is required)
 ```
 
 A `check` test that takes more than 2 s of CPU, or 10 s of wall time, fails and asks

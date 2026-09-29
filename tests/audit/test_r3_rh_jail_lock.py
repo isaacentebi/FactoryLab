@@ -110,31 +110,23 @@ def test_a_living_jailed_child_never_holds_the_lock(world):
 
 
 @pytest.mark.skipif(not sandbox.jail_available(), reason="no jail on this host")
-def test_an_interrupted_jail_run_kills_the_confined_process_group():
+def test_an_interrupted_jail_run_kills_the_confined_process_group(monkeypatch):
     """A caller that never returns normally still leaves no confined process behind."""
     class Interrupted(BaseException):
         pass
 
     launched = {}
-    real = subprocess.Popen
 
-    class Interrupting(real):
-        def communicate(self, *args, **kwargs):
-            launched["pid"] = self.pid
-            raise Interrupted
+    def interrupting(proc, deadline):
+        # The wait for the confined child is where a caller is interrupted: the
+        # interpreter is already running under the jail.
+        launched["pid"] = proc.pid
+        raise Interrupted
 
-    monkey = type(sandbox.subprocess)("subprocess")
-    for name in ("PIPE", "TimeoutExpired", "SubprocessError"):
-        setattr(monkey, name, getattr(subprocess, name))
-    monkey.Popen = Interrupting
+    monkeypatch.setattr(sandbox, "_exited_by", interrupting)
     started = time.monotonic()
-    original = sandbox.subprocess
-    sandbox.subprocess = monkey
-    try:
-        with pytest.raises(Interrupted):
-            sandbox.run_python(SLEEPER, timeout_s=30, cpu_s=10)
-    finally:
-        sandbox.subprocess = original
+    with pytest.raises(Interrupted):
+        sandbox.run_python(SLEEPER, timeout_s=30, cpu_s=10)
     assert time.monotonic() - started < 2.0  # it did not wait out the confined sleeper
     with pytest.raises(ProcessLookupError):
         os.killpg(launched["pid"], 0)

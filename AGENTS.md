@@ -151,3 +151,33 @@ only the specific `gate` files for what you changed; do not run the whole gate
 and a `check` test whose call uses over 2 s of CPU (or over 10 s of wall time) fails with a message telling you to mark it
 `@pytest.mark.gate`. Run it before you return. Return the list of changed files, the gate output
 verbatim, and any decision you made that the task did not specify.
+
+The `soak` tier holds the long runs: the checkpoint plateau (5,000 events) and the
+original, long lengths of the gauntlet's worlds, whose short lengths run in the gate.
+
+```
+uv run pytest -m soak -n 2
+```
+
+Running the soak tier is REQUIRED, and its output is returned with the gate's:
+- for any change to any path but a `*.md` file (worlds, pyproject, the lock, tests,
+  scripts and deploy included);
+- before any world launch;
+- on request.
+
+It is enforced locally. `tests/soak_inventory.txt` names every soak test, sorted; a
+check test keeps it equal to what the soak marker selects. Only `uv run pytest -m soak`
+(optionally with `-n <workers>`) certifies a tree, recording its hash in
+`factorylab-soak-passes` in the git common directory, and only when `PYTEST_ADDOPTS` and
+`PYTEST_PLUGINS` are unset, no narrowing option is in effect from any source (`--lf`,
+`--ff`, stepwise, `--deselect`, `--ignore`, `-k`, `--collect-only`, `-o`, ...), nothing
+failed, the tests whose call passed are exactly the inventory, and the tree did not
+change while it ran; any other soak run says why it certified nothing. A whole gate run
+(`-m gate` or `-m "check or gate"`, no file arguments, no `-k`) on a tree with a
+required change since `origin/main` fails until that exact tree is certified, and fails
+if the tree changed while it ran. Run soak first, then the whole gate.
+
+This guards against honest mistakes. It is not a security boundary: the record is
+plain text a person could write, and redefining the soak set on purpose (the marker,
+the inventory, ini or conftest collection rules, in reviewed files) is code review's to
+catch, not this guard's.

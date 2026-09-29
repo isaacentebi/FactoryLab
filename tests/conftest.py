@@ -9,6 +9,7 @@ import os
 import pickle
 import resource
 import shutil
+import tempfile
 from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 
@@ -22,6 +23,70 @@ from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
+
+#: Directories a test module made at import, for the whole session: removed at its end
+#: (``_TemporaryDirectories``), in each process that imported the module.
+_SESSION_DIRECTORIES: list[Path] = []
+
+
+def session_directory(prefix: str) -> Path:
+    """A fresh directory that lives until this test session ends, then is removed.
+
+    For a module-level stand-in file (a fixture cannot run at import); anything a test
+    makes for itself belongs in ``tmp_path``.
+    """
+    path = Path(tempfile.mkdtemp(prefix=prefix))
+    _SESSION_DIRECTORIES.append(path)
+    return path
+
+
+class _TemporaryDirectories:
+    """Every directory ``tempfile.mkdtemp`` made in this process during the run (a
+    ``TemporaryDirectory`` makes its own through it) must be gone when the session ends:
+    a test run leaves nothing behind in the system temporary directory. Session
+    directories are removed first; any other survivor fails the run, named.
+    """
+
+    def __init__(self):
+        self.made: list[str] = []
+        self.original = None
+        self.left: list[str] = []
+
+    def pytest_configure(self, config):
+        self.original = original = tempfile.mkdtemp
+        made = self.made
+
+        def recorded(*args, **kwargs):
+            path = original(*args, **kwargs)
+            made.append(path)
+            return path
+
+        tempfile.mkdtemp = recorded
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_sessionfinish(self, session):
+        for path in _SESSION_DIRECTORIES:
+            shutil.rmtree(path, ignore_errors=True)
+        _SESSION_DIRECTORIES.clear()
+        if self.original is not None:
+            tempfile.mkdtemp = self.original
+        self.left = sorted({*self.left, *(path for path in self.made
+                                           if os.path.exists(path))})
+        if hasattr(session.config, "workeroutput"):  # an xdist worker tells its controller
+            session.config.workeroutput["factorylab_left"] = self.left
+        if self.left and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_testnodedown(self, node, error):
+        """The controller hears what each xdist worker left behind."""
+        self.left.extend(getattr(node, "workeroutput", {}).get("factorylab_left", ()))
+
+    def pytest_terminal_summary(self, terminalreporter):
+        for path in self.left:
+            terminalreporter.write_line(
+                f"FAILED temporary directory left behind: {path} (use tmp_path, a "
+                "TemporaryDirectory context, or tests.conftest.session_directory)", red=True)
 
 
 def _manifest_with_changes(manifest, changes):
@@ -168,12 +233,47 @@ def scripted_runtime_run(_scripted_run_cache):
     return run
 
 
+@pytest.fixture(scope="session")
+def shared_result(_scripted_run_cache):
+    """``shared_result(key, factory)``: ``factory()``'s picklable result, computed once
+    per key per pytest invocation and shared by every xdist worker (the first to ask
+    runs it and publishes it; the others wait on the same POSIX lock and read it).
+
+    For an uninterrupted reference world several tests of one module compare against,
+    so each worker does not rerun it. The result is read afresh by each worker; a test
+    that mutates what it got changes nothing another worker reads.
+    """
+    directory = _scripted_run_cache / "shared-results"
+    memo = {}
+
+    def get(key, factory):
+        if key in memo:
+            return memo[key]
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{key}.pickle"
+        with (directory / f"{key}.lock").open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not path.exists():
+                temporary = path.with_suffix(".tmp")
+                temporary.write_bytes(pickle.dumps(factory(), protocol=pickle.HIGHEST_PROTOCOL))
+                temporary.replace(path)
+        memo[key] = pickle.loads(path.read_bytes())
+        return memo[key]
+
+    return get
+
+
 # Test tiers (see README "Try it" and AGENTS.md):
 #   check  the developer inner loop, the default; no test here runs a world
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
+#   soak   the long runs (``-m soak``): the checkpoint plateau and the gauntlet's long
+#          worlds, whose short lengths run in gate. REQUIRED for a change to any path
+#          but a ``*.md``, before any world launch, and on request (AGENTS.md, Verify
+#          gate); a whole gate run enforces it (``_SoakRequirement``)
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
-_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run"})
+_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run",
+                                    "shared_result"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
 #: Functions outside ``tests/`` that run a world's loop when called: the loop's own entry
 #: and the operator rehearsal's (``scripts/edition4_rehearsal.run_rehearsal``).
@@ -191,19 +291,30 @@ CHECK_WALL_CEILING_S = 10.0
 # the reason it cannot be smaller.
 GATE_FILE_BUDGET_ENV = "FACTORYLAB_GATE_FILE_BUDGET_S"
 GATE_FILE_BUDGET_DEFAULT_S = 60.0
+#: Each tier's whole serial CPU (setup, call and teardown of every test in it, summed
+#: across workers). The per-file budget above bounds no total; this does, so a tier
+#: cannot creep: a run whose tier spends more fails, naming the files that cost most.
+#: At ``-n 2`` a tier's wall is about half its serial cost. Set over what each tier
+#: measured on a loaded host at test-speed-2 (gate 1,025 s, slow 223 s); the slow
+#: tier's is inside five minutes of wall, the gate's is not yet (600 s of CPU is where
+#: it should come down to).
+#: ``FACTORYLAB_TIER_BUDGET_S=off`` disables it (a profiled or instrumented run).
+TIER_BUDGET_ENV = "FACTORYLAB_TIER_BUDGET_S"
+TIER_BUDGETS_S = {"gate": 1150.0, "slow": 300.0}
 GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
-    # Serial CPU on the integrated tree (lanes E, M, P and #149, #154, #155 merged).
+    # Serial CPU measured at -n 2 on a loaded host (load average 8-10), test-speed-2.
     "tests/gauntlet/test_thrash.py": (
-        "Thrash criteria retain 300-event th1 release and th3 two-boundary witnesses, "
-        "360-event sustained cap updates, 150-event th2/reversion worlds and the shared "
-        "300-event IID null. Missing-price, missing-charge and always-ready negative "
-        "controls need only 100 events to report FAIL (never UNSUPPORTED); charge and "
-        "cadence controls omit unused steering snapshots. All assertions remain"),
+        "42-54 s: TH-1 at 100 events (detector, price, charge, frontier, physics) with its "
+        "missing-price and missing-charge controls at 100, TH-2 at 100 and its reversion "
+        "world at 150 (the router loop's short lifespan needs it), TH-3 at 150 (two "
+        "charter boundaries) with its always-ready control at 100. The original 300/360 "
+        "worlds, TH-1e/f, the frozen integral and TH-4's null run in the soak tier"),
     "tests/runtime/test_settled_release.py": (
-        "89 s: wave 17b. Release changes nothing a reader sees, over a released and a kept "
-        "150-event world (at 120 and 100 events the release share, the venue-confirmed "
-        "released orders and the invariant's candidate pool are absent), the tally checked "
-        "against the full scan after every event, and one crash probe resumed to the end"),
+        "87-90 s: wave 17b. Release changes nothing a reader sees, over a released and a "
+        "kept 150-event world (at 120 and 100 events the release share, the "
+        "venue-confirmed released orders and the invariant's candidate pool are absent), "
+        "the tally checked against the full scan after every event; the crash probe "
+        "resumes the released world's own diary, copied mid-pass after tick 140"),
     "tests/runtime/test_retained_state_crash.py": (
         "Crash/resume storage contract: thirteen crash-point rows retain event, unlink, "
         "artifact-write and every checkpoint/io protocol step over 20 ticks (12 misses "
@@ -211,33 +322,33 @@ GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
         "assertions; matrix and eviction rows each share their reference. Late-world "
         "divergence remains owned by test_checkpoint_coverage's 100-tick world"),
     "tests/runtime/test_evaluation_layer.py": (
-        "78 s: tier recursion on two seeds and a fourth tier (CUTOVER, lane E), the "
-        "multi-judge, adversarial, two-router and heavy-chaos worlds at their lane E "
-        "sizes; family-disjoint judging reads the shared 100-event scripted run"),
+        "75-88 s: tier recursion on two seeds and a fourth tier at 100 events (120 in the "
+        "soak tier), the multi-judge, adversarial, two-router and heavy-chaos worlds at "
+        "their lane E sizes; family-disjoint judging reads the shared 100-event run"),
     "tests/scripts/test_class2_audit.py": (
-        "74 s: the Class 2 release audit's CLI, run on real git histories (about 2,500 git "
+        "80 s: the Class 2 release audit's CLI, run on real git histories (about 2,500 git "
         "calls, the tool's own provenance and calibration reads) and the seat-text scan; "
         "gate as a whole (GATE_MODULE), on one worker"),
     "tests/runtime/test_bounded_memory.py": (
-        "68 s: the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at "
+        "65-76 s: the diary grows linearly (a 60/120-tick pair: at 30/60 the ratio sits at "
         "2.2 against the 2.3 bound) and pruning changes nothing a reader sees (a 120-tick "
-        "world with and without pruning: at 60 ticks only 45% of returns are slim, under "
-        "the test's own non-vacuity bound); every other test reads these shared worlds"),
+        "world with and without pruning, the second in memory: at 60 ticks only 45% of "
+        "returns are slim, under the test's own non-vacuity bound)"),
     "tests/gauntlet/test_stable_failure.py": (
-        "65 s: SF-1 (sf1c reads the integral frozen at the cap, which a two-thirds run "
-        "does not reach) with its two negative controls, and the transient world and its "
-        "control, strict xfails wave 16b turns green, all at 300 events; sf2 is halved"),
+        "57-64 s: SF-1 at 100 events (a-d, f, physics) with its two 52-event controls, the "
+        "transient world at 150 with its control, SF-2 at 100 and the 220-event "
+        "intermittent world, several running observations in the jail. The original "
+        "228/250 worlds and SF-1e run in the soak tier"),
     "tests/audit/test_class2_rendered.py": (
-        "56-61 s: every launchable world's launch path run for 60 ticks on the scripted "
+        "56-66 s: every launchable world's launch path run for 60 ticks on the scripted "
         "population, each once and shared by the file's tests, and every request it sends "
         "rendered and linted; since wave 16b the edition6 worlds reach the counter-verdict "
-        "request inside those 60 ticks, whose surfaces the audit must read (the budget "
-        "sits inside the run-to-run noise)"),
+        "request inside those 60 ticks, whose surfaces the audit must read"),
     "tests/gauntlet/test_overfitting.py": (
-        "105-124 s: three 400-event worlds at about 40 s each, the fewest in which a seated "
-        "adversary's holdout is proposed, trialled, balloted and activated at the steady "
-        "cadence: of2 (OF-2a/c/d), of4 (a trivial predicate) and OF-2c's negative control "
-        "(holdouts ignored); of1 and its control are 300 events and shared"),
+        "77-89 s: four 100-event worlds (of2, of4, OF-2c's two controls) and two of1 "
+        "worlds, the fewest in which a seated adversary's holdout is proposed, trialled, "
+        "balloted and activated; about half the CPU is the jail's interpreters, one per "
+        "registered observation at each price close"),
 }
 
 
@@ -407,7 +518,7 @@ def _runs_world(item, world_functions_of, world_fixtures) -> bool:
 
 
 @pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(config, items):
     """Partition collected tests into tiers, one test at a time.
 
     A test is ``gate`` when the test itself (or its class) is marked ``gate`` (or
@@ -445,6 +556,12 @@ def pytest_collection_modifyitems(items):
             module.own_markers[:] = [m for m in module.own_markers
                                      if m.name not in _GATE_MARKS]
     for item in items:
+        item.stash[_COLLECTED_NODEID] = item.nodeid
+        if item.get_closest_marker("soak"):
+            # A soak row (a long param of a gate test) is soak only: -m gate never
+            # selects it, whatever its test is marked.
+            item.own_markers[:] = [m for m in item.own_markers if m.name not in _GATE_MARKS]
+            continue
         if any(item.get_closest_marker(m) for m in ("network", "slow")):
             continue
         world_fixtures = _world_fixtures(item, world_functions_of)
@@ -463,6 +580,12 @@ def pytest_collection_modifyitems(items):
         else:
             item.add_marker(pytest.mark.check)
             item.add_marker(pytest.mark.fast)
+    # The whole repository's collection, before any -m deselects from it: its soak tests
+    # are what the inventory must name (``SOAK_INVENTORY``).
+    if (config.args_source is pytest.Config.ArgsSource.TESTPATHS
+            and not any(getattr(config.option, name, None) for name in _NARROWING_OPTIONS)):
+        config.stash[SOAK_COLLECTED] = sorted(item.nodeid for item in items
+                                              if item.get_closest_marker("soak"))
 
 
 def _seconds_from_env(name: str, default: float) -> float | None:
@@ -499,6 +622,15 @@ def _files_over_budget(cpu_by_file: dict[str, float], budget_s: float | None,
         return {}
     return {path: s for path, s in cpu_by_file.items()
             if s > budget_s and path not in exceptions}
+
+
+def _tiers_over_budget(cpu_by_tier: dict[str, float], budgets: dict[str, float],
+                       enabled: bool = True) -> dict[str, float]:
+    """The tiers whose summed serial CPU is over their budget (none when disabled)."""
+    if not enabled:
+        return {}
+    return {tier: s for tier, s in cpu_by_tier.items()
+            if tier in budgets and s > budgets[tier]}
 
 
 _PHASE_CPU = pytest.StashKey[dict]()
@@ -597,8 +729,9 @@ def pytest_runtest_makereport(item, call):
     report = yield
     report.factorylab_cpu_s = item.stash.get(_PHASE_CPU, {}).get(call.when, 0.0)
     item.stash.setdefault(_PHASE_WALL, {})[call.when] = report.duration
-    report.factorylab_tier = ("gate" if item.get_closest_marker("gate")
-                              else "check" if item.get_closest_marker("check") else None)
+    report.factorylab_tier = next((tier for tier in ("gate", "check", "slow", "soak")
+                                   if item.get_closest_marker(tier)), None)
+    report.factorylab_nodeid = item.stash.get(_COLLECTED_NODEID, item.nodeid)
     if report.when != "call" or not report.passed or report.factorylab_tier != "check":
         return report
     problem = _stepped_a_world_problem(item) or _check_limit_problem(
@@ -617,29 +750,42 @@ def pytest_runtest_makereport(item, call):
 class _GateBudget:
     """Sums each gate file's serial CPU from the reports and fails a run whose file is
     over the budget: a slow world is shrunk, shared or excepted by name, never let creep.
+    Sums each tier's serial CPU too and fails a run whose tier is over its budget.
     """
 
     def __init__(self):
         self.cpu: dict[str, float] = {}
         self.wall: dict[str, float] = {}
         self.over: dict[str, float] = {}
+        self.tiers: dict[str, float] = {}
+        self.tiers_over: dict[str, float] = {}
+        self.slow_files: dict[str, float] = {}
 
     def pytest_runtest_logreport(self, report):
-        if getattr(report, "factorylab_tier", None) != "gate":
-            return
+        tier = getattr(report, "factorylab_tier", None)
+        cpu = report.factorylab_cpu_s or 0.0
+        if tier is not None:
+            self.tiers[tier] = self.tiers.get(tier, 0.0) + cpu
         path = report.nodeid.split("::", 1)[0]
-        self.cpu[path] = self.cpu.get(path, 0.0) + (report.factorylab_cpu_s or 0.0)
+        if tier == "slow":
+            self.slow_files[path] = self.slow_files.get(path, 0.0) + cpu
+        if tier != "gate":
+            return
+        self.cpu[path] = self.cpu.get(path, 0.0) + cpu
         self.wall[path] = self.wall.get(path, 0.0) + report.duration
 
     def pytest_sessionfinish(self, session):
         self.over = _files_over_budget(
             self.cpu, _seconds_from_env(GATE_FILE_BUDGET_ENV, GATE_FILE_BUDGET_DEFAULT_S),
             GATE_FILE_BUDGET_EXCEPTIONS)
-        if self.over and session.exitstatus == pytest.ExitCode.OK:
+        self.tiers_over = _tiers_over_budget(
+            self.tiers, TIER_BUDGETS_S, _seconds_from_env(TIER_BUDGET_ENV, 1.0) is not None)
+        if (self.over or self.tiers_over) and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
     def pytest_terminal_summary(self, terminalreporter):
         if not self.cpu:
+            self._tier_summary(terminalreporter)
             return
         write = terminalreporter.write_line
         terminalreporter.section("gate files by serial CPU")
@@ -652,15 +798,249 @@ class _GateBudget:
             write(f"FAILED gate budget: {path} used {cpu:.1f}s of CPU, over the "
                   f"{GATE_FILE_BUDGET_ENV} budget; shrink or share its world, or list it "
                   "in GATE_FILE_BUDGET_EXCEPTIONS with the reason", red=True)
+        self._tier_summary(terminalreporter)
+
+    def _tier_summary(self, terminalreporter):
+        write = terminalreporter.write_line
+        for tier, cpu in sorted(self.tiers.items()):
+            if tier in TIER_BUDGETS_S:
+                write(f"{tier} tier: {cpu:.1f}s of CPU (budget {TIER_BUDGETS_S[tier]:.0f}s)")
+        for tier, cpu in sorted(self.tiers_over.items()):
+            files = self.cpu if tier == "gate" else self.slow_files
+            top = ", ".join(f"{path} {s:.0f}s" for path, s in
+                            sorted(files.items(), key=lambda kv: -kv[1])[:5])
+            write(f"FAILED {tier} tier budget: its tests used {cpu:.1f}s of CPU, over "
+                  f"TIER_BUDGETS_S[{tier!r}] = {TIER_BUDGETS_S[tier]:.0f}s; shrink or share "
+                  f"a world, never raise the budget to fit; the costliest files: {top}",
+                  red=True)
+
+
+#: The soak tier's tests, by node id, sorted (tests/soak_inventory.txt): a soak run
+#: certifies only when exactly these passed. A check test keeps it equal to what the
+#: soak marker selects (``test_the_soak_inventory_is_what_the_soak_marker_selects``).
+SOAK_INVENTORY = _TESTS_ROOT / "soak_inventory.txt"
+#: Whether this session's collection was the whole repository's, and the soak tests in
+#: it: set by the collection hook, read by the inventory's check test.
+SOAK_COLLECTED = pytest.StashKey[list]()
+#: Each test's node id as collected, before xdist's loadgroup appends ``@group`` to it:
+#: every report carries it (``factorylab_nodeid``), and the inventory is compared on it.
+_COLLECTED_NODEID = pytest.StashKey[str]()
+#: The file, in the repository's common git directory (shared by its worktrees), listing
+#: the tree hashes on which the whole soak tier passed.
+SOAK_PASSES = "factorylab-soak-passes"
+
+
+def soak_required(paths: list[str]) -> list[str]:
+    """The paths among ``paths`` whose change requires a soak pass: every one but a
+    Markdown file (AGENTS.md, Verify gate). One rule: when in doubt, it is required."""
+    return [path for path in paths if not path.endswith(".md")]
+
+
+def _git(root: Path, *args: str, env: dict | None = None) -> str | None:
+    import subprocess
+
+    try:
+        done = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                              text=True, encoding="utf-8", errors="surrogateescape",
+                              env=env, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return done.stdout
+
+
+def _tree_hash(root: Path) -> str | None:
+    """The git tree of the working tree as it stands, uncommitted and untracked (not
+    ignored) files included, written through a private index: the index is untouched."""
+    with tempfile.TemporaryDirectory(prefix="factorylab-soak-") as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        if _git(root, "read-tree", "HEAD", env=env) is None:
+            return None
+        if _git(root, "add", "-A", env=env) is None:
+            return None
+        tree = _git(root, "write-tree", env=env)
+    return tree.strip() if tree else None
+
+
+def _changed_since_main(root: Path) -> list[str] | None:
+    """Every path the working tree changed since ``origin/main``, or None without git: a
+    rename as both its endpoints (``--no-renames``), and each path whole, spaces and any
+    characters included (``-z``, never quoted)."""
+    changed = _git(root, "diff", "--no-renames", "--name-only", "-z", "origin/main")
+    untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z")
+    if changed is None or untracked is None:
+        return None
+    return sorted({path for listing in (changed, untracked)
+                   for path in listing.split("\0") if path})
+
+
+#: Options that narrow a run or run no test body, from whatever source (the command
+#: line, ini ``addopts``): a soak run with any of them active certifies nothing.
+_NARROWING_OPTIONS = ("lf", "failedfirst", "stepwise", "stepwise_skip", "deselect",
+                      "ignore", "ignore_glob", "keyword", "collectonly", "setuponly",
+                      "setupplan", "exitfirst", "override_ini")
+
+
+def uncertifiable(args, environ, option) -> str | None:
+    """Why a soak run with these invocation ``args``, environment and effective options
+    certifies nothing, or None: only exactly ``-m soak``, optionally with ``-n
+    <workers>`` and ``-p`` for xdist's internals, with no ``PYTEST_ADDOPTS`` or
+    ``PYTEST_PLUGINS`` and none of ``_NARROWING_OPTIONS`` in effect. What such a run
+    must then have passed is the inventory (``SOAK_INVENTORY``)."""
+    for name in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS"):
+        if environ.get(name, "").strip():
+            return f"{name} is set"
+    for name in _NARROWING_OPTIONS:
+        if getattr(option, name, None):
+            return f"--{name} (or its ini default) narrows the run"
+    args, marks = list(args), None
+    while args:
+        arg = args.pop(0)
+        if arg == "-m" and args:
+            marks = args.pop(0)
+        elif arg == "-n" and args and args[0].isdigit() or arg == "-p" and args and (
+                args[0].startswith("xdist")):
+            args.pop(0)
+        elif arg.startswith("-n") and arg[2:].isdigit():
+            continue
+        else:
+            return f"the run names {arg!r}: only -m soak, -n <workers> and -p xdist certify"
+    return None if marks == "soak" else "the run is not -m soak"
+
+
+class _SoakRequirement:
+    """The soak tier, enforced: a guard against honest mistakes, not a security boundary
+    (the record is plain text).
+
+    A soak run certifies its tree (appends its hash to ``SOAK_PASSES``) only when its
+    invocation and effective options are exactly the whole tier's (``uncertifiable``),
+    nothing failed, skipped or xfailed (a collection either), the soak tests it ran and
+    those whose call passed are each exactly ``SOAK_INVENTORY`` (compared on collected
+    node ids), and the tree is the same at its end as at its start; anything else runs as
+    usual and says why it certified nothing. A whole gate run (``-m gate`` or
+    ``-m "check or gate"``, no file arguments, no ``-k``) on a tree that changed a
+    soak-required path since ``origin/main`` (``soak_required``) fails unless that tree
+    is certified, and fails if the tree changed while it ran. Without git (or
+    ``origin/main``) nothing is judged, and the run says so.
+    """
+
+    def __init__(self, root: Path):
+        self.root, self.tree, self.problem, self.note = root, None, None, None
+        self.passed: set[str] = set()
+        self.seen: set[str] = set()
+        self.failed = self.skipped = False
+        self.collection_problem: str | None = None
+        self.tiers: set[str] = set()
+
+    @staticmethod
+    def _whole(config) -> bool:
+        return (config.args_source is pytest.Config.ArgsSource.TESTPATHS
+                and not config.option.keyword)
+
+    def _record(self) -> Path | None:
+        common = _git(self.root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        return Path(common.strip()) / SOAK_PASSES if common else None
+
+    def pytest_sessionstart(self, session):
+        marks = session.config.option.markexpr or ""
+        if self._whole(session.config) and ("gate" in marks or "soak" in marks):
+            self.tree = _tree_hash(self.root)
+
+    def pytest_runtest_logreport(self, report):
+        tier = getattr(report, "factorylab_tier", None)
+        if tier is not None:
+            self.tiers.add(tier)
+        nodeid = getattr(report, "factorylab_nodeid", report.nodeid)
+        if tier == "soak":
+            self.seen.add(nodeid)
+            self.skipped |= report.skipped or hasattr(report, "wasxfail")
+        if report.when == "call" and report.passed:
+            self.passed.add(nodeid)
+        if report.failed:
+            self.failed = True
+
+    def pytest_collectreport(self, report):
+        """A collection that skipped or failed (a module-level ``pytest.skip`` or
+        ``importorskip`` leaves no test report at all); xdist forwards a worker's."""
+        if not report.passed and self.collection_problem is None:
+            self.collection_problem = f"collecting {report.nodeid or 'a module'} {report.outcome}"
+
+    def _why_not_certified(self, session) -> str | None:
+        config = session.config
+        why = uncertifiable(config.invocation_params.args, os.environ, config.option)
+        if why is None and (session.exitstatus != pytest.ExitCode.OK or self.failed):
+            why = "the run did not pass"
+        if why is None and self.collection_problem:
+            why = self.collection_problem
+        if why is None and self.skipped:
+            why = "a soak test was skipped or xfailed"
+        if why is None:
+            inventory = set(SOAK_INVENTORY.read_text().splitlines())
+            for name, ran in (("collected", self.seen), ("passed", self.passed)):
+                missing, extra = inventory - ran, ran - inventory
+                if missing or extra:
+                    why = (f"the {name} soak tests are not the inventory ({len(missing)} "
+                           f"missing, {len(extra)} not in it; tests/soak_inventory.txt)")
+                    break
+        if why is None and _tree_hash(self.root) != self.tree:
+            why = "the tree changed while it ran"
+        return why
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_sessionfinish(self, session):
+        if self.tree is None or not self.tiers:
+            return
+        record = self._record()
+        if record is None:
+            return
+        if "soak" in self.tiers and "gate" not in self.tiers:
+            why = self._why_not_certified(session)
+            if why is None:
+                with record.open("a") as passes:
+                    passes.write(self.tree + "\n")
+                self.note = f"soak passed whole on tree {self.tree[:12]}: recorded"
+            else:
+                self.note = f"soak run not recorded: {why}"
+            return
+        if "gate" not in self.tiers:
+            return
+        changed = _changed_since_main(self.root)
+        if changed is None:
+            self.note = "soak requirement not judged: no git or no origin/main"
+            return
+        now = _tree_hash(self.root)
+        required = soak_required(changed)
+        passed = record.read_text().split() if record.exists() else []
+        if now != self.tree:
+            self.problem = (f"the tree changed while the gate ran ({self.tree[:12]} -> "
+                            f"{(now or '?')[:12]}): its result is no one tree's")
+        elif required and self.tree not in passed:
+            self.problem = (
+                f"soak required: this tree changes {', '.join(required[:6])}"
+                f"{' and more' if len(required) > 6 else ''} since origin/main, and the "
+                f"soak tier has not passed on it (tree {self.tree[:12]}); run "
+                "`uv run pytest -m soak -n 2` on this tree, then the gate again")
+        if self.problem and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    def pytest_terminal_summary(self, terminalreporter):
+        if self.note:
+            terminalreporter.write_line(self.note)
+        if self.problem:
+            terminalreporter.write_line(f"FAILED {self.problem}", red=True)
 
 
 def pytest_configure(config):
-    # Every process that runs tests watches its worlds.
+    # Every process that runs tests watches its worlds and its temporary directories.
     config.pluginmanager.register(_WorldGuard(), "factorylab-world-guard")
+    directories = _TemporaryDirectories()
+    # Registered while configuring: pytest calls its (historic) pytest_configure now.
+    config.pluginmanager.register(directories, "factorylab-temporary-directories")
     # Only the process that sees every report judges the budget: the controller under
     # xdist, or the one process without it.
     if not hasattr(config, "workerinput"):
         config.pluginmanager.register(_GateBudget(), "factorylab-gate-budget")
+        config.pluginmanager.register(_SoakRequirement(config.rootpath),
+                                      "factorylab-soak-requirement")
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):

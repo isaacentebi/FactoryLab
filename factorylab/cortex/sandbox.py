@@ -15,12 +15,15 @@ import errno
 import json
 import os
 import platform
+import select
+import selectors
 import shutil
 import signal
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -186,6 +189,93 @@ def _kill_group(proc) -> None:
         pass
 
 
+def _exchange(proc, data: bytes, timeout_s: float) -> bool:
+    """Feed ``data`` to the child's stdin and wait for it to exit, both within
+    ``timeout_s`` of wall time: True when it exited in time, False when time ran out.
+
+    Guarantees what ``proc.communicate(data, timeout=timeout_s)`` guarantees for a
+    child whose output goes to files (a broken pipe ends the feed; stdin is closed
+    after it), and learns of the exit when it happens. ``communicate`` with a timeout
+    waits by polling in sleeps that double up to 50 ms, so it learns of an exit up to
+    about as late again as the child ran: a jailed interpreter lives ~25 ms and was
+    reaped at ~40 ms, on every tool, observation and program call (Chapter II §IV.c,
+    the apparatus may not be slower than its environment).
+    """
+    deadline = time.monotonic() + timeout_s
+    if data:
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdin, selectors.EVENT_WRITE)
+            view, offset = memoryview(data), 0
+            while offset < len(view):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    return False
+                try:
+                    offset += os.write(proc.stdin.fileno(),
+                                       view[offset:offset + select.PIPE_BUF])
+                except BrokenPipeError:
+                    break
+    try:
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
+    return _exited_by(proc, deadline)
+
+
+def _exited_by(proc, deadline: float) -> bool:
+    """Whether ``proc`` exits (and is reaped) before ``deadline`` on the monotonic clock.
+
+    Blocks on the kernel's own exit notification (a pidfd on Linux, a kqueue process
+    filter on macOS) rather than polling; where neither is available it is
+    ``Popen.wait`` with the remaining time, as before.
+    """
+    remaining = max(0.0, deadline - time.monotonic())
+    pidfd_open = getattr(os, "pidfd_open", None)
+    if pidfd_open is not None:
+        try:
+            descriptor = pidfd_open(proc.pid)
+        except OSError:  # a kernel without pidfds: fall through to the portable wait
+            descriptor = None
+        if descriptor is not None:
+            # A selector, never select(): a parent with many descriptors open can be
+            # handed a pidfd above FD_SETSIZE, which select() refuses.
+            try:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(descriptor, selectors.EVENT_READ)
+                    exited = bool(selector.select(remaining))
+            finally:
+                os.close(descriptor)
+            return _reaped(proc, exited)
+    if hasattr(select, "kqueue"):
+        queue = select.kqueue()
+        try:
+            event = select.kevent(proc.pid, filter=select.KQ_FILTER_PROC,
+                                  flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                  fflags=select.KQ_NOTE_EXIT)
+            try:
+                exited = bool(queue.control([event], 1, remaining))
+            except ProcessLookupError:
+                exited = True  # it has already exited: there is nothing left to watch
+        finally:
+            queue.close()
+        return _reaped(proc, exited)
+    try:
+        proc.wait(timeout=remaining)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
+
+
+def _reaped(proc, exited: bool) -> bool:
+    """Reap ``proc`` once the kernel said it exited (the notice can precede the moment a
+    non-blocking wait sees it, so this wait blocks, briefly); otherwise only if it has.
+    """
+    if exited:
+        proc.wait()
+        return True
+    return proc.poll() is not None
+
+
 def run_python(
     code: str,
     *,
@@ -250,10 +340,9 @@ def run_python(
             pass_fds=(seccomp.fileno(),) if sys.platform == "linux" else (),
         ) as proc:
             try:
-                proc.communicate(stdin.encode("utf-8"), timeout=timeout_s)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                _kill_group(proc)
+                if not _exchange(proc, stdin.encode("utf-8"), timeout_s):
+                    timed_out = True
+                    _kill_group(proc)
             except BaseException:
                 # An interrupted caller must not leave a confined process behind,
                 # and must not block in Popen.__exit__ waiting for one.
