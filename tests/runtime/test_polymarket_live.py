@@ -914,3 +914,35 @@ def test_one_failed_read_or_cancel_never_stops_the_kill_reaching_every_order():
     report = polymarket.wind_down(rt)
     assert len(attempts) == 2 and len(server.fake._orders) == 1
     assert report["exposure_state"] == "unknown"
+
+
+def test_a_failed_trade_lets_its_order_s_account_close():
+    """Sol P2 on #177: a fully FAILED buy released its collateral reservation, but its
+    consequence order stayed remaining=10, unconfirmed, and its account could not close."""
+    rt, server = live_world(confirm=False)
+    buy(rt, server, collateral_decision(rt), price="0.45")
+    server.settle("FAILED")
+    for _ in range(3):
+        polymarket.tick(rt)
+    (order,) = rt.consequences.table.orders
+    assert order.remaining == 0 and order.executed == 0 and order.confirmed == 0
+
+
+def test_a_released_placement_cancelled_by_the_kill_is_not_left_unanswered():
+    """Sol P2 on #177: a released lost-answer placement the kill cancelled, with the
+    venue's word cancelled and nothing matched, was still listed unanswered: unknown."""
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    server.lose_answer = True
+    server.fail_lookups = 2 * UNCERTAIN_ORDER_POLLS + 1
+    buy(rt, server, handle)
+    for _ in range(UNCERTAIN_ORDER_POLLS + 1):
+        polymarket.tick(rt)
+    assert rt.polymarket.intents[f"{handle}:tool:0"]["unresolved"]
+    server.fail_lookups = 0
+    rt.polymarket._account_memo = None
+    report = polymarket.wind_down(rt)
+    assert report["cancelled"] == 1 and report["unanswered"] == []
+    assert report["exposure_state"] == "flat"

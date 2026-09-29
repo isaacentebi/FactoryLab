@@ -1687,7 +1687,12 @@ def confirm_terminal(rt: Any) -> None:
     surface = rt.polymarket
     for order in rt.consequences.table.orders:
         client_id = surface.order_ids.get(order.order_id)
-        if client_id is None or order.remaining or order.confirmed is not None:
+        if client_id is None or order.confirmed is not None:
+            continue
+        if order.remaining and surface.live:
+            _release_failed(rt, surface, order, client_id)
+            continue
+        if order.remaining:
             continue
         try:
             answer = (surface.venue.lookup(client_id, order_id=order.order_id)
@@ -1698,6 +1703,30 @@ def confirm_terminal(rt: Any) -> None:
                 and answer.get("filled_size") is not None):
             rt.consequences.confirm_terminal(order.order_id, answer["status"],
                                              str(answer["filled_size"]), rt.n)
+
+
+def _release_failed(rt: Any, surface: PolymarketSurface, order: Any, client_id: str) -> None:
+    """Carry terminal evidence into the consequence book, inventing no fill.
+
+    Sol P2 on #177: an order the venue reports terminal whose remaining liability is
+    only legs that FAILED (never settled) kept its account pinned. Once its placement is
+    proven over and everything it matched, less its failed legs, is booked, its
+    unfilled liability is released (``ReturnConsequences.cancel``) and it is confirmed
+    at what was booked, the quantity that really executed.
+    """
+    intent = surface.intents[client_id]
+    if not _terminal(surface, intent):
+        return
+    failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
+    booked = Decimal(surface.filled.get(order.order_id, "0"))
+    matched = _cancelled(surface).get(order.order_id)
+    if matched is None:
+        matched = Decimal(str(intent["result"].get("filled_size") or "0"))
+    if failed <= 0 or matched - failed > booked:
+        return
+    rt.consequences.cancel(order.order_id, rt.n)
+    rt.consequences.confirm_terminal(order.order_id, str(intent["result"].get(
+        "status")), str(booked), rt.n)
 
 
 def mark(rt: Any) -> None:
@@ -2078,7 +2107,9 @@ def _unsettled(surface: PolymarketSurface) -> tuple[list[dict], list[str]]:
         order_id, result = str(intent["order_hash"]), intent["result"]
         if result.get("status") == "rejected" or intent.get("terminal"):
             continue
-        if result.get("status") == "uncertain":
+        # An acknowledged cancel's read-back is the venue's word on the order, and it
+        # overrides a placement answer that never came (Sol P2 on #177).
+        if cancelled.get(order_id) is None and result.get("status") == "uncertain":
             unanswered.append(order_id)
             continue
         matched = (cancelled[order_id] if cancelled.get(order_id) is not None

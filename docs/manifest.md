@@ -2679,7 +2679,10 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   until it catches up.
 * **Failed legs.** A leg whose trade FAILED is never booked; its quantity is kept, and
   once the order is terminal (filled or cancelled) its matched size less its failed
-  legs is what stays reserved or counts as unsettled.
+  legs is what stays reserved or counts as unsettled; once that is booked, the order's
+  unfilled liability is released in the consequence book and it is confirmed at what
+  was booked, so its account can close, and no fill is invented. An acknowledged
+  cancel's read-back overrides a placement answer that never came.
 * **Opening first.** No live order is taken ("the polymarket pot's opening is not yet
   read") and no fill is booked (`polymarket.poll_deferred`) before the pot's opening,
   the baseline its reconciliation is measured from, has been read. A cancelled or
