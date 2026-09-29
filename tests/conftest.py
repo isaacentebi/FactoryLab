@@ -268,9 +268,9 @@ def shared_result(_scripted_run_cache):
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
 #   soak   the long runs (``-m soak``): the checkpoint plateau and the gauntlet's long
-#          worlds, whose short lengths run in gate. REQUIRED for any change under
-#          factorylab/kernel, to pricing, the immune system, the router or learners, or
-#          the gauntlet; before any world launch; on request (AGENTS.md, Verify gate)
+#          worlds, whose short lengths run in gate. REQUIRED for a change to any of
+#          ``SOAK_REQUIRED_PATHS``, before any world launch, and on request (AGENTS.md,
+#          Verify gate); a whole gate run enforces it (``_SoakRequirement``)
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
 _SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run",
                                     "shared_result"})
@@ -807,6 +807,123 @@ class _GateBudget:
                   red=True)
 
 
+#: The paths whose change requires a soak pass (AGENTS.md, Verify gate): a whole-gate run
+#: on a tree that changed one of them since ``origin/main`` fails unless the soak tier
+#: passed whole on this exact tree (``_SoakRequirement``).
+SOAK_REQUIRED_PATHS = (
+    "factorylab/kernel/", "factorylab/runtime/pricing.py", "factorylab/charter/controller.py",
+    "factorylab/runtime/immune.py", "factorylab/versioning/", "factorylab/runtime/routing.py",
+    "factorylab/learners/", "factorylab/runtime/settled.py", "factorylab/runtime/resume.py",
+    "factorylab/runtime/loop.py", "factorylab/runtime/governance.py", "tests/gauntlet/",
+    "scripts/gauntlet.py",
+)
+#: The file, in the repository's common git directory (shared by its worktrees), listing
+#: the tree hashes on which the whole soak tier passed.
+SOAK_PASSES = "factorylab-soak-passes"
+
+
+def _git(root: Path, *args: str, env: dict | None = None) -> str | None:
+    import subprocess
+
+    try:
+        done = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                              text=True, env=env, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return done.stdout
+
+
+def _tree_hash(root: Path) -> str | None:
+    """The git tree of the working tree as it stands, uncommitted and untracked (not
+    ignored) files included, written through a private index: the index is untouched."""
+    with tempfile.TemporaryDirectory(prefix="factorylab-soak-") as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        if _git(root, "read-tree", "HEAD", env=env) is None:
+            return None
+        if _git(root, "add", "-A", env=env) is None:
+            return None
+        tree = _git(root, "write-tree", env=env)
+    return tree.strip() if tree else None
+
+
+def _changed_since_main(root: Path) -> list[str] | None:
+    """Every path the working tree changed since ``origin/main``, or None without git."""
+    changed = _git(root, "diff", "--name-only", "origin/main")
+    untracked = _git(root, "ls-files", "--others", "--exclude-standard")
+    if changed is None or untracked is None:
+        return None
+    return sorted({*changed.split(), *untracked.split()})
+
+
+def soak_required(paths: list[str]) -> list[str]:
+    """The paths among ``paths`` whose change requires a soak pass."""
+    return [path for path in paths if path.startswith(SOAK_REQUIRED_PATHS)]
+
+
+class _SoakRequirement:
+    """The soak tier, enforced: a whole ``soak`` run that passes records its tree hash;
+    a whole ``gate`` run on a tree that changed a soak-required path since
+    ``origin/main`` fails unless that tree's hash is recorded. A run that names files or
+    ``-k`` is neither. Without git (or ``origin/main``) nothing is judged, and says so.
+    """
+
+    def __init__(self, root: Path):
+        self.root, self.tree, self.problem, self.note = root, None, None, None
+
+    @staticmethod
+    def _whole(config) -> bool:
+        return (config.args_source is pytest.Config.ArgsSource.TESTPATHS
+                and not config.option.keyword)
+
+    def _record(self) -> Path | None:
+        common = _git(self.root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        return Path(common.strip()) / SOAK_PASSES if common else None
+
+    def pytest_sessionstart(self, session):
+        marks = session.config.option.markexpr or ""
+        if self._whole(session.config) and ("gate" in marks or "soak" in marks):
+            self.tree = _tree_hash(self.root)
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_sessionfinish(self, session):
+        budget = session.config.pluginmanager.get_plugin("factorylab-gate-budget")
+        tiers = budget.tiers if budget is not None else {}
+        if self.tree is None or not tiers:
+            return
+        record = self._record()
+        if record is None:
+            return
+        if "soak" in tiers and "gate" not in tiers:
+            if (session.exitstatus == pytest.ExitCode.OK
+                    and _tree_hash(self.root) == self.tree):
+                with record.open("a") as passes:
+                    passes.write(self.tree + "\n")
+                self.note = f"soak passed on tree {self.tree[:12]}: recorded"
+            return
+        if "gate" not in tiers:
+            return
+        changed = _changed_since_main(self.root)
+        if changed is None:
+            self.note = "soak requirement not judged: no git or no origin/main"
+            return
+        required = soak_required(changed)
+        passed = record.read_text().split() if record.exists() else []
+        if required and self.tree not in passed:
+            self.problem = (
+                f"soak required: this tree changes {', '.join(required[:6])}"
+                f"{' and more' if len(required) > 6 else ''} since origin/main, and the "
+                f"soak tier has not passed on it (tree {self.tree[:12]}); run "
+                "`uv run pytest -m soak -n 2` on this tree, then the gate again")
+            if session.exitstatus == pytest.ExitCode.OK:
+                session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    def pytest_terminal_summary(self, terminalreporter):
+        if self.note:
+            terminalreporter.write_line(self.note)
+        if self.problem:
+            terminalreporter.write_line(f"FAILED {self.problem}", red=True)
+
+
 def pytest_configure(config):
     # Every process that runs tests watches its worlds and its temporary directories.
     config.pluginmanager.register(_WorldGuard(), "factorylab-world-guard")
@@ -817,6 +934,8 @@ def pytest_configure(config):
     # xdist, or the one process without it.
     if not hasattr(config, "workerinput"):
         config.pluginmanager.register(_GateBudget(), "factorylab-gate-budget")
+        config.pluginmanager.register(_SoakRequirement(config.rootpath),
+                                      "factorylab-soak-requirement")
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):

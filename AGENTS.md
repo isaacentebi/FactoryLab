@@ -164,6 +164,15 @@ Running the soak tier is REQUIRED, and its output is returned with the gate's:
 - for any change to pricing (`factorylab/runtime/pricing.py`,
   `factorylab/charter/controller.py`), the immune system (`factorylab/runtime/immune.py`,
   `factorylab/versioning/`), the router or learners (`factorylab/runtime/routing.py`,
-  `factorylab/learners/`), or the gauntlet (`tests/gauntlet/`, `scripts/gauntlet.py`);
+  `factorylab/learners/`), retention, recovery or the loop
+  (`factorylab/runtime/settled.py`, `factorylab/runtime/resume.py`,
+  `factorylab/runtime/loop.py`, `factorylab/runtime/governance.py`), or the gauntlet
+  (`tests/gauntlet/`, `scripts/gauntlet.py`);
 - before any world launch;
 - on request.
+
+It is enforced: a whole soak run that passes records its tree hash (in the git common
+directory, `factorylab-soak-passes`), and a whole gate run (`-m gate` or
+`-m "check or gate"`, no file arguments, no `-k`) on a tree that changed one of these
+paths since `origin/main` fails until the soak tier has passed on that exact tree
+(`SOAK_REQUIRED_PATHS`, `tests/conftest.py`). Run soak first, then the whole gate.

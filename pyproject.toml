@@ -33,8 +33,9 @@ testpaths = ["tests"]
 #   gate   runs a world or reads a shared scripted run; run before a merge
 #   slow   kills and resumes real subprocesses
 #   soak   the long runs: the checkpoint plateau and the gauntlet's long worlds;
-#          required for kernel, pricing, immune, router, learner or gauntlet
-#          changes, before any world launch, and on request (AGENTS.md)
+#          required for kernel, pricing, immune, router, learner, retention,
+#          recovery, loop or gauntlet changes, before any world launch, and on
+#          request (AGENTS.md; a whole gate run enforces it)
 # A bare `uv run pytest` runs `check` on 2 workers. The merge gate is
 # `uv run pytest -m "check or gate" -n 4`; more workers: `-n 8`, or `-n auto` for all
 # cores (hot on a laptop). The last `-m`/`-n` on the command line wins over these.
@@ -46,7 +47,7 @@ markers = [
     "world: old name of gate, still set on every gate test",
     "network: requires network access (deselected in CI)",
     "slow: kills and resumes real subprocesses; run before merging to main",
-    "soak: long runs (-m soak): REQUIRED for changes to factorylab/kernel, pricing, the immune system, the router or learners, or the gauntlet; before any world launch; on request",
+    "soak: long runs (-m soak): REQUIRED for changes to factorylab/kernel, pricing, the immune system, the router or learners, retention, recovery or the loop, or the gauntlet; before any world launch; on request (a whole gate run enforces it)",
 ]
 addopts = "-m check -n 2 --dist loadgroup"
 
