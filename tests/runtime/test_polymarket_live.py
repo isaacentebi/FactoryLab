@@ -634,3 +634,48 @@ def test_a_kill_cancels_only_this_world_s_orders():
     cancels = [i["order_id"] for i in items(rt, "polymarket.wind_down")]
     assert cancels == [own]
 
+def test_a_sell_matched_before_resolution_and_confirmed_after_is_booked_once():
+    """Codex P1 on #177: a resting sell matched just before resolution; resolution paid
+    the whole book, the sell then confirmed, and the consequence book raised out of tick
+    after the pot had booked both the payout and the sale."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 0)})
+    rt, server = live_world(fake=fake)
+    handle = collateral_decision(rt)
+    buy(rt, server, handle, price="0.45")  # 10 tokens at 0.41, confirmed
+    polymarket.tick(rt)
+    sell = buy(rt, server, collateral_decision(rt), side="sell", price="0.50",
+               slot="tool:1")
+    assert sell["status"] == "resting"
+    server.confirm = False
+    fake._markets["fake-1"]["mid"] = Decimal("0.60")  # the bid crosses the resting sell
+    server.advance(10**14)  # it matches: MINED, not yet final
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    polymarket.tick(rt)
+    polymarket.tick(rt)
+    server.settle("CONFIRMED")
+    for _ in range(3):
+        polymarket.tick(rt)  # nothing raises out of tick
+    sale = [f for f in items(rt, "polymarket.fill") if f["is_buy"] is False]
+    assert len(sale) == 1 and sale[0]["size"] == "10"
+    assert all(r["size"] == "0" for r in items(rt, "polymarket.resolution")) or not items(
+        rt, "polymarket.resolution")
+    paid = [i for i in items(rt, "venue.settled") if i["reference"].startswith("resolution:")]
+    assert paid == []  # nothing held at resolution once the sale is booked
+
+
+
+def test_a_fill_the_consequence_book_refuses_is_quarantined_never_raised(monkeypatch):
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    buy(rt, server, handle, size="5", price="0.75", market="fake-2")
+
+    def refuses(kind, payload, event):
+        raise ValueError("spot sell exceeds long inventory")
+
+    monkeypatch.setattr(rt.consequences, "observe", refuses)
+    polymarket.tick(rt)  # does not raise
+    (quarantined,) = items(rt, "polymarket.fill_quarantined")
+    assert "exceeds long inventory" in quarantined["reason"]
+    rows = [i for i in items(rt, "venue.settled") if i["reference"].startswith("fill:")]
+    assert rows and all(i["handle"] is None for i in rows)

@@ -1831,8 +1831,17 @@ def _settle_fill(rt: Any, event: dict) -> None:
                 "px": str(event["px"])}
         surface.open_fees.append(item)
         rt.ledger.append({"kind": "polymarket.fee_unresolved", **item, "ts": rt.clock.now_ns})
+    try:
+        rt.consequences.observe("Fill", payload, rt.n)
+    except ValueError as exc:
+        # Codex P1 on #177: a fill the consequence book cannot hold (a sale past the
+        # inventory it holds, say) never raises out of the tick. Its money is the
+        # pot's, owned by no decision, and it is quarantined with its evidence.
+        rt.ledger.append({"kind": "polymarket.fill_quarantined", "order_id": order_id,
+                          "size": str(event["size"]), "reason": str(exc)[:200],
+                          "ts": rt.clock.now_ns})
+        owner_handle = None
     _book_pot(rt, delta, f"fill:{order_id}", "exchange_pnl", owner_handle)
-    rt.consequences.observe("Fill", payload, rt.n)
     _tell(rt, owner_handle, {"kind": "polymarket_fill", "order_id": order_id,
                              "token_id": event["token_id"], "market_id": event["market_id"],
                              "side": "buy" if event["is_buy"] else "sell",

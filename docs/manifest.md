@@ -2539,6 +2539,10 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   the baseline its reconciliation is measured from, has been read. A cancelled or
   otherwise terminal buy reserves only what it matched and is not yet booked; a
   rejected placement is no order of the world's and is never looked up or read.
+* **Resolution waits on sells.** A resolved token's payout is sized only once no sell
+  of the world's on it may still have matched quantity unbooked; a fill the consequence
+  book cannot hold is quarantined (`polymarket.fill_quarantined`), its money the pot's
+  and no decision's, and never raises out of the tick.
 * **Only the world's own.** The live wallet may hold orders and tokens that another
   signer placed or the funder brought: a kill cancels only the orders this world
   recorded, its report counts only the world's orders and tokens, and

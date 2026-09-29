@@ -1000,11 +1000,20 @@ class LivePolymarket(PolymarketReader):
                             if t not in state["resolved"] and markets.get(t))
         events: list[dict[str, Any]] = []
         facts = state.setdefault("resolution_facts", {})
+
+        def selling(token: str) -> bool:
+            # A sell of this world's on the token that may still have matched quantity
+            # not yet booked (Codex P1 on #177): what the pot holds of the token is not
+            # known until it is terminal and wholly booked, so no payout is sized yet.
+            return any(o["token_id"] == token and o["side"] == "sell"
+                       and oid not in state["terminal"] for oid, o in orders.items())
+
         # Inventory a trade confirmed after its market resolved (Astra P0 on #177): it is
-        # paid its token's payout once, when it is booked, never lost.
+        # paid its token's payout once, when it is booked, never lost. A resolution is
+        # paid only once no sell of the token may still take from what it pays.
         for token, paid in sorted(state["resolved"].items()):
             size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-            if size > 0 and token in facts:
+            if size > 0 and token in facts and not selling(token):
                 state["book"][token] = ["0", str(avg)]
                 events.append({**facts[token], "kind": "resolution", "token_id": token,
                                "payout": str(paid), "size": str(size),
@@ -1024,7 +1033,7 @@ class LivePolymarket(PolymarketReader):
                                 "outcome_index": outcome["outcome_index"],
                                 "outcome_name": outcome["outcome"]}
                 size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-                if size > 0:
+                if size > 0 and not selling(token):
                     state["book"][token] = ["0", str(avg)]
                     events.append({
                         **facts[token], "kind": "resolution", "token_id": token,
