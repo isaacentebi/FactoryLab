@@ -525,8 +525,8 @@ def scan_contradictions(answer: Any, ours: Any) -> dict[str, str]:
     never raises: a non-object is skipped, a hash is matched whatever its case, and a
     leg is contradicting when this world's order is the trade's taker, or when any key
     of its maker leg whose name contains "fee" (any case: ``fee_rate_bps``,
-    ``feeRateBps``, ``fees``...) holds anything but ``0`` or ``"0"`` (architect's
-    decision on Sol's round-7 review of #177). It runs before the strict parse, and
+    ``feeRateBps``, ``fees``...) states a charge (``_charged``; architect's decisions on
+    Sol's round-7 review of #177). It runs before the strict parse, and
     what it finds is kept whatever that parse decides."""
     found: dict[str, str] = {}
     try:
@@ -554,10 +554,24 @@ def scan_contradictions(answer: Any, ours: Any) -> dict[str, str]:
 
 
 def _charged(leg: dict) -> bool:
-    """Whether any fee-named key of a leg holds anything but ``0`` or ``"0"``."""
+    """Whether any fee-named key of a leg states a charge.
+
+    A key is uncharged when its value is null or a finite decimal equal to zero (``0``,
+    ``0.0``, ``"0"``, ``"0.00"``, ``"-0"``): the documented ``fee_rate_bps`` is a string,
+    ``"0"`` on a maker's leg, and a post-only maker is never charged, so a null states
+    nothing a fee actually taken would not show as drift. It is charged when it is a
+    nonzero number or any other value (``"garbage"``, ``{}``, ``[]``, a bool): a
+    statement the pot cannot read as zero (architect's decision on #177)."""
     for key, value in leg.items():
-        if isinstance(key, str) and "fee" in key.lower():
-            zero = (type(value) is int and value == 0) or value == "0"
-            if not zero:
+        if isinstance(key, str) and "fee" in key.lower() and value is not None:
+            try:
+                if isinstance(value, bool) or not isinstance(value, (str, int, Decimal,
+                                                                     float)):
+                    return True
+                amount = Decimal(str(value).strip()) if isinstance(value, str) else Decimal(
+                    value)
+            except (InvalidOperation, ValueError):
+                return True
+            if not amount.is_finite() or amount != 0:
                 return True
     return False

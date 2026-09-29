@@ -177,8 +177,11 @@ def test_a_trades_page_keeps_only_this_world_s_legs_normalised():
     (_page({**TRADE, "maker_orders": [{**_without(LEG, "fee_rate_bps"),
                                        "feeRateBps": "500"}]}), 1),
     (_page({**TRADE, "maker_orders": [{**LEG, "fees": 0, "fee": "0"}]}), 0),
-    (_page({**TRADE, "maker_orders": [{**LEG, "fee": "0.0"}]}), 1),
-    (_page({**TRADE, "maker_orders": [{**LEG, "fee": None}]}), 1),
+    *[(_page({**TRADE, "maker_orders": [{**LEG, "fee_rate_bps": zero}]}), 0)
+      for zero in (None, 0, 0.0, Decimal("0.0"), "0", "0.0", "0.00", "-0", " 0 ")],
+    *[(_page({**TRADE, "maker_orders": [{**LEG, "fee_rate_bps": charged}]}), 1)
+      for charged in ("500", 1, 0.5, "1e-9", "-1", "garbage", "", {}, [], True, False,
+                      "NaN", "Infinity")],
     (_page({**TRADE, "maker_orders": [{**LEG, "matched_amount": "garbage",
                                        "FEE": "1"}]}), 1),
     (_page({**TRADE, "taker_order_id": OURS.upper().replace("0X", "0x"),
@@ -190,6 +193,28 @@ def test_a_trades_page_keeps_only_this_world_s_legs_normalised():
 ])
 def test_the_scan_finds_every_contradiction_and_never_raises(page, found):
     assert len(wire.scan_contradictions(page, [OURS])) == found
+
+
+def test_the_documented_trade_example_scans_uncharged():
+    """clob-openapi.yaml (read 2026-09-29), ``GET /data/trades`` example: every field a
+    string, ``fee_rate_bps: '30'`` on the trade (its taker's) and a maker leg's
+    ``fee_rate_bps`` a string. This world's maker leg at the documented "0" is
+    uncharged; the taker's rate is never read as this world's."""
+    documented = {
+        "limit": 100, "next_cursor": "MTAw", "count": 1, "data": [{
+            "id": "trade-123", "taker_order_id": "0xabcdef1234567890abcdef1234567890abcdef12",
+            "market": "0x" + "00" * 31 + "01", "asset_id": TOKEN, "side": "BUY",
+            "size": "100000000", "fee_rate_bps": "30", "price": "0.5",
+            "status": "TRADE_STATUS_CONFIRMED", "match_time": "1700000000",
+            "last_update": "1700000000", "outcome": "YES", "bucket_index": 0,
+            "owner": "f4f247b7-4ac7-ff29-a152-04fda0a8755a",
+            "maker_address": "0x1234567890123456789012345678901234567890",
+            "transaction_hash": "0x" + "1234567890abcdef" * 4, "trader_side": "TAKER",
+            "maker_orders": [{"order_id": OURS, "owner": "key-1",
+                              "maker_address": "0x1234567890123456789012345678901234567890",
+                              "matched_amount": "5", "price": "0.3", "fee_rate_bps": "0",
+                              "asset_id": TOKEN, "outcome": "YES", "side": "BUY"}]}]}
+    assert wire.scan_contradictions(documented, [OURS]) == {}
 
 
 # --- the pot: balance, positions, cancel ----------------------------------------------------

@@ -2656,8 +2656,11 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   it as a taker or states a fee on it halts buying: the rows are scanned before any is
   parsed, and the halt is kept apart from the poll's cursor, so a malformed row read
   beside it cannot erase it; the scan matches this world's hashes in any case and
-  reads any key whose name contains "fee" holding anything but `0` or `"0"` as a
-  charge. Rows are scanned as the fill read returns them; a fee disclosed later on a
+  reads any key whose name contains "fee" as a charge unless it is null or a
+  decimal equal to zero (`"0"`, `0.0`, `"0.00"`; the documented `fee_rate_bps` is a
+  string); an unreadable value is a charge. A read the door finds malformed stalls,
+  conservatively, and is ledgered `polymarket.read_malformed` with its reason, once a
+  reason per `MALFORMED_LEDGER_TICKS` (60) ticks. Rows are scanned as the fill read returns them; a fee disclosed later on a
   trade no longer read is caught by what it does to the pot: a fee actually charged
   lowers the balance, the reconciliation drifts and buying stops. Money the books do
   not explain halts buying whichever way it moved. A deposit that exactly masks a hidden fee is out of scope.

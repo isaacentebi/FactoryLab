@@ -1426,3 +1426,21 @@ def test_money_the_books_do_not_explain_halts_buying_whichever_way_it_moved():
     assert rt.polymarket.drifting
     refused = buy(rt, server, collateral_decision(rt))
     assert refused["error"] == polymarket.DRIFT_REFUSAL
+
+
+def test_a_stalled_read_is_visible_once_per_reason_per_window():
+    """Architect's decision on #177: a malformed row stalls the trades read, and the
+    stall is ledgered with its reason, at most once a reason per MALFORMED_LEDGER_TICKS."""
+    rt, server = live_world()
+    order_id = buy(rt, server, collateral_decision(rt))["order_id"]
+    row = _partial(rt, server, order_id)
+    row["maker_orders"][0]["price"] = "1.40"
+    for _ in range(3):
+        rt.ticks_consumed += 1
+        polymarket.tick(rt)
+    rows = items(rt, "polymarket.read_malformed")
+    assert len(rows) == 1 and "maker price" in rows[0]["reason"]
+    rt.ticks_consumed += polymarket.MALFORMED_LEDGER_TICKS
+    polymarket.tick(rt)
+    assert len(items(rt, "polymarket.read_malformed")) == 2
+    assert order_id not in rt.polymarket.filled

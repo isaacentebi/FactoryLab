@@ -796,7 +796,7 @@ class LivePolymarket(PolymarketReader):
     def poll(self, *, now_ns: int, cursor: dict[str, Any],
              orders: dict[str, dict[str, str]]) -> dict[str, Any]:
         """The pot's fills and resolutions since ``cursor``: ``{events, cursor,
-        contradictions, complete}``.
+        contradictions, malformed, complete}`` (``malformed``: why a read was unread).
 
         Guarantees each fill of one of ``orders`` (this world's orders, as their intents
         name them) is reported exactly once, when its trade is CONFIRMED, in the shape
@@ -826,6 +826,7 @@ class LivePolymarket(PolymarketReader):
         # parsed, kept outside the transactional cursor (architect's decision on Sol's
         # round-6 review of #177): a read that fails later cannot erase them.
         contradictions: dict[str, str] = {}
+        malformed: list[str] = []
         for step in (lambda trial: self._fills(trial, orders, contradictions),
                      lambda trial: self._resolutions(trial, orders, now_ns)):
             # Each step works on a copy and commits only whole: a read that failed half
@@ -834,15 +835,17 @@ class LivePolymarket(PolymarketReader):
             trial = json.loads(json.dumps(state))
             try:
                 found = step(trial)
-            except Exception:  # noqa: BLE001 - an unread step moves no cursor; what the
-                # contradiction scan found is kept whatever failed after it
+            except Exception as exc:  # noqa: BLE001 - an unread step moves no cursor; what
+                # the contradiction scan found is kept whatever failed after it
                 complete = False
+                if isinstance(exc, wire.Malformed):
+                    malformed.append(str(exc))
                 continue
             state = trial
             events.extend(found)
         # A read that stopped at the page bound resumes where it stopped (``page``).
         return {"events": events, "cursor": state, "contradictions": contradictions,
-                "complete": complete and "page" not in state}
+                "malformed": malformed, "complete": complete and "page" not in state}
 
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                contradictions: dict[str, str]) -> list[dict]:

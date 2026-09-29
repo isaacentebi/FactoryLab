@@ -231,6 +231,8 @@ class PolymarketSurface:
         # A trade that contradicted the maker-only venue (a taker leg, a fee):
         # buying stops for the world's life.
         self.contradicted = False
+        # reason -> the tick a malformed read was last ledgered (transient).
+        self.malformed_ledgered: dict[str, int] = {}
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
         self._account_memo: tuple | None = None
         # The market each write was last weighed against, by token (transient): the one
@@ -1531,6 +1533,7 @@ def tick(rt: Any) -> None:
                               "reason": type(exc).__name__, "ts": rt.clock.now_ns})
         else:
             _halt_on_contradiction(rt, surface, answer.get("contradictions") or {})
+            _ledger_malformed(rt, surface, answer.get("malformed") or [])
             surface.cursor = answer["cursor"]
             settle(rt, answer["events"])
             if answer.get("complete"):
@@ -1553,6 +1556,25 @@ def _signed(surface: PolymarketSurface, order_id: str) -> tuple[Decimal, Decimal
                 and str(intent.get("order_hash") or "").lower() == wanted):
             return Decimal(str(intent["args"]["size"])), Decimal(str(intent["args"]["price"]))
     return None
+
+
+#: Ticks between two ``polymarket.read_malformed`` rows of one reason: a stalled read is
+#: visible, never a flood.
+MALFORMED_LEDGER_TICKS = 60
+
+
+def _ledger_malformed(rt: Any, surface: PolymarketSurface, reasons: list[str]) -> None:
+    """Make a read the one door found malformed visible: a ``polymarket.read_malformed``
+    row with its reason, at most once per distinct reason per ``MALFORMED_LEDGER_TICKS``
+    (architect's decision on #177: a malformed row stalls the read, conservatively, and
+    the stall is seen). The memo is transient: a restart may ledger a reason once more."""
+    seen = surface.malformed_ledgered
+    for reason in sorted(set(reasons)):
+        last = seen.get(reason)
+        if last is None or rt.ticks_consumed - last >= MALFORMED_LEDGER_TICKS:
+            seen[reason] = rt.ticks_consumed
+            rt.ledger.append({"kind": "polymarket.read_malformed", "reason": reason[:200],
+                              "ts": rt.clock.now_ns})
 
 
 def _halt_on_contradiction(rt: Any, surface: PolymarketSurface,
