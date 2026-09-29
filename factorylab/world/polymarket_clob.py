@@ -32,9 +32,10 @@ Protocol facts, each read 2026-09-29 (Polymarket moved to CLOB V2 on 2026-04-28)
   ``0xadA2005600Dec949baf300f4C6120000bDB6eAab``, CollateralOnramp
   ``0x93070a847efEf7F70739046A929D47a521F5B8ee``.
   https://docs.polymarket.com/resources/contracts, https://docs.polymarket.com/concepts/pusd
-* **Amounts.** Collateral and outcome tokens both carry 6 decimals. A BUY's maker
-  amount is ``price x size`` USD and its taker amount ``size`` tokens; a SELL the
-  reverse. Rounding per tick: ``ROUNDING``. https://docs.polymarket.com/trading/place-orders
+* **Amounts.** Collateral and outcome tokens both carry six decimals. A BUY's maker
+  amount is ``price x size`` USD and its taker amount ``size`` tokens (a SELL the
+  reverse; this venue signs BUYs only). Rounding per tick: ``ROUNDING``.
+  https://docs.polymarket.com/trading/place-orders
 * **Auth.** L1: EIP-712 ``ClobAuth(address address,string timestamp,uint256 nonce,string
   message)`` under ``{name: "ClobAuthDomain", version: "1", chainId: 137}``; ``GET
   /auth/derive-api-key`` or ``POST /auth/api-key`` answer ``{apiKey, secret,
@@ -207,8 +208,9 @@ def order_hash(order: dict[str, Any], neg_risk: bool) -> str:
     return "0x" + _keccak(b"\x19\x01" + domain_separator(neg_risk) + _struct_hash(order)).hex()
 
 
-def order_amounts(is_buy: bool, size: Decimal, price: Decimal, tick: Decimal) -> tuple[int, int]:
-    """(makerAmount, takerAmount) in six-decimal units for a limit order, or raise.
+def order_amounts(size: Decimal, price: Decimal, tick: Decimal) -> tuple[int, int]:
+    """(makerAmount, takerAmount) in six-decimal units for a limit BUY, or raise: the
+    maker gives ``price x size`` USD for ``size`` tokens (the venue takes BUY orders only).
 
     Guarantees the order the exchange would read is exactly the one asked for: a price
     off the market's tick, a size past two decimals, or an amount past the tick's
@@ -228,14 +230,12 @@ def order_amounts(is_buy: bool, size: Decimal, price: Decimal, tick: Decimal) ->
     shares, cash = int(size * UNIT), int(usd * UNIT)
     if Decimal(shares) != size * UNIT or Decimal(cash) != usd * UNIT:
         raise PolymarketRefused("amounts are not exact six-decimal units")
-    return (cash, shares) if is_buy else (shares, cash)
+    return cash, shares
 
 
-def order_price_size(side: int, maker_amount: int, taker_amount: int) -> tuple[Decimal, Decimal]:
-    """(price, size) an order's amounts state: the inverse of ``order_amounts``."""
-    if side == 0:
-        return Decimal(maker_amount) / Decimal(taker_amount), Decimal(taker_amount) / UNIT
-    return Decimal(taker_amount) / Decimal(maker_amount), Decimal(maker_amount) / UNIT
+def order_price_size(maker_amount: int, taker_amount: int) -> tuple[Decimal, Decimal]:
+    """(price, size) a BUY's amounts state: the inverse of ``order_amounts``."""
+    return Decimal(maker_amount) / Decimal(taker_amount), Decimal(taker_amount) / UNIT
 
 
 def salt_of(identity: str) -> int:
@@ -638,13 +638,13 @@ class LivePolymarket(PolymarketReader):
         if not is_buy:
             raise PolymarketRefused("the polymarket venue takes BUY orders only")
         tick = _dec(market["tick_size"])
-        maker_amount, taker_amount = order_amounts(is_buy, size, price, tick)
+        maker_amount, taker_amount = order_amounts(size, price, tick)
         namespace, nonce = self.identity()
         signer = self.funder if self.signature_type in (0, 3) else self.signer().address
         order = {"salt": salt_of(f"{namespace}:{nonce}:{client_id}"), "maker": self.funder,
                  "signer": signer, "tokenId": str(int(token_id)),
                  "makerAmount": str(maker_amount), "takerAmount": str(taker_amount),
-                 "side": 0 if is_buy else 1, "signatureType": self.signature_type,
+                 "side": 0, "signatureType": self.signature_type,
                  "timestamp": str(int(self.wall()) // 1_000_000), "metadata": ZERO32,
                  "builder": ZERO32}
         neg_risk = bool(market.get("neg_risk"))
@@ -669,13 +669,18 @@ class LivePolymarket(PolymarketReader):
         """
         intent = self._intended(client_id, "polymarket.place_limit")
         identity, args = intent.get("order_identity"), intent.get("args", {})
+        # Sol P1 on #177: the call, the intent and the struct to be signed are all a
+        # BUY, or nothing is signed: the venue takes BUY orders only.
+        if is_buy is not True or args.get("side") != "buy":
+            raise PolymarketRefused("the polymarket venue takes BUY orders only")
         if (not isinstance(identity, dict) or str(args.get("token_id")) != str(token_id)
-                or (args.get("side") == "buy") != is_buy
                 or _dec(args.get("size")) != size or _dec(args.get("price")) != price):
             raise PolymarketRefused("the intent does not name this order")
         order, neg_risk = dict(identity["order"]), bool(identity["neg_risk"])
+        if order.get("side") != 0:
+            raise PolymarketRefused("the polymarket venue takes BUY orders only")
         if (order_hash(order, neg_risk) != intent.get("order_hash")
-                or order_price_size(order["side"], int(order["makerAmount"]),
+                or order_price_size(int(order["makerAmount"]),
                                     int(order["takerAmount"])) != (price, size)
                 or order["tokenId"] != str(int(token_id))):
             raise PolymarketRefused("the intent's order does not rebuild to its hash")
@@ -689,7 +694,7 @@ class LivePolymarket(PolymarketReader):
                           "signer": order["signer"], "tokenId": order["tokenId"],
                           "makerAmount": order["makerAmount"],
                           "takerAmount": order["takerAmount"],
-                          "side": "BUY" if order["side"] == 0 else "SELL",
+                          "side": "BUY",
                           "expiration": "0", "signatureType": order["signatureType"],
                           "timestamp": order["timestamp"], "metadata": order["metadata"],
                           "builder": order["builder"], "signature": signature},

@@ -233,8 +233,9 @@ class FakeClob:
         if digest in self.orders:
             return {"success": False, "errorMsg": f"order {digest} is invalid. Duplicated.",
                     "orderID": ""}
-        price, size = clob.order_price_size(signed["side"], int(order["makerAmount"]),
-                                            int(order["takerAmount"]))
+        if signed["side"] != 0:
+            raise clob.ClobHttpError(400, "the fake takes BUY orders only")
+        price, size = clob.order_price_size(int(order["makerAmount"]), int(order["takerAmount"]))
         before = len(self.fake._events)
         result = self.fake.place(client_id=digest, token_id=order["tokenId"],
                                  is_buy=signed["side"] == 0, size=size, price=price)

@@ -41,16 +41,15 @@ def test_the_order_hash_is_the_exchanges_own_hash_order():
 def test_amounts_are_the_documented_ones_and_an_order_off_its_tick_is_refused():
     d = Decimal
     # place-orders: BUY 10 shares at 0.52 -> makerAmount 5,200,000, takerAmount 10,000,000.
-    assert clob.order_amounts(True, d(10), d("0.52"), d("0.01")) == (5_200_000, 10_000_000)
-    assert clob.order_amounts(False, d(10), d("0.52"), d("0.01")) == (10_000_000, 5_200_000)
-    assert clob.order_price_size(0, 5_200_000, 10_000_000) == (d("0.52"), d(10))
-    assert clob.order_amounts(True, d("12.5"), d("0.1234"), d("0.0001")) == (1_542_500,
+    assert clob.order_amounts(d(10), d("0.52"), d("0.01")) == (5_200_000, 10_000_000)
+    assert clob.order_price_size(5_200_000, 10_000_000) == (d("0.52"), d(10))
+    assert clob.order_amounts(d("12.5"), d("0.1234"), d("0.0001")) == (1_542_500,
                                                                              12_500_000)
     for size, price, tick in ((d(10), d("0.525"), d("0.01")), (d(10), d("0.99"), d("0.1")),
                               (d("10.001"), d("0.5"), d("0.01")), (d(0), d("0.5"), d("0.01")),
                               (d(10), d("0.5"), d("0.02")), (d(10), d(1), d("0.01"))):
         with pytest.raises(PolymarketRefused):
-            clob.order_amounts(True, size, price, tick)
+            clob.order_amounts(size, price, tick)
 
 
 def test_a_salt_is_fixed_by_its_identity_and_safe_as_a_json_number():
@@ -523,3 +522,22 @@ def test_what_the_pot_holds_does_not_depend_on_the_order_buys_are_booked_in():
     assert all(book == books[0] for book in books)
     assert Decimal(books[0][0]) == 30
     assert Decimal(books[0][1]) == (Decimal("0.41") + Decimal("0.61") + Decimal("0.55")) / 3
+
+
+def test_the_signing_boundary_never_signs_a_sell():
+    """Sol P1 on #177: a durable SELL identity with a consistent hash was signed and sent,
+    whether the call or the intent's arguments said buy. Before anything is signed the
+    call, the intent and the signed struct must all be a buy."""
+    venue, server = live_venue()
+    token, intent = _intent(venue, server, "c-1", price="0.30")
+    order = {**intent["order_identity"]["order"], "side": 1,
+             "makerAmount": intent["order_identity"]["order"]["takerAmount"],
+             "takerAmount": intent["order_identity"]["order"]["makerAmount"]}
+    selling = {**intent, "order_identity": {**intent["order_identity"], "order": order},
+               "order_hash": clob.order_hash(order, False)}
+    for is_buy, side in ((True, "buy"), (False, "sell")):
+        venue.intent_of = {"c-1": {**selling, "args": {**selling["args"], "side": side}}}.get
+        with pytest.raises(PolymarketRefused):
+            venue.place(client_id="c-1", token_id=token, is_buy=is_buy, size=Decimal(10),
+                        price=Decimal("0.30"))
+    assert ("POST", "/order") not in server.calls
