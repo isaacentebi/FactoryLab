@@ -793,3 +793,20 @@ def test_a_cancel_whose_answer_and_lookups_failed_is_settled_by_later_reads():
     order = next(o for o in rt.consequences.table.orders if o.order_id == order_id)
     assert order.remaining == 0  # the unfilled liability is released too
 
+
+def test_resolution_reads_rotate_over_what_the_world_holds_or_has_resting_now():
+    """Codex P2 on #177: tokens whose orders were all filled or cancelled stayed in the
+    resolution rotation, so a held token's market was read ever more rarely."""
+    rt, server = live_world()
+    for market in ("fake-2", "fake-3"):
+        handle = collateral_decision(rt)
+        order_id = buy(rt, server, handle, market=market, price="0.10")["order_id"]
+        rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
+                                              "args": {"order_id": order_id}}, slot="tool:1")
+    buy(rt, server, collateral_decision(rt), price="0.45")  # fake-1: held
+    polymarket.tick(rt)
+    before = len(server.calls)
+    for _ in range(3):
+        polymarket.tick(rt)
+    reads = [path for _method, path in server.calls[before:] if path.startswith("/markets/")]
+    assert reads == ["/markets/fake-1"] * 3

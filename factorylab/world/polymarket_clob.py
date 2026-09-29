@@ -1005,8 +1005,11 @@ class LivePolymarket(PolymarketReader):
     def _resolutions(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                      now_ns: int) -> list[dict]:
         markets = {o["token_id"]: o.get("market_id") for o in orders.values()}
+        # What the pot holds or may still come to hold now: a token with an order that
+        # rests, is unanswered or has matched more than is booked, never one whose
+        # orders are all over (Codex P2 on #177: the rotation grew with history).
         open_tokens = {o["token_id"] for oid, o in orders.items()
-                       if oid not in state["terminal"]}
+                       if o.get("open", True) and oid not in state["terminal"]}
         held = {token for token, (size, _avg) in state["book"].items() if _dec(size) > 0}
         candidates = sorted(t for t in held | open_tokens
                             if t not in state["resolved"] and markets.get(t))

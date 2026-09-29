@@ -2545,6 +2545,10 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   the baseline its reconciliation is measured from, has been read. A cancelled or
   otherwise terminal buy reserves only what it matched and is not yet booked; a
   rejected placement is no order of the world's and is never looked up or read.
+* **Resolution reads what is open now.** A held token's market is read one a poll, in
+  turn over the tokens the pot holds or may still come to hold: those with an order that
+  rests, is unanswered, or matched more than is booked; a token whose orders are all
+  filled and booked or cancelled leaves the rotation.
 * **Resolution waits on sells.** A resolved token's payout is sized only once no sell
   of the world's on it may still have matched quantity unbooked; a fill the consequence
   book cannot hold is quarantined (`polymarket.fill_quarantined`), its money the pot's

@@ -1252,6 +1252,19 @@ def open_fee_reserve(surface: PolymarketSurface) -> Decimal:
     return sum((Decimal(str(i.get("reserve", "0"))) for i in surface.open_fees), Decimal(0))
 
 
+def _cancelled(surface: PolymarketSurface) -> dict[str, Decimal | None]:
+    """Each order an acknowledged cancel proved terminal: order id -> the quantity the
+    cancel's read-back says it matched (None where it did not say)."""
+    cancelled: dict[str, Decimal | None] = {}
+    for intent in surface.intents.values():
+        if (intent["operation"] == "polymarket.cancel"
+                and intent["result"].get("status") == "cancelled"):
+            matched = intent["result"].get("filled_size")
+            cancelled[str(intent["args"]["order_id"])] = (
+                None if matched is None else Decimal(str(matched)))
+    return cancelled
+
+
 def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
     """(USDC the world's buys may still take, the world's booked inventory at cost).
 
@@ -1266,13 +1279,7 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
     requires every matched quantity booked (Codex P1 on #177: a cancelled buy's
     notional stayed reserved forever).
     """
-    cancelled: dict[str, Decimal | None] = {}
-    for intent in surface.intents.values():
-        if (intent["operation"] == "polymarket.cancel"
-                and intent["result"].get("status") == "cancelled"):
-            matched = intent["result"].get("filled_size")
-            cancelled[str(intent["args"]["order_id"])] = (
-                None if matched is None else Decimal(str(matched)))
+    cancelled = _cancelled(surface)
     finished = set(surface.cursor.get("terminal", ()))
     reserved = Decimal(0)
     for intent in surface.intents.values():
@@ -1665,6 +1672,7 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
     order whose fills are all booked and whose token has resolved reads nothing more."""
     orders = {}
     resolved = surface.cursor.get("resolved", {})
+    cancelled = _cancelled(surface)
     known = dict(surface.order_ids)
     for client_id in _undiscovered(surface):
         # A released placement's fills are read too: a confirmed trade is the venue's
@@ -1678,7 +1686,16 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
         token = str(args["token_id"])
         if token in resolved and order_id in surface.cursor.get("terminal", ()):
             continue
-        orders[order_id] = {"token_id": token, "side": str(args["side"]),
+        result = intent["result"]
+        matched = Decimal(str(result.get("filled_size") or "0"))
+        status = result.get("status")
+        if cancelled.get(order_id) is not None:
+            status, matched = "cancelled", cancelled[order_id]
+        # Whether the order can still change what the pot holds: it rests or is
+        # unanswered, or it matched more than is booked (Codex P2 on #177).
+        live = (status in ("resting", "uncertain")
+                or matched > Decimal(surface.filled.get(order_id, "0")))
+        orders[order_id] = {"token_id": token, "side": str(args["side"]), "open": live,
                             "size": str(args["size"]), "price": str(args["price"]),
                             "market_id": surface.token_markets.get(token),
                             # The order's own signed timestamp (ms): no fill of it can
