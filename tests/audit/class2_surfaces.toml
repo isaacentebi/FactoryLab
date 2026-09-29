@@ -737,7 +737,6 @@ sources = [
   "factorylab/world/polymarket_clob.py::_bytes32",
   "factorylab/world/polymarket_clob.py::_dec",
   "factorylab/world/polymarket_clob.py::order_amounts",
-  "factorylab/world/polymarket_clob.py::taker_fee",
   "factorylab/world/recorder.py::Recorder.__init__",
   "factorylab/world/recorder.py::Recorder.poll",
   "factorylab/world/recorder.py::Recorder.start",
