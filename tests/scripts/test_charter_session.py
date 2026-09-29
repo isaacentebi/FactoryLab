@@ -119,3 +119,19 @@ def test_the_dry_run_runs_on_edition6(tmp_path):
     # The card contract is the world's own section, never request text.
     world_block = charter_session.launch_world(manifest)
     assert "region {rule, lo, hi}" in world_block["mechanics"]["committee"]["card_contract"]
+
+
+def test_a_capital_loop_world_renders_its_block_without_arming_its_rails():
+    """The funded edition-6 world must be re-ratified on its own roster before launch
+    (worlds/edition6-capital-loop.toml [charter] note), so the session must render its
+    world block. It does so over a fake venue: no real-money rail is armed (bootstrap
+    refuses a live capital-loop world outside the rehearsal runner)."""
+    from factorylab.runtime.loop import Runtime
+    from factorylab.world.evm import RailError
+
+    world = load_manifest("worlds/edition6-capital-loop.toml")
+    with pytest.raises(RailError):
+        Runtime(world, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
+                router_gamma=0.1)
+    block = charter_session.launch_world(world)
+    assert block and isinstance(block, dict)

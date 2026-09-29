@@ -235,10 +235,17 @@ def launch_world(manifest) -> dict:
     Built on the manifest's catalogue, so it makes no call and reads no network,
     whichever provider the session's ballots then use.
     """
+    from dataclasses import replace
+
     from factorylab.runtime.loop import Runtime
     from factorylab.world.exchange import FakeExchange
 
-    rt = Runtime(manifest, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
+    # The block is rendered over a fake venue, so the manifest it launches is stated as
+    # one: a capital-loop world's real-money rails (treasury.venice_network) are never
+    # armed here, and its roster, the one the export digests, is unchanged (the export
+    # hashes the manifest it was given, not this copy).
+    shown = replace(manifest, exchange=replace(manifest.exchange, kind="fake"))
+    rt = Runtime(shown, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1, provider=ManifestCatalogue(manifest),
                  exchange=FakeExchange(seed=manifest.exchange.seed, coins=manifest.exchange.coins,
                                        start_cash_usd=manifest.exchange.start_cash_usd))
