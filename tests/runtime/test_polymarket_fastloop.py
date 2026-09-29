@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from factorylab.world import polymarket as world_polymarket
 from scripts import fastloop
 
 WORLD = Path(__file__).parent / "fixtures" / "polymarket-fastloop.toml"
@@ -28,17 +29,38 @@ class EventMarketPolicy(fastloop.PolicyProvider):
             turn = self.decisions + 1
             if turn % 4 == 1:
                 self.decisions += 1
-                # One tick over the opening mid: the post-only venue rejects it while
-                # it would cross, rests it once the market walks up, and fills it as a
-                # maker when the market walks back.
+                # At the opening mid, under its ask: the post-only venue rests it, and
+                # ``ScriptedMarket`` fills it as a maker.
                 return {"action": "order", "tool_calls": [{
                     "tool": "polymarket.place_limit",
-                    "args": {"token_id": YES, "side": "buy", "size": "10", "price": "0.41"}}]}
+                    "args": {"token_id": YES, "side": "buy", "size": "10", "price": "0.40"}}]}
             if turn % 4 == 2:
                 self.decisions += 1
                 return {"action": "investigate", "tool_calls": [
                     {"tool": "polymarket.search", "args": {"query": "simulated", "limit": 3}}]}
         return super()._decide(inputs)
+
+
+class ScriptedMarket(world_polymarket.FakePolymarket):
+    """The seeded venue with its first market scripted, whatever the run's timing (Sol P2,
+    round 5, on #177: a random walk left every resting buy unfilled): it stands still
+    until a buy rests on it, then walks one tick down so its ask meets the lowest resting
+    buy, which fills there as a maker; later buys at that price would cross and are
+    rejected. It resolves YES 900 s after the venue's first step."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.step_ticks = 0
+
+    def advance(self, now_ns):
+        if self._started_ns is None:
+            self.resolutions = {**self.resolutions, "fake-1": (now_ns + 900 * 10**9, 0)}
+        market = self._markets["fake-1"]
+        resting = [o["price"] for o in self._orders.values()
+                   if self._tokens[o["token_id"]] == ("fake-1", 0)]
+        if resting and not market["closed"]:
+            market["mid"] = min(market["mid"], min(resting) - self.tick)
+        return super().advance(now_ns)
 
 
 EDITION6 = Path(__file__).parents[2] / "worlds" / "edition6-testnet-rehearsal.toml"
@@ -119,10 +141,15 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     every holder, and a learning signal. 95 ticks is the fewest that reach the seeded
     market's resolution (900 s) and the refusal after it closes."""
     monkeypatch.setattr(fastloop, "PolicyProvider", EventMarketPolicy)
+    monkeypatch.setattr(world_polymarket, "FakePolymarket", ScriptedMarket)
     card = fastloop.run("scripted", 95, WORLD, tmp_path, cap_usd="2", seed=1)
     assert card["status"] == "completed", card.get("error")
     events = json.loads(Path(card["out"], "events.json").read_text())
     kinds = [e.get("kind") for e in events]
+    # A resting buy filled as a maker, a later one would have crossed and was rejected.
+    acknowledged = [e["result"]["status"] for e in events
+                    if e.get("kind") == "polymarket.acknowledged"]
+    assert "resting" in acknowledged and "rejected" in acknowledged
     assert kinds.count("polymarket.intent") >= 1
     assert "polymarket.fill" in kinds and "polymarket.read" in kinds
     assert "polymarket.resolution" in kinds and "consequence.resolution" in kinds
