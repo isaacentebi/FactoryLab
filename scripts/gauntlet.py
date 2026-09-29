@@ -1546,6 +1546,15 @@ def router_kind(router: str, kinds: Mapping[str, str]) -> str:
     return kinds.get(router) or router.split(":", 1)[1].split("#")[0].split("@")[0]
 
 
+def _metered(row: Mapping) -> bool:
+    """Whether a ``router.learned`` row is a sample of its router's meter. NOOP never is,
+    and nor is a restored round whose ``opened_tick`` is stated as None: the kernel feeds
+    no meter for it (feedback.py ``_record_router_round`` returns early; Codex on
+    2bc2d30). A row with no ``opened_tick`` key at all is an older diary's, not this."""
+    return need(row, "action") != "NOOP" and not ("opened_tick" in row
+                                                  and row["opened_tick"] is None)
+
+
 def tick_clocked(events: list[Mapping]) -> bool:
     """Whether the diary states the gain loop's own clock: a ``tick`` on every organ close,
     and an ``opened_tick`` and ``closed_tick`` on every round a router meter sampled
@@ -1555,7 +1564,7 @@ def tick_clocked(events: list[Mapping]) -> bool:
     window reading's looser bound. An older diary has no such clock and is read in
     windows (``router_round_periods``)."""
     closes = windows(events)
-    learned = [row for row in rows_of(events, "router.learned") if need(row, "action") != "NOOP"]
+    learned = [row for row in rows_of(events, "router.learned") if _metered(row)]
     return (bool(closes) and all(_is_tick(row.get("tick")) for row in closes)
             and all(_is_tick(row.get("opened_tick")) and _is_tick(row.get("closed_tick"))
                     for row in learned))
@@ -1605,7 +1614,7 @@ def gain_acts(events: list[Mapping], ph: Physics) -> list[GainAct]:
     acts: list[GainAct] = []
     for row in events:
         kind = row.get("kind")
-        if kind == "router.learned" and need(row, "action") != "NOOP":
+        if kind == "router.learned" and _metered(row):
             sample = meters[router_kind(need(row, "router"), kinds)]
             sample.append(max(0, need(row, "closed_tick") - need(row, "opened_tick")))
             del sample[:-ph.cadence_sample]

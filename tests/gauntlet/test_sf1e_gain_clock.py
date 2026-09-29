@@ -161,3 +161,18 @@ def test_a_diary_whose_organ_closes_carry_no_tick_is_read_in_windows():
     legacy = [{k: v for k, v in row.items() if k != "tick"} for row in _unmetered(False)]
     assert not g.tick_clocked(legacy)
     assert g.sf1e_gain(legacy, {}).evidence["clock"] == "windows"
+
+
+def test_an_unmetered_restored_round_keeps_the_tick_clock(rows, manifest):
+    """Codex on 2bc2d30: a restored round stated with ``opened_tick`` None feeds no meter
+    (feedback.py ``_record_router_round`` returns early), so it neither switches the diary
+    to the window reading nor hides a skipped tick-due step."""
+    first = next(i for i, row in enumerate(rows) if row["kind"] == "router.learned"
+                 and row.get("action") != "NOOP")
+    restored = {**rows[first], "opened_tick": None, "closed_tick": None}
+    cut = [row for row in rows if not (row["kind"] == "immune.gain" and row["window"] == 204)]
+    cut.insert(first, restored)
+    result = g.sf1e_gain(cut, manifest)
+    assert result.evidence["clock"] == "ticks"
+    assert result.status == g.FAIL
+    assert result.evidence["problems"][0]["late"]["window"] == 212
