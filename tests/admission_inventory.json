@@ -26792,7 +26792,7 @@
     },
     {
       "rule": "polymarket_orders.principal_micro",
-      "enforced": "factorylab/runtime/polymarket.py:1205 (principal_excess)",
+      "enforced": "factorylab/runtime/polymarket.py:1207 (principal_excess)",
       "published": "factorylab/cortex/admission_tools.py:308 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26816,7 +26816,7 @@
     },
     {
       "rule": "polymarket_orders.principal",
-      "enforced": "factorylab/runtime/polymarket.py:1205 (principal_excess)",
+      "enforced": "factorylab/runtime/polymarket.py:1207 (principal_excess)",
       "published": "factorylab/cortex/admission_tools.py:312 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26850,7 +26850,7 @@
     "factorylab/runtime/compute.py": "a0b0a5cac799e433071a590b6409016582b4c6affb30f106f05775a45723fd1c",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
-    "factorylab/runtime/polymarket.py": "25772146082697cb0b8b5859dd4a4cec6d71a4730f9339dff5c07eba45fb4ce7",
+    "factorylab/runtime/polymarket.py": "b2830318bbea7fa56afa6d3c2ab55d79b3a8f166c80a7b48e0f5cdcc4b9ca991",
     "factorylab/runtime/propensity.py": "cf32c2a547166dc2093853b0489b61ae8ad73872f4d9d089a0f822e8e76c6853",
     "factorylab/runtime/routing.py": "267b781ce62203279e17544891bf27c654e4c344e46f337528ca52cbb5b091c6",
     "factorylab/runtime/subscriptions.py": "618df166c01ba3a97d43516ef770d12f92e016d9e4788f14a5f0cf4e83de41d3",

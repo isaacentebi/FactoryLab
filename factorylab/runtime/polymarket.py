@@ -609,6 +609,8 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
         if tool_id == OPEN_ORDERS and view["status"] == "observed":
             view = {key: view[key] for key in ("status", "custody", "open_orders",
                                                "observed_at_ns") if key in view}
+            # The world's own resting orders, never another signer's on the wallet.
+            view["open_orders"] = _own_orders(surface, view["open_orders"])
         return {**view, "as_of_ns": rt.clock.now_ns}
     from factorylab.world.polymarket import SEAT_READ_REQUESTS
 
@@ -2002,6 +2004,38 @@ def pots_view(rt: Any) -> dict[str, Any]:
     return pots
 
 
+def _own_orders(surface: PolymarketSurface, orders: list[dict]) -> list[dict]:
+    """The orders of a pot read that this world placed (its ``order_ids``). The live
+    wallet is shared with whatever else signs for it; the simulated pot holds only the
+    world's own."""
+    if not surface.live:
+        return list(orders)
+    return [o for o in orders if str(o["order_id"]) in surface.order_ids]
+
+
+def _own_view(surface: PolymarketSurface, account: dict) -> dict:
+    """A pot read cut to what is this world's: its own orders, and of each position no
+    more than its own confirmed fills hold (a resolved token's, what the wallet still
+    holds of the tokens this world traded). The simulated pot is the world's whole."""
+    if not surface.live:
+        return account
+    book = surface.cursor.get("book", {})
+    resolved = surface.cursor.get("resolved", {})
+    traded = {str(surface.intents[c]["args"]["token_id"]) for c in surface.order_ids.values()}
+    positions = []
+    for p in account["positions"]:
+        token = p["token_id"]
+        if token not in traded:
+            continue
+        size = Decimal(p["size"])
+        if token not in resolved:
+            size = min(size, Decimal(book.get(token, ("0", "0"))[0]))
+        if size > 0:
+            positions.append({**p, "size": str(size)})
+    return {**account, "positions": positions,
+            "open_orders": _own_orders(surface, account["open_orders"])}
+
+
 def wind_down(rt: Any) -> dict[str, Any]:
     """Cancel every resting order; leave every held token to resolve into the pot.
 
@@ -2017,7 +2051,9 @@ def wind_down(rt: Any) -> dict[str, Any]:
     surface = rt.polymarket
     report: dict[str, Any] = {"cancelled": 0, "residual": []}
     try:
-        for order in surface.account(rt)["open_orders"]:
+        # Only this world's orders (Codex P1 on #177): the wallet may rest orders placed
+        # by hand or by another process, and the kill has no claim on them.
+        for order in _own_orders(surface, surface.account(rt)["open_orders"]):
             client_id = f"kill:{order['order_id']}"
             rt.ledger.append({"kind": "polymarket.wind_down", "op": "cancel",
                               "client_id": client_id, "order_id": order["order_id"]})
@@ -2033,7 +2069,7 @@ def wind_down(rt: Any) -> dict[str, Any]:
             rt.ledger.append({"kind": "polymarket.wind_down_result", "client_id": client_id,
                               "result": result})
             report["cancelled"] += result.get("status") == "cancelled"
-        still = sanitized(surface.account(rt))
+        still = sanitized(_own_view(surface, surface.account(rt)))
         report["residual"] = [{key: p[key] for key in ("token_id", "market_id", "outcome",
                                                        "size", "avg_px")}
                               for p in still["positions"]]

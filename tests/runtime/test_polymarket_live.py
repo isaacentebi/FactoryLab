@@ -606,3 +606,31 @@ def test_a_placement_rejected_after_its_intent_is_not_polled():
     assert result["order_id"] not in rt.polymarket.order_ids
     assert polymarket._live_orders(rt.polymarket) == {}
     assert polymarket.local_commitments(rt.polymarket) == (Decimal(0), Decimal(0))
+
+
+def _foreign_resting_order(server, token_id):
+    """An order someone else placed from the same wallet, by hand or another process."""
+    placed = server.fake.place(client_id="0xforeign", token_id=token_id, is_buy=True,
+                               size=Decimal(10), price=Decimal("0.20"))
+    server.orders["0x" + "f0" * 32] = {"pm": placed["order_id"], "signed_s": 0}
+    server.pm_to_hash[placed["order_id"]] = "0x" + "f0" * 32
+    return placed["order_id"]
+
+
+def test_a_kill_cancels_only_this_world_s_orders():
+    """Codex P1 on #177: the wind-down cancelled every order the wallet had resting,
+    orders placed by hand or by another process included."""
+    rt, server = live_world()
+    own = buy(rt, server, collateral_decision(rt))["order_id"]
+    foreign = _foreign_resting_order(server, token(server))
+    rt.polymarket._account_memo = None
+    shown, _ = rt._run_tool("seed-decider", collateral_decision(rt),
+                            {"tool": "polymarket.open_orders", "args": {}})
+    assert [o["order_id"] for o in shown["open_orders"]] == [own]
+    report = polymarket.wind_down(rt)
+    assert foreign in server.fake._orders  # the foreign order still rests
+    assert server.orders[own]["pm"] not in server.fake._orders
+    assert report["cancelled"] == 1 and report["open_orders"] == 0
+    cancels = [i["order_id"] for i in items(rt, "polymarket.wind_down")]
+    assert cancels == [own]
+
