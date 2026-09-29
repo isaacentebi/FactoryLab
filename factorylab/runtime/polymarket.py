@@ -1717,8 +1717,12 @@ def confirm_terminal(rt: Any) -> None:
             continue
         if (answer.get("status") in ("filled", "cancelled", "rejected")
                 and answer.get("filled_size") is not None):
+            # What executed is what matched less the legs that FAILED, on every path
+            # to a confirmation (Sol P2 on #177): a failed leg never settles.
+            failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
+            executed = max(Decimal(0), Decimal(str(answer["filled_size"])) - failed)
             rt.consequences.confirm_terminal(order.order_id, answer["status"],
-                                             str(answer["filled_size"]), rt.n)
+                                             str(executed), rt.n)
 
 
 def _release_failed(rt: Any, surface: PolymarketSurface, order: Any, client_id: str) -> None:

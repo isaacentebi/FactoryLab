@@ -969,3 +969,27 @@ def test_resolved_custody_stays_the_world_s_residual_until_it_is_redeemed():
     report = polymarket.wind_down(rt)
     assert report["exposure_state"] == "wind_down_pending"
     assert [p["size"] for p in report["residual"]] == ["10"]
+
+
+def test_a_cancelled_order_s_failed_legs_are_netted_before_it_is_confirmed():
+    """Sol P2 on #177: a resting buy matched 5 whose leg FAILED, then was cancelled; the
+    cancel cleared its remaining liability, so the failed-leg netting was skipped and it
+    was confirmed at the gross 5 matched against 0 executed: its account never closed."""
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    order_id = buy(rt, server, handle)["order_id"]  # 10 at 0.30 rests
+    pm = server.orders[order_id]["pm"]
+    server.fake._all_orders[pm]["filled"] = Decimal(5)  # the venue matched 5 ...
+    server.fake._all_orders[pm]["remaining"] = Decimal(5)
+    server.extra_fills = [{"id": "t-failed", "status": "FAILED",  # ... and the leg failed
+                           "match_time": signed_s(rt, order_id), "taker_order_id": "0xo",
+                           "size": "5", "price": "0.30", "maker_orders": [
+                               {"order_id": order_id, "matched_amount": "5",
+                                "price": "0.30", "side": "BUY"}]}]
+    polymarket.tick(rt)
+    rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
+                                          "args": {"order_id": order_id}}, slot="tool:1")
+    for _ in range(3):
+        polymarket.tick(rt)
+    (order,) = rt.consequences.table.orders
+    assert order.remaining == 0 and order.executed == 0 and order.confirmed == 0
