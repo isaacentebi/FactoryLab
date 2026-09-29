@@ -144,7 +144,9 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
                 "the market's tick. A buy holds price x size USDC while it rests. An order "
                 "that fills on arrival pays the market's taker fee. " + (
                     "The order is signed by the pot's wallet and sent to Polymarket's CLOB "
-                    "on Polygon as a GTC order; its identity is its EIP-712 order hash. "
+                    "on Polygon as a GTC post-only order: it rests on the book as a maker, "
+                    "the venue rejects one that would cross, and a maker pays no fee. Its "
+                    "identity is its EIP-712 order hash. "
                     "The pot's collateral is pUSD, Polymarket's USDC-backed token. "
                     if live else "") + "Free to call.",
                 {"token_id": token, "side": {"type": "string", "enum": ["buy"]},
@@ -225,9 +227,12 @@ class PolymarketSurface:
         # Whether the last reconciliation found money gone that the books do not explain
         # (live orders): no new risk until it agrees again.
         self.drifting = False
-        # Fills whose fee their execution did not state (``execution_fee``): open until
-        # the custodian's balance settles them (``reconcile``); no new risk meanwhile.
-        self.open_fees: list[dict[str, Any]] = []
+        # The fees fills were charged (the simulated venue's takers; a live order is
+        # post-only and pays none): part of the principal the world has spent.
+        self.fees_paid = Decimal(0)
+        # A trade that contradicted the maker-only live venue (a taker leg, a fee):
+        # buying stops for the world's life.
+        self.contradicted = False
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
         self._account_memo: tuple | None = None
         # The market each write was last weighed against, by token (transient): the one
@@ -235,8 +240,8 @@ class PolymarketSurface:
         self.checked: dict[str, dict] = {}
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
-              "opening", "token_markets", "open_reads", "through", "filled", "cursor", "open_fees",
-              "drifting")
+              "opening", "token_markets", "open_reads", "through", "filled", "cursor",
+              "drifting", "fees_paid", "contradicted")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -1142,17 +1147,15 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     notional = size * price
     if usd_to_micro(notional, rounding="ceil") > spec.max_order_micro:
         return "order notional exceeds [polymarket] max_order_usd"
-    if surface.open_fees:
-        # Sol P1 on #177: a fee its trade did not state has no bound valid at its
-        # execution, so no principal is added until it is established.
-        return FEE_OPEN_REFUSAL
+    if surface.contradicted:
+        return MAKER_ONLY_REFUSAL
     if surface.live and surface.drifting:
         return DRIFT_REFUSAL
-    fee = taker_fee(market, size, price)
+    # A live order is post-only and never charged; the simulated venue's may take.
+    fee = Decimal(0) if surface.live else taker_fee(market, size, price)
     cap = spec.principal_micro
     if cap is not None and usd_to_micro(
-            principal_at_risk(surface) + principal_committed
-            + size * price * (1 + _fee_bound(market.get("fees"))),
+            principal_at_risk(surface) + principal_committed + notional + fee,
             rounding="ceil") > cap:
         return PRINCIPAL_REFUSAL
     exposure, available = _open_exposure(account), Decimal(account["usdc_available"])
@@ -1172,7 +1175,7 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
 
 
 #: A fill whose fee its trade did not state: its amount is not established.
-FEE_OPEN_REFUSAL = "a polymarket fill's fee is not established"
+MAKER_ONLY_REFUSAL = "a polymarket trade contradicted the maker-only venue"
 #: Version 1 of the venue: BUY orders only; a position is held to its resolution.
 BUY_ONLY_REFUSAL = "the polymarket venue takes BUY orders only"
 PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
@@ -1192,26 +1195,14 @@ def held_at_cost(account: dict) -> Decimal:
     return Decimal(account["usdc"]) + tokens
 
 
-#: The most fee the exchange lets a fill charge, as a share of its cash value: the
-#: CTF Exchange's ``maxFeeRateBps``, 500 by default (ctf-exchange-v2 ``Fees.sol``;
-#: ``getMaxFeeRate()`` reads the live one, which its admin can set). A schedule's rate
-#: can change at match time; this bound, or the schedule's own rate if larger, holds.
-PLATFORM_MAX_FEE_RATE = Decimal("0.05")
-
-
-def _fee_bound(fees: dict | None) -> Decimal:
-    """The most fee, as a share of cash value, an order under ``fees`` can be charged."""
-    rate = _decimal((fees or {}).get("rate")) if (fees or {}).get("enabled") else None
-    return max(PLATFORM_MAX_FEE_RATE, rate or Decimal(0))
-
-
 def principal_at_risk(surface: PolymarketSurface) -> Decimal:
     """The principal the world has put at risk, from its own durable records alone.
 
     Architect's decision on Sol's third review of #177: every buy that may have
     executed or may still execute (a placement not rejected: its size while it may
     still fill; once proven over, what it matched less its failed legs), at its limit
-    price plus the most fee it can be charged (``_fee_bound``). It is the world's
+    price, and every fee its fills were charged (a live order is post-only and pays
+    none; the simulated venue's takers do). It is the world's
     lifetime outlay: no resolution, payout or redemption gives room back (architect's
     decision on Sol's round-4 review), so once the cap is used, buying stops for the
     world's life. No wallet balance and no listing enters it, so no one's deposit,
@@ -1236,10 +1227,8 @@ def principal_at_risk(surface: PolymarketSurface) -> Decimal:
             if matched is None:
                 matched = Decimal(str(result.get("filled_size") or "0"))
             quantity = matched - Decimal(str(failed.get(order_id, "0")))
-        identity = intent.get("order_identity") or {}
-        bound = max(PLATFORM_MAX_FEE_RATE, Decimal(str(identity.get("fee_rate") or "0")))
-        total += max(Decimal(0), quantity) * Decimal(str(args["price"])) * (1 + bound)
-    return total
+        total += max(Decimal(0), quantity) * Decimal(str(args["price"]))
+    return total + surface.fees_paid
 
 
 #: The pot does not agree with its custodian: money left it that its books do not explain.
@@ -1296,11 +1285,8 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
                 str(order_id)) is not None:
             # A terminal order's legs that FAILED never settle (Sol P2 on #177).
             quantity -= Decimal(str(surface.cursor.get("failed", {}).get(str(order_id), "0")))
-        price = Decimal(str(args["price"]))
-        identity = intent.get("order_identity") or {}
-        rate = Decimal(str(identity.get("fee_rate") or "0"))
         remaining = max(Decimal(0), quantity - booked)
-        reserved += remaining * price * (1 + rate * (1 - price))
+        reserved += remaining * Decimal(str(args["price"]))
     resolved = surface.cursor.get("resolved", {})
     book = sum((Decimal(size) * Decimal(avg)
                 for token, (size, avg) in surface.cursor.get("book", {}).items()
@@ -1341,8 +1327,9 @@ def batch_refusal(rt: Any, seat: str, handle: str,
             if args.get("side") == "buy":
                 size, price = Decimal(str(args["size"])), Decimal(str(args["price"]))
                 market = _write_market(rt, surface, args["token_id"]) or {}
-                committed += size * price + taker_fee(market, size, price)
-                at_risk += size * price * (1 + _fee_bound(market.get("fees")))
+                fee = Decimal(0) if surface.live else taker_fee(market, size, price)
+                committed += size * price + fee
+                at_risk += size * price + fee
     return None
 
 
@@ -1684,9 +1671,7 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
                             # The order's own signed timestamp (ms): no fill of it can
                             # precede it, so the fill read starts no later.
                             "timestamp": str((identity.get("order") or {}).get(
-                                "timestamp", "0")),
-                            "fee_rate": str(identity.get("fee_rate", "0")),
-                            "fee_exponent": str(identity.get("fee_exponent", "1"))}
+                                "timestamp", "0"))}
     return orders
 
 
@@ -1735,9 +1720,21 @@ def _release_failed(rt: Any, surface: PolymarketSurface, order: Any, client_id: 
     at what was booked, the quantity that really executed.
     """
     intent = surface.intents[client_id]
+    failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
+    if not _terminal(surface, intent) and failed > 0:
+        # A resting post-only order whose matched legs FAILED stays "resting" in its
+        # placement's answer: its own status is read back until the venue says over.
+        try:
+            answer = surface.venue.lookup(client_id, order_id=order.order_id)
+        except Exception:  # noqa: BLE001 - an unanswered read proves nothing
+            return
+        if answer.get("status") in ("filled", "cancelled") and answer.get(
+                "filled_size") is not None:
+            intent = surface.intents[client_id] = {**intent, "result": {
+                **intent["result"], "status": answer["status"],
+                "filled_size": str(answer["filled_size"])}}
     if not _terminal(surface, intent):
         return
-    failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
     booked = Decimal(surface.filled.get(order.order_id, "0"))
     matched = _cancelled(surface).get(order.order_id)
     if matched is None:
@@ -1851,8 +1848,6 @@ def settle(rt: Any, events: list[dict[str, Any]]) -> None:
             rt.consequences.cancel(str(event["order_id"]), rt.n)
         elif kind == "resolution":
             _settle_resolution(rt, event)
-        elif kind == "fee":
-            _settle_fee(rt, event)
 
 
 def _settle_fill(rt: Any, event: dict) -> None:
@@ -1894,16 +1889,14 @@ def _settle_fill(rt: Any, event: dict) -> None:
         owner_handle = None
     else:
         surface.filled[order_id] = str(booked)
-    if event.get("fee_unresolved"):
-        # Astra P0 and Codex P1 on #177: the execution did not state its fee (get-trades
-        # lists fee_rate_bps as optional). Nothing is debited, from a schedule or from
-        # the balance (a drift cannot tell a fee from a deposit or a withdrawal): the fee
-        # stays an unresolved item until its trade states it (``_settle_fee``), and no
-        # buy is taken while one is open (``refusal``).
-        item = {"order_id": order_id, "handle": owner_handle, "size": str(event["size"]),
-                "px": str(event["px"]), "key": event.get("fee_key")}
-        surface.open_fees.append(item)
-        rt.ledger.append({"kind": "polymarket.fee_unresolved", **item, "ts": rt.clock.now_ns})
+    surface.fees_paid += Decimal(event["fee_usd"])
+    if event.get("contradiction"):
+        # A leg that contradicts the maker-only venue (a taker, a fee): it is drift the
+        # books cannot explain, never a guessed fee, and it stops buying for the world's
+        # life (architect's decision on Sol's round-4 review of #177).
+        surface.contradicted = True
+        rt.ledger.append({"kind": "polymarket.drift", "reason": event["contradiction"],
+                          "order_id": order_id, "ts": rt.clock.now_ns})
     try:
         rt.consequences.observe("Fill", payload, rt.n)
     except ValueError as exc:
@@ -1920,27 +1913,6 @@ def _settle_fill(rt: Any, event: dict) -> None:
                              "side": "buy" if event["is_buy"] else "sell",
                              "size": event["size"], "px": event["px"],
                              "fee_usd": event["fee_usd"]})
-
-
-def _settle_fee(rt: Any, event: dict) -> None:
-    """Book, once, the fee a trade stated after its leg was booked (Sol P2 on #177).
-
-    The fee is its open item's: it is debited from the pot to that fill's owner, and the
-    item is gone, which lifts the buy halt when it was the last one. An event for an
-    item already settled books nothing.
-    """
-    surface = rt.polymarket
-    item = next((i for i in surface.open_fees if i.get("key") == event["fee_key"]), None)
-    if item is None:
-        return
-    surface.open_fees = [i for i in surface.open_fees if i is not item]
-    fee = Decimal(event["fee_usd"])
-    surface.settled -= fee
-    rt.ledger.append({"kind": "polymarket.fee_established", "order_id": item["order_id"],
-                      "handle": item["handle"], "fee_usd": event["fee_usd"],
-                      "ts": rt.clock.now_ns})
-    _book_pot(rt, -usd_to_micro(fee, rounding="nearest"), f"fee:{item['order_id']}",
-              "exchange_pnl", item["handle"])
 
 
 def _settle_resolution(rt: Any, event: dict) -> None:
@@ -2037,9 +2009,7 @@ def custody_books(rt: Any) -> dict[str, int]:
     surface = rt.polymarket
     claimed = sum(surface.claims.values())
     return {"booked_micro": surface.booked, "claimed_micro": claimed,
-            "unattributed_micro": surface.booked - claimed,
-            # Fills whose fee their trade did not state.
-            "unresolved_fees": len(surface.open_fees)}
+            "unattributed_micro": surface.booked - claimed}
 
 
 def _tell(rt: Any, handle: str | None, outcome: dict[str, Any]) -> None:

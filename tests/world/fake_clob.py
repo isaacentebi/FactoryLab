@@ -233,6 +233,13 @@ class FakeClob:
         digest = self._verify(order, market in self.neg_risk_markets)
         if self.on_post is not None:
             self.on_post()
+        if body.get("postOnly") is True:
+            _bid, ask = self.fake._best(order["tokenId"])
+            price, _size = clob.order_price_size(int(order["makerAmount"]),
+                                                 int(order["takerAmount"]))
+            if price >= ask:
+                # "invalid post-only order: order crosses book" (resources/error-codes).
+                raise clob.ClobHttpError(400, "post-only order crosses the book")
         if digest in self.orders:
             return {"success": False, "errorMsg": f"order {digest} is invalid. Duplicated.",
                     "orderID": ""}
@@ -321,6 +328,15 @@ class FakeClob:
                 event = self.effects.pop(trade["id"], None)
                 if event is not None and status == "CONFIRMED":
                     self._move(event, undo=False)
+
+    def match(self) -> list:
+        """Every resting order fills as a maker: each market moves so its ask meets the
+        order's price, and the book advances one nanosecond."""
+        for order in list(self.fake._orders.values()):
+            market_id, side = self.fake._tokens[order["token_id"]]
+            ask_mid = order["price"] - self.fake.tick  # the token's mid with ask = price
+            self.fake._markets[market_id]["mid"] = ask_mid if side == 0 else 1 - ask_mid
+        return self.advance(self.fake._now_ns + 1)
 
     def advance(self, now_ns: int) -> list:
         """Move the simulated book; what fills now fills resting (maker) orders."""

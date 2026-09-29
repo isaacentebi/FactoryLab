@@ -46,11 +46,15 @@ Protocol facts, each read 2026-09-29 (Polymarket moved to CLOB V2 on 2026-04-28)
   price is rejected, never rounded; a size below ``orderMinSize`` is rejected.
   https://docs.polymarket.com/market-data/market-details,
   https://docs.polymarket.com/resources/error-codes
-* **Fees.** ``fee = shares x rate x (p (1 - p))^exponent``, takers only, rounded to 5
-  decimals, set by the operator at match time from the market's ``feeSchedule``; a BUY
-  taker pays it in collateral on top of the notional, a SELL taker out of proceeds.
-  https://docs.polymarket.com/trading/fees
-* **Order types.** GTC and GTD rest; FOK and FAK do not. Every order here is GTC.
+* **Fees.** ``fee = shares x rate x (p (1 - p))^exponent``, set at match time; "Makers
+  are never charged fees. Only takers pay fees." https://docs.polymarket.com/trading/fees
+* **Post-only.** "If a post-only order would match immediately (cross the spread), it's
+  rejected instead of executed. This guarantees you're always the maker, never the
+  taker" (https://docs.polymarket.com/concepts/order-lifecycle); the CLOB answers
+  ``invalid post-only order: order crosses book`` (resources/error-codes), and
+  ``postOnly`` is "only supported for GTC and GTD orders" (api-spec/clob-openapi.yaml).
+  Every order here is GTC and post-only, so it is never charged a fee.
+* **Order types.** GTC and GTD rest; FOK and FAK do not.
   ``POST /order`` answers ``{success, errorMsg, orderID, status: live | matched |
   delayed | unmatched, makingAmount, takingAmount}``; ``DELETE /order {orderID}``
   answers ``{canceled, not_canceled}``. The CLOB has no client order id: an order's
@@ -246,46 +250,6 @@ def salt_of(identity: str) -> int:
     no two launches or intents share one.
     """
     return int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big") & MAX_SALT
-
-
-def taker_fee(size: Decimal, price: Decimal, rate: Decimal, exponent: Decimal) -> Decimal:
-    """The fee a taker pays: ``size x rate x (p (1 - p))^exponent``, to five decimals.
-
-    Exact decimal arithmetic only (money is never a float): an exponent that is not a
-    nonnegative integer is refused rather than approximated.
-    """
-    if exponent != exponent.to_integral_value() or exponent < 0:
-        raise PolymarketRefused("a fee exponent that is not a whole number is not priced")
-    value = size * rate * (price * (1 - price)) ** int(exponent)
-    return value.quantize(Decimal("0.00001"))
-
-
-def execution_fee(size: Decimal, price: Decimal, taker: bool, fee_bps: Any,
-                  exponent: Any) -> Decimal | None:
-    """The fee one execution charged, from what the execution itself states, or None.
-
-    Astra P0 on #177: the operator sets the fee at match time, so a fill's fee is read
-    from its own trade (``fee_rate_bps``, get-trades), never from the schedule admission
-    saw. A maker leg is charged nothing (fees: "Makers are never charged fees"). A taker
-    leg's fee is ``size x fee_rate_bps / 10,000 x p (1 - p)`` to five decimals (the
-    documented formula) when the trade states its rate and the market's schedule is the
-    documented one (exponent 1); otherwise the execution does not establish it, and
-    None is returned: the fee stays open, and its trade is read again until it states
-    the fee (``LivePolymarket._fees``); nothing is debited meanwhile, from a schedule
-    or from a balance.
-    """
-    if not taker:
-        try:
-            return Decimal(0) if fee_bps is None or _dec(fee_bps) == 0 else None
-        except (ValueError, ArithmeticError):
-            return None
-    try:
-        rate, power = _dec(fee_bps) / 10_000, _dec(exponent)
-    except (ValueError, ArithmeticError, TypeError):
-        return None
-    if power != 1 or rate < 0:
-        return None
-    return taker_fee(size, price, rate, power)
 
 
 # --- signing ------------------------------------------------------------------------------
@@ -649,11 +613,8 @@ class LivePolymarket(PolymarketReader):
                  "timestamp": str(int(self.wall()) // 1_000_000), "metadata": ZERO32,
                  "builder": ZERO32}
         neg_risk = bool(market.get("neg_risk"))
-        fees = market.get("fees") or {}
         return {"order": order, "neg_risk": neg_risk,
-                "order_hash": order_hash(order, neg_risk),
-                "fee_rate": str(fees.get("rate") or "0") if fees.get("enabled") else "0",
-                "fee_exponent": str(fees.get("exponent") or "1")}
+                "order_hash": order_hash(order, neg_risk)}
 
     def _intended(self, client_id: str, operation: str) -> dict[str, Any]:
         intent = self.intent_of(client_id)
@@ -699,7 +660,10 @@ class LivePolymarket(PolymarketReader):
                           "expiration": "0", "signatureType": order["signatureType"],
                           "timestamp": order["timestamp"], "metadata": order["metadata"],
                           "builder": order["builder"], "signature": signature},
-                "owner": owner, "orderType": "GTC", "postOnly": False, "deferExec": False}
+                # Post-only: the order rests as a maker, and one that would cross is
+                # rejected by the venue, never filled (concepts/order-lifecycle), so no
+                # fee is ever charged: the venue charges takers only (trading/fees).
+                "owner": owner, "orderType": "GTC", "postOnly": True, "deferExec": False}
         try:
             answer = self._l2("POST", "/order", body=body)
         except BudgetSpent:
@@ -874,8 +838,8 @@ class LivePolymarket(PolymarketReader):
 
         Guarantees each fill of one of ``orders`` (this world's orders, as their intents
         name them) is reported exactly once, when its trade is CONFIRMED, in the shape
-        ``FakePolymarket`` reports it, with the fee a taker pays at the market's schedule
-        its intent recorded and the realised P&L on the pot's own average cost; a FAILED
+        ``FakePolymarket`` reports it, with no fee (a post-only maker is never charged;
+        a leg that says otherwise carries its ``contradiction``); a FAILED
         trade is reported never; a trade not yet final holds the cursor so it is read
         again. A held token's market is read (one a poll, in turn) and, once it has a
         payout, one ``resolution`` is reported for what the pot holds of it, and each of
@@ -896,7 +860,6 @@ class LivePolymarket(PolymarketReader):
         events: list[dict[str, Any]] = []
         complete = True
         for step in (lambda trial: self._fills(trial, orders),
-                     lambda trial: self._fees(trial, orders),
                      lambda trial: self._resolutions(trial, orders, now_ns)):
             # Each step works on a copy and commits only whole: a read that failed half
             # way leaves the cursor where it was, and what it would have reported is
@@ -955,6 +918,7 @@ class LivePolymarket(PolymarketReader):
             if str(trade.get("taker_order_id", "")) in orders:
                 legs.append((str(trade["taker_order_id"]), trade.get("size"),
                              trade.get("price"), True, trade.get("fee_rate_bps")))
+                # A leg as taker would contradict post-only (see ``_fill_event``).
             for maker in trade.get("maker_orders") or []:
                 if str(maker.get("order_id", "")) in orders:
                     legs.append((str(maker["order_id"]), maker.get("matched_amount"),
@@ -974,23 +938,17 @@ class LivePolymarket(PolymarketReader):
                     pending.append(at)
                     continue
                 state["seen"][key] = at
-                found.append({"instant": instant, "at": at, "trade_id": str(trade.get("id")),
-                              "key": key, "order_id": order_id, "size": _dec(size),
+                found.append({"instant": instant, "at": at, "key": key,
+                              "order_id": order_id, "size": _dec(size),
                               "price": _dec(price), "taker": taker, "fee_bps": fee_bps})
-        # Every leg is a buy (the venue takes BUY orders only): what the pot holds of a
-        # token and its average cost do not depend on the order legs are booked in.
+        # Every leg is a post-only buy: what the pot holds of a token and its average
+        # cost do not depend on the order legs are booked in, and no fee is charged.
         events = []
         for leg in sorted(found, key=lambda leg: (leg["instant"], leg["key"])):
             event = self._fill_event(state, orders[leg["order_id"]], leg["order_id"],
                                      leg["size"], leg["price"], leg["taker"], leg["at"],
                                      leg["fee_bps"])
             event["ts_ns"] = leg["instant"]
-            if event.get("fee_unresolved"):
-                # The trade is read again, by its id, until it states its fee (``_fees``).
-                event["fee_key"] = leg["key"]
-                state.setdefault("fee_open", {})[leg["key"]] = {
-                    "trade_id": leg["trade_id"], "order_id": leg["order_id"],
-                    "size": str(leg["size"]), "price": str(leg["price"])}
             events.append(event)
         if not ended:
             state["page"] = page_cursor
@@ -1016,7 +974,16 @@ class LivePolymarket(PolymarketReader):
                     size: Decimal, price: Decimal, taker: bool, at: int,
                     fee_bps: Any = None) -> dict[str, Any]:
         token = order["token_id"]
-        fee = execution_fee(size, price, taker, fee_bps, order.get("fee_exponent", "1"))
+        # A post-only order is never a taker and a maker is never charged: a leg that
+        # says otherwise contradicts the published venue. It is reported, never booked
+        # as a fee (architect's decision on Sol's round-4 review of #177).
+        try:
+            charged = fee_bps not in (None, "") and _dec(fee_bps) != 0
+        except (ValueError, ArithmeticError):
+            charged = True
+        contradiction = ("the venue reports this post-only order as a taker" if taker
+                         else "the venue reports a fee on this maker fill" if charged
+                         else None)
         held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
         # A buy: the holding grows at its average cost; nothing is realised until the
         # token's resolution pays it.
@@ -1027,41 +994,9 @@ class LivePolymarket(PolymarketReader):
         booked[order_id] = str(_dec(booked.get(order_id, "0")) + size)
         return {"kind": "fill", "order_id": order_id, "token_id": token,
                 "market_id": order.get("market_id"), "is_buy": True, "size": str(size),
-                "px": str(price), "fee_usd": "0" if fee is None else str(fee),
+                "px": str(price), "fee_usd": "0",
                 "realized_usd": "0", "ts_ns": at * 1_000_000_000,
-                **({"fee_unresolved": True} if fee is None else {})}
-
-    def _fees(self, state: dict[str, Any], orders: dict[str, dict[str, str]]) -> list[dict]:
-        """Each fee a booked leg's trade did not state, read again until it does.
-
-        Sol P2 on #177: a trade may state ``fee_rate_bps`` after its leg was booked,
-        and fill deduplication never reads it again. Each open fee is kept by its leg's
-        identity and its trade is read by id, two a poll in turn; once the trade states
-        the fee, one ``fee`` event is reported for it and the item is gone, so the fee
-        is booked exactly once.
-        """
-        open_fees = state.get("fee_open", {})
-        if not open_fees:
-            return []
-        keys = sorted(open_fees)
-        turn = state.get("fee_turn", 0)
-        state["fee_turn"] = turn + 1
-        events = []
-        for key in sorted({keys[(turn + k) % len(keys)] for k in range(min(2, len(keys)))}):
-            item = open_fees[key]
-            page = self._l2("GET", "/data/trades", query={"id": item["trade_id"]})
-            for trade in page.get("data", []) if isinstance(page, dict) else []:
-                if str(trade.get("taker_order_id", "")) != item["order_id"]:
-                    continue
-                order = orders.get(item["order_id"], {})
-                fee = execution_fee(_dec(item["size"]), _dec(item["price"]), True,
-                                    trade.get("fee_rate_bps"),
-                                    order.get("fee_exponent", "1"))
-                if fee is not None:
-                    del open_fees[key]
-                    events.append({"kind": "fee", "order_id": item["order_id"],
-                                   "fee_key": key, "fee_usd": str(fee)})
-        return sorted(events, key=lambda e: e["fee_key"])
+                **({"contradiction": contradiction} if contradiction else {})}
 
     def _resolutions(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                      now_ns: int) -> list[dict]:

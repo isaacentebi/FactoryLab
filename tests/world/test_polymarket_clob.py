@@ -126,10 +126,9 @@ def _token(server, market="fake-1", side=0):
     return server.fake._markets[market]["tokens"][side]
 
 
-def _intent(venue, server, client_id, *, side="buy", size="10", price="0.45", market="fake-1"):
+def _intent(venue, server, client_id, *, side="buy", size="10", price="0.40", market="fake-1"):
     token = _token(server, market)
-    facts = {"tick_size": "0.01", "neg_risk": False,
-             "fees": {"enabled": True, "rate": "0.05", "exponent": "1"}}
+    facts = {"tick_size": "0.01", "neg_risk": False}
     identity = venue.order_identity(client_id=client_id, token_id=token,
                                     is_buy=side == "buy", size=Decimal(size),
                                     price=Decimal(price), market=facts)
@@ -140,7 +139,7 @@ def _intent(venue, server, client_id, *, side="buy", size="10", price="0.45", ma
     return token, intent
 
 
-def _place(venue, token, *, side="buy", size="10", price="0.45", client_id="c-1"):
+def _place(venue, token, *, side="buy", size="10", price="0.40", client_id="c-1"):
     return venue.place(client_id=client_id, token_id=token, is_buy=side == "buy",
                        size=Decimal(size), price=Decimal(price))
 
@@ -173,10 +172,11 @@ def test_an_order_rests_or_is_read_back_by_its_hash_never_by_its_ack():
     assert _place(venue, token, price="0.30")["status"] == "resting"
     token, crossing = _intent(venue, server, "c-2", price="0.45")
     venue.intent_of = {"c-2": crossing}.get
+    # Post-only: an order that would cross the 0.41 ask is rejected by the venue.
     answer = _place(venue, token, price="0.45", client_id="c-2")
-    # "matched" is an ACK, never a fill: the order's own status is read back by hash.
-    assert answer["status"] == "uncertain"
-    looked = venue.lookup("c-2", order_id=crossing["order_hash"])
+    assert answer["status"] == "rejected" and "crosses the book" in answer["error"]
+    server.match()  # the resting order fills as a maker
+    looked = venue.lookup("c-1", order_id=intent["order_hash"])
     assert looked["status"] == "filled" and looked["filled_size"] == "10"
 
 
@@ -246,25 +246,23 @@ def test_a_cancel_needs_its_intent_and_answers_what_the_venue_did():
 
 def _orders(intent, token):
     return {intent["order_hash"]: {"token_id": token, "side": "buy", "size": "10",
-                                   "price": "0.45", "market_id": "fake-1",
-                                   "fee_rate": "0.05", "fee_exponent": "1"}}
+                                   "price": "0.40", "market_id": "fake-1"}}
 
 
 def test_a_fill_is_reported_once_when_final_and_a_failed_trade_never():
     venue, server = live_venue(confirm=False)
-    server.fake._markets["fake-1"]["fee_rate"] = Decimal("0.05")
     token, intent = _intent(venue, server, "c-1")
     venue.intent_of = {"c-1": intent}.get
     _place(venue, token)
+    server.match()
     orders = _orders(intent, token)
     first = venue.poll(now_ns=1, cursor={}, orders=orders)
     assert first["events"] == [] and first["complete"]  # MATCHED is not final
     server.settle("CONFIRMED")
     second = venue.poll(now_ns=2, cursor=first["cursor"], orders=orders)
     (fill,) = second["events"]
-    assert fill["kind"] == "fill" and fill["size"] == "10" and fill["px"] == "0.41"
-    # The taker fee at the market's schedule: 10 x 0.05 x 0.41 x 0.59.
-    assert Decimal(fill["fee_usd"]) == Decimal("0.12095")
+    assert fill["kind"] == "fill" and fill["size"] == "10"
+    assert Decimal(fill["px"]) == Decimal("0.40") and fill["fee_usd"] == "0"  # a maker
     third = venue.poll(now_ns=3, cursor=second["cursor"], orders=orders)
     assert [e for e in third["events"] if e["kind"] == "fill"] == []
     server.trades[0]["status"] = "FAILED"
@@ -278,6 +276,7 @@ def test_a_fill_of_another_order_is_not_this_worlds():
     token, intent = _intent(venue, server, "c-1")
     venue.intent_of = {"c-1": intent}.get
     _place(venue, token)
+    server.match()
     server.extra_fills = [{"id": "t-x", "status": "CONFIRMED", "match_time": "5",
                            "taker_order_id": "0x" + "cd" * 32, "size": "99", "price": "0.5",
                            "maker_orders": []}]
@@ -290,6 +289,7 @@ def test_a_failed_read_leaves_the_cursor_where_it_was():
     token, intent = _intent(venue, server, "c-1")
     venue.intent_of = {"c-1": intent}.get
     _place(venue, token)
+    server.match()
     venue._credentials()
     server.fail_next = [PolymarketUnavailable("transport")]
     answer = venue.poll(now_ns=1, cursor={}, orders=_orders(intent, token))
@@ -307,13 +307,14 @@ def test_a_resolution_pays_what_the_pot_holds_of_the_token():
     token, intent = _intent(venue, server, "c-1")
     venue.intent_of = {"c-1": intent}.get
     _place(venue, token)
+    server.match()
     orders = _orders(intent, token)
     cursor = venue.poll(now_ns=1, cursor={}, orders=orders)["cursor"]
     server.advance(10 ** 12)
     events = venue.poll(now_ns=10 ** 12, cursor=cursor, orders=orders)["events"]
     (resolution,) = [e for e in events if e["kind"] == "resolution"]
     assert resolution["payout"] == "1" and resolution["size"] == "10"
-    assert Decimal(resolution["realized_usd"]) == Decimal("5.9")
+    assert Decimal(resolution["realized_usd"]) == Decimal("6")
 
 
 def test_the_account_is_the_custodian_s_word():
@@ -332,6 +333,7 @@ def test_a_trade_listed_late_is_read_and_nothing_is_booked_twice():
     token, intent = _intent(venue, server, "c-1")
     venue.intent_of = {"c-1": intent}.get
     _place(venue, token)
+    server.match()
     orders = _orders(intent, token)
     server.trades[0]["match_time"] = "5000"
     first = venue.poll(now_ns=1, cursor={}, orders=orders)
@@ -379,9 +381,10 @@ def test_a_first_poll_long_after_an_execution_still_books_it():
     world resumed more than ten minutes after its order executed never read the fill.
     It starts at its earliest order not wholly booked, less the overlap."""
     venue, server = live_venue()
-    token, intent = _intent(venue, server, "c-1", price="0.45")
+    token, intent = _intent(venue, server, "c-1")
     venue.intent_of = {"c-1": intent}.get
-    _place(venue, token, price="0.45")
+    _place(venue, token)
+    server.match()
     placed_s = int(intent["order_identity"]["order"]["timestamp"]) // 1000
     server.trades[0]["match_time"] = str(placed_s + 5)
     orders = {**_orders(intent, token)}
@@ -395,8 +398,7 @@ def test_a_first_poll_long_after_an_execution_still_books_it():
 
 
 def _facts(neg_risk=False):
-    return {"tick_size": "0.01", "neg_risk": neg_risk,
-            "fees": {"enabled": True, "rate": "0.05", "exponent": "1"}}
+    return {"tick_size": "0.01", "neg_risk": neg_risk}
 
 
 def _signed_intent(venue, server, *, neg_risk=False, price="0.30"):
@@ -458,17 +460,18 @@ def test_a_neg_risk_market_s_order_is_signed_for_the_neg_risk_exchange_and_no_ot
 
 def test_a_matched_trade_moves_nothing_and_a_failed_one_leaves_nothing_behind():
     venue, server = live_venue(confirm=False)
-    token = _signed_intent(venue, server, price="0.45")
+    token = _signed_intent(venue, server, price="0.40")
     cash = server.fake._cash
-    _place(venue, token, price="0.45")
+    _place(venue, token, price="0.40")
+    server.match()  # it fills as a maker: MATCHED, not yet final
     assert server.fake._cash == cash and server.fake._positions[token]["size"] == 0
     server.settle("FAILED")
     assert server.fake._cash == cash and server.fake._positions[token]["size"] == 0
-    token = _signed_intent(venue, server, price="0.46")
-    venue.intent_of("c-1")["client_id"] = "c-1"
-    _place(venue, token, price="0.46")
+    token = _signed_intent(venue, server, price="0.39")
+    _place(venue, token, price="0.39")
+    server.match()
     server.settle("CONFIRMED")
-    assert server.fake._cash == cash - Decimal("4.1")
+    assert server.fake._cash == cash - Decimal("3.9")
     assert server.fake._positions[token]["size"] == 10
 
 

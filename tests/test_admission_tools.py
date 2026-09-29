@@ -221,7 +221,7 @@ def test_polymarket_principal_and_order_budget_are_enforced_at_their_published_b
     from dataclasses import replace
 
     from factorylab.cortex.admission_tools import tool_admission_schematics
-    from factorylab.runtime.polymarket import PLATFORM_MAX_FEE_RATE, principal_at_risk
+    from factorylab.runtime.polymarket import principal_at_risk
     from factorylab.runtime.worlds import PolymarketSpec
     from factorylab.world.polymarket_clob import BudgetSpent, RequestBudget
 
@@ -232,10 +232,13 @@ def test_polymarket_principal_and_order_budget_are_enforced_at_their_published_b
     resting = {"operation": "polymarket.place_limit", "order_hash": "0x1",
                "args": {"side": "buy", "size": "10", "price": "0.30"},
                "result": {"status": "resting"}}
-    surface = SimpleNamespace(intents={"c": resting}, cursor={}, filled={})
-    # The world's own lifetime outlay: its size at its limit, plus the most fee the
-    # exchange lets it be charged; nothing gives it back.
-    assert principal_at_risk(surface) == Decimal(3) * (1 + PLATFORM_MAX_FEE_RATE)
+    surface = SimpleNamespace(intents={"c": resting}, cursor={}, filled={},
+                              fees_paid=Decimal(0))
+    # The world's own lifetime outlay: its size at its limit (a post-only order pays no
+    # fee), plus any fee its fills were charged; nothing gives it back.
+    assert principal_at_risk(surface) == Decimal(3)
+    surface.fees_paid = Decimal("0.2")
+    assert principal_at_risk(surface) == Decimal("3.2")
     budget = RequestBudget(facts["order_requests_per_10s"], wall=lambda: 10**18)
     for _ in range(facts["order_requests_per_10s"]):
         budget.take()
