@@ -32,6 +32,7 @@ testpaths = ["tests"]
 #          of CPU and 10 s of wall time
 #   gate   runs a world or reads a shared scripted run; run before a merge
 #   slow   kills and resumes real subprocesses
+#   soak   runs a world for thousands of events (the checkpoint plateau)
 # A bare `uv run pytest` runs `check` on 2 workers. The merge gate is
 # `uv run pytest -m "check or gate" -n 4`; more workers: `-n 8`, or `-n auto` for all
 # cores (hot on a laptop). The last `-m`/`-n` on the command line wins over these.
@@ -43,6 +44,7 @@ markers = [
     "world: old name of gate, still set on every gate test",
     "network: requires network access (deselected in CI)",
     "slow: kills and resumes real subprocesses; run before merging to main",
+    "soak: runs a world for thousands of events (-m soak); run before changing what a world retains",
 ]
 addopts = "-m check -n 2 --dist loadgroup"
 

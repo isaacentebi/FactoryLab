@@ -172,6 +172,7 @@ def scripted_runtime_run(_scripted_run_cache):
 #   check  the developer inner loop, the default; no test here runs a world
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
+#   soak   runs a world for thousands of events; its own tier, run with ``-m soak``
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
 _SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
@@ -445,7 +446,7 @@ def pytest_collection_modifyitems(items):
             module.own_markers[:] = [m for m in module.own_markers
                                      if m.name not in _GATE_MARKS]
     for item in items:
-        if any(item.get_closest_marker(m) for m in ("network", "slow")):
+        if any(item.get_closest_marker(m) for m in ("network", "slow", "soak")):
             continue
         world_fixtures = _world_fixtures(item, world_functions_of)
         if (any(item.get_closest_marker(m) for m in _GATE_MARKS)
