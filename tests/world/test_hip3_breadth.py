@@ -301,3 +301,46 @@ def test_a_hip3_label_canonicalizes_like_any_other():
     made = effect_label("venue.place_market", {"coin": "xyz:TSLA", "side": "buy",
                                                "size": "0.5"})
     assert canonical_label(made.lower()) == made
+
+
+def test_a_halted_hip3_price_is_that_markets_absence_not_the_whole_reads(venue):
+    ex = venue()
+    real = ex._info.all_mids
+    ex._info.all_mids = lambda dex="": ({**real(dex), "xyz:TSLA": "0"} if dex else real())
+    mids = ex.mids()
+    assert "xyz:TSLA" not in mids and "xyz:GOLD" in mids and "BTC" in mids
+
+
+def test_a_cancel_whose_order_is_not_open_sends_nothing_and_can_be_sent_later(venue):
+    ex = venue()
+    ex._exchange = Mock()
+    ex._exchange.cancel.return_value = {"status": "ok",
+                                        "response": {"data": {"statuses": ["success"]}}}
+    ex.lookup = lambda client_id, order_id=None: type(
+        "R", (), {"status": "resting"})()
+    first = ex.cancel("88", client_id="k")
+    assert first["status"] == "uncertain"
+    ex._exchange.cancel.assert_not_called()
+    # Once the venue lists it, the same identity sends the cancel.
+    ex._info.open_orders = lambda address, dex="": [
+        {"oid": 88, "coin": "BTC", "side": "B", "sz": "1", "limitPx": "90"}] if not dex else []
+    assert ex.cancel("88", client_id="k")["status"] == "cancelled"
+    ex._exchange.cancel.assert_called_once_with("BTC", 88)
+
+
+def test_a_failed_fee_refresh_keeps_the_scaling_its_rates_were_read_with(venue):
+    ex = venue()
+    ex._info.user_fees = lambda address: {
+        "userCrossRate": "0.00045", "userAddRate": "0.00015",
+        "userSpotCrossRate": "0.0007", "userSpotAddRate": "0.0004",
+        "activeReferralDiscount": "0.1"}
+    ex.refresh_fee_rates()
+    before = {r["coin"]: r["taker_fee_rate"] for r in ex.instruments()["perp"]}
+
+    def unanswered(address):
+        raise OSError("userFees unanswered")
+
+    ex._info.user_fees = unanswered
+    ex.refresh_fee_rates()
+    assert {r["coin"]: r["taker_fee_rate"] for r in ex.instruments()["perp"]} == before
+    assert before["BTC"] == "0.000405"  # 0.00045 x (1 - 0.1)

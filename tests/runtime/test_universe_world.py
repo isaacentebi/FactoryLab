@@ -146,3 +146,33 @@ def test_the_pinned_universe_survives_a_resume_and_is_never_resolved_again(tmp_p
     ledger = Ledger.open_read_only(str(path), manifest=json.loads(
         universe_manifest().canonical_json()))
     assert Counter(item.get("kind") for item in ledger.items())["venue.universe"] == 1
+
+
+def test_a_market_that_left_the_broadcast_keeps_no_mark_a_trade_could_open_at():
+    """A seat could read today's price and name the move it already saw: a mark of a
+    market no longer broadcast is dropped, so a trade named on it opens at the first
+    mid at or after it is named (ruling R10-h)."""
+    rt = runtime(30)
+    rt.venue_marks["C3"] = [1, "100"]  # broadcast once, long ago
+    rt.venue_marks["C4"] = [1, "100"]
+    rt.order_intents["c"] = {"args": {"coin": "C4"}, "operation": "venue.place_market"}
+    rt._forget_unbroadcast_marks()
+    assert "C3" not in rt.venue_marks and "C4" in rt.venue_marks
+
+
+def test_a_resting_order_the_fill_cursor_tracks_keeps_its_market_in_play():
+    rt = runtime(30)
+    rt.consequence_fills.orders["k"] = {"coin": "C9", "oid": "5", "booked": "0"}
+    assert "C9" in rt._broadcast_markets()
+
+
+def test_the_schematics_render_of_a_selector_world_resolves_nothing_and_says_so():
+    """A render reads no venue (runtime/published.py): the universe is published by its
+    selectors as not yet resolved, and no coin is invented for a tool example."""
+    from scripts import charter_session
+
+    block = charter_session.launch_world(load_manifest("edition7-breadth-testnet"), "run")
+    universe = block["trading_markets"]["universe"]
+    assert universe["selectors"] == {"coins": ["*", "xyz:*"], "spot_pairs": ["*/USDC"]}
+    assert universe["resolved"]["status"] == "unavailable"
+    assert block["trading_markets"]["perp"] == []

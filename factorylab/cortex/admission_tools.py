@@ -206,8 +206,9 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "cancel": "A fake cancellation names a known order on the supplied coin. A "
                 "live cancellation names a nonzero decimal integer venue identity; one that "
                 "names no coin is sent on the order's own market as the venue's open orders "
-                "state it, never on every market; already-terminal orders and a lookup "
-                "bound to another id are refused.",
+                "state it, never on every market, and is not sent while the order is not "
+                "among them; already-terminal orders and a lookup bound to another id are "
+                "refused.",
                 "leverage": "Spot has no leverage. Perp leverage is a positive integer. The "
                 "default random-walk fake also caps it at default_fake_max_leverage; "
                 "a supplied fake adapter uses its own max_leverage. Live leverage above a "

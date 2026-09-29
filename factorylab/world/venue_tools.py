@@ -233,7 +233,9 @@ class VenueTools:
         # whatever the venue allows, and the venue's refusal is the only ceiling.
         # Callers that still pass the deprecated ``[tools] max_leverage`` keep working.
         del max_leverage
-        if not coins or any(not isinstance(coin, str) or not coin for coin in coins):
+        # No coin at all is a world whose universe is not resolved yet (a schematics
+        # render reads no venue): nothing is tradeable, and the schemas say so.
+        if any(not isinstance(coin, str) or not coin for coin in coins):
             raise ValueError("coins must contain nonempty coin names")
         self.exchange = exchange
         self.coins, self.spot_pairs = tuple(coins), tuple(spot_pairs)

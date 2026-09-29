@@ -753,6 +753,22 @@ class VenueMixin:
             coins=universe_names.explicit_markets(self.m.exchange.coins),
             spot_pairs=universe_names.explicit_markets(self.m.exchange.spot_pairs))
 
+    def _forget_unbroadcast_marks(self) -> None:
+        """Drop the latest mid kept for a market the tick no longer broadcasts.
+
+        Guarantees, in a world with a universe, that a named trade never opens at the
+        last mid of a market that left the broadcast set hours ago (a seat could read
+        today's price and name the move it already saw): with no current mark, the
+        trade opens at the market's first mid at or after it is named (ruling R10-h),
+        and the market joins the broadcast by being named. A world without selectors
+        broadcasts every trading market every tick, and keeps every mark as before.
+        """
+        if not getattr(self, "universe", None):
+            return
+        keep = set(self._broadcast_markets())
+        for coin in [c for c in getattr(self, "venue_marks", {}) if c not in keep]:
+            del self.venue_marks[coin]
+
     def _broadcast_markets(self) -> tuple[str, ...]:
         """The markets whose venue facts the tick broadcasts: bounded by the world's own
         activity, never by the size of its universe.
@@ -784,6 +800,11 @@ class VenueMixin:
         in_play |= {str(intent["args"]["coin"])
                     for intent in (getattr(self, "order_intents", None) or {}).values()
                     if isinstance(intent.get("args"), dict) and intent["args"].get("coin")}
+        # An order the fill cursor still tracks (acknowledged, resting, not yet booked):
+        # its market's mid at a horizon marks the return that sent it.
+        in_play |= {str(order["coin"]) for order in (getattr(
+            getattr(self, "consequence_fills", None), "orders", None) or {}).values()
+                    if isinstance(order, dict) and order.get("coin")}
         memo = getattr(self, "_account_memo", None)
         account = memo[1] if memo is not None else None
         if account is not None:

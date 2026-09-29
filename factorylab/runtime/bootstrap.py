@@ -967,7 +967,9 @@ class BootstrapMixin:
             "price_micro_per_call": 0,
             "kind": "market",
         }
-        coin = self.venue_tools.coins[0]
+        # A world whose universe is not resolved (a schematics render) has no coin to
+        # show: its coin-taking venue tools carry no example rather than an invented one.
+        coin = self.venue_tools.coins[0] if self.venue_tools.coins else None
         examples = {
             "venue.instruments": [{}], "venue.mids": [{}], "venue.funding": [{}],
             "venue.candles": [{"coin": coin, "interval": "1m", "n": 20}],
@@ -988,6 +990,11 @@ class BootstrapMixin:
             "outcome.get": [{"outcome_id": "outcome:1"}, {"handle": "decision-1"}],
             **vault_examples,
         }
+        if coin is None:
+            for tool_id in ("venue.candles", "venue.order_book", "venue.funding_history",
+                            "venue.place_market", "venue.place_limit", "venue.cancel",
+                            "venue.close", "venue.set_leverage"):
+                examples[tool_id] = []
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
             "description": "Read an archived artifact by its sha256: your own working "

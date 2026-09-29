@@ -443,6 +443,8 @@ class Runtime(
             self._tick_treasury()
             self._classify_financing()  # a conversion confirmed this tick is spendable now
             self._reconcile_x402()
+            # A universe world's marks are its broadcast markets' (a no-op without one).
+            self._forget_unbroadcast_marks()
             if self.venue is not None:
                 # Mids and funding; fills come only through the fill cursor below.
                 observed = self.venue.on_tick(self.clock.now_ns)

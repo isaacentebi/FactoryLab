@@ -1149,13 +1149,14 @@ class FakeExchange:
 
 #: How a market's fee rates follow from an account's ``userFees`` answer, as the venue's
 #: fee schedule states it (hyperliquid.gitbook.io/hyperliquid-docs/trading/fees): a
-#: HIP-3 perp scales both rates by ``1 + d`` for a ``deployerFeeScale`` d below 1, else
-#: ``2d``; growth mode multiplies them by 0.1; a positive rate is multiplied by
-#: ``1 - activeReferralDiscount``.
+#: HIP-3 perp scales a positive rate by ``1 + d`` for a ``deployerFeeScale`` d below 1,
+#: else ``2d``; growth mode multiplies both rates by 0.1; a positive rate is multiplied
+#: by ``1 - activeReferralDiscount``. A negative maker rate (a rebate) takes only the
+#: growth-mode factor.
 FEE_SCALING_BASIS = ("fraction of notional: this account's userFees rate for the market "
-                     "class, times the HIP-3 fee scale (1 + deployerFeeScale below 1, else "
-                     "2 x deployerFeeScale), times 0.1 in growth mode, times "
-                     "1 - activeReferralDiscount on a positive rate")
+                     "class; a positive rate times the HIP-3 fee scale (1 + deployerFeeScale "
+                     "below 1, else 2 x deployerFeeScale) and 1 - activeReferralDiscount; "
+                     "both rates times 0.1 in growth mode")
 
 
 def scaled_fee_rates(base: dict, *, deployer_fee_scale: Any = None, growth_mode: bool = False,
@@ -1301,7 +1302,10 @@ class HyperliquidExchange:
                 reason = "the venue's userFees answer did not state them"
             except Exception as exc:  # noqa: BLE001 - an unread rate is unavailable
                 reason = f"the venue's userFees read failed: {type(exc).__name__}"
-        self._fee_answer = answer if isinstance(answer, dict) else {}
+        # A failed refresh keeps the last answer the rates in force were read from, so
+        # a market's scaling (its referral discount) never changes without a new read.
+        self._fee_answer = (answer if isinstance(answer, dict)
+                            else getattr(self, "_fee_answer", None) or {})
         rates: dict[str, dict[str, str]] = {}
         for market, (taker, maker) in self.FEE_FIELDS.items():
             try:
@@ -1532,9 +1536,18 @@ class HyperliquidExchange:
                 answer = self._guarded("all_mids", lambda dex=dex: self._info.all_mids(dex))
             except VenueUnavailable:
                 continue
-            if isinstance(answer, dict):
-                out.update({name: value for name, value in answer.items()
-                            if isinstance(name, str) and name.startswith(f"{dex}:")})
+            if not isinstance(answer, dict):
+                continue
+            for name, value in answer.items():
+                # One halted or malformed HIP-3 price is that market's absence, never
+                # the whole read's: a dex's listing changes under its deployer.
+                try:
+                    price = Decimal(str(value))
+                except (ArithmeticError, ValueError):
+                    continue
+                if (isinstance(name, str) and name.startswith(f"{dex}:")
+                        and price.is_finite() and price > 0):
+                    out[name] = value
         return out
 
     def _dex_contexts(self, dex: str) -> Any:
@@ -2221,7 +2234,19 @@ class HyperliquidExchange:
                                  if row["order_id"] == order_id), None)
                 except (RuntimeError, OSError, ValueError, KeyError, TypeError):
                     coin = None
-            for name in (coin,) if coin is not None else ():
+            if coin is None:
+                # Nothing was sent: the identity is not held as a submitted cancel, so a
+                # retry reads the open orders again and may send it.
+                result = self.lookup(client_id, order_id=order_id)
+                results.pop(client_id, None)
+                if result.status == "cancelled":
+                    return {"status": "cancelled", "order_id": order_id}
+                if result.status in ("filled", "rejected"):
+                    return {"status": "rejected", "order_id": order_id,
+                            "error": "order already terminal"}
+                return {"status": "uncertain", "order_id": order_id,
+                        "error": "the order is not among the venue's open orders"}
+            for name in (coin,):
                 try:
                     response = self._exchange.cancel(self._wire_coin(name), int(order_id))
                     if response.get("status") == "err":

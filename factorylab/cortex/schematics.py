@@ -1415,12 +1415,17 @@ class SchematicsMixin:
         to at launch, with the route to every market's record; the resolved list itself
         is ``world.read`` section ``markets``, never carried in a prompt.
         """
+        from factorylab.world import universe as universe_names
+
         pinned = getattr(self, "universe", None)
-        if not pinned:
+        declared = (universe_names.selectors(self.m.exchange.coins)
+                    or universe_names.selectors(self.m.exchange.spot_pairs))
+        if not pinned and not declared:
             return {"perp": list(self.venue_tools.coins),
                     "spot": list(self.venue_tools.spot_pairs)}
+        # A schematics render reads no venue, so its selectors are not resolved yet.
+        pinned = pinned or {"coins": [], "spot_pairs": []}
         tools = self.venue_tools
-        from factorylab.world import universe as universe_names
 
         selected = set(pinned["coins"]) | set(pinned["spot_pairs"])
         explicit = (set(universe_names.explicit_markets(self.m.exchange.coins))
@@ -1434,7 +1439,11 @@ class SchematicsMixin:
                 "selectors": {
                     "coins": list(universe_names.selectors(self.m.exchange.coins)),
                     "spot_pairs": list(universe_names.selectors(self.m.exchange.spot_pairs))},
-                "resolved": {"perp": len(pinned["coins"]), "spot": len(pinned["spot_pairs"])},
+                "resolved": ({"perp": len(pinned["coins"]), "spot": len(pinned["spot_pairs"])}
+                             if getattr(self, "universe", None) else
+                             {"status": "unavailable",
+                              "reason": "resolved against the venue's listing at launch; "
+                                        "this render reads no venue"}),
                 "rule": ("* is every live perp of the venue's first perp dex, <dex>:* every "
                          "live perp of that HIP-3 dex, */USDC every USDC-quoted spot pair. "
                          "Resolved against the venue's listing at launch and fixed for the "
