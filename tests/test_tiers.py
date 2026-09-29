@@ -14,6 +14,8 @@ import pytest
 from tests.conftest import (
     _STEPPED_A_WORLD,
     CHECK_WALL_CEILING_S,
+    SOAK_COLLECTED,
+    SOAK_INVENTORY,
     _check_limit_problem,
     _files_over_budget,
     _stepped_a_world_problem,
@@ -155,20 +157,29 @@ def test_a_check_test_that_steps_a_one_event_world_fails_under_the_guard(request
     request.node.stash[_STEPPED_A_WORLD] = False
 
 
-def test_any_change_to_what_the_factory_runs_requires_soak_and_a_doc_does_not():
-    """Soak is required for any change under factorylab/ and to the gauntlet, the
-    modules Sol found missing from a derived list among them; a doc is exempt."""
-    required = ["factorylab/runtime/subscriptions.py", "factorylab/settlement/receipts.py",
-                "factorylab/runtime/clockwork.py", "factorylab/world/venue_tools.py",
-                "factorylab/kernel/ledger.py", "tests/gauntlet/test_thrash.py",
-                "scripts/gauntlet.py"]
-    exempt = ["README.md", "AGENTS.md", "docs/manifest.md", "factorylab/runtime/NOTES.md",
-              "deploy/README.md", "tests/runtime/test_resume.py"]
+def test_any_change_but_a_markdown_file_requires_soak():
+    """One rule (Sol on #179: a world's toml changed a checkpoint's retained history and
+    required nothing): every changed path requires soak except a ``*.md``."""
+    required = ["worlds/scripted.toml", "pyproject.toml", "uv.lock", "tests/conftest.py",
+                "tests/runtime/test_checkpoint_plateau.py", "scripts/fastloop.py",
+                "deploy/start.sh", "factorylab/runtime/clockwork.py",
+                "tests/soak_inventory.txt"]
+    exempt = ["README.md", "AGENTS.md", "docs/manifest.md", "deploy/README.md"]
     assert soak_required(required + exempt) == required
 
 
-def _soak_session(tmp_path, *, marks, tiers, collected, passed, status=None,
-                  args=("-m", "soak", "-n", "2"), environ=None, deselected=0, **options):
+def test_the_soak_inventory_is_what_the_soak_marker_selects(request):
+    """tests/soak_inventory.txt names, sorted, every test pytest's own collection of the
+    whole repository marks soak: adding, renaming or removing a soak test without its
+    inventory line fails here (a deliberate change is a reviewed diff of that file)."""
+    collected = request.config.stash.get(SOAK_COLLECTED, None)
+    if collected is None:
+        pytest.skip("this session did not collect the whole repository")
+    assert SOAK_INVENTORY.read_text().split() == collected
+
+
+def _soak_session(tmp_path, *, marks, tiers, passed, status=None,
+                  args=("-m", "soak", "-n", "2"), environ=None, **options):
     from types import SimpleNamespace
 
     from tests import conftest
@@ -176,62 +187,64 @@ def _soak_session(tmp_path, *, marks, tiers, collected, passed, status=None,
     plugin = conftest._SoakRequirement(tmp_path)
     plugin._record = lambda: tmp_path / "passes"
     option = SimpleNamespace(**{"keyword": "", "markexpr": marks, **options})
-    counted = SimpleNamespace(count=deselected)
     config = SimpleNamespace(
         args_source=pytest.Config.ArgsSource.TESTPATHS, option=option,
-        invocation_params=SimpleNamespace(args=tuple(args)),
-        pluginmanager=SimpleNamespace(get_plugin=lambda name: counted))
+        invocation_params=SimpleNamespace(args=tuple(args)))
     session = SimpleNamespace(config=config, exitstatus=status or pytest.ExitCode.OK)
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(conftest.os, "environ", environ or {})
         plugin.pytest_sessionstart(session)
-        plugin.collected = set(collected)
         for nodeid in passed:
             plugin.pytest_runtest_logreport(SimpleNamespace(
-                when="call", passed=True, nodeid=nodeid, factorylab_tier=tiers))
+                when="call", passed=True, failed=False, nodeid=nodeid,
+                factorylab_tier=tiers))
         if not passed:  # a setup report: the tier ran, no test body did
             plugin.pytest_runtest_logreport(SimpleNamespace(
-                when="setup", passed=True, nodeid="t", factorylab_tier=tiers))
+                when="setup", passed=True, failed=False, nodeid="t", factorylab_tier=tiers))
         plugin.pytest_sessionfinish(session)
     return session.exitstatus, plugin
 
 
-def test_only_exactly_the_whole_soak_tier_passing_certifies_its_tree(tmp_path, monkeypatch):
+def test_only_the_whole_soak_inventory_passing_certifies_its_tree(tmp_path, monkeypatch):
     """A soak pass is recorded only for exactly ``-m soak`` (with ``-n`` and xdist's
-    ``-p``), no PYTEST_ADDOPTS, no ``-o``, no stepwise, no soak test deselected, every
-    collected test passing its call, on one tree (Sol on #179: --setup-only, stepwise,
-    -o python_functions, PYTEST_ADDOPTS and a deselecting hook each certified)."""
+    ``-p``), no PYTEST_ADDOPTS or PYTEST_PLUGINS, no narrowing option in effect from any
+    source, and the tests whose call passed exactly the inventory, on one tree. Sol's
+    narrowings on #179 (ini python_functions or testpaths, collect_ignore, a plugin
+    that drops tests, addopts=--lf) leave a passing run short of the inventory."""
     from tests import conftest
 
     monkeypatch.setattr(conftest, "_tree_hash", lambda root: "tree-a")
     ids = ["tests/a.py::soak_one", "tests/a.py::soak_two"]
+    inventory = tmp_path / "inventory.txt"
+    inventory.write_text("\n".join(ids) + "\n")
+    monkeypatch.setattr(conftest, "SOAK_INVENTORY", inventory)
     record = tmp_path / "passes"
     refused = [
-        dict(args=("-m", "soak", "--setup-only")), dict(args=("-m", "soak", "-k", "one")),
-        dict(args=("-m", "soak", "tests/a.py")), dict(args=("-m", "soak", "-x")),
-        dict(args=("-m", "soak", "--deselect", "tests/a.py::soak_two")),
-        dict(args=("-m", "soak", "--sw"), stepwise=True),
-        dict(args=("-m", "soak", "-o", "python_functions=soak_one"),
-             override_ini=["python_functions=soak_one"]),
+        dict(passed=ids[:1]),  # python_functions, testpaths, collect_ignore narrowed it
+        dict(passed=[*ids, "tests/a.py::soak_three"]),  # a test the inventory lacks
+        dict(passed=[]), dict(status=pytest.ExitCode.TESTS_FAILED),
+        dict(environ={"PYTEST_PLUGINS": "dropper"}),
         dict(environ={"PYTEST_ADDOPTS": "-o python_functions=soak_one"}),
-        dict(stepwise=True), dict(override_ini=["python_functions=soak_one"]),
-        dict(deselected=1), dict(args=("-m", "soak or slow")),
-        dict(passed=[]), dict(passed=ids[:1]),
+        dict(lf=True), dict(failedfirst=True), dict(stepwise=True),
+        dict(deselect=["tests/a.py::soak_two"]), dict(ignore=["tests/b.py"]),
+        dict(ignore_glob=["tests/b*"]), dict(keyword="one"), dict(collectonly=True),
+        dict(override_ini=["python_functions=soak_one"]),
+        dict(args=("-m", "soak", "tests/a.py")), dict(args=("-m", "soak or slow")),
     ]
     for case in refused:
         _, plugin = _soak_session(tmp_path, **{"marks": "soak", "tiers": "soak",
-                                               "collected": ids, "passed": ids, **case})
+                                               "passed": ids, **case})
         assert not record.exists(), case
-        assert plugin.note.startswith("soak run not recorded"), case
+        # A -k run is not whole: it is not judged at all, so it says nothing.
+        assert (plugin.note or "soak run not recorded").startswith("soak run not recorded")
     trees = iter(["tree-a", "tree-b"])  # edited while it ran
     monkeypatch.setattr(conftest, "_tree_hash", lambda root: next(trees))
-    _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids)
+    _soak_session(tmp_path, marks="soak", tiers="soak", passed=ids)
     assert not record.exists()
     monkeypatch.setattr(conftest, "_tree_hash", lambda root: "tree-a")
     for args in (("-m", "soak"), ("-m", "soak", "-n", "2"), ("-m", "soak", "-n2"),
                  ("-m", "soak", "-p", "xdist.looponfail")):
-        _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids,
-                      args=args)
+        _soak_session(tmp_path, marks="soak", tiers="soak", passed=ids, args=args)
     assert record.read_text() == "tree-a\n" * 4
 
 
@@ -249,12 +262,15 @@ def test_a_whole_gate_on_a_soak_required_change_fails_until_soak_passed_on_its_t
     ids = ["tests/a.py::soak_one"]
 
     def gate():
-        return _soak_session(tmp_path, marks="gate", tiers="gate", collected=["g"],
-                             passed=["g"], args=("-m", "gate", "-n", "2"))
+        return _soak_session(tmp_path, marks="gate", tiers="gate", passed=["g"],
+                             args=("-m", "gate", "-n", "2"))
 
     status, plugin = gate()
     assert status == pytest.ExitCode.TESTS_FAILED and "ledger.py" in plugin.problem
-    _soak_session(tmp_path, marks="soak", tiers="soak", collected=ids, passed=ids)
+    inventory = tmp_path / "inventory.txt"
+    inventory.write_text("\n".join(ids) + "\n")
+    monkeypatch.setattr(conftest, "SOAK_INVENTORY", inventory)
+    _soak_session(tmp_path, marks="soak", tiers="soak", passed=ids)
     assert gate()[0] == pytest.ExitCode.OK
     tree["now"] = "tree-b"  # never certified
     assert gate()[0] == pytest.ExitCode.TESTS_FAILED
@@ -273,8 +289,8 @@ def test_a_whole_gate_on_a_soak_required_change_fails_until_soak_passed_on_its_t
                                invocation_params=SimpleNamespace(args=("-m", "gate"))),
         exitstatus=pytest.ExitCode.OK)
     plugin.pytest_sessionstart(session)
-    plugin.pytest_runtest_logreport(SimpleNamespace(when="call", passed=True, nodeid="g",
-                                                    factorylab_tier="gate"))
+    plugin.pytest_runtest_logreport(SimpleNamespace(when="call", passed=True, failed=False,
+                                                    nodeid="g", factorylab_tier="gate"))
     tree["now"] = "tree-c"
     plugin.pytest_sessionfinish(session)
     assert session.exitstatus == pytest.ExitCode.TESTS_FAILED

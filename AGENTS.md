@@ -160,17 +160,24 @@ uv run pytest -m soak -n 2
 ```
 
 Running the soak tier is REQUIRED, and its output is returned with the gate's:
-- for any change under `factorylab/`, or to the gauntlet (`tests/gauntlet/`,
-  `scripts/gauntlet.py`), except `*.md` files (`SOAK_REQUIRED`, `tests/conftest.py`);
+- for any change to any path but a `*.md` file (worlds, pyproject, the lock, tests,
+  scripts and deploy included);
 - before any world launch;
 - on request.
 
-It is enforced locally. Only `uv run pytest -m soak` (optionally with `-n <workers>`)
-certifies a tree, recording its hash in `factorylab-soak-passes` in the git common
-directory, and only when `PYTEST_ADDOPTS` is empty, no ini option is overridden, no
-soak test is deselected, every collected soak test passed, and the tree did not change
-while it ran; any other soak run says why it certified nothing. A whole gate run
-(`-m gate` or `-m "check or gate"`, no file arguments, no `-k`) on a tree that changed a
-required path since `origin/main` fails until that exact tree is certified, and fails if
-the tree changed while it ran. Run soak first, then the whole gate. This guards against
-honest mistakes, not forgery: the record is plain text a person could write.
+It is enforced locally. `tests/soak_inventory.txt` names every soak test, sorted; a
+check test keeps it equal to what the soak marker selects. Only `uv run pytest -m soak`
+(optionally with `-n <workers>`) certifies a tree, recording its hash in
+`factorylab-soak-passes` in the git common directory, and only when `PYTEST_ADDOPTS` and
+`PYTEST_PLUGINS` are unset, no narrowing option is in effect from any source (`--lf`,
+`--ff`, stepwise, `--deselect`, `--ignore`, `-k`, `--collect-only`, `-o`, ...), nothing
+failed, the tests whose call passed are exactly the inventory, and the tree did not
+change while it ran; any other soak run says why it certified nothing. A whole gate run
+(`-m gate` or `-m "check or gate"`, no file arguments, no `-k`) on a tree with a
+required change since `origin/main` fails until that exact tree is certified, and fails
+if the tree changed while it ran. Run soak first, then the whole gate.
+
+This guards against honest mistakes. It is not a security boundary: the record is
+plain text a person could write, and redefining the soak set on purpose (the marker,
+the inventory, ini or conftest collection rules, in reviewed files) is code review's to
+catch, not this guard's.

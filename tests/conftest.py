@@ -268,9 +268,9 @@ def shared_result(_scripted_run_cache):
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
 #   soak   the long runs (``-m soak``): the checkpoint plateau and the gauntlet's long
-#          worlds, whose short lengths run in gate. REQUIRED for a change to any of
-#          ``SOAK_REQUIRED`` paths, before any world launch, and on request (AGENTS.md,
-#          Verify gate); a whole gate run enforces it (``_SoakRequirement``)
+#          worlds, whose short lengths run in gate. REQUIRED for a change to any path
+#          but a ``*.md``, before any world launch, and on request (AGENTS.md, Verify
+#          gate); a whole gate run enforces it (``_SoakRequirement``)
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
 _SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run",
                                     "shared_result"})
@@ -518,7 +518,7 @@ def _runs_world(item, world_functions_of, world_fixtures) -> bool:
 
 
 @pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(config, items):
     """Partition collected tests into tiers, one test at a time.
 
     A test is ``gate`` when the test itself (or its class) is marked ``gate`` (or
@@ -579,6 +579,12 @@ def pytest_collection_modifyitems(items):
         else:
             item.add_marker(pytest.mark.check)
             item.add_marker(pytest.mark.fast)
+    # The whole repository's collection, before any -m deselects from it: its soak tests
+    # are what the inventory must name (``SOAK_INVENTORY``).
+    if (config.args_source is pytest.Config.ArgsSource.TESTPATHS
+            and not any(getattr(config.option, name, None) for name in _NARROWING_OPTIONS)):
+        config.stash[SOAK_COLLECTED] = sorted(item.nodeid for item in items
+                                              if item.get_closest_marker("soak"))
 
 
 def _seconds_from_env(name: str, default: float) -> float | None:
@@ -807,20 +813,22 @@ class _GateBudget:
                   red=True)
 
 
-#: A change under these requires a soak pass (AGENTS.md, Verify gate): everything the
-#: factory runs, and the gauntlet. When in doubt, it is required.
-SOAK_REQUIRED = ("factorylab/", "tests/gauntlet/", "scripts/gauntlet.py")
-#: Except these, which cannot change what a world retains, prices or recovers.
-SOAK_EXEMPT_SUFFIXES = (".md",)
+#: The soak tier's tests, by node id, sorted (tests/soak_inventory.txt): a soak run
+#: certifies only when exactly these passed. A check test keeps it equal to what the
+#: soak marker selects (``test_the_soak_inventory_is_what_the_soak_marker_selects``).
+SOAK_INVENTORY = _TESTS_ROOT / "soak_inventory.txt"
+#: Whether this session's collection was the whole repository's, and the soak tests in
+#: it: set by the collection hook, read by the inventory's check test.
+SOAK_COLLECTED = pytest.StashKey[list]()
 #: The file, in the repository's common git directory (shared by its worktrees), listing
 #: the tree hashes on which the whole soak tier passed.
 SOAK_PASSES = "factorylab-soak-passes"
 
 
 def soak_required(paths: list[str]) -> list[str]:
-    """The paths among ``paths`` whose change requires a soak pass."""
-    return [path for path in paths if path.startswith(SOAK_REQUIRED)
-            and not path.endswith(SOAK_EXEMPT_SUFFIXES)]
+    """The paths among ``paths`` whose change requires a soak pass: every one but a
+    Markdown file (AGENTS.md, Verify gate). One rule: when in doubt, it is required."""
+    return [path for path in paths if not path.endswith(".md")]
 
 
 def _git(root: Path, *args: str, env: dict | None = None) -> str | None:
@@ -856,17 +864,25 @@ def _changed_since_main(root: Path) -> list[str] | None:
     return sorted({*changed.split(), *untracked.split()})
 
 
+#: Options that narrow a run or run no test body, from whatever source (the command
+#: line, ini ``addopts``): a soak run with any of them active certifies nothing.
+_NARROWING_OPTIONS = ("lf", "failedfirst", "stepwise", "stepwise_skip", "deselect",
+                      "ignore", "ignore_glob", "keyword", "collectonly", "setuponly",
+                      "setupplan", "exitfirst", "override_ini")
+
+
 def uncertifiable(args, environ, option) -> str | None:
-    """Why a soak run with these invocation ``args``, environment and options certifies
-    nothing, or None. Only exactly ``-m soak``, optionally with ``-n <workers>`` and
-    ``-p`` for xdist's internals, certifies: no ``PYTEST_ADDOPTS``, no ``-o``, no
-    stepwise, and anything else named (a file, ``-k``, ``--deselect``, ...) is out."""
-    if environ.get("PYTEST_ADDOPTS", "").strip():
-        return "PYTEST_ADDOPTS is set"
-    if getattr(option, "stepwise", False) or getattr(option, "stepwise_skip", False):
-        return "stepwise is on"
-    if getattr(option, "override_ini", None):
-        return "an ini option is overridden (-o)"
+    """Why a soak run with these invocation ``args``, environment and effective options
+    certifies nothing, or None: only exactly ``-m soak``, optionally with ``-n
+    <workers>`` and ``-p`` for xdist's internals, with no ``PYTEST_ADDOPTS`` or
+    ``PYTEST_PLUGINS`` and none of ``_NARROWING_OPTIONS`` in effect. What such a run
+    must then have passed is the inventory (``SOAK_INVENTORY``)."""
+    for name in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS"):
+        if environ.get(name, "").strip():
+            return f"{name} is set"
+    for name in _NARROWING_OPTIONS:
+        if getattr(option, name, None):
+            return f"--{name} (or its ini default) narrows the run"
     args, marks = list(args), None
     while args:
         arg = args.pop(0)
@@ -882,34 +898,15 @@ def uncertifiable(args, environ, option) -> str | None:
     return None if marks == "soak" else "the run is not -m soak"
 
 
-class _SoakDeselections:
-    """Counts the soak tests a collection deselected, in each process that collects; an
-    xdist worker tells its controller. A certifying run deselects none."""
-
-    def __init__(self):
-        self.count = 0
-
-    def pytest_deselected(self, items):
-        self.count += sum(1 for item in items if item.get_closest_marker("soak"))
-
-    def pytest_sessionfinish(self, session):
-        if hasattr(session.config, "workerinput"):
-            session.config.workeroutput["factorylab_soak_deselected"] = self.count
-
-    @pytest.hookimpl(optionalhook=True)
-    def pytest_testnodedown(self, node, error):
-        self.count += getattr(node, "workeroutput", {}).get("factorylab_soak_deselected", 0)
-
-
 class _SoakRequirement:
     """The soak tier, enforced: a guard against honest mistakes, not a security boundary
     (the record is plain text).
 
     A soak run certifies its tree (appends its hash to ``SOAK_PASSES``) only when its
-    invocation is exactly the whole tier (``uncertifiable``), it deselected no soak test
-    (``_SoakDeselections``), every test it collected passed its call, and the tree is
-    the same at its end as at its start; anything else runs as usual and says why it
-    certified nothing. A whole gate run (``-m gate`` or ``-m "check or gate"``, no file
+    invocation and effective options are exactly the whole tier's (``uncertifiable``),
+    nothing failed, the tests whose call passed are exactly ``SOAK_INVENTORY``, and the
+    tree is the same at its end as at its start; anything else runs as usual and says
+    why it certified nothing. A whole gate run (``-m gate`` or ``-m "check or gate"``, no file
     arguments, no ``-k``) on a tree that changed a soak-required path since
     ``origin/main`` (``soak_required``) fails unless that tree is certified, and fails if
     the tree changed while it ran. Without git (or ``origin/main``) nothing is judged,
@@ -918,8 +915,8 @@ class _SoakRequirement:
 
     def __init__(self, root: Path):
         self.root, self.tree, self.problem, self.note = root, None, None, None
-        self.collected: set[str] | None = None
         self.passed: set[str] = set()
+        self.failed = False
         self.tiers: set[str] = set()
 
     @staticmethod
@@ -936,31 +933,26 @@ class _SoakRequirement:
         if self._whole(session.config) and ("gate" in marks or "soak" in marks):
             self.tree = _tree_hash(self.root)
 
-    def pytest_collection_finish(self, session):
-        self.collected = {item.nodeid for item in session.items}
-
-    @pytest.hookimpl(optionalhook=True)
-    def pytest_xdist_node_collection_finished(self, node, ids):
-        """Under xdist the controller collects nothing: each worker says what it did."""
-        self.collected = set(ids) if self.collected is None else self.collected & set(ids)
-
     def pytest_runtest_logreport(self, report):
         tier = getattr(report, "factorylab_tier", None)
         if tier is not None:
             self.tiers.add(tier)
         if report.when == "call" and report.passed:
             self.passed.add(report.nodeid)
+        if report.failed:
+            self.failed = True
 
     def _why_not_certified(self, session) -> str | None:
         config = session.config
-        deselections = config.pluginmanager.get_plugin("factorylab-soak-deselections")
         why = uncertifiable(config.invocation_params.args, os.environ, config.option)
-        if why is None and deselections is not None and deselections.count:
-            why = f"{deselections.count} soak test(s) deselected"
-        if why is None and session.exitstatus != pytest.ExitCode.OK:
+        if why is None and (session.exitstatus != pytest.ExitCode.OK or self.failed):
             why = "the run did not pass"
-        if why is None and not (self.collected and self.passed == self.collected):
-            why = "not every collected soak test passed its call"
+        if why is None:
+            inventory = set(SOAK_INVENTORY.read_text().split())
+            missing, extra = inventory - self.passed, self.passed - inventory
+            if missing or extra:
+                why = (f"the passed tests are not the inventory ({len(missing)} missing, "
+                       f"{len(extra)} not in it; tests/soak_inventory.txt)")
         if why is None and _tree_hash(self.root) != self.tree:
             why = "the tree changed while it ran"
         return why
@@ -1015,7 +1007,6 @@ def pytest_configure(config):
     directories = _TemporaryDirectories()
     # Registered while configuring: pytest calls its (historic) pytest_configure now.
     config.pluginmanager.register(directories, "factorylab-temporary-directories")
-    config.pluginmanager.register(_SoakDeselections(), "factorylab-soak-deselections")
     # Only the process that sees every report judges the budget: the controller under
     # xdist, or the one process without it.
     if not hasattr(config, "workerinput"):
