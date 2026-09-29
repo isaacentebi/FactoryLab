@@ -27,7 +27,8 @@ from tests.runtime.test_polymarket_surface import still_fake
 from tests.world.fake_clob import FakeClob, _Wall, make_signer
 
 
-def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None, **spec):
+def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None,
+               opened=True, **spec):
     signer = make_signer()
     manifest = replace(load_manifest("scripted"), polymarket=PolymarketSpec(
         enabled=True, venue="live", orders=True, funder=signer.address,
@@ -54,6 +55,8 @@ def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None
                                 wall=wall or _Wall(), nonce=lambda: 7)
     venue.intent_of = installed.intent_of  # the runtime's own intents, as installed
     rt.polymarket.venue.target = venue
+    if opened:
+        polymarket.tick(rt)  # a world's first tick reads the pot's opening, before any order
     return rt, server
 
 
@@ -149,7 +152,8 @@ def test_a_lost_answer_is_recovered_by_hash_and_never_resent():
     result = buy(rt, server, handle)
     assert result["status"] == "resting"
     assert [c for c in server.calls if c == ("POST", "/order")] == [("POST", "/order")]
-    kinds = [i["kind"] for i in rt.seen_items if i["kind"].startswith("polymarket.")]
+    kinds = [i["kind"] for i in rt.seen_items if i["kind"] in (
+        "polymarket.intent", "polymarket.uncertain", "polymarket.acknowledged")]
     assert kinds[:3] == ["polymarket.intent", "polymarket.uncertain",
                          "polymarket.acknowledged"]
     # The same identity again reconciles; it is never a second order.
@@ -399,6 +403,7 @@ def test_a_sale_of_tokens_this_world_never_acquired_is_refused():
     rt, server = live_world()
     held = token(server)
     server.fake._positions[held] = {"size": Decimal(10), "avg_px": Decimal("0.2")}
+    rt.polymarket._account_memo = None  # the funder's tokens, as the next read shows them
     handle = collateral_decision(rt)
     refused = buy(rt, server, handle, side="sell", size="5", price="0.39")
     assert refused["status"] == "rejected" and "acquired" in refused["error"]
@@ -546,6 +551,26 @@ def test_money_gone_that_the_books_do_not_explain_stops_new_exposure_until_it_ag
     server.fake._cash += Decimal(5)
     polymarket.tick(rt)
     assert buy(rt, server, collateral_decision(rt))["status"] == "resting"
+
+
+def test_no_order_is_taken_before_the_pot_s_opening_is_read():
+    """Codex P1 on #177: the opening read failed, a fill whose fee its trade did not
+    state settled first, and the opening then absorbed the fee: it closed at zero."""
+    rt, server = live_world(opened=False)
+    server.fail_balance = 1
+    polymarket.tick(rt)  # the opening read fails
+    assert rt.polymarket.opening is None
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.75",
+                  market="fake-2")
+    assert refused["status"] == "rejected" and refused["error"] == polymarket.OPENING_REFUSAL
+    polymarket.tick(rt)  # the opening is read
+    handle = collateral_decision(rt)
+    buy(rt, server, handle, size="5", price="0.75", market="fake-2")
+    for trade in server.trades:
+        trade.pop("fee_rate_bps")
+    polymarket.tick(rt)
+    (closed,) = items(rt, "polymarket.fee_reconciled")
+    assert closed["amount"] == -51_480
 
 
 def test_a_cancelled_buy_releases_its_reservation():

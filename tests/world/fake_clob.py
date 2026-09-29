@@ -52,6 +52,7 @@ class FakeClob:
         self.extra_fills: list[dict] = []  # trade rows to inject on the next /data/trades
         self.signer_address: str | None = None
         self.fail_lookups = 0  # order lookups that fail before one answers
+        self.fail_balance = 0  # balance reads that fail before one answers
         self.page_size: int | None = None  # rows a /data/trades page carries; None: all
 
     # ---- the transport
@@ -103,6 +104,9 @@ class FakeClob:
             return {"data": rows[start:end], "next_cursor": following}
         if path == "/positions":
             return self._positions(query)
+        if path == "/balance-allowance" and self.fail_balance:
+            self.fail_balance -= 1
+            raise clob.PolymarketUnavailable("transport: TimeoutError")
         if path == "/balance-allowance":
             return {"balance": str(int(self.fake._cash * clob.UNIT)), "allowances": {}}
         raise AssertionError(f"unexpected request {method} {path}")

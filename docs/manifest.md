@@ -2534,6 +2534,11 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   that inventory; the positions listing is read page by page to an empty page (or the
   pot is unavailable); and no buy is taken while the last reconciliation found money
   gone that the books do not explain (`polymarket.drift` below zero).
+* **Opening first.** No live order is taken ("the polymarket pot's opening is not yet
+  read") and no fill is booked (`polymarket.poll_deferred`) before the pot's opening,
+  the baseline its reconciliation is measured from, has been read. A cancelled or
+  otherwise terminal buy reserves only what it matched and is not yet booked; a
+  rejected placement is no order of the world's and is never looked up or read.
 * **Only what the world acquired is sold.** A sell fits the tokens this world's
   confirmed fills hold, less its resting sells ("sell exceeds the tokens this world's
   confirmed fills acquired"): a token the wallet held otherwise has no cost on the

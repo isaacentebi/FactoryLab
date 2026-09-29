@@ -25107,7 +25107,7 @@
         "rules",
         "live"
       ],
-      "value": "With live_orders, an order is a GTC limit order on Polymarket's CLOB, signed by the pot's wallet; its identity is its EIP-712 order hash, recorded with the intent before it is sent, and a lost answer is looked up by that hash and never sent again. A fill is booked once, when Polymarket reports its trade CONFIRMED; a fill beyond its order's size is booked to the pot owned by no decision. A fill's fee is the one its own trade states (a taker's fee_rate_bps, a maker nothing); a fee its trade does not state stays open until the pot's balance shows it, and no buy is taken while one is open. A buy's exposure and collateral also count, from the world's own records, every buy not yet booked from a confirmed trade and its booked inventory at cost, and the principal counts each token at the larger of the positions listing and that inventory; the positions listing is read to its end or the pot is unavailable; no buy is taken while the pot's last reconciliation found money gone that its books do not explain. A sell fits the tokens this world's confirmed fills acquired, less its resting sells, never tokens the wallet held otherwise. The pot's own requests (orders, cancels, lookups, fills, account, marks and a write's market read) are at most order_requests_per_10s in any sliding 10 s of wall time; one past it is not sent and reads as unavailable.",
+      "value": "With live_orders, an order is a GTC limit order on Polymarket's CLOB, signed by the pot's wallet; its identity is its EIP-712 order hash, recorded with the intent before it is sent, and a lost answer is looked up by that hash and never sent again. A fill is booked once, when Polymarket reports its trade CONFIRMED; a fill beyond its order's size is booked to the pot owned by no decision. A fill's fee is the one its own trade states (a taker's fee_rate_bps, a maker nothing); a fee its trade does not state stays open until the pot's balance shows it, and no buy is taken while one is open. No order is taken before the pot's opening (its reconciliation baseline) is read, and no fill is booked before it. A cancelled or otherwise terminal order holds only what it matched and is not yet booked. A buy's exposure and collateral also count, from the world's own records, every buy not yet booked from a confirmed trade and its booked inventory at cost, and the principal counts each token at the larger of the positions listing and that inventory; the positions listing is read to its end or the pot is unavailable; no buy is taken while the pot's last reconciliation found money gone that its books do not explain. A sell fits the tokens this world's confirmed fills acquired, less its resting sells, never tokens the wallet held otherwise. The pot's own requests (orders, cancels, lookups, fills, account, marks and a write's market read) are at most order_requests_per_10s in any sliding 10 s of wall time; one past it is not sent and reads as unavailable.",
       "enforced": [
         207
       ],
@@ -26792,7 +26792,7 @@
     },
     {
       "rule": "polymarket_orders.principal_micro",
-      "enforced": "factorylab/runtime/polymarket.py:1199 (principal_excess)",
+      "enforced": "factorylab/runtime/polymarket.py:1205 (principal_excess)",
       "published": "factorylab/cortex/admission_tools.py:308 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26816,7 +26816,7 @@
     },
     {
       "rule": "polymarket_orders.principal",
-      "enforced": "factorylab/runtime/polymarket.py:1199 (principal_excess)",
+      "enforced": "factorylab/runtime/polymarket.py:1205 (principal_excess)",
       "published": "factorylab/cortex/admission_tools.py:312 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26850,7 +26850,7 @@
     "factorylab/runtime/compute.py": "a0b0a5cac799e433071a590b6409016582b4c6affb30f106f05775a45723fd1c",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
-    "factorylab/runtime/polymarket.py": "cbe30416ea07b7e9eb6b58cf575d37a2654e360e124eeea3b768755ade28b583",
+    "factorylab/runtime/polymarket.py": "25772146082697cb0b8b5859dd4a4cec6d71a4730f9339dff5c07eba45fb4ce7",
     "factorylab/runtime/propensity.py": "cf32c2a547166dc2093853b0489b61ae8ad73872f4d9d089a0f822e8e76c6853",
     "factorylab/runtime/routing.py": "267b781ce62203279e17544891bf27c654e4c344e46f337528ca52cbb5b091c6",
     "factorylab/runtime/subscriptions.py": "618df166c01ba3a97d43516ef770d12f92e016d9e4788f14a5f0cf4e83de41d3",

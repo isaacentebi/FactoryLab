@@ -1098,6 +1098,10 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     size, price = _decimal(args.get("size")), _decimal(args.get("price"))
     if size is None or price is None or size <= 0 or not 0 < price < 1:
         return "size must be positive and price strictly between 0 and 1"
+    if surface.live and surface.opening is None:
+        # Codex P1 on #177: the pot's opening is its baseline; an order before it is
+        # read would put its own fill and fee inside the baseline, unbooked.
+        return OPENING_REFUSAL
     window, count = surface.window_orders
     count = window_count if window_count is not None else (
         count if window == rt.window.index else 0)
@@ -1180,6 +1184,8 @@ def acquired(surface: PolymarketSurface, account: dict, token_id: str) -> Decima
 
 
 PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
+#: The live pot's opening, the baseline its reconciliation is measured from, is not read.
+OPENING_REFUSAL = "the polymarket pot's opening is not yet read"
 #: A fill whose fee its execution did not state leaves the pot's books unreconciled.
 FEE_OPEN_REFUSAL = "a polymarket fill's fee is not yet established; the pot is unreconciled"
 
@@ -1489,6 +1495,14 @@ def tick(rt: Any) -> None:
             rt._replay_deferred(rt.consequences.release_unresolved(client_id, rt.n), before)
             continue
         _recover(rt, surface, client_id)
+    if surface.live and surface.opening is None:
+        # The baseline comes first: no fill is booked before the pot's opening is read
+        # (Codex P1 on #177), and no order is taken before it (``refusal``).
+        reconcile(rt)
+        if surface.opening is None:
+            rt.ledger.append({"kind": "polymarket.poll_deferred",
+                              "reason": "opening not read", "ts": rt.clock.now_ns})
+            return
     if surface.live:
         _discover(rt, surface)
         # The live venue's fills and resolutions since the cursor, read through the
