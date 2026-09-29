@@ -117,6 +117,11 @@ class ModelRequest:
     #: states a ratio of its delivered tick, Chapter II §IV.c; time audit T8). None
     #: leaves the adapter's own ceiling in force.
     timeout_s: float | None = None
+    #: How many leading characters of the final message's content repeat across
+    #: its sender's consecutive calls (``Request.cache_prefix``); 0 names none. It
+    #: changes no byte the model reads: an adapter may only use it to key sticky
+    #: routing or to place an explicit cache breakpoint (§IV.a: speed is cash burn).
+    cache_prefix_chars: int = 0
 
 
 def prompt_chars(req: ModelRequest) -> int:

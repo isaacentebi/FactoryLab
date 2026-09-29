@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Callable, Iterable, Mapping
@@ -26,6 +27,46 @@ from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
 #: answer to an invented thinking cutoff, and a stalled connection must not hold the
 #: world forever.
 MODEL_HTTP_TIMEOUT_S = 180
+
+#: The model-id vendors whose hosts on this route cache a shared leading prefix only
+#: up to an explicit ``cache_control`` breakpoint, which OpenRouter carries to each
+#: host in its own form (``prompt_cache_breakpoint`` for OpenAI). Anthropic always;
+#: OpenAI's GPT-5.6 and later, whose own breakpoints cached an exactly repeated
+#: prompt but no shared lead; and Google's Gemini, which read no cached token even
+#: for an identical request resent (both measured 2026-09-29). Every other route
+#: (Qwen's host among them, which billed a marker as a write and never read it back)
+#: caches an identical leading prefix on its own. A wire fact about the host, like
+#: its URL, not a choice about what any seat reads.
+EXPLICIT_CACHE_VENDORS = ("anthropic/", "google/", "openai/")
+
+
+def _cacheable_lead(req: ModelRequest) -> str | None:
+    """The leading run of the final message that repeats across its sender's calls.
+
+    Guarantees a non-empty prefix of the final message's own string content, or
+    None when the request names no such run or its final message cannot carry one.
+    """
+    chars = getattr(req, "cache_prefix_chars", 0)
+    if type(chars) is not int or chars <= 0 or not req.messages:
+        return None
+    final = req.messages[-1]
+    content = final.get("content")
+    if final.get("role") != "user" or not isinstance(content, str) or chars > len(content):
+        return None
+    return content[:chars]
+
+
+def _session_id(wire_id: str, req: ModelRequest, lead: str) -> str:
+    """One sticky-routing key per identical leading prompt on one model.
+
+    Guarantees two requests share the key exactly when they share the model, the
+    system message, every earlier message and the cacheable lead, whatever their
+    moving suffixes, so a host that holds that prefix in its cache keeps serving
+    them. It is a digest: no prompt text leaves in it.
+    """
+    encoded = json.dumps([wire_id, req.system, list(req.messages[:-1]), lead],
+                         sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _positive_int(value: Any) -> int | None:
@@ -176,6 +217,24 @@ class OpenRouterProvider:
                       if k in self._extra_body), None)
         if extra is not None:
             payload.update(deepcopy(extra))
+        # §IV.a, speed is cash burn: a repeated leading prompt should be billed as a
+        # cache read. OpenRouter keeps a session on one host only when it can tell
+        # the calls apart from new conversations, which by default it does by the
+        # first user message, here the whole of a changing prompt: so the session
+        # is named by the lead alone (a manifest's own session_id wins). A host that
+        # caches only at a marker gets one at the end of the lead. The text the
+        # model reads is unchanged: the same string, in two adjacent parts.
+        lead = _cacheable_lead(req)
+        if lead is not None:
+            payload.setdefault("session_id", _session_id(wire_id, req, lead))
+            if base_id.startswith(EXPLICIT_CACHE_VENDORS):
+                final = payload["messages"][-1]
+                rest = final["content"][len(lead):]
+                parts = [{"type": "text", "text": lead,
+                          "cache_control": {"type": "ephemeral"}}]
+                if rest:
+                    parts.append({"type": "text", "text": rest})
+                payload["messages"][-1] = {**final, "content": parts}
         contract = response_format(req, schema_route=any(
             k in self._schema_models for k in (req.model_id, wire_id, base_id)))
         if contract is not None:

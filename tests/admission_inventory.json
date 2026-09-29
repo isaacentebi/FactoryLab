@@ -25232,7 +25232,7 @@
     },
     {
       "rule": "JSON object parsing",
-      "enforced": "factorylab/cortex/assembly.py:642 (_parse_json_object)",
+      "enforced": "factorylab/cortex/assembly.py:648 (_parse_json_object)",
       "published": "factorylab/cortex/admission_structure.py:40 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25240,7 +25240,7 @@
     },
     {
       "rule": "UTF-8 strings and keys",
-      "enforced": "factorylab/cortex/assembly.py:664 (_utf8_json)",
+      "enforced": "factorylab/cortex/assembly.py:670 (_utf8_json)",
       "published": "factorylab/cortex/admission_structure.py:42 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25248,7 +25248,7 @@
     },
     {
       "rule": "Finite JSON numbers",
-      "enforced": "factorylab/cortex/assembly.py:677 (_finite_json)",
+      "enforced": "factorylab/cortex/assembly.py:683 (_finite_json)",
       "published": "factorylab/cortex/admission_structure.py:41 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25256,7 +25256,7 @@
     },
     {
       "rule": "Schema objects and local references with siblings",
-      "enforced": "factorylab/cortex/assembly.py:738 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:744 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:53 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25264,7 +25264,7 @@
     },
     {
       "rule": "anyOf and sibling constraints",
-      "enforced": "factorylab/cortex/assembly.py:746 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:752 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:54 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25272,7 +25272,7 @@
     },
     {
       "rule": "Supported types and nonnumeric booleans",
-      "enforced": "factorylab/cortex/assembly.py:758 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:764 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:49 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25280,7 +25280,7 @@
     },
     {
       "rule": "Type-sensitive enum membership",
-      "enforced": "factorylab/cortex/assembly.py:765 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:771 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:52 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25288,7 +25288,7 @@
     },
     {
       "rule": "Numeric bounds",
-      "enforced": "factorylab/cortex/assembly.py:768 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:774 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:55 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25296,7 +25296,7 @@
     },
     {
       "rule": "Property names",
-      "enforced": "factorylab/cortex/assembly.py:774 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:780 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:43 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25304,7 +25304,7 @@
     },
     {
       "rule": "Object counts",
-      "enforced": "factorylab/cortex/assembly.py:791 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:797 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:56 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25312,7 +25312,7 @@
     },
     {
       "rule": "Required/dependent fields and partial exceptions",
-      "enforced": "factorylab/cortex/assembly.py:794 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:800 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:62 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25320,7 +25320,7 @@
     },
     {
       "rule": "Property schemas and additional properties",
-      "enforced": "factorylab/cortex/assembly.py:803 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:809 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:58 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25328,7 +25328,7 @@
     },
     {
       "rule": "Array counts and recursive item schemas",
-      "enforced": "factorylab/cortex/assembly.py:814 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:820 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:61 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25336,7 +25336,7 @@
     },
     {
       "rule": "Unsupported general-schema keywords ignored",
-      "enforced": "factorylab/cortex/assembly.py:725 (validate_schema)",
+      "enforced": "factorylab/cortex/assembly.py:731 (validate_schema)",
       "published": "factorylab/cortex/admission_structure.py:64 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25344,7 +25344,7 @@
     },
     {
       "rule": "Universal return fields, calls, children, forecasts and horizon",
-      "enforced": "factorylab/cortex/assembly.py:840 (reserved_return_fields)",
+      "enforced": "factorylab/cortex/assembly.py:846 (reserved_return_fields)",
       "published": "factorylab/cortex/admission_structure.py:68 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25352,7 +25352,7 @@
     },
     {
       "rule": "Kind-owned fields",
-      "enforced": "factorylab/cortex/assembly.py:1473 (_validate_return)",
+      "enforced": "factorylab/cortex/assembly.py:1479 (_validate_return)",
       "published": "factorylab/cortex/admission_structure.py:69 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25360,7 +25360,7 @@
     },
     {
       "rule": "Answer kind selection",
-      "enforced": "factorylab/cortex/assembly.py:1164 (answer_kind)",
+      "enforced": "factorylab/cortex/assembly.py:1170 (answer_kind)",
       "published": "factorylab/cortex/admission_structure.py:70 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25368,7 +25368,7 @@
     },
     {
       "rule": "Null-field removal",
-      "enforced": "factorylab/cortex/assembly.py:1247 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1253 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:73 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25376,7 +25376,7 @@
     },
     {
       "rule": "Required rationale from reason",
-      "enforced": "factorylab/cortex/assembly.py:1248 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1254 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:74 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25384,7 +25384,7 @@
     },
     {
       "rule": "Decline normalization",
-      "enforced": "factorylab/cortex/assembly.py:1253 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1259 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:76 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25392,7 +25392,7 @@
     },
     {
       "rule": "Continuation and decline partial validation",
-      "enforced": "factorylab/cortex/assembly.py:1494 (_validate_return)",
+      "enforced": "factorylab/cortex/assembly.py:1500 (_validate_return)",
       "published": "factorylab/cortex/admission_structure.py:78 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25400,7 +25400,7 @@
     },
     {
       "rule": "Optional section shapes and common declared fields",
-      "enforced": "factorylab/cortex/assembly.py:1264 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1270 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:81 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25408,7 +25408,7 @@
     },
     {
       "rule": "Invalid optional scalar removal",
-      "enforced": "factorylab/cortex/assembly.py:1273 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1279 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:90 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25416,7 +25416,7 @@
     },
     {
       "rule": "List type, item validation and maximum",
-      "enforced": "factorylab/cortex/assembly.py:1281 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1287 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:91 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25424,7 +25424,7 @@
     },
     {
       "rule": "Atomic child/tool batch failure",
-      "enforced": "factorylab/cortex/assembly.py:1304 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1310 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:93 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25432,7 +25432,7 @@
     },
     {
       "rule": "Refused tool slots and runtime batch validation",
-      "enforced": "factorylab/cortex/assembly.py:1305 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1311 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:95 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25440,7 +25440,7 @@
     },
     {
       "rule": "Independent registration/forecast removal",
-      "enforced": "factorylab/cortex/assembly.py:1330 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1336 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:98 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25448,7 +25448,7 @@
     },
     {
       "rule": "Continuation draft removal and protected fields",
-      "enforced": "factorylab/cortex/assembly.py:1342 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1348 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:100 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25456,7 +25456,7 @@
     },
     {
       "rule": "Final strict revalidation and empty/unsettled failure",
-      "enforced": "factorylab/cortex/assembly.py:1361 (validate_return_sections)",
+      "enforced": "factorylab/cortex/assembly.py:1367 (validate_return_sections)",
       "published": "factorylab/cortex/admission_structure.py:103 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25464,7 +25464,7 @@
     },
     {
       "rule": "Child target and description",
-      "enforced": "factorylab/cortex/assembly.py:1440 (_check_child)",
+      "enforced": "factorylab/cortex/assembly.py:1446 (_check_child)",
       "published": "factorylab/cortex/admission_structure.py:109 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25472,7 +25472,7 @@
     },
     {
       "rule": "Child authorship prohibition",
-      "enforced": "factorylab/cortex/assembly.py:1442 (_check_child)",
+      "enforced": "factorylab/cortex/assembly.py:1448 (_check_child)",
       "published": "factorylab/cortex/admission_structure.py:111 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25480,7 +25480,7 @@
     },
     {
       "rule": "Child propensity/chosen relationship",
-      "enforced": "factorylab/cortex/assembly.py:1445 (_check_child)",
+      "enforced": "factorylab/cortex/assembly.py:1451 (_check_child)",
       "published": "factorylab/cortex/admission_structure.py:113 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25488,7 +25488,7 @@
     },
     {
       "rule": "Child schema keyword/type whitelist",
-      "enforced": "factorylab/cortex/assembly.py:1944 (_schema_definition)",
+      "enforced": "factorylab/cortex/assembly.py:1950 (_schema_definition)",
       "published": "factorylab/cortex/admission_structure.py:115 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25496,7 +25496,7 @@
     },
     {
       "rule": "Child reply field identifiers",
-      "enforced": "factorylab/cortex/assembly.py:1976 (_schema_definition)",
+      "enforced": "factorylab/cortex/assembly.py:1982 (_schema_definition)",
       "published": "factorylab/cortex/admission_structure.py:120 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25504,7 +25504,7 @@
     },
     {
       "rule": "Child numeric/count bound types",
-      "enforced": "factorylab/cortex/assembly.py:1960 (_schema_definition)",
+      "enforced": "factorylab/cortex/assembly.py:1966 (_schema_definition)",
       "published": "factorylab/cortex/admission_structure.py:123 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25512,7 +25512,7 @@
     },
     {
       "rule": "Child annotations unrestricted",
-      "enforced": "factorylab/cortex/assembly.py:1956 (_schema_definition)",
+      "enforced": "factorylab/cortex/assembly.py:1962 (_schema_definition)",
       "published": "factorylab/cortex/admission_structure.py:125 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25520,7 +25520,7 @@
     },
     {
       "rule": "Child recursive positions and nonempty anyOf",
-      "enforced": "factorylab/cortex/assembly.py:1971 (_schema_definition)",
+      "enforced": "factorylab/cortex/assembly.py:1977 (_schema_definition)",
       "published": "factorylab/cortex/admission_structure.py:126 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25528,7 +25528,7 @@
     },
     {
       "rule": "Answer order activation and forbidden fields",
-      "enforced": "factorylab/cortex/assembly.py:1478 (_validate_return)",
+      "enforced": "factorylab/cortex/assembly.py:1484 (_validate_return)",
       "published": "factorylab/cortex/admission_structure.py:131 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25536,7 +25536,7 @@
     },
     {
       "rule": "Order required fields and side",
-      "enforced": "factorylab/cortex/assembly.py:1490 (_validate_return)",
+      "enforced": "factorylab/cortex/assembly.py:1496 (_validate_return)",
       "published": "factorylab/cortex/admission_structure.py:136 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25544,7 +25544,7 @@
     },
     {
       "rule": "Positive wire decimal",
-      "enforced": "factorylab/cortex/assembly.py:1934 (positive_wire_decimal)",
+      "enforced": "factorylab/cortex/assembly.py:1940 (positive_wire_decimal)",
       "published": "factorylab/cortex/admission_structure.py:139 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25552,7 +25552,7 @@
     },
     {
       "rule": "Generic proposal field schema",
-      "enforced": "factorylab/cortex/assembly.py:1872 (proposal_field_schema)",
+      "enforced": "factorylab/cortex/assembly.py:1878 (proposal_field_schema)",
       "published": "factorylab/cortex/admission_structure.py:144 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25560,7 +25560,7 @@
     },
     {
       "rule": "Kind-specific proposal forms",
-      "enforced": "factorylab/cortex/assembly.py:1905 (validate_proposal)",
+      "enforced": "factorylab/cortex/assembly.py:1911 (validate_proposal)",
       "published": "factorylab/cortex/admission_structure.py:145 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25568,7 +25568,7 @@
     },
     {
       "rule": "Router add type",
-      "enforced": "factorylab/cortex/assembly.py:1910 (validate_proposal)",
+      "enforced": "factorylab/cortex/assembly.py:1916 (validate_proposal)",
       "published": "factorylab/cortex/admission_structure.py:147 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25576,7 +25576,7 @@
     },
     {
       "rule": "Amendment/card structural checks",
-      "enforced": "factorylab/cortex/assembly.py:1915 (validate_proposal)",
+      "enforced": "factorylab/cortex/assembly.py:1921 (validate_proposal)",
       "published": "factorylab/cortex/admission_structure.py:149 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25584,7 +25584,7 @@
     },
     {
       "rule": "Assembly spec constraints",
-      "enforced": "factorylab/cortex/assembly.py:88 (AssemblySpec.__post_init__)",
+      "enforced": "factorylab/cortex/assembly.py:89 (AssemblySpec.__post_init__)",
       "published": "factorylab/cortex/admission_structure.py:158 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25592,7 +25592,7 @@
     },
     {
       "rule": "Program spec constraints",
-      "enforced": "factorylab/cortex/assembly.py:386 (ProgramAssemblySpec.__post_init__)",
+      "enforced": "factorylab/cortex/assembly.py:392 (ProgramAssemblySpec.__post_init__)",
       "published": "factorylab/cortex/admission_structure.py:166 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25600,7 +25600,7 @@
     },
     {
       "rule": "Program state policy and stripping",
-      "enforced": "factorylab/cortex/assembly.py:566 (ProgramAssembly._interpret)",
+      "enforced": "factorylab/cortex/assembly.py:572 (ProgramAssembly._interpret)",
       "published": "factorylab/cortex/admission_structure.py:177 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25608,7 +25608,7 @@
     },
     {
       "rule": "State encoding, byte bound, archive requirement",
-      "enforced": "factorylab/cortex/assembly.py:581 (ProgramAssembly._interpret)",
+      "enforced": "factorylab/cortex/assembly.py:587 (ProgramAssembly._interpret)",
       "published": "factorylab/cortex/admission_structure.py:179 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25616,7 +25616,7 @@
     },
     {
       "rule": "Refused state write retention",
-      "enforced": "factorylab/cortex/assembly.py:598 (ProgramAssembly._interpret)",
+      "enforced": "factorylab/cortex/assembly.py:604 (ProgramAssembly._interpret)",
       "published": "factorylab/cortex/admission_structure.py:182 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25624,7 +25624,7 @@
     },
     {
       "rule": "Unavailable state prevents execution",
-      "enforced": "factorylab/cortex/assembly.py:490 (ProgramAssembly.invoke)",
+      "enforced": "factorylab/cortex/assembly.py:496 (ProgramAssembly.invoke)",
       "published": "factorylab/cortex/admission_structure.py:185 (structural_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25856,7 +25856,7 @@
     },
     {
       "rule": "dispatch.max_tool_calls",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:46 (tool_admission_schematics)",
       "missing_before": false,
       "published_before": "factorylab/cortex/schematics.py:1424-1464 (retrieved tool schemas); factorylab/world/venue_tools.py (published argument schemas)",
@@ -25864,7 +25864,7 @@
     },
     {
       "rule": "dispatch.max_tool_rounds",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:47 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25872,7 +25872,7 @@
     },
     {
       "rule": "dispatch.outside_text_tools",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:48 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25880,7 +25880,7 @@
     },
     {
       "rule": "dispatch.outside_text_continuation_kinds",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:49 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25888,7 +25888,7 @@
     },
     {
       "rule": "dispatch.read_only_kinds",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:50 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25896,7 +25896,7 @@
     },
     {
       "rule": "dispatch.consequence_writes",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:51 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25904,7 +25904,7 @@
     },
     {
       "rule": "dispatch.writing_channels",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:52 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25912,7 +25912,7 @@
     },
     {
       "rule": "dispatch.registered",
-      "enforced": "factorylab/runtime/compute.py:1867 (_run_tool)",
+      "enforced": "factorylab/runtime/compute.py:1869 (_run_tool)",
       "published": "factorylab/cortex/admission_tools.py:54 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25920,7 +25920,7 @@
     },
     {
       "rule": "dispatch.budget",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:55 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25928,7 +25928,7 @@
     },
     {
       "rule": "dispatch.write_authority",
-      "enforced": "factorylab/runtime/compute.py:1674 (_may_write)",
+      "enforced": "factorylab/runtime/compute.py:1676 (_may_write)",
       "published": "factorylab/cortex/admission_tools.py:59 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25936,7 +25936,7 @@
     },
     {
       "rule": "dispatch.continuation",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:63 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25944,7 +25944,7 @@
     },
     {
       "rule": "dispatch.outside_text",
-      "enforced": "factorylab/runtime/compute.py:2234 (_invoke)",
+      "enforced": "factorylab/runtime/compute.py:2236 (_invoke)",
       "published": "factorylab/cortex/admission_tools.py:68 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25952,7 +25952,7 @@
     },
     {
       "rule": "dispatch.invalid_batch",
-      "enforced": "factorylab/runtime/compute.py:706 (_validate_output_contract)",
+      "enforced": "factorylab/runtime/compute.py:708 (_validate_output_contract)",
       "published": "factorylab/cortex/admission_tools.py:71 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -25960,7 +25960,7 @@
     },
     {
       "rule": "dispatch.batch",
-      "enforced": "factorylab/runtime/compute.py:1808 (_weigh_venue_batch)",
+      "enforced": "factorylab/runtime/compute.py:1810 (_weigh_venue_batch)",
       "published": "factorylab/cortex/admission_tools.py:74 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26112,7 +26112,7 @@
     },
     {
       "rule": "connector.state",
-      "enforced": "factorylab/runtime/compute.py:1188 (_fetch_connector)",
+      "enforced": "factorylab/runtime/compute.py:1190 (_fetch_connector)",
       "published": "factorylab/cortex/admission_tools.py:120 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26192,7 +26192,7 @@
     },
     {
       "rule": "venue_reads.window_ns",
-      "enforced": "factorylab/runtime/compute.py:1505 (_venue_read_refusal)",
+      "enforced": "factorylab/runtime/compute.py:1507 (_venue_read_refusal)",
       "published": "factorylab/cortex/admission_tools.py:144 (tool_admission_schematics)",
       "missing_before": false,
       "published_before": "factorylab/cortex/schematics.py:1424-1464 (retrieved tool schemas); factorylab/world/venue_tools.py (published argument schemas)",
@@ -26216,7 +26216,7 @@
     },
     {
       "rule": "venue_reads.slot",
-      "enforced": "factorylab/runtime/compute.py:1793 (_allowed_tools)",
+      "enforced": "factorylab/runtime/compute.py:1795 (_allowed_tools)",
       "published": "factorylab/cortex/admission_tools.py:151 (tool_admission_schematics)",
       "missing_before": false,
       "published_before": "factorylab/cortex/schematics.py:1424-1464 (retrieved tool schemas); factorylab/world/venue_tools.py (published argument schemas)",
@@ -26224,7 +26224,7 @@
     },
     {
       "rule": "venue_reads.weight",
-      "enforced": "factorylab/runtime/compute.py:1505 (_venue_read_refusal)",
+      "enforced": "factorylab/runtime/compute.py:1507 (_venue_read_refusal)",
       "published": "factorylab/cortex/admission_tools.py:152 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26727,7 +26727,7 @@
     "factorylab/charter/measurement.py": "cddaab174fa8a0cdb9025926f636c3935a388bf0f12a06c8b62e0b209a085c61",
     "factorylab/charter/region.py": "a47f205f7e6e7ea098a8a4adb5bee180d9c38de6c73653ef1cc1864368a4847c",
     "factorylab/charter/windows.py": "b2e39fa606e3dec3f858bae46196a52b31628ef1db206b7fe734e1640c143d99",
-    "factorylab/cortex/assembly.py": "1ef87007f7087a86f897b4a9c6e14a7b581d76ecdc482162f7ea10d1d361ab30",
+    "factorylab/cortex/assembly.py": "c52c0f58dedbe3846dc42fe8753de1a5ab2708db3cce5405cb053aed374fa3bb",
     "factorylab/cortex/registration.py": "344ea1b6f7c453dfaffad8b650d4bd907d273c694826b2575e91f188fb43179d",
     "factorylab/cortex/sandbox.py": "eeefbbffdb6569bfcae89848ad0cd8c8cd3654d6333d354a2d69a1858a15e89d",
     "factorylab/cortex/tools.py": "5edbbfce3eb58e6e8974e2ac7e60f588c8a4721ec38e71fdfe4a18cb6dbad004",
@@ -26735,7 +26735,7 @@
     "factorylab/kernel/registry.py": "7e848639de72db3937110978339005251a001e86bd5684dfda927b99f84a798c",
     "factorylab/kernel/reserve.py": "11373ac82be95c9800c266b4fb5a1dbc035688602a2999c2bad4395c4d098a64",
     "factorylab/runtime/composition.py": "07901c7e1c6e2ebed31fe7dd009f21e9d2a00dd8a027f0b2b5307af5243627cc",
-    "factorylab/runtime/compute.py": "a96bedb69b3a8aa963b80ff3087e965893d9d021ef6bf6eed6babc2e16f51bb5",
+    "factorylab/runtime/compute.py": "a0b0a5cac799e433071a590b6409016582b4c6affb30f106f05775a45723fd1c",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
     "factorylab/runtime/polymarket.py": "32f74d37169698156e6dc79c8b17bfd8b8b55977756a4f5638c943ff68e893d7",

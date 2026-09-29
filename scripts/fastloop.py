@@ -203,7 +203,7 @@ class PolicyProvider(ScriptedProvider):
             reply = self._decide(inputs)
         # The return contract, not a behaviour: a producing final answer that executes
         # nothing names the trade it declined (factorylab.runtime.grounded).
-        reply = names_declined_trade(reply, text, inputs, self.decisions)
+        reply = names_declined_trade(reply, text, inputs, self.decisions, req)
         return ModelResponse(req.model_id, json.dumps(reply), len(text) // 4, 60, "stop",
                              cost_micro=1)
 

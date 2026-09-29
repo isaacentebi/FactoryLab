@@ -61,8 +61,9 @@ def _prompt_cache_identity(assembly: Assembly, req: Request) -> dict[str, str]:
     """Hash the exact stable prompt bytes and message ordering without retaining prose.
 
     The effective-leading hash includes the system message, any handle-scoped
-    messages that precede this request, and the stable prefix at the head of the
-    final user message. It deliberately excludes the moving suffix. Two live
+    messages that precede this request, and the cacheable run at the head of the
+    final user message (``ModelRequest.cache_prefix_chars``: the stable prefix
+    and the reply contract). It deliberately excludes the moving suffix. Two live
     invocations can therefore distinguish local prefix drift from an upstream
     cache miss without putting prompt bodies on the ledger.
     """
@@ -72,12 +73,13 @@ def _prompt_cache_identity(assembly: Assembly, req: Request) -> dict[str, str]:
     model_request = assembly.build_model_request(req, stamped=stamped)
     leading = [{"role": "system", "content": model_request.system},
                *[dict(message) for message in model_request.messages[:-1]]]
-    if stable and model_request.messages:
+    if model_request.messages and model_request.cache_prefix_chars:
         final = model_request.messages[-1]
         content = final.get("content")
         if not isinstance(content, str) or not content.startswith(stable):
             raise ValueError("model request does not begin with its stable prefix")
-        leading.append({"role": final.get("role"), "content": stable})
+        leading.append({"role": final.get("role"),
+                        "content": content[:model_request.cache_prefix_chars]})
 
     def digest(value: Any) -> str:
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
