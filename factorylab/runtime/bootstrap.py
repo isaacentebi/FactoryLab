@@ -55,6 +55,7 @@ from factorylab.settlement import (
     Settler,
 )
 from factorylab.settlement.consequence import FillCursor
+from factorylab.world import universe as universe_names
 from factorylab.world.clock import ClockIterator, ClockSource
 from factorylab.world.exchange import (
     FakeExchange,
@@ -173,6 +174,7 @@ class BootstrapMixin:
         _journal: RecoveryJournal | None = None,
         _lock: LedgerLock | None = None,
         _schematics_rail: Any | None = None,
+        universe: dict | None = None,
     ) -> None:
         self.live = manifest.exchange.kind != "fake"
         # SCHEMATICS ONLY (Chapter II §I.b, the schematics are public): given an inert
@@ -291,10 +293,15 @@ class BootstrapMixin:
             shocks: dict[int, dict[str, Decimal]] = {}
             for sh in manifest.exchange.shocks:
                 shocks.setdefault(sh.step, {})[sh.coin] = Decimal(sh.multiplier)
+            # The fake venue lists the manifest's explicit markets; a selector-only
+            # manifest selects from the fake's own listing (``universe.resolve``).
+            explicit = universe_names.explicit_markets(manifest.exchange.coins)
             self.exchange = FakeExchange(
                 seed=manifest.exchange.seed,
-                coins=manifest.exchange.coins,
-                spot_pairs=manifest.exchange.spot_pairs,
+                coins=explicit or (FakeExchange.coins
+                                   if universe_names.selectors(manifest.exchange.coins)
+                                   else ()),
+                spot_pairs=universe_names.explicit_markets(manifest.exchange.spot_pairs),
                 start_cash_usd=money_to_usd(self.initial),
                 shocks=shocks,
             )
@@ -341,8 +348,9 @@ class BootstrapMixin:
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()
-        if isinstance(self.provider, ScriptedProvider) and manifest.exchange.spot_pairs:
-            self.provider.spot_pair = manifest.exchange.spot_pairs[0]
+        explicit_pairs = universe_names.explicit_markets(manifest.exchange.spot_pairs)
+        if isinstance(self.provider, ScriptedProvider) and explicit_pairs:
+            self.provider.spot_pair = explicit_pairs[0]
         self.market = (
             market
             if market is not None
@@ -467,11 +475,30 @@ class BootstrapMixin:
         self.exchange.observer = self._observe_venue_answer
         from factorylab.world.venue_tools import seed_markets
 
-        seed_markets(self.exchange, manifest.exchange)
+        # The market universe (factorylab/world/universe.py): a manifest's selectors are
+        # resolved against the venue's listing once, at launch, and the resolved lists
+        # are pinned for the world's life (Chapter II §II: one world, never rewound).
+        # A resume is handed the pinned lists (``universe``) and never resolves again.
+        self.universe = universe
+        if (self.universe is None and not self.ledger.bootstrap and not self.schematics_only
+                and (universe_names.selectors(manifest.exchange.coins)
+                     or universe_names.selectors(manifest.exchange.spot_pairs))):
+            coins, pairs = universe_names.resolve(
+                manifest.exchange.coins, manifest.exchange.spot_pairs,
+                self.exchange.instruments())
+            self.universe = {"coins": list(coins), "spot_pairs": list(pairs)}
+            self.ledger.append({
+                "kind": "venue.universe",
+                "selectors": {"coins": list(universe_names.selectors(manifest.exchange.coins)),
+                              "spot_pairs": list(universe_names.selectors(
+                                  manifest.exchange.spot_pairs))},
+                "coins": list(coins), "spot_pairs": list(pairs)})
+        seed_markets(self.exchange, self._seed_spec())
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
             LiveVenue(self.exchange, ledger=self.ledger,
-                      last_funding_ns=self.clock.now_ns, markets=self._trading_markets,
+                      last_funding_ns=self.clock.now_ns, markets=self._broadcast_markets,
+                      bounded=bool(self.universe),
                       # Chapter II §III.b, §IV.b: cached marks open trades only over
                       # their frozen horizon, with the same funding patience.
                       funding_needed=lambda coin, boundary: (
@@ -828,10 +855,11 @@ class BootstrapMixin:
         # C10 routing evidence: each seat's last rendered ceiling and the world size then.
         self.seat_ceilings: dict[str, dict[str, int]] = {}
         self.entitlement_bridges: dict[str, int] = {}  # handle -> pool-backed cover, one call
+        seed = self._seed_spec()
         self.venue_tools = VenueTools(
             self.exchange,
-            coins=manifest.exchange.coins,
-            spot_pairs=manifest.exchange.spot_pairs,
+            coins=seed.coins,
+            spot_pairs=seed.spot_pairs,
         )
         for spec in self.venue_tools.contracts():
             self.tool_specs[spec.id] = {
@@ -939,7 +967,7 @@ class BootstrapMixin:
             "price_micro_per_call": 0,
             "kind": "market",
         }
-        coin = manifest.exchange.coins[0]
+        coin = self.venue_tools.coins[0]
         examples = {
             "venue.instruments": [{}], "venue.mids": [{}], "venue.funding": [{}],
             "venue.candles": [{"coin": coin, "interval": "1m", "n": 20}],
@@ -1016,7 +1044,7 @@ class BootstrapMixin:
         examples["outcome.list"] = [{"after": 0, "limit": 8}]
         from factorylab.cortex.schematics import (
             INSTITUTION_SECTIONS,
-            RETRIEVABLE_ADMISSION_SECTIONS,
+            RETRIEVABLE_SECTIONS,
         )
 
         self.tool_specs["world.read"] = {
@@ -1028,7 +1056,7 @@ class BootstrapMixin:
                 "type": "object",
                 "properties": {"section": {"type": "string",
                                             "enum": sorted(INSTITUTION_SECTIONS |
-                                                           RETRIEVABLE_ADMISSION_SECTIONS)}},
+                                                           RETRIEVABLE_SECTIONS)}},
                 "required": ["section"], "additionalProperties": False,
             },
             "price_micro_per_call": 0, "kind": "institution",

@@ -297,10 +297,13 @@ def launch_world(manifest, launch: str | None) -> dict:
         return render_schematics(launched, rail=launch_rail(launched, launch))
     from factorylab.runtime.loop import Runtime
     from factorylab.world.exchange import FakeExchange
+    from factorylab.world.universe import explicit_markets
 
     rt = Runtime(launched, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1, provider=ManifestCatalogue(launched),
-                 exchange=FakeExchange(seed=launched.exchange.seed, coins=launched.exchange.coins,
+                 exchange=FakeExchange(seed=launched.exchange.seed,
+                                       coins=explicit_markets(launched.exchange.coins)
+                                       or FakeExchange.coins,
                                        start_cash_usd=launched.exchange.start_cash_usd))
     return rt._world_block()
 

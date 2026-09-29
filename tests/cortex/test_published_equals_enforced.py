@@ -11,6 +11,7 @@ MiniMax replies satisfied the wire and failed the kernel.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -973,3 +974,72 @@ def test_the_published_prevalence_key_is_the_one_the_runtime_keys_by():
     for handle, (_operations, legs) in cases.items():
         rt.world_outcomes[handle] = {"subject": rt._acted_trade(handle)}
         assert rt._verdict_key(handle, "return_paid_off") == published(legs), handle
+
+
+# --- the venue's per-market terms: retrievable in world.read, enforced by the venue -----
+
+
+def _universe_world():
+    """A world selecting every market of a fake venue with an order floor."""
+    from dataclasses import replace
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+    from factorylab.world.exchange import FakeExchange
+    from factorylab.world.scripted import ScriptedProvider
+
+    base = load_manifest("scripted")
+    manifest = replace(base, exchange=replace(base.exchange, coins=("*",),
+                                              spot_pairs=("*/USDC",)))
+    venue = FakeExchange(coins=(), start_cash_usd=Decimal(10_000),
+                         listed_coins=("BTC", "ETH", "SOL"), listed_spot_pairs=("PURR/USDC",),
+                         min_order_value_usd=Decimal(10), spread_bps=Decimal(0))
+    return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                   router_gamma=0.1, provider=ScriptedProvider(), exchange=venue)
+
+
+def test_every_tradeable_market_publishes_its_terms_in_world_read():
+    """Chapter II §I.b: tick, lot, order floor, leverage limit and fee of every market the
+    world may trade are retrievable facts, in the world.read section the tool names."""
+    rt = _universe_world()
+    assert "markets" in rt.tool_specs["world.read"]["args_schema"]["properties"]["section"][
+        "enum"]
+    records = rt.institution_section("markets")
+    assert {row["coin"] for row in records["perp"]} == set(rt.venue_tools.coins)
+    assert {row["coin"] for row in records["spot"]} == set(rt.venue_tools.spot_pairs)
+    for market, rows in records.items():
+        for row in rows:
+            facts = {"lot_size", "tick_size", "min_order_value_usd", "taker_fee_rate",
+                     "maker_fee_rate"} | ({"max_leverage"} if market == "perp" else set())
+            assert facts <= set(row), (market, row)
+
+
+def test_each_published_term_is_the_one_the_venue_enforces():
+    """Chapter II §II.b: an order off the published tick or lot, under the published
+    floor, or leverage above the published limit is refused; a fill pays the published
+    rate, and the wallet moves by that fee alone."""
+    from factorylab.world.exchange import Order, OrderKind
+
+    rt = _universe_world()
+    row = next(r for r in rt.institution_section("markets")["perp"] if r["coin"] == "SOL")
+    venue = rt.exchange.target
+    tick, lot = Decimal(row["tick_size"]), Decimal(row["lot_size"])
+    floor, cap = Decimal(row["min_order_value_usd"]), row["max_leverage"]
+    mid = venue.mids()["SOL"]
+    size = (floor / mid * 2).quantize(lot)
+
+    def order(**kw):
+        args = {"coin": "SOL", "is_buy": True, "size": size, "kind": OrderKind.LIMIT,
+                "limit_px": (mid / 2).quantize(tick)} | kw
+        return venue.place(Order(**args))
+
+    assert order(limit_px=(mid / 2).quantize(tick) + tick / 3).status == "rejected"
+    assert order(size=size + lot / 3).status == "rejected"
+    assert order(size=((floor / mid) / 2).quantize(lot)).status == "rejected"
+    assert venue.set_leverage("SOL", cap + 1)["status"] == "rejected"
+    assert venue.set_leverage("SOL", cap)["status"] == "ok"
+    filled = venue.place(Order("SOL", True, size, OrderKind.MARKET))
+    assert filled.status == "filled"
+    fill = venue.fills(0)[-1]
+    assert fill.fee == (fill.size * fill.px * Decimal(row["taker_fee_rate"])).quantize(
+        Decimal("0.000001"))

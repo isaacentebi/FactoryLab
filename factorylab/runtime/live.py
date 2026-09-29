@@ -300,7 +300,7 @@ class WallClock:
 class LiveVenue:
     """Adapts a real ``Exchange`` to per-tick world events.
 
-    Each tick reads mids, L2 books and funding. Rates remain observations; separate
+    Each tick reads mids and funding, never a book. Rates remain observations; separate
     venue-identified funding payments carry actual cash. Fills are never read here:
     the consequence fill cursor (``settlement.consequence.FillCursor``) is the one fill
     path, whose watermark is the fills stream's.
@@ -338,6 +338,9 @@ class LiveVenue:
         default_factory=dict)
     settled_gaps: dict[str, set[int]] = field(default_factory=dict)
     funding_needed: Callable[[str, int], bool] | None = None
+    # Whether ``markets`` bounds a world with a universe (factorylab/world/universe.py):
+    # then a former market's settled cursor is read only while it still owes a boundary.
+    bounded: bool = False
 
     def _funding_needed(self, coin: str, boundary: int) -> bool:
         """Keep unknown consumers retryable; stop only when their absence is established."""
@@ -483,13 +486,10 @@ class LiveVenue:
                     {"coin": coin, "mid": str(mid)},
                 )
             )
-        # Chapter II §II.b/§III.b: retain the venue's liquidity as an outside fact,
-        # independent of whether a seat asks for a book or the mids read succeeds.
-        for coin in sorted(traded if traded is not None else mids):
-            try:
-                self.exchange.order_book(coin, 20)
-            except (RuntimeError, OSError, ValueError, ArithmeticError):
-                continue
+        # No book is read on the tick's critical path: a book is one request per
+        # market, and a tick's venue cost must not grow with the markets it lists
+        # (Chapter II §IV.c). A book is read when a seat asks (``venue.order_book``),
+        # and the tape recorder (scripts/record_tape.py) samples books off the path.
         try:
             funding = self.exchange.funding()
             self.through["rates"] = now_ns
@@ -529,8 +529,17 @@ class LiveVenue:
             # have no periodic funding; durable cursors retain former markets.
             coins = ({coin for coin in traded if "/" not in coin}
                      if traded is not None else {f.coin for f in funding})
-            coins.update(key.removeprefix("settled:") for key in self.through
-                         if key.startswith("settled:"))
+            # A former market keeps its cursor. In a world with a universe (``bounded``)
+            # it is read again only while a boundary of it is still owed (a gap, or an
+            # emitted boundary a consequence still reads): the settled reads a tick
+            # sends are bounded by the markets in play, never by every market the world
+            # ever touched (Chapter II §IV.c).
+            coins.update(
+                coin for coin in (key.removeprefix("settled:") for key in self.through
+                                  if key.startswith("settled:"))
+                if not self.bounded or self.settled_gaps.get(coin) or any(
+                    self._funding_needed(coin, stamp)
+                    for stamp in self.settled_emitted.get(coin, ())))
             out.extend(self._settled_rates(now_ns, coins))
         out.extend(self.funding_payments(now_ns))
         return out

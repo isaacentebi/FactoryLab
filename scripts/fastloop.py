@@ -1252,8 +1252,12 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False,
               and base.treasury.reserve_address is not None)
     manifest = rehearsal.effective_manifest(base, native_completions=True,
                                             capital_loop=hybrid)
+    # The fake venue lists no builder-deployed (HIP-3) dex: a market or selector on
+    # one (``xyz:TSLA``, ``xyz:*``) is not a market of the simulated world, which keeps
+    # the rest of the launch universe (factorylab/world/universe.py).
+    coins = tuple(c for c in manifest.exchange.coins if ":" not in c) or ("BTC", "ETH")
     exchange = replace(manifest.exchange, kind="fake", mainnet=False, seed=seed,
-                       spot_pairs=(), client_namespace=None,
+                       coins=coins, spot_pairs=(), client_namespace=None,
                        vault_tools=vault_tools or manifest.exchange.vault_tools,
                        tape=None if tape is None else tape_spec(tape, allow_unknown_cutoff))
     manifest = replace(manifest, exchange=exchange, seed=seed)
@@ -1309,9 +1313,13 @@ def tape_venue(tape: Tape, manifest: Any) -> TapeVenue:
     """The fake venue replaying ``tape`` for the manifest's markets, funded as bootstrap
     funds the seeded fake."""
     from factorylab.kernel.money import money_to_usd
+    from factorylab.world.universe import explicit_markets
 
-    return TapeVenue(tape, coins=manifest.exchange.coins,
-                     spot_pairs=manifest.exchange.spot_pairs, seed=manifest.exchange.seed,
+    # A selector (``*``, ``*/USDC``) selects from the recording's own listing at launch
+    # (factorylab/world/universe.py); the venue is built with the explicit names.
+    return TapeVenue(tape, coins=explicit_markets(manifest.exchange.coins),
+                     spot_pairs=explicit_markets(manifest.exchange.spot_pairs),
+                     seed=manifest.exchange.seed,
                      start_cash_usd=money_to_usd(manifest.initial_balance_micro))
 
 

@@ -203,7 +203,7 @@ def render_static(name: str, rt=None) -> list[Leaf]:
     from factorylab.cortex import schematics
     from factorylab.cortex.schematics import (
         INSTITUTION_SECTIONS,
-        RETRIEVABLE_ADMISSION_SECTIONS,
+        RETRIEVABLE_SECTIONS,
     )
     from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 
@@ -225,7 +225,7 @@ def render_static(name: str, rt=None) -> list[Leaf]:
     }
     for key, text in fixed.items():
         leaves.append((f"{name}/institutions/{key}", text))
-    for section in sorted(INSTITUTION_SECTIONS | RETRIEVABLE_ADMISSION_SECTIONS):
+    for section in sorted(INSTITUTION_SECTIONS | RETRIEVABLE_SECTIONS):
         leaves.extend(flatten(f"{name}/institutions/{section}/",
                               _plain(rt.institution_section(section))))
     for tool_id, spec in sorted(rt.tool_specs.items()):

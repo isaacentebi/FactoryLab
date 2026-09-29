@@ -29,6 +29,7 @@ from factorylab.charter.provenance import (
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
 from factorylab.runtime.observations import observation_for
+from factorylab.world import universe
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
@@ -874,19 +875,39 @@ class WorldManifest:
             with urlopen(request, timeout=5) as response:
                 return json.load(response)
 
+        def dex_metadata(dex):
+            request = Request(f"https://{host}/info",
+                              data=json.dumps({"type": "meta", "dex": dex}).encode(),
+                              headers={"Content-Type": "application/json"})
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        dexes = universe.named_dexes(self.exchange.coins)
         try:
             perps, spot = metadata("meta"), metadata("spotMeta")
             coins = {row["name"] for row in perps["universe"]}
             tokens = {row["index"]: row["name"] for row in spot["tokens"]}
             pairs = {f"{tokens[row['tokens'][0]]}/{tokens[row['tokens'][1]]}"
                      for row in spot["universe"]}
+            usdc = next((row["index"] for row in spot["tokens"] if row["name"] == "USDC"),
+                        None)
+            foreign = []
+            for dex in dexes:
+                dex_meta = dex_metadata(dex)
+                coins |= {row["name"] for row in dex_meta["universe"]}
+                if dex_meta.get("collateralToken", usdc) != usdc:
+                    foreign.append(dex)
         except (OSError, ValueError, KeyError, TypeError, IndexError):
             return {"status": "unavailable", "coins": list(self.exchange.coins),
                     "spot_pairs": list(self.exchange.spot_pairs)}
-        missing_coins = sorted(set(self.exchange.coins) - coins)
-        missing_pairs = sorted(set(self.exchange.spot_pairs) - pairs)
-        return {"status": "invalid" if missing_coins or missing_pairs else "valid",
-                "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs}
+        missing_coins = sorted(set(universe.explicit_markets(self.exchange.coins)) - coins)
+        missing_pairs = sorted(set(universe.explicit_markets(self.exchange.spot_pairs)) - pairs)
+        missing_dexes = sorted(dex for dex in dexes
+                               if not any(coin.startswith(f"{dex}:") for coin in coins))
+        return {"status": ("invalid" if missing_coins or missing_pairs or missing_dexes
+                           or foreign else "valid"),
+                "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs,
+                "missing_dexes": missing_dexes, "non_usdc_dexes": sorted(foreign)}
 
     def _validate_funded_admission(self) -> None:
         """Real money launches only on a fresh identity space and the ratified charter.
@@ -1298,7 +1319,8 @@ class WorldManifest:
         if (type(tape.start_ns) is not int or type(tape.end_ns) is not int
                 or not 0 < tape.start_ns < tape.end_ns):
             raise ValueError("exchange.tape span must be two increasing ns instants")
-        missing = set(self.exchange.coins) | set(self.exchange.spot_pairs)
+        missing = set(universe.explicit_markets(self.exchange.coins))
+        missing |= set(universe.explicit_markets(self.exchange.spot_pairs))
         missing -= set(tape.markets)
         if missing:
             raise ValueError(f"exchange.tape recorded no mids for {sorted(missing)}")
@@ -1891,6 +1913,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             or not p.split("/")[0] for p in spot_pairs)
             or len(set(spot_pairs)) != len(spot_pairs)):
         raise ValueError("venue.spot_pairs must be a unique list of BASE/USDC pairs")
+    coins = ex.get("coins", ["BTC", "ETH"])
+    if not isinstance(coins, list) or len(set(map(str, coins))) != len(coins):
+        raise ValueError("exchange.coins must be a unique list of coins or selectors")
+    # Selectors (``*``, ``<dex>:*``, ``*/USDC``) are resolved against the venue's listing
+    # at launch and pinned for the world's life (factorylab/world/universe.py).
+    universe.validate(coins, spot_pairs)
     tape = ex.get("tape")
     if tape is not None:
         if not isinstance(tape, dict) or set(tape) - {
@@ -1909,7 +1937,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         tape=tape,
         client_namespace=ex.get("client_namespace"),
         mainnet=bool(ex.get("mainnet", False)),
-        coins=tuple(ex.get("coins", ["BTC", "ETH"])),
+        coins=tuple(coins),
         spot_pairs=tuple(spot_pairs),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),

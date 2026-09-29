@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import sys
 from decimal import Decimal
+from types import SimpleNamespace
 
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.shared import _to_plain
 from factorylab.settlement.lots import VENUE_FEE_MARKETS, WIND_DOWN, LotTable
+from factorylab.world import universe as universe_names
 from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.exchange import (
     AccountState,
@@ -27,6 +29,14 @@ from factorylab.world.exchange import (
 #: repeat forever. The kill wind-down's terminal reconciliation reads past it: a
 #: dying runtime asks once more, whatever the schedule already spent.
 UNCERTAIN_ORDER_POLLS = 5
+
+
+def _nonzero_usd(value) -> bool:
+    """Whether a venue payload's USD amount moves money (an unreadable amount does)."""
+    try:
+        return Decimal(str(value)) != 0
+    except ArithmeticError:
+        return True
 
 
 def _custody_of(market: str) -> str:
@@ -603,6 +613,16 @@ class VenueMixin:
         events = self.exchange.advance(ts_ns)
         self.advance_through_ns = max(getattr(self, "advance_through_ns", None) or ts_ns,
                                       ts_ns)
+        if getattr(self, "universe", None):
+            # A simulated or recorded venue answers every market it lists; the world
+            # broadcasts the markets it is in play on, as the live tick does (Chapter
+            # II §IV.c). A price or a rate no broadcast market needs is not an event.
+            broadcast = set(self._broadcast_markets())
+            events = [we for we in events
+                      if we.payload.get("coin") in broadcast or not (
+                          we.kind is WorldEventKind.MARKET_MID
+                          or we.kind is WorldEventKind.FUNDING
+                          and not _nonzero_usd(we.payload.get("paid_usd", "0")))]
         return events
 
     def _stream_watermark(self, stream: str) -> int | float | None:
@@ -711,8 +731,68 @@ class VenueMixin:
         """
         tools = getattr(self, "venue_tools", None)
         if tools is None:
-            return (*self.m.exchange.coins, *self.m.exchange.spot_pairs)
+            seed = self._seed_spec()
+            return (*seed.coins, *seed.spot_pairs)
         return (*tools.coins, *tools.spot_pairs)
+
+    def _seed_spec(self) -> SimpleNamespace:
+        """The launch seed of trading permission: the pinned universe, else the manifest.
+
+        Guarantees the manifest's explicit coins and pairs when it names no selector,
+        and the lists its selectors resolved to at launch (``universe``, pinned in the
+        Launch ledger and every checkpoint) when it does; never a selector itself, and
+        never a list resolved again after launch (Chapter II §II: one world for life).
+        A world whose selectors were not resolved (a schematics render reads no venue)
+        seeds its explicit names alone.
+        """
+        pinned = getattr(self, "universe", None)
+        if pinned:
+            return SimpleNamespace(coins=tuple(pinned["coins"]),
+                                   spot_pairs=tuple(pinned["spot_pairs"]))
+        return SimpleNamespace(
+            coins=universe_names.explicit_markets(self.m.exchange.coins),
+            spot_pairs=universe_names.explicit_markets(self.m.exchange.spot_pairs))
+
+    def _broadcast_markets(self) -> tuple[str, ...]:
+        """The markets whose venue facts the tick broadcasts: bounded by the world's own
+        activity, never by the size of its universe.
+
+        Chapter II §IV.c: neither the factory nor its control apparatus may be slower
+        than its environment, so a tick's cost may not grow with the number of markets
+        the venue lists. Guarantees, for a world whose manifest names no selector,
+        exactly its trading markets (``_trading_markets``: the manifest's markets and
+        every registration), as before. For a world with a universe: the manifest's
+        explicit markets, every registered market, and every market the world is in
+        play on -- a named trade or an open consequence that still reads it
+        (``_fee_needs``), an instrument an open return holds or held
+        (``graded_instruments``), an order intent not yet released, and a position or
+        spot balance in the tick's account read. Every other market's price is one
+        batched ``venue.mids`` read away, and its book one ``venue.order_book``.
+        """
+        markets = self._trading_markets()
+        pinned = getattr(self, "universe", None)
+        if not pinned:
+            return markets
+        selected = set(pinned["coins"]) | set(pinned["spot_pairs"])
+        explicit = (set(universe_names.explicit_markets(self.m.exchange.coins))
+                    | set(universe_names.explicit_markets(self.m.exchange.spot_pairs)))
+        out = [m for m in markets if m not in selected or m in explicit]
+        in_play = set(self._fee_needs())
+        consequences = getattr(self, "consequences", None)
+        if consequences is not None:
+            in_play |= {coin for coin, _market in consequences.graded_instruments()}
+        in_play |= {str(intent["args"]["coin"])
+                    for intent in (getattr(self, "order_intents", None) or {}).values()
+                    if isinstance(intent.get("args"), dict) and intent["args"].get("coin")}
+        memo = getattr(self, "_account_memo", None)
+        account = memo[1] if memo is not None else None
+        if account is not None:
+            in_play |= {p.coin for p in account.positions if p.size}
+            in_play |= {f"{b.coin}/USDC" for b in account.spot_balances
+                        if b.coin != "USDC" and b.total}
+        tradeable = set(markets)
+        out.extend(sorted(m for m in in_play if m in tradeable and m not in out))
+        return tuple(out)
 
     def _tick_mids(self) -> dict[str, Decimal]:
         """The venue's mid prices, read once for the tick that reads them.
