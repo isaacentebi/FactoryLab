@@ -175,11 +175,22 @@ def test_the_soak_inventory_is_what_the_soak_marker_selects(request):
     collected = request.config.stash.get(SOAK_COLLECTED, None)
     if collected is None:
         pytest.skip("this session did not collect the whole repository")
-    assert SOAK_INVENTORY.read_text().split() == collected
+    assert SOAK_INVENTORY.read_text().splitlines() == collected
+
+
+def _report(nodeid, tier, *, when="call", outcome="passed", reported=None, **extra):
+    """A test report as the conftest's makereport leaves it: ``reported`` is the id
+    xdist reports (``…@group`` under loadgroup), ``nodeid`` the collected one."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(when=when, passed=outcome == "passed",
+                           failed=outcome == "failed", skipped=outcome == "skipped",
+                           nodeid=reported or nodeid, factorylab_nodeid=nodeid,
+                           factorylab_tier=tier, **extra)
 
 
 def _soak_session(tmp_path, *, marks, tiers, passed, status=None,
-                  args=("-m", "soak", "-n", "2"), environ=None, **options):
+                  args=("-m", "soak", "-n", "2"), environ=None, reports=(), **options):
     from types import SimpleNamespace
 
     from tests import conftest
@@ -195,12 +206,11 @@ def _soak_session(tmp_path, *, marks, tiers, passed, status=None,
         patch.setattr(conftest.os, "environ", environ or {})
         plugin.pytest_sessionstart(session)
         for nodeid in passed:
-            plugin.pytest_runtest_logreport(SimpleNamespace(
-                when="call", passed=True, failed=False, nodeid=nodeid,
-                factorylab_tier=tiers))
-        if not passed:  # a setup report: the tier ran, no test body did
-            plugin.pytest_runtest_logreport(SimpleNamespace(
-                when="setup", passed=True, failed=False, nodeid="t", factorylab_tier=tiers))
+            plugin.pytest_runtest_logreport(_report(nodeid, tiers))
+        if not passed and not reports:  # a setup report: the tier ran, no body did
+            plugin.pytest_runtest_logreport(_report("t", tiers, when="setup"))
+        for report in reports:
+            plugin.pytest_runtest_logreport(report)
         plugin.pytest_sessionfinish(session)
     return session.exitstatus, plugin
 
@@ -230,6 +240,13 @@ def test_only_the_whole_soak_inventory_passing_certifies_its_tree(tmp_path, monk
         dict(ignore_glob=["tests/b*"]), dict(keyword="one"), dict(collectonly=True),
         dict(override_ini=["python_functions=soak_one"]),
         dict(args=("-m", "soak", "tests/a.py")), dict(args=("-m", "soak or slow")),
+        # Sol's final review: a soak test missing from the inventory that is skipped or
+        # xfailed, and an inventoried one that xpasses.
+        dict(reports=[_report("tests/a.py::soak_new", "soak", when="setup",
+                              outcome="skipped")]),
+        dict(reports=[_report("tests/a.py::soak_new", "soak", outcome="skipped",
+                              wasxfail="")]),
+        dict(passed=ids[:1], reports=[_report(ids[1], "soak", wasxfail="")]),
     ]
     for case in refused:
         _, plugin = _soak_session(tmp_path, **{"marks": "soak", "tiers": "soak",
@@ -246,6 +263,41 @@ def test_only_the_whole_soak_inventory_passing_certifies_its_tree(tmp_path, monk
                  ("-m", "soak", "-p", "xdist.looponfail")):
         _soak_session(tmp_path, marks="soak", tiers="soak", passed=ids, args=args)
     assert record.read_text() == "tree-a\n" * 4
+    # An id with a space is one inventory line; an xdist-grouped test is compared on its
+    # collected id, not the ``@group`` one it reports under.
+    spaced = ["tests/a.py::soak[slow world]", "tests/a.py::soak_grouped"]
+    inventory.write_text("\n".join(spaced) + "\n")
+    _soak_session(tmp_path, marks="soak", tiers="soak", passed=[], reports=[
+        _report(spaced[0], "soak"),
+        _report(spaced[1], "soak", reported=spaced[1] + "@long_world")])
+    assert record.read_text() == "tree-a\n" * 5
+
+
+def test_a_rename_is_both_its_endpoints_and_a_path_is_read_whole(tmp_path):
+    """Sol's final review: ``archive.py`` renamed to ``docs/archive.md`` showed only its
+    Markdown destination, and names with spaces or accents were split or quoted. Both
+    endpoints of a rename are changes, and every path is read whole."""
+    import subprocess
+
+    from tests import conftest
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c",
+                        "user.email=t@t", *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    (tmp_path / "archive.py").write_text("x = 1\n" * 20)
+    git("add", "archive.py")
+    git("commit", "-q", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    (tmp_path / "docs").mkdir()
+    git("mv", "archive.py", "docs/archive.md")
+    for name in ("Guide for developers.md", "café.md"):
+        (tmp_path / "docs" / name).write_text("words\n")
+    changed = conftest._changed_since_main(tmp_path)
+    assert changed == ["archive.py", "docs/Guide for developers.md", "docs/archive.md",
+                       "docs/café.md"]
+    assert soak_required(changed) == ["archive.py"]
 
 
 def test_a_whole_gate_on_a_soak_required_change_fails_until_soak_passed_on_its_tree(

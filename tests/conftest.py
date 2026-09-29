@@ -556,6 +556,7 @@ def pytest_collection_modifyitems(config, items):
             module.own_markers[:] = [m for m in module.own_markers
                                      if m.name not in _GATE_MARKS]
     for item in items:
+        item.stash[_COLLECTED_NODEID] = item.nodeid
         if item.get_closest_marker("soak"):
             # A soak row (a long param of a gate test) is soak only: -m gate never
             # selects it, whatever its test is marked.
@@ -730,6 +731,7 @@ def pytest_runtest_makereport(item, call):
     item.stash.setdefault(_PHASE_WALL, {})[call.when] = report.duration
     report.factorylab_tier = next((tier for tier in ("gate", "check", "slow", "soak")
                                    if item.get_closest_marker(tier)), None)
+    report.factorylab_nodeid = item.stash.get(_COLLECTED_NODEID, item.nodeid)
     if report.when != "call" or not report.passed or report.factorylab_tier != "check":
         return report
     problem = _stepped_a_world_problem(item) or _check_limit_problem(
@@ -820,6 +822,9 @@ SOAK_INVENTORY = _TESTS_ROOT / "soak_inventory.txt"
 #: Whether this session's collection was the whole repository's, and the soak tests in
 #: it: set by the collection hook, read by the inventory's check test.
 SOAK_COLLECTED = pytest.StashKey[list]()
+#: Each test's node id as collected, before xdist's loadgroup appends ``@group`` to it:
+#: every report carries it (``factorylab_nodeid``), and the inventory is compared on it.
+_COLLECTED_NODEID = pytest.StashKey[str]()
 #: The file, in the repository's common git directory (shared by its worktrees), listing
 #: the tree hashes on which the whole soak tier passed.
 SOAK_PASSES = "factorylab-soak-passes"
@@ -836,7 +841,8 @@ def _git(root: Path, *args: str, env: dict | None = None) -> str | None:
 
     try:
         done = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                              text=True, env=env, check=True)
+                              text=True, encoding="utf-8", errors="surrogateescape",
+                              env=env, check=True)
     except (OSError, subprocess.CalledProcessError):
         return None
     return done.stdout
@@ -856,12 +862,15 @@ def _tree_hash(root: Path) -> str | None:
 
 
 def _changed_since_main(root: Path) -> list[str] | None:
-    """Every path the working tree changed since ``origin/main``, or None without git."""
-    changed = _git(root, "diff", "--name-only", "origin/main")
-    untracked = _git(root, "ls-files", "--others", "--exclude-standard")
+    """Every path the working tree changed since ``origin/main``, or None without git: a
+    rename as both its endpoints (``--no-renames``), and each path whole, spaces and any
+    characters included (``-z``, never quoted)."""
+    changed = _git(root, "diff", "--no-renames", "--name-only", "-z", "origin/main")
+    untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z")
     if changed is None or untracked is None:
         return None
-    return sorted({*changed.split(), *untracked.split()})
+    return sorted({path for listing in (changed, untracked)
+                   for path in listing.split("\0") if path})
 
 
 #: Options that narrow a run or run no test body, from whatever source (the command
@@ -904,7 +913,8 @@ class _SoakRequirement:
 
     A soak run certifies its tree (appends its hash to ``SOAK_PASSES``) only when its
     invocation and effective options are exactly the whole tier's (``uncertifiable``),
-    nothing failed, the tests whose call passed are exactly ``SOAK_INVENTORY``, and the
+    nothing failed, skipped or xfailed, the soak tests it ran and those whose call passed
+    are each exactly ``SOAK_INVENTORY`` (compared on collected node ids), and the
     tree is the same at its end as at its start; anything else runs as usual and says
     why it certified nothing. A whole gate run (``-m gate`` or ``-m "check or gate"``, no file
     arguments, no ``-k``) on a tree that changed a soak-required path since
@@ -916,7 +926,8 @@ class _SoakRequirement:
     def __init__(self, root: Path):
         self.root, self.tree, self.problem, self.note = root, None, None, None
         self.passed: set[str] = set()
-        self.failed = False
+        self.seen: set[str] = set()
+        self.failed = self.skipped = False
         self.tiers: set[str] = set()
 
     @staticmethod
@@ -937,8 +948,12 @@ class _SoakRequirement:
         tier = getattr(report, "factorylab_tier", None)
         if tier is not None:
             self.tiers.add(tier)
+        nodeid = getattr(report, "factorylab_nodeid", report.nodeid)
+        if tier == "soak":
+            self.seen.add(nodeid)
+            self.skipped |= report.skipped or hasattr(report, "wasxfail")
         if report.when == "call" and report.passed:
-            self.passed.add(report.nodeid)
+            self.passed.add(nodeid)
         if report.failed:
             self.failed = True
 
@@ -947,12 +962,16 @@ class _SoakRequirement:
         why = uncertifiable(config.invocation_params.args, os.environ, config.option)
         if why is None and (session.exitstatus != pytest.ExitCode.OK or self.failed):
             why = "the run did not pass"
+        if why is None and self.skipped:
+            why = "a soak test was skipped or xfailed"
         if why is None:
-            inventory = set(SOAK_INVENTORY.read_text().split())
-            missing, extra = inventory - self.passed, self.passed - inventory
-            if missing or extra:
-                why = (f"the passed tests are not the inventory ({len(missing)} missing, "
-                       f"{len(extra)} not in it; tests/soak_inventory.txt)")
+            inventory = set(SOAK_INVENTORY.read_text().splitlines())
+            for name, ran in (("collected", self.seen), ("passed", self.passed)):
+                missing, extra = inventory - ran, ran - inventory
+                if missing or extra:
+                    why = (f"the {name} soak tests are not the inventory ({len(missing)} "
+                           f"missing, {len(extra)} not in it; tests/soak_inventory.txt)")
+                    break
         if why is None and _tree_hash(self.root) != self.tree:
             why = "the tree changed while it ran"
         return why
