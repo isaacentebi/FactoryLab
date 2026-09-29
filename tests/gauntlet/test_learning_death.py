@@ -60,10 +60,14 @@ def test_ld1b_the_newcomers_trial_calls_are_funded_from_the_niche(ld1):
 
 
 def test_ld1b_negative_control_without_protected_compute_the_trial_is_unfunded():
-    mutant = P.run(*P.ld1(at_window=10), events=350, patches=[
+    """The newcomer registers at window 10 and is woken three times inside its trial by
+    event 150 (all three funded in the unmutated world); without protected compute
+    none of those calls is funded. The positive test reads the 350-event world."""
+    mutant = P.run(*P.ld1(at_window=10), events=150, patches=[
         (RoutingMixin, "_novelty_compute", lambda self, handle, reason: False)])
     calls = _newcomer_calls(mutant)
-    assert not calls or not all(funded for _handle, funded in calls)
+    assert calls, "the newcomer was never woken inside its trial"
+    assert not all(funded for _handle, funded in calls)
 
 
 def test_ld1c_the_newcomer_lives_and_is_offered_for_its_patience(ld1):
