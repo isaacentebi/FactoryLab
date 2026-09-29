@@ -273,3 +273,21 @@ def test_a_json_schema_route_sends_its_schema_on_venices_openai_wire(completion,
     assert sent[1]["response_format"] == {"type": "json_object"}
     assert "response_format" not in sent[2]
     assert sent[3]["response_format"] == {"type": "json_object"}
+
+
+def test_a_json_schema_strict_route_sends_the_strict_schema_on_venices_openai_wire(
+        completion, req):
+    """A json_schema_strict route hands the decoder ``strict_schema`` with strict on."""
+    from factorylab.world.openai_wire import strict_schema
+
+    schema = {"type": "object", "propertyNames": {"pattern": "^[a-z]+$"},
+              "properties": {"action": {"type": "string"}}, "required": ["action"]}
+    fake = FakeTransport([dict(completion) for _ in range(2)])
+    provider = VeniceProvider(transport=fake, strict_models=[req.model_id])
+    provider.complete(replace(req, json_object=True, response_schema=schema))
+    provider.complete(replace(req, json_object=True))
+    sent = [call[2] for call in fake.calls]
+    assert sent[0]["response_format"] == {"type": "json_schema", "json_schema": {
+        "name": "outcome", "strict": True, "schema": strict_schema(schema)}}
+    assert "propertyNames" not in sent[0]["response_format"]["json_schema"]["schema"]
+    assert sent[1]["response_format"] == {"type": "json_object"}

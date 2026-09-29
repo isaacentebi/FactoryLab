@@ -135,6 +135,26 @@ section is unchanged. OpenAI-hosted routes stay on the default: their hosts
 refuse a schema whose root is a union, and strict mode would require every
 property and close every object, which is a different contract.
 
+`"json_schema_strict"` sends the same schema with `strict: true`, after removing
+every keyword outside the set strict decoders commonly compile
+(`openai_wire.STRICT_KEYWORDS`: `type`, `properties`, `required`,
+`additionalProperties`, `items`, `enum`, `anyOf`, `$ref`, `$defs`, `description`,
+the numeric bounds, `minItems` and `maxItems`). The removed keywords are those hosts
+refused with HTTP 400: `propertyNames` (the field-name rule), `pattern`,
+`dependentRequired` and `minProperties`/`maxProperties` (a child request's
+propensity). A reference inside a `$defs` entry becomes `{}`, so no definition is
+recursive (a child `outcome_schema` is carried to its first level). Removing an
+assertion only widens what the schema admits, so a reply the decoder may produce is
+never one the full schema forbids by a rule the strict schema kept, and a rule it
+removed is still published in the prompt's `outcome_schema` and still enforced: the
+kernel validates every reply against the full contract, as on any other route. The
+request, its prompt and its `response_schema` are the same on every route; only the
+`response_format` differs. Objects stay open, so a strict decoder still admits any
+field name; hosts that refuse a union at the root (OpenAI, Mistral, ByteDance Seed,
+Meta, 29 September 2026), open objects (OpenAI) or any `$ref` (Google AI Studio)
+refuse this contract too, before generation. Same keys and rules as `json_schema`
+otherwise: `openrouter` and `venice` routes only, fixed for the world's life.
+
 `models[].training_cutoff` is the last UTC day (`"YYYY-MM-DD"`) a model's training
 data may cover, as its provider states it; absent (the default) means unknown. It is
 fixed for the world's life and hashed. It binds only a world that replays a recorded

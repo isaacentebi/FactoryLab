@@ -607,6 +607,12 @@ def _schema_models(manifest: Any) -> frozenset[str]:
             if hasattr(manifest, "schema_contract_models") else frozenset())
 
 
+def _strict_models(manifest: Any) -> frozenset[str]:
+    """The model ids whose route carries the contract as a strict schema (stubs may carry none)."""
+    return (manifest.strict_contract_models()
+            if hasattr(manifest, "strict_contract_models") else frozenset())
+
+
 def build_provider(manifest: Any) -> Any:
     """Return the model provider a manifest asks for.
 
@@ -639,9 +645,11 @@ def build_provider(manifest: Any) -> Any:
         return MultiProvider(
             OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config(),
                                extra_body=_extra_body(manifest),
-                               schema_models=_schema_models(manifest)),
+                               schema_models=_schema_models(manifest),
+                               strict_models=_strict_models(manifest)),
             VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
-                           schema_models=_schema_models(manifest)), market,
+                           schema_models=_schema_models(manifest),
+                           strict_models=_strict_models(manifest)), market,
         )
     if "venice" in providers:
         from factorylab.world.venice import VeniceProvider
@@ -654,7 +662,8 @@ def build_provider(manifest: Any) -> Any:
             raise RuntimeError("Venice model ids must start with venice:")
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
         venice = VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
-                                schema_models=_schema_models(manifest))
+                                schema_models=_schema_models(manifest),
+                                strict_models=_strict_models(manifest))
         if providers == {"venice"}:
             return venice
         if not os.environ.get("OPENROUTER_API_KEY"):
@@ -664,6 +673,7 @@ def build_provider(manifest: Any) -> Any:
         return MultiProvider(OpenRouterProvider(
             reasoning_config=config, web_config=manifest.web_config(),
             extra_body=_extra_body(manifest), schema_models=_schema_models(manifest),
+            strict_models=_strict_models(manifest),
         ), venice, market)
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
@@ -675,8 +685,10 @@ def build_provider(manifest: Any) -> Any:
         return MultiProvider(
             OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config(),
                                extra_body=_extra_body(manifest),
-                               schema_models=_schema_models(manifest)),
+                               schema_models=_schema_models(manifest),
+                               strict_models=_strict_models(manifest)),
             VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
-                           schema_models=_schema_models(manifest)), market,
+                           schema_models=_schema_models(manifest),
+                           strict_models=_strict_models(manifest)), market,
         )
     raise RuntimeError(f"unsupported provider set {sorted(providers)}")

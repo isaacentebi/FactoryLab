@@ -160,6 +160,24 @@ def test_build_provider_hands_each_adapter_the_manifests_schema_routes(monkeypat
     assert provider.venice._schema_models == manifest.schema_contract_models()
     assert "openai/gpt-6-luna" not in provider.openrouter._schema_models
     assert build_provider(load_manifest("testnet")).openrouter._schema_models == frozenset()
+    assert provider.openrouter._strict_models == manifest.strict_contract_models()
+    assert provider.venice._strict_models == manifest.strict_contract_models()
+
+
+def test_build_provider_hands_each_adapter_the_manifests_strict_routes(monkeypatch) -> None:
+    """A json_schema_strict route reaches both adapters as a strict route (§II.b)."""
+    from dataclasses import replace
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("VENICE_API_KEY", "test-key-not-real")
+    manifest = load_manifest("edition6-testnet-rehearsal")
+    manifest = replace(manifest, models=tuple(
+        replace(m, contract="json_schema_strict") if m.id == "qwen/qwen3.8-flash" else m
+        for m in manifest.models))
+    provider = build_provider(manifest)
+    assert provider.openrouter._strict_models == frozenset({"qwen/qwen3.8-flash"})
+    assert provider.venice._strict_models == frozenset({"qwen/qwen3.8-flash"})
+    assert "qwen/qwen3.8-flash" not in provider.openrouter._schema_models
 
 
 def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() -> None:
