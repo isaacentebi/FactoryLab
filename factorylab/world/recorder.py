@@ -179,11 +179,11 @@ class Recorder:
 
     def poll(self) -> dict:
         """One poll: every market's mid, the funding contexts on a funding poll, and a
-        rotating, bounded sample of books. A read that failed is named in ``failed``."""
+        rotating, bounded sample of books, stamped at the instant its last answer
+        arrived. A read that failed is named in ``failed``."""
         if self.header is None:
             raise RuntimeError("start() reads the listing before the first poll")
         weight_before = self.weight
-        ts = self.clock()
         failed: list[str] = []
         public = {w: m for m, w in self.header["wire"].items()}
         mids: dict[str, str] = {}
@@ -227,6 +227,9 @@ class Recorder:
             except Exception as exc:  # noqa: BLE001 - an unanswered book is absent
                 failed.append(f"l2Book:{market}:{type(exc).__name__}")
         self.polls += 1
+        # Stamped when the last answer arrived, never before a read: a fact is replayed
+        # only from the instant it was known (Chapter II §III.b; no look-ahead).
+        ts = self.clock()
         return {"ts": ts, "mids": mids, "funding": funding, "books": books,
                 "failed": failed, "weight": self.weight - weight_before}
 

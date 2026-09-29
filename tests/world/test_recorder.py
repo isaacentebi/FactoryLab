@@ -152,3 +152,22 @@ def test_a_journal_that_is_not_a_recording_is_refused(tmp_path):
     path.write_text('{"format": "something-else"}\n')
     with pytest.raises(ValueError, match="not a factorylab tape journal"):
         read_journal(path)
+
+
+def test_a_poll_is_stamped_when_its_answers_arrived_never_before():
+    """Codex P2 on #178: a poll stamped before its reads backdated a slow read's facts,
+    a look-ahead on replay. The stamp is taken after the last answer arrived."""
+    now = [100 * S]
+    venue = Venue(3)
+
+    def slow(body):
+        answer = venue(body)
+        now[0] += 5 * S  # every read takes five seconds
+        return answer
+
+    rec = Recorder(slow, coins=["*"], spot_pairs=["*/USDC"], clock=lambda: now[0],
+                   books_per_poll=2)
+    rec.start()
+    before = now[0]
+    poll = rec.poll()
+    assert poll["ts"] == now[0] > before
