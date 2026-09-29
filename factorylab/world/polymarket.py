@@ -477,15 +477,13 @@ class PolymarketReader:
 DEFAULT_FAKE_MARKETS = (
     {"market_id": "fake-1", "question":
          "Will simulated event A occur by its scripted resolution time?",
-     "outcomes": ("Yes", "No"), "mid": "0.40", "fee_rate": "0", "resolves_after_s": 900},
+     "outcomes": ("Yes", "No"), "mid": "0.40", "resolves_after_s": 900},
     {"market_id": "fake-2", "question":
          "Will simulated event B occur by its scripted resolution time?",
-     "outcomes": ("Yes", "No"), "mid": "0.70", "fee_rate": "0.05",
-     "resolves_after_s": 3600},
+     "outcomes": ("Yes", "No"), "mid": "0.70", "resolves_after_s": 3600},
     {"market_id": "fake-3", "question":
          "Will simulated event C occur by its scripted resolution time?",
-     "outcomes": ("Yes", "No"), "mid": "0.15", "fee_rate": "0.04",
-     "resolves_after_s": None},
+     "outcomes": ("Yes", "No"), "mid": "0.15", "resolves_after_s": None},
 )
 
 
@@ -498,11 +496,11 @@ class FakePolymarket:
     a ``tick`` grid strictly inside (0, 1); an outcome's two tokens price to 1.
     The book is one tick either side of the mid, ``depth_shares`` deep a level.
     It takes BUY orders only, as the factory's Polymarket venue does: a position is
-    held to its resolution. A limit buy at or above the best ask fills at once at
-    the ask; otherwise it rests and fills at its own price once the moving mid
-    crosses it. A resting buy holds ``price * size`` USDC. Fees are
-    Polymarket's: a taker pays ``shares * rate * p * (1 - p)``, rounded to five
-    decimals, at the market's own rate; a resting order that is filled pays none.
+    held to its resolution. Every order is post-only, as the live venue's are: a buy
+    at or above the best ask would cross, and it is rejected before it executes; any
+    other rests and fills at its own price once the moving mid crosses it. A resting
+    buy holds ``price * size`` USDC. A maker pays no fee, so no fill here is charged
+    one.
     At a scripted resolution every resting order on the market is cancelled and
     every token redeems into the pot: 1 USDC a winning token, 0 a losing one,
     0.5 each on a 50-50 answer. Client ids are idempotent: repeating one returns
@@ -541,7 +539,6 @@ class FakePolymarket:
                 "question": seed_market["question"],
                 "outcomes": list(seed_market["outcomes"]),
                 "tokens": tokens, "mid": mid,
-                "fee_rate": Decimal(str(seed_market.get("fee_rate", "0"))),
                 "closed": False, "winner": None, "resolved_at_ns": None,
             }
             for side, token in enumerate(tokens):
@@ -577,8 +574,9 @@ class FakePolymarket:
             "accepting_orders": not market["closed"], "order_book": True,
             "tick_size": str(self.tick), "min_order_size": str(self.min_order_size),
             "neg_risk": False,
-            "fees": {"enabled": bool(market["fee_rate"]), "rate": str(market["fee_rate"]),
-                     "exponent": "1", "taker_only": True},
+            # The listing's own statement, in the live listing's shape: the simulated
+            # venue has no takers, so it states no fee schedule.
+            "fees": {"enabled": False, "rate": "0", "exponent": "1", "taker_only": True},
             "uma_resolution_status": "resolved" if market["closed"] else None,
             "best_bid": None if market["closed"] else str(yes - self.tick),
             "best_ask": None if market["closed"] else str(yes + self.tick),
@@ -653,11 +651,6 @@ class FakePolymarket:
             raise PolymarketUnavailable("HTTP 404")
         return str(self._token_mid(token_id))
 
-    def taker_fee(self, token_id: str, size: Decimal, price: Decimal) -> Decimal:
-        """What a taker pays to trade ``size`` tokens at ``price``, in USDC."""
-        rate = self._markets[self._tokens[token_id][0]]["fee_rate"]
-        return (size * rate * price * (1 - price)).quantize(Decimal("0.00001"))
-
     # ---- account
 
     def _holds(self) -> Decimal:
@@ -691,22 +684,21 @@ class FakePolymarket:
 
     # ---- writes
 
-    def _fill(self, order: dict, size: Decimal, px: Decimal, *, taker: bool) -> None:
+    def _fill(self, order: dict, size: Decimal, px: Decimal) -> None:
         token = order["token_id"]
-        fee = self.taker_fee(token, size, px) if taker else Decimal(0)
         position = self._positions.setdefault(token, {"size": Decimal(0),
                                                       "avg_px": Decimal(0)})
         total = position["size"] + size
         position["avg_px"] = (position["size"] * position["avg_px"] + size * px) / total
         position["size"] = total
-        self._cash -= px * size + fee
+        self._cash -= px * size
         order["remaining"] -= size
         order["filled"] += size
         order["notional"] += px * size
         self._events.append({
             "kind": "fill", "order_id": order["order_id"], "token_id": token,
             "market_id": self._tokens[token][0], "is_buy": True,
-            "size": str(size), "px": str(px), "fee_usd": str(fee),
+            "size": str(size), "px": str(px), "fee_usd": "0",
             "realized_usd": "0", "ts_ns": self._now_ns})
 
     def _result(self, order: dict) -> dict[str, Any]:
@@ -741,18 +733,17 @@ class FakePolymarket:
             return reject(f"price must be on the {self.tick} tick inside (0, 1)")
         if size < self.min_order_size:
             return reject(f"size below the minimum order of {self.min_order_size}")
-        if price * size + self.taker_fee(token_id, size, price) > (
-                self._cash - self._holds()):
+        if price >= self._best(token_id)[1]:
+            # Post-only, as the live venue's orders are (docs, error-codes): an order
+            # that would cross is rejected before it executes, never filled as a taker.
+            return reject("invalid post-only order: order crosses book")
+        if price * size > self._cash - self._holds():
             return reject("not enough balance / allowance")
         order = {"order_id": f"pm-{self._next_oid}", "client_id": client_id,
                  "token_id": token_id, "is_buy": is_buy, "price": price, "size": size,
                  "remaining": size, "filled": Decimal(0), "notional": Decimal(0)}
         self._next_oid += 1
-        _bid, ask = self._best(token_id)
-        if price >= ask:
-            self._fill(order, size, ask, taker=True)
-        if order["remaining"]:
-            self._orders[order["order_id"]] = order
+        self._orders[order["order_id"]] = order
         self._all_orders[order["order_id"]] = order
         self._client_results[client_id] = {"order_id": order["order_id"]}
         return self._result(order)
@@ -814,7 +805,7 @@ class FakePolymarket:
             for order in list(self._orders.values()):
                 _bid, ask = self._best(order["token_id"])
                 if ask <= order["price"]:
-                    self._fill(order, order["remaining"], order["price"], taker=False)
+                    self._fill(order, order["remaining"], order["price"])
                     self._orders.pop(order["order_id"], None)
             for market_id, (at_ns, winner) in sorted(self.resolutions.items()):
                 market = self._markets.get(market_id)

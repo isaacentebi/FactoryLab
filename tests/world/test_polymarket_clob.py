@@ -174,7 +174,7 @@ def test_an_order_rests_or_is_read_back_by_its_hash_never_by_its_ack():
     venue.intent_of = {"c-2": crossing}.get
     # Post-only: an order that would cross the 0.41 ask is rejected by the venue.
     answer = _place(venue, token, price="0.45", client_id="c-2")
-    assert answer["status"] == "rejected" and "crosses the book" in answer["error"]
+    assert answer["status"] == "rejected" and "order crosses book" in answer["error"]
     server.match()  # the resting order fills as a maker
     looked = venue.lookup("c-1", order_id=intent["order_hash"])
     assert looked["status"] == "filled" and looked["filled_size"] == "10"

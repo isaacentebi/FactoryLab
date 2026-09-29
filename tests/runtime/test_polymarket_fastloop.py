@@ -28,9 +28,12 @@ class EventMarketPolicy(fastloop.PolicyProvider):
             turn = self.decisions + 1
             if turn % 4 == 1:
                 self.decisions += 1
+                # One tick over the opening mid: the post-only venue rejects it while
+                # it would cross, rests it once the market walks up, and fills it as a
+                # maker when the market walks back.
                 return {"action": "order", "tool_calls": [{
                     "tool": "polymarket.place_limit",
-                    "args": {"token_id": YES, "side": "buy", "size": "10", "price": "0.45"}}]}
+                    "args": {"token_id": YES, "side": "buy", "size": "10", "price": "0.41"}}]}
             if turn % 4 == 2:
                 self.decisions += 1
                 return {"action": "investigate", "tool_calls": [
@@ -131,15 +134,17 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     # No decision traded on the text it read in the same wake.
     assert not any(e.get("kind") == "polymarket.intent" and e.get("handle") in {
         r.get("handle") for r in events if r.get("kind") == "polymarket.read"} for e in events)
-    # Each decision that held the token is told what the resolution realised for it.
-    assert {r["receipt"]["handle"] for r in receipts} == {
-        e["handle"] for e in events if e.get("kind") == "polymarket.intent"}
+    # Each decision that held the token is told what the resolution realised for it (the
+    # venue is post-only: an order that would cross is rejected and one that rests may
+    # never fill, so only a filled order's decision holds the token).
+    owner = {e["order_id"]: e["handle"] for e in events if e.get("kind") == "consequence.order"}
+    held = {owner[e["order_id"]] for e in events if e.get("kind") == "polymarket.fill"}
+    assert held and {r["receipt"]["handle"] for r in receipts} == held
     # Each holder is credited what the resolution realised for it, exactly: the payout
-    # on every share its orders bought, less what it paid for them and their fees, in
-    # integer micro-USD, as its claim on the pot.
+    # on every share its orders bought, less what it paid for them, in integer
+    # micro-USD, as its claim on the pot.
     from decimal import Decimal
 
-    owner = {e["order_id"]: e["handle"] for e in events if e.get("kind") == "consequence.order"}
     (resolution,) = [e for e in events if e.get("kind") == "polymarket.resolution"]
     payout = Decimal(resolution["payout"])
     fills = [e for e in events if e.get("kind") == "polymarket.fill"]
@@ -147,7 +152,8 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     expected = {}
     for fill in fills:
         handle = owner[fill["order_id"]]
-        usd = (payout - Decimal(fill["px"])) * Decimal(fill["size"]) - Decimal(fill["fee_usd"])
+        assert fill["fee_usd"] == "0"  # a maker pays no fee
+        usd = (payout - Decimal(fill["px"])) * Decimal(fill["size"])
         expected[handle] = expected.get(handle, 0) + int(usd * 1_000_000)
     credited = {}
     for claim in (e for e in events if e.get("kind") == "polymarket.claim"

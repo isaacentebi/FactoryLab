@@ -239,7 +239,7 @@ class FakeClob:
                                                  int(order["takerAmount"]))
             if price >= ask:
                 # "invalid post-only order: order crosses book" (resources/error-codes).
-                raise clob.ClobHttpError(400, "post-only order crosses the book")
+                raise clob.ClobHttpError(400, "invalid post-only order: order crosses book")
         if digest in self.orders:
             return {"success": False, "errorMsg": f"order {digest} is invalid. Duplicated.",
                     "orderID": ""}
@@ -255,7 +255,7 @@ class FakeClob:
         self.orders[digest] = {"pm": result["order_id"],
                                "signed_s": int(order["timestamp"]) // 1000}
         self.pm_to_hash[result["order_id"]] = digest
-        self._trades(self.fake._events[before:], taker=True)
+        self._trades(self.fake._events[before:])
         del self.fake._events[before:]
         return {"success": True, "errorMsg": "", "orderID": digest,
                 "status": "matched" if result["status"] == "filled" else "live",
@@ -281,28 +281,23 @@ class FakeClob:
 
     # ---- fills, time and the public reads
 
-    def _trades(self, events, *, taker: bool) -> None:
+    def _trades(self, events) -> None:
+        """Each fill as the venue reports it: every order here is post-only, so this
+        world's order is the maker leg of a trade some other order took."""
         for event in events:
             if event["kind"] != "fill":
                 continue
             digest = self.pm_to_hash[event["order_id"]]
-            rate = self._market_of(event["token_id"])["fee_rate"]
             row = {"id": f"t-{len(self.trades) + 1}", "status":
                    "CONFIRMED" if self.confirm else "MATCHED",
                    "match_time": str(max(1, event["ts_ns"] // 1_000_000_000,
                                          self.orders[digest]["signed_s"])),
                    "asset_id": event["token_id"], "maker_orders": []}
-            if taker:
-                # The execution's own fee rate, in basis points (get-trades).
-                row.update(taker_order_id=digest, size=event["size"], price=event["px"],
-                           side="BUY" if event["is_buy"] else "SELL",
-                           fee_rate_bps=str(int(rate * 10_000)))
-            else:
-                row.update(taker_order_id="0xother", size=event["size"], price=event["px"],
-                           fee_rate_bps="0",
-                           maker_orders=[{"order_id": digest, "matched_amount": event["size"],
-                                          "price": event["px"], "fee_rate_bps": "0",
-                                          "side": "BUY" if event["is_buy"] else "SELL"}])
+            row.update(taker_order_id="0xother", size=event["size"], price=event["px"],
+                       fee_rate_bps="0",
+                       maker_orders=[{"order_id": digest, "matched_amount": event["size"],
+                                      "price": event["px"], "fee_rate_bps": "0",
+                                      "side": "BUY" if event["is_buy"] else "SELL"}])
             self.trades.append(row)
             if not self.confirm:
                 self.effects[row["id"]] = event
@@ -341,7 +336,7 @@ class FakeClob:
     def advance(self, now_ns: int) -> list:
         """Move the simulated book; what fills now fills resting (maker) orders."""
         events = self.fake.advance(now_ns)
-        self._trades(events, taker=False)
+        self._trades(events)
         return events
 
     def _raw_market(self, market: dict) -> dict:

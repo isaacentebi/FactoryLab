@@ -264,26 +264,32 @@ def test_fake_client_ids_are_idempotent_and_never_trade_twice():
     fake = venue()
     token = yes(fake)
     first = fake.place(client_id="d:tool:0", token_id=token, is_buy=True,
-                       size=Decimal(10), price=Decimal("0.45"))
+                       size=Decimal(10), price=Decimal("0.40"))
     again = fake.place(client_id="d:tool:0", token_id=token, is_buy=True,
-                       size=Decimal(10), price=Decimal("0.45"))
-    assert first == again and first["status"] == "filled"
-    assert fake.account()["positions"][0]["size"] == "10"
+                       size=Decimal(10), price=Decimal("0.40"))
+    assert first == again and first["status"] == "resting"
+    assert len(fake.account()["open_orders"]) == 1
     assert fake.lookup("d:tool:0") == first
     assert fake.lookup("never-sent")["status"] == "rejected"
 
 
-def test_fake_crossing_order_takes_the_ask_and_pays_the_taker_fee():
+def test_fake_rejects_a_crossing_order_before_it_executes_as_the_live_venue_does():
+    """Every order is post-only on every venue kind (architect's decision on #177): a
+    buy at or above the best ask is rejected with the venue's own reason, and nothing
+    trades, moves or rests; one below it rests."""
     fake = venue()
-    token = yes(fake, "fake-2")  # mid 0.70, fee rate 0.05
-    result = fake.place(client_id="c", token_id=token, is_buy=True, size=Decimal(10),
-                        price=Decimal("0.80"))
-    assert result["avg_px"] == "0.71"
-    fee = Decimal(10) * Decimal("0.05") * Decimal("0.71") * Decimal("0.29")
-    [fill] = fake.drain_events()
-    assert Decimal(fill["fee_usd"]) == fee.quantize(Decimal("0.00001"))
-    assert Decimal(fake.account()["usdc"]) == Decimal(100) - Decimal("7.1") - Decimal(
-        fill["fee_usd"])
+    token = yes(fake, "fake-2")  # mid 0.70: the ask is 0.71
+    for price in ("0.80", "0.71"):
+        result = fake.place(client_id=f"c{price}", token_id=token, is_buy=True,
+                            size=Decimal(10), price=Decimal(price))
+        assert result["status"] == "rejected" and result["filled_size"] == "0"
+        assert result["error"] == "invalid post-only order: order crosses book"
+    assert fake.drain_events() == []
+    account = fake.account()
+    assert (account["usdc"], account["positions"], account["open_orders"]) == ("100", [], [])
+    assert fake.place(client_id="rest", token_id=token, is_buy=True, size=Decimal(10),
+                      price=Decimal("0.70"))["status"] == "resting"
+    assert all(not m["fees"]["enabled"] for m in fake.search_markets("simulated", 10))
 
 
 def test_fake_resting_orders_hold_collateral_and_fill_as_maker_without_fee():
@@ -315,11 +321,14 @@ def test_fake_refuses_off_tick_prices_small_orders_and_any_sale():
 def test_fake_resolution_cancels_resting_orders_and_redeems_the_pot():
     fake = venue(resolutions={"fake-1": (5, 1)})
     yes_token, no_token = (o["token_id"] for o in fake.market("fake-1")["outcomes"])
+    fake._markets["fake-1"]["mid"] = Decimal("0.41")  # "a" rests one tick under the ask
     fake.place(client_id="a", token_id=yes_token, is_buy=True, size=Decimal(10),
-               price=Decimal("0.50"))
+               price=Decimal("0.41"))
     fake.place(client_id="b", token_id=no_token, is_buy=True, size=Decimal(5),
                price=Decimal("0.10"))  # rests below the book
-    fake.drain_events()
+    # The market walks down: whatever its next step, its ask meets "a", a maker fill.
+    fake._markets["fake-1"]["mid"] = Decimal("0.39")
+    assert [e["kind"] for e in fake.advance(1)] == ["fill"]
     events = fake.advance(5)
     kinds = [e["kind"] for e in events]
     assert "cancelled" in kinds
