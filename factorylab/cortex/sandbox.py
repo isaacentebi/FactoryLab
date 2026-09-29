@@ -237,8 +237,12 @@ def _exited_by(proc, deadline: float) -> bool:
         except OSError:  # a kernel without pidfds: fall through to the portable wait
             descriptor = None
         if descriptor is not None:
+            # A selector, never select(): a parent with many descriptors open can be
+            # handed a pidfd above FD_SETSIZE, which select() refuses.
             try:
-                exited = bool(select.select([descriptor], [], [], remaining)[0])
+                with selectors.DefaultSelector() as selector:
+                    selector.register(descriptor, selectors.EVENT_READ)
+                    exited = bool(selector.select(remaining))
             finally:
                 os.close(descriptor)
             return _reaped(proc, exited)

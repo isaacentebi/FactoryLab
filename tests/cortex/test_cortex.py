@@ -206,3 +206,24 @@ def test_json_extraction_preserves_braces_and_escapes_in_strings(prefix):
     body = {"verdict": 0.5, "rationale": 'literal } and { and \"quoted\"',
             "nested": {"values": ["}", "{"]}}
     assert _parse_json_object(prefix + json.dumps(body) + " trailing") == body
+
+
+def test_the_contract_copy_is_copy_deepcopy_even_with_a_reused_memo():
+    """assembly.deepcopy keeps each copied source alive in the memo, as copy.deepcopy
+    does, so a memo reused across calls never answers for a recycled id (Sol on #179:
+    without it the second copy returned the first's dict, holding ``[0]``)."""
+    import copy
+
+    from factorylab.cortex import assembly
+
+    memo, copies = {}, []
+    for i in range(200):
+        source = {"mutable": [i]}
+        copies.append(assembly.deepcopy(source, memo)["mutable"][0])
+        del source  # its id is free for the next source to reuse
+    assert copies == list(range(200))
+    shared = [1, {"k": [2]}]
+    source = {"a": shared, "b": shared, "c": (shared, 3.5, None)}
+    mine, theirs = assembly.deepcopy(source), copy.deepcopy(source)
+    assert mine == theirs and mine["a"] is mine["b"] and mine["c"][0] is mine["a"]
+    assert mine["a"] is not shared

@@ -153,3 +153,30 @@ def test_macos_profile_does_not_grant_general_filesystem_network_or_fork(tmp_pat
     assert "(allow network" not in profile and "process-fork" not in profile
     assert profile.count("subpath") == 3
     assert str(prefix) in profile and str(tmp_path) in profile
+
+
+def test_a_pidfd_above_fd_setsize_still_reaps_the_child(monkeypatch):
+    """The Linux pidfd wait uses a selector, never select(), which refuses descriptors
+    at or above FD_SETSIZE (Sol on #179: ValueError at fd 1100). Simulated anywhere: a
+    readable descriptor at 1100 stands for the pidfd of a child that has exited."""
+    import os
+    import resource
+    import subprocess
+    import time
+
+    high = 1100
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if hard != resource.RLIM_INFINITY and hard <= high:
+        pytest.skip("this host's descriptor limit is below the simulated pidfd")
+    resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, high + 1), hard))
+    read, write = os.pipe()
+    try:
+        os.dup2(read, high)
+        os.close(write)  # end of file: the descriptor is readable, as an exited pidfd is
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        monkeypatch.setattr(os, "pidfd_open", lambda pid: high, raising=False)
+        assert sandbox._exited_by(proc, time.monotonic() + 30)
+        assert proc.returncode == 0
+    finally:
+        os.close(read)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
