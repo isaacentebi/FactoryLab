@@ -640,7 +640,7 @@ class CompositionProvider(ScriptedProvider):
             # A child's final answer that executes nothing names the trade it declined,
             # on a coin its prompt shows listed, as every scripted producing answer does.
             answer = names_declined_trade({'answer': 42}, text, _inputs_from_prompt(text),
-                                          self._producer_calls)
+                                          self._producer_calls, request)
             return replace(response, text=json.dumps(answer))
         return response
 
