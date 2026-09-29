@@ -508,6 +508,12 @@ class Tape:
             for source, sides in sources.items():
                 for side, steps in sides.items():
                     tape._index[("fees", market, source, side)] = [int(r[0]) for r in steps]
+        # A broad recording lists hundreds of markets: each market's listing row is found
+        # by name, not by a scan of the listing, so a listing read stays linear in them.
+        for kind, rows in (data.get("instruments") or {}).items():
+            for row in rows or ():
+                if isinstance(row, dict) and row.get("coin") is not None:
+                    tape._index.setdefault(("listing", kind, row["coin"]), row)
         return tape
 
     @classmethod
@@ -591,10 +597,8 @@ class Tape:
     def listing(self, market: str) -> dict | None:
         """``market``'s own row of the recorded instrument listing, or None."""
         kind = "spot" if "/" in market else "perp"
-        for row in self.instrument_rows(kind):
-            if row.get("coin") == market:
-                return row
-        return None
+        row = self._index.get(("listing", kind, market))
+        return None if row is None else dict(row)
 
     def _step(self, market: str, source: str, side: str, ts_ns: int) -> list | None:
         stamps = self._index.get(("fees", market, source, side))
@@ -634,7 +638,11 @@ class Tape:
         return (None if taker is None else taker[0]), (None if maker is None else maker[0])
 
     def _book_spreads_bps(self, coin: str) -> list[Decimal]:
-        out = []
+        # The recording is immutable: each market's spreads are computed once.
+        cached = self._index.get(("spreads", coin))
+        if cached is not None:
+            return cached
+        out = self._index[("spreads", coin)] = []
         for row in self.data.get("books", {}).get(coin, []):
             bids, asks = row[1], row[2]
             if bids and asks:
@@ -650,7 +658,10 @@ class Tape:
         own = self._book_spreads_bps(coin)
         if own:
             return _median(own).quantize(Decimal("0.0001")), "recorded"
-        every = [s for c in self.data.get("books", {}) for s in self._book_spreads_bps(c)]
+        every = self._index.get(("spreads", None))
+        if every is None:
+            every = self._index[("spreads", None)] = [
+                s for c in self.data.get("books", {}) for s in self._book_spreads_bps(c)]
         if every:
             return _median(every).quantize(Decimal("0.0001")), "recorded_other_markets"
         return None, "none"
@@ -668,13 +679,17 @@ class Tape:
                  for side in (row[1], row[2]) if side]
         if sizes:
             return _median(sizes)
-        notionals = [Decimal(side[0][0]) * Decimal(side[0][1])
-                     for rows in self.data.get("books", {}).values() for row in rows
-                     for side in (row[1], row[2]) if side]
+        smallest = self._index.get(("smallest_notional",), False)
+        if smallest is False:
+            notionals = [Decimal(side[0][0]) * Decimal(side[0][1])
+                         for rows in self.data.get("books", {}).values() for row in rows
+                         for side in (row[1], row[2]) if side]
+            smallest = self._index[("smallest_notional",)] = (
+                min(notionals) if notionals else None)
         mid = self.mid_at(market, self.start_ns if ts_ns is None else ts_ns)
-        if not notionals or mid is None or mid[1] <= 0:
+        if smallest is None or mid is None or mid[1] <= 0:
             return None
-        return min(notionals) / mid[1]
+        return smallest / mid[1]
 
     def depth_source(self, market: str) -> str:
         """Where one synthetic level's size comes from (``level_size``)."""
