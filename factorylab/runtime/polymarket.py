@@ -1368,6 +1368,7 @@ def tick(rt: Any) -> None:
             continue
         _recover(rt, surface, client_id)
     if surface.live:
+        _discover(rt, surface)
         # The live venue's fills and resolutions since the cursor, read through the
         # journal with the cursor carried in and out: a replay reads what the run read
         # and resumes from the cursor its checkpoint holds.
@@ -1400,6 +1401,51 @@ def _order_facts(market: dict | None) -> dict[str, Any]:
             "fees": dict(market.get("fees") or {})}
 
 
+#: Released placements whose hash is looked up a tick, in turn (``_discover``).
+DISCOVERIES_PER_TICK = 2
+
+
+def _undiscovered(surface: PolymarketSurface) -> list[str]:
+    """Live placements released unresolved whose order the venue has not yet answered
+    for: signed and possibly sent, so possibly resting, filling or filled."""
+    return sorted(client_id for client_id, intent in surface.intents.items()
+                  if intent.get("unresolved") and intent.get("order_hash")
+                  and intent["operation"] == "polymarket.place_limit"
+                  and intent["order_hash"] not in surface.order_ids
+                  and not intent.get("terminal"))
+
+
+def _discover(rt: Any, surface: PolymarketSurface) -> None:
+    """Keep looking up every released live placement by its hash until the venue answers.
+
+    Codex P1 on #177: a placement that reached the venue while its answer and every
+    scheduled lookup failed is released unresolved (its decision's consequence settles
+    censored), but the order may still rest and fill. Its hash is durable in its intent,
+    so it is looked up, ``DISCOVERIES_PER_TICK`` a tick in turn, for the world's life or
+    until the venue answers; an answer binds the order to its decision
+    (``_record``), whose fills are then its owner's, late (``LotTable.fill``). Its fills
+    are read by the poll meanwhile (``_live_orders``). Nothing is ever resent.
+    """
+    waiting = _undiscovered(surface)
+    if not waiting:
+        return
+    turn = int(surface.cursor.get("discover", 0))
+    for step in range(min(DISCOVERIES_PER_TICK, len(waiting))):
+        client_id = waiting[(turn + step) % len(waiting)]
+        intent = surface.intents[client_id]
+        try:
+            answer = surface.venue.lookup(client_id, order_id=intent["order_hash"])
+        except Exception:  # noqa: BLE001 - an unanswered lookup proves nothing
+            continue
+        if answer.get("status") in ("filled", "resting", "cancelled"):
+            _record(rt, surface, client_id, answer)
+        elif answer.get("status") == "rejected":
+            surface.intents[client_id] = {**intent, "terminal": True}
+            rt.ledger.append({"kind": "polymarket.discovered", "client_id": client_id,
+                              "handle": intent["handle"], "result": dict(answer)})
+    surface.cursor = {**surface.cursor, "discover": turn + 1}
+
+
 def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
     """This world's live orders the fill poll reads for: order hash -> token, side, size,
     price, market and fee schedule, each as its intent recorded them (an order is booked
@@ -1407,7 +1453,12 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
     order whose fills are all booked and whose token has resolved reads nothing more."""
     orders = {}
     resolved = surface.cursor.get("resolved", {})
-    for order_id, client_id in surface.order_ids.items():
+    known = dict(surface.order_ids)
+    for client_id in _undiscovered(surface):
+        # A released placement's fills are read too: a confirmed trade is the venue's
+        # word that its order exists (``_settle_fill`` binds it then).
+        known[surface.intents[client_id]["order_hash"]] = client_id
+    for order_id, client_id in known.items():
         intent = surface.intents[client_id]
         args, identity = intent["args"], intent.get("order_identity") or {}
         token = str(args["token_id"])
@@ -1552,6 +1603,16 @@ def settle(rt: Any, events: list[dict[str, Any]]) -> None:
 
 def _settle_fill(rt: Any, event: dict) -> None:
     order_id = str(event["order_id"])
+    surface = rt.polymarket
+    if order_id not in surface.order_ids:
+        found = next((cid for cid in _undiscovered(surface)
+                      if surface.intents[cid]["order_hash"] == order_id), None)
+        if found is not None:
+            # A confirmed trade of a released placement: the venue accepted the order.
+            # It is bound to its decision before its fill is booked.
+            _record(rt, surface, found, {"order_id": order_id, "status": "resting",
+                                         "filled_size": "0", "avg_px": None, "error": None,
+                                         "evidence": "confirmed trade"})
     payload = {"order_id": order_id, "coin": coin_of(event["token_id"]),
                "is_buy": event["is_buy"], "size": event["size"], "px": event["px"],
                "fee_usd": event["fee_usd"], "realized_usd": event["realized_usd"],

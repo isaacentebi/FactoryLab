@@ -42,6 +42,7 @@ class FakeClob:
         self.lose_answer = False  # the next POST /order is executed but its answer lost
         self.extra_fills: list[dict] = []  # trade rows to inject on the next /data/trades
         self.signer_address: str | None = None
+        self.fail_lookups = 0  # order lookups that fail before one answers
         self.page_size: int | None = None  # rows a /data/trades page carries; None: all
 
     # ---- the transport
@@ -72,6 +73,9 @@ class FakeClob:
         if path == "/order" and method == "DELETE":
             return self._cancel(json.loads(body)["orderID"])
         if path.startswith("/data/order/"):
+            if self.fail_lookups:
+                self.fail_lookups -= 1
+                raise clob.PolymarketUnavailable("transport: TimeoutError")
             return self._order(path.rsplit("/", 1)[1])
         if path == "/data/orders":
             return {"data": [self._order(h) for h, o in self.orders.items()

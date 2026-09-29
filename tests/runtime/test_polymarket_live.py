@@ -314,3 +314,70 @@ def test_a_cancel_is_an_intent_and_releases_the_unfilled_order():
                  if i["operation"] == "polymarket.cancel"]
     assert cancel["args"] == {"order_id": order_id}
     assert server.fake._orders == {}
+
+
+def test_a_placement_whose_answer_and_lookups_all_failed_is_still_read_until_terminal():
+    """Codex P1 on #177: the order reached the venue, its answer and every scheduled
+    lookup failed, the intent was released unresolved, and its hash never entered the
+    world's orders: the fill poll never read it, and its fills moved custody unbooked."""
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    server.lose_answer = True
+    server.fail_lookups = UNCERTAIN_ORDER_POLLS + 1
+    # fake-2 charges takers 5%: the crossing buy fills on arrival and books its fee.
+    assert buy(rt, server, handle, size="5", price="0.75", market="fake-2")["status"] == (
+        "uncertain")
+    for _ in range(UNCERTAIN_ORDER_POLLS + 1):
+        polymarket.tick(rt)
+    client_id = f"{handle}:tool:0"
+    assert rt.polymarket.intents[client_id]["unresolved"]
+    polymarket.tick(rt)
+    polymarket.tick(rt)
+    intent = rt.polymarket.intents[client_id]
+    assert rt.polymarket.order_ids.get(intent["order_hash"]) == client_id
+    (fill,) = items(rt, "polymarket.fill")
+    assert fill["order_id"] == intent["order_hash"] and fill["size"] == "5"
+    owned = [i for i in items(rt, "venue.settled") if i["reference"] == f"fill:{fill['order_id']}"]
+    assert owned and owned[0]["handle"] == handle
+    assert [c for c in server.calls if c == ("POST", "/order")] == [("POST", "/order")]
+
+
+def test_a_released_placement_the_venue_never_saw_is_read_and_never_resent():
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    live = rt.polymarket.venue.target
+
+    def lost(**_kwargs):  # the order never reaches the venue, and nothing says so
+        raise clob.PolymarketUnavailable("transport: TimeoutError")
+
+    live.place = lost
+    buy(rt, server, handle)
+    for _ in range(UNCERTAIN_ORDER_POLLS + 3):
+        polymarket.tick(rt)
+    intent = rt.polymarket.intents[f"{handle}:tool:0"]
+    assert intent["unresolved"] and intent["order_hash"] not in rt.polymarket.order_ids
+    assert ("POST", "/order") not in server.calls
+
+
+def test_a_released_placement_s_confirmed_trade_binds_it_while_lookups_still_fail():
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    server.lose_answer = True
+    server.fail_lookups = 10**6  # the order status never answers again
+    buy(rt, server, handle, size="5", price="0.75", market="fake-2")
+    for _ in range(UNCERTAIN_ORDER_POLLS + 2):
+        polymarket.tick(rt)
+    intent = rt.polymarket.intents[f"{handle}:tool:0"]
+    assert rt.polymarket.order_ids.get(intent["order_hash"]) == f"{handle}:tool:0"
+    (acknowledged,) = [i for i in items(rt, "polymarket.acknowledged")
+                       if i["result"].get("evidence") == "confirmed trade"]
+    assert acknowledged["handle"] == handle
+    (fill,) = items(rt, "polymarket.fill")
+    owned = [i for i in items(rt, "venue.settled") if i["reference"] == f"fill:{fill['order_id']}"]
+    assert owned[0]["handle"] == handle
