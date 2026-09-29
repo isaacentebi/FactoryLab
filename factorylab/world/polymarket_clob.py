@@ -467,6 +467,11 @@ class RequestBudget:
     wall: Any = time.time_ns
     stamps: list = field(default_factory=list)
 
+    def spend_all(self) -> None:
+        """Count the whole allowance as sent now: the bound for requests a previous
+        process may have sent in the window before this one took over."""
+        self.stamps = [int(self.wall())] * self.limit
+
     def take(self) -> None:
         now = int(self.wall())
         self.stamps = [s for s in self.stamps if s > now - BUDGET_WINDOW_NS]

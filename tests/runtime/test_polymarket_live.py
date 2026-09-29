@@ -679,3 +679,12 @@ def test_a_fill_the_consequence_book_refuses_is_quarantined_never_raised(monkeyp
     assert "exceeds long inventory" in quarantined["reason"]
     rows = [i for i in items(rt, "venue.settled") if i["reference"].startswith("fill:")]
     assert rows and all(i["handle"] is None for i in rows)
+
+def test_a_resume_within_ten_seconds_sends_no_second_allowance():
+    """Codex P2 on #177: the pot's request stamps lived in memory, so a world resumed
+    within 10 s could send another full allowance."""
+    rt, server = live_world(budget=5, wall=lambda: 1_790_000_000_000_000_000)
+    saved = rt.polymarket.state()
+    rt.polymarket.restore(saved)  # what a resume does
+    with pytest.raises(clob.BudgetSpent):
+        rt.polymarket.venue.target.budget.take()

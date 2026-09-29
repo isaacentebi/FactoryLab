@@ -251,6 +251,11 @@ class PolymarketSurface:
             if name in saved:
                 setattr(self, name, saved[name])
         self.window_orders = tuple(saved.get("window_orders") or (0, 0))
+        if self.live:
+            # Codex P2 on #177: the pot's request stamps live in the process that sent
+            # them. The one that died may have sent a whole allowance in the 10 s before
+            # it did, so a resumed pot counts its allowance as spent at the resume.
+            self.venue.target.budget.spend_all()
         if saved.get("venue") is not None and self.venue.deterministic:
             self.venue.target.__dict__.clear()
             self.venue.target.__dict__.update(saved["venue"])
