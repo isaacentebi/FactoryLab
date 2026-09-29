@@ -200,20 +200,72 @@ def test_leverage_above_the_published_limit_is_refused_before_it_is_signed(venue
     ex._exchange.update_leverage.assert_called_with(5, "BTC", is_cross=True)
 
 
-def test_a_hip3_market_order_is_priced_at_perp_precision_not_the_sdks_spot_rounding(venue):
-    ex = venue()
+#: A mid where the perp rule (6 - szDecimals = 3 decimals for xyz:TSLA) binds before the
+#: five significant figures do, so the spot rule (8 - szDecimals = 5) would differ.
+SMALL_MID = "0.123456"
+
+
+def _hip3_long(ex):
+    """``ex`` holding 2 xyz:TSLA long, at SMALL_MID, with a filling signing adapter."""
     ex.coins = ("BTC", "xyz:TSLA")
     ex._exchange = Mock()
     ex._exchange._slippage_price.side_effect = AssertionError("rounds a HIP-3 id as spot")
     ex._exchange.order.return_value = {"status": "ok", "response": {"data": {"statuses": [
-        {"filled": {"totalSz": "1", "avgPx": "100", "oid": 5}}]}}}
-    ex._info.all_mids = lambda dex="": {"xyz:TSLA": "123.4567"}
-    result = ex.place(Order("xyz:TSLA", True, Decimal("1"), OrderKind.MARKET, client_id="c"))
-    assert result.status == "filled"
-    wire, is_buy, size, price = ex._exchange.order.call_args.args[:4]
-    # szDecimals 3 -> at most 6 - 3 = 3 decimals and five significant figures.
-    assert (wire, is_buy, size) == ("xyz:TSLA", True, 1.0)
-    assert Decimal(str(price)) == Decimal("129.62")
+        {"filled": {"totalSz": "1", "avgPx": "0.12", "oid": 5}}]}}}
+    ex._exchange.cancel.return_value = {"status": "ok",
+                                        "response": {"data": {"statuses": ["success"]}}}
+    real = ex._info.all_mids
+    ex._info.all_mids = lambda dex="": ({**real(dex), "xyz:TSLA": SMALL_MID} if dex
+                                        else real())
+    ex._info.states["xyz"] = {
+        "marginSummary": {"accountValue": "40", "totalMarginUsed": "5", "totalRawUsd": "30"},
+        "assetPositions": [{"position": {"coin": "xyz:TSLA", "szi": "2", "entryPx": "0.12",
+                                         "leverage": {"type": "isolated", "value": 2}}}]}
+    return ex
+
+
+def _wind_down(ex):
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.runtime.winddown import execute
+
+    execute(ex, Ledger(clock_ns=lambda: 1))
+
+
+@pytest.mark.parametrize("path,is_buy,perp,spot", [
+    # A buy's IOC price is mid x 1.05 = 0.1296288: rounded down, never more aggressive.
+    ("market", True, "0.129", "0.12962"),
+    ("limit", True, "0.123", "0.12345"),
+    # A reduction of the long sells at mid x 0.95 = 0.1172832, rounded up.
+    ("reduce_only", False, "0.118", "0.11729"),
+    ("close", False, "0.118", "0.11729"),
+    ("wind_down", False, "0.118", "0.11729"),
+])
+def test_every_hip3_order_path_prices_at_perp_precision_never_spots(venue, path, is_buy,
+                                                                    perp, spot):
+    """A HIP-3 price obeys the perp rule the listing publishes (tick 10^-(6 - szDecimals));
+    the SDK rounds any asset id at or above 10,000 as spot. Each case's spot rounding
+    differs, so the wrong rule fails it (Astra P2 on #178)."""
+    ex = _hip3_long(venue())
+    one = Decimal("1")
+    if path == "market":
+        ex.place(Order("xyz:TSLA", True, one, OrderKind.MARKET, client_id="m"))
+    elif path == "limit":
+        ex.place(Order("xyz:TSLA", True, one, OrderKind.LIMIT, Decimal("0.1234567"),
+                       client_id="l"))
+    elif path == "reduce_only":
+        ex.place(Order("xyz:TSLA", False, one, OrderKind.MARKET, client_id="r",
+                       reduce_only=True))
+    elif path == "close":
+        ex.close("xyz:TSLA", client_id="c")
+    else:
+        _wind_down(ex)
+    calls = [c for c in ex._exchange.order.call_args_list if c.args[0] == "xyz:TSLA"]
+    assert calls, "the order reached the venue"
+    wire, buy, _size, price = calls[0].args[:4]
+    assert buy is is_buy
+    assert Decimal(str(price)) == Decimal(perp) != Decimal(spot)
+    assert calls[0].kwargs.get("reduce_only") is (path in ("reduce_only", "close",
+                                                             "wind_down"))
 
 
 def test_an_order_on_a_market_outside_the_universe_is_refused_unsent(venue):
