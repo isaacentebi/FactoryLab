@@ -232,13 +232,10 @@ def test_polymarket_principal_and_order_budget_are_enforced_at_their_published_b
     resting = {"operation": "polymarket.place_limit", "order_hash": "0x1",
                "args": {"side": "buy", "size": "10", "price": "0.30"},
                "result": {"status": "resting"}}
-    surface = SimpleNamespace(intents={"c": resting}, cursor={}, filled={},
-                              paid_out=Decimal(0))
-    # The world's own outlay: its size at its limit, plus the most fee the exchange lets
-    # it be charged; a payout its resolution paid returns it.
+    surface = SimpleNamespace(intents={"c": resting}, cursor={}, filled={})
+    # The world's own lifetime outlay: its size at its limit, plus the most fee the
+    # exchange lets it be charged; nothing gives it back.
     assert principal_at_risk(surface) == Decimal(3) * (1 + PLATFORM_MAX_FEE_RATE)
-    surface.paid_out = Decimal(5)
-    assert principal_at_risk(surface) == Decimal("3.15") - 5
     budget = RequestBudget(facts["order_requests_per_10s"], wall=lambda: 10**18)
     for _ in range(facts["order_requests_per_10s"]):
         budget.take()

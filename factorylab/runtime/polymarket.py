@@ -228,8 +228,6 @@ class PolymarketSurface:
         # Fills whose fee their execution did not state (``execution_fee``): open until
         # the custodian's balance settles them (``reconcile``); no new risk meanwhile.
         self.open_fees: list[dict[str, Any]] = []
-        # Every payout the world's resolutions paid it: what returns principal's room.
-        self.paid_out = Decimal(0)
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
         self._account_memo: tuple | None = None
         # The market each write was last weighed against, by token (transient): the one
@@ -238,7 +236,7 @@ class PolymarketSurface:
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
               "opening", "token_markets", "open_reads", "through", "filled", "cursor", "open_fees",
-              "drifting", "paid_out")
+              "drifting")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -1213,9 +1211,11 @@ def principal_at_risk(surface: PolymarketSurface) -> Decimal:
     Architect's decision on Sol's third review of #177: every buy that may have
     executed or may still execute (a placement not rejected: its size while it may
     still fill; once proven over, what it matched less its failed legs), at its limit
-    price plus the most fee it can be charged (``_fee_bound``), less every payout the
-    world's resolutions paid it (``paid_out``). No wallet balance and no listing enters
-    it, so no one's deposit, withdrawal or omission makes room or takes it away.
+    price plus the most fee it can be charged (``_fee_bound``). It is the world's
+    lifetime outlay: no resolution, payout or redemption gives room back (architect's
+    decision on Sol's round-4 review), so once the cap is used, buying stops for the
+    world's life. No wallet balance and no listing enters it, so no one's deposit,
+    withdrawal or omission makes room.
     """
     cancelled, failed = _cancelled(surface), surface.cursor.get("failed", {})
     finished = set(surface.cursor.get("terminal", ()))
@@ -1239,7 +1239,7 @@ def principal_at_risk(surface: PolymarketSurface) -> Decimal:
         identity = intent.get("order_identity") or {}
         bound = max(PLATFORM_MAX_FEE_RATE, Decimal(str(identity.get("fee_rate") or "0")))
         total += max(Decimal(0), quantity) * Decimal(str(args["price"])) * (1 + bound)
-    return total - surface.paid_out
+    return total
 
 
 #: The pot does not agree with its custodian: money left it that its books do not explain.
@@ -1970,7 +1970,6 @@ def _settle_resolution(rt: Any, event: dict) -> None:
     # did; several holders share one unattributed row, and each is told its own
     # FIFO share through the consequence book instead.
     rt.polymarket.settled += Decimal(event["realized_usd"])
-    rt.polymarket.paid_out += Decimal(event["payout"]) * Decimal(event["size"])
     _book_pot(rt, usd_to_micro(event["realized_usd"], rounding="nearest"),
               f"resolution:{token}", "resolution", holders[0] if len(holders) == 1 else None)
     for handle, micro in realized.items():

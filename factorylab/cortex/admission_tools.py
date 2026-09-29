@@ -331,9 +331,11 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "still execute (its size while it may still fill; once over, what it matched "
                 "less its failed legs), at its limit price plus the most fee it can be "
                 "charged (the larger of its schedule's rate and 5% of its cash value, the CTF"
-                " Exchange's maxFeeRateBps default), less the payouts its resolutions paid "
-                "it. No wallet balance or listing enters it: no deposit, withdrawal or "
-                "omission makes room. Cancellations are not refused by it.",
+                " Exchange's maxFeeRateBps default). It is the world's lifetime outlay: no "
+                "resolution, payout or redemption gives room back, so once the cap is used, "
+                "buying stops for the world's life. No wallet balance or listing enters it: "
+                "no deposit, withdrawal or omission makes room. Cancellations are not refused"
+                " by it.",
                 "live": "With live_orders, an order is a GTC limit order on Polymarket's "
                 "CLOB, signed by the pot's wallet; its identity is its EIP-712 order hash, "
                 "recorded with the intent before it is sent, and a lost answer is looked up "

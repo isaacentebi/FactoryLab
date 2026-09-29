@@ -25092,7 +25092,7 @@
         "rules",
         "principal"
       ],
-      "value": "When principal_micro is set, a buy is refused when the world's principal at risk plus the buy would exceed principal_micro. The principal at risk is the world's own record: every buy that may have executed or may still execute (its size while it may still fill; once over, what it matched less its failed legs), at its limit price plus the most fee it can be charged (the larger of its schedule's rate and 5% of its cash value, the CTF Exchange's maxFeeRateBps default), less the payouts its resolutions paid it. No wallet balance or listing enters it: no deposit, withdrawal or omission makes room. Cancellations are not refused by it.",
+      "value": "When principal_micro is set, a buy is refused when the world's principal at risk plus the buy would exceed principal_micro. The principal at risk is the world's own record: every buy that may have executed or may still execute (its size while it may still fill; once over, what it matched less its failed legs), at its limit price plus the most fee it can be charged (the larger of its schedule's rate and 5% of its cash value, the CTF Exchange's maxFeeRateBps default). It is the world's lifetime outlay: no resolution, payout or redemption gives room back, so once the cap is used, buying stops for the world's life. No wallet balance or listing enters it: no deposit, withdrawal or omission makes room. Cancellations are not refused by it.",
       "enforced": [
         206
       ],
@@ -26792,7 +26792,7 @@
     },
     {
       "rule": "polymarket_orders.principal_micro",
-      "enforced": "factorylab/runtime/polymarket.py:1210 (principal_at_risk)",
+      "enforced": "factorylab/runtime/polymarket.py:1208 (principal_at_risk)",
       "published": "factorylab/cortex/admission_tools.py:324 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26800,7 +26800,7 @@
     },
     {
       "rule": "polymarket_orders.live_orders",
-      "enforced": "factorylab/runtime/polymarket.py:290 (install)",
+      "enforced": "factorylab/runtime/polymarket.py:288 (install)",
       "published": "factorylab/cortex/admission_tools.py:325 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26816,7 +26816,7 @@
     },
     {
       "rule": "polymarket_orders.principal",
-      "enforced": "factorylab/runtime/polymarket.py:1210 (principal_at_risk)",
+      "enforced": "factorylab/runtime/polymarket.py:1208 (principal_at_risk)",
       "published": "factorylab/cortex/admission_tools.py:328 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26825,7 +26825,7 @@
     {
       "rule": "polymarket_orders.live",
       "enforced": "factorylab/world/polymarket_clob.py:664 (LivePolymarket.place)",
-      "published": "factorylab/cortex/admission_tools.py:337 (tool_admission_schematics)",
+      "published": "factorylab/cortex/admission_tools.py:339 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
       "surface": "tools"
@@ -26850,7 +26850,7 @@
     "factorylab/runtime/compute.py": "4c9505ade970688c7fe540b07f110344ac405504294a156ffe3436bfb7e51814",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
-    "factorylab/runtime/polymarket.py": "57b6050c8647b4c69157b0c0dc9e51d4c0acf2b45538039bfe839cc286432791",
+    "factorylab/runtime/polymarket.py": "6ea78e993c1dfbf8cf65de10fd36a3bdc2ed02f4be0abd8429e8a7310b82e4e9",
     "factorylab/runtime/propensity.py": "488c4992bdb4707ff1f2c64549995c629e8f55909dde38822ce9f5132fc00280",
     "factorylab/runtime/routing.py": "267b781ce62203279e17544891bf27c654e4c344e46f337528ca52cbb5b091c6",
     "factorylab/runtime/subscriptions.py": "2c096e82698cc03a7f5d7af70942b522b29a00c26611bb2830a0078456d93a6c",

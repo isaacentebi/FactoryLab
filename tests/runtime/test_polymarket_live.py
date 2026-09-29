@@ -938,20 +938,22 @@ def test_principal_at_risk_is_the_world_s_own_outlay_never_the_wallet():
     assert third["status"] == "rejected" and third["error"] == polymarket.PRINCIPAL_REFUSAL
 
 
-def test_a_resolution_s_payout_is_the_only_thing_that_returns_room():
+def test_the_principal_cap_is_the_world_s_lifetime_outlay_never_released():
+    """Architect's decision on Sol's round-4 review of #177: principal_usd is the world's
+    lifetime Polymarket outlay. A resolution, a payout or a redemption gives no room
+    back (Sol P1: resolution released it before any payment arrived); once the cap is
+    used, buying stops for the world's life."""
     fake = still_fake(resolutions={"fake-1": (10**15, 0)})
     rt, server = live_world(fake=fake, principal="5")
-    buy(rt, server, collateral_decision(rt), price="0.45")  # 4.725 of 5 at risk
+    buy(rt, server, collateral_decision(rt), price="0.45")
     polymarket.tick(rt)
-    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.10",
-                  market="fake-2")
-    assert refused["error"] == polymarket.PRINCIPAL_REFUSAL
     rt.clock.now_ns = 10**15
     server.advance(10**15)
     polymarket.tick(rt)
-    assert polymarket.principal_at_risk(rt.polymarket) == Decimal("-5.275")  # 10 paid
-    assert buy(rt, server, collateral_decision(rt), size="5", price="0.10",
-               market="fake-2")["status"] == "resting"
+    assert items(rt, "polymarket.resolution")  # it paid 10 winning tokens
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.10",
+                  market="fake-2")
+    assert refused["error"] == polymarket.PRINCIPAL_REFUSAL
 
 
 def test_resolved_custody_stays_the_world_s_residual_until_it_is_redeemed():
