@@ -1247,6 +1247,20 @@ def _most_fee(surface: PolymarketSurface, order_id: str, event: dict) -> Decimal
     return (size * rate * shape).quantize(Decimal("0.00001"), rounding=ROUND_CEILING)
 
 
+#: What one share's cost may differ by between the Data API's ``avgPrice`` and the
+#: pot's own exact average cost: the listing's own precision, never a cost basis error.
+AVG_PRICE_TOLERANCE = Decimal("0.0001")
+
+
+def _listing_tolerance(surface: PolymarketSurface, account: dict) -> Decimal:
+    """The listing precision a live reconciliation allows: ``AVG_PRICE_TOLERANCE`` a
+    listed share. The simulated pot states its cost exactly."""
+    if not surface.live:
+        return Decimal(0)
+    return sum((Decimal(p["size"]) for p in account["positions"]), Decimal(0)) * (
+        AVG_PRICE_TOLERANCE)
+
+
 def open_fee_reserve(surface: PolymarketSurface) -> Decimal:
     """What the unresolved fee items could have charged, all together."""
     return sum((Decimal(str(i.get("reserve", "0"))) for i in surface.open_fees), Decimal(0))
@@ -1790,8 +1804,10 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
         rt.ledger.append({"kind": "polymarket.reconcile_unavailable",
                           "reason": type(exc).__name__, "ts": rt.clock.now_ns})
         return None
-    held = (Decimal(account["usdc"]) + _live_tokens_value(surface, account) if surface.live
-            else held_at_cost(account))
+    # The custodian's word, never the larger of it and the world's own book (Sol P0 on
+    # #177: taking the larger hid a cost basis booked too high, and its profit). A
+    # listing that lags shows as drift until it catches up, which holds new risk.
+    held = held_at_cost(account)
     if surface.opening is None:
         surface.opening = held - surface.settled
         rt.ledger.append({"kind": "polymarket.opening", "usdc": str(surface.opening),
@@ -1804,7 +1820,8 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     # Astra P1 on #177: money gone that the books do not explain leaves the pot's
     # reconciliation unknown, and new exposure waits on it; the most the open fees could
     # have charged is explained by them (Codex P1: a drift is never booked as a fee).
-    surface.drifting = drift < -(Decimal("0.000001") + open_fee_reserve(surface))
+    surface.drifting = drift < -(Decimal("0.000001") + open_fee_reserve(surface)
+                                 + _listing_tolerance(surface, account))
     above = principal_excess(surface, account)
     if above is not None:
         result["principal_exceeded"] = True

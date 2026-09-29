@@ -515,7 +515,12 @@ def test_the_exposure_cap_holds_while_the_venue_s_listings_lag():
     assert second["status"] == "rejected" and "max_open_usd" in second["error"]
     polymarket.tick(rt)  # booked from its confirmed trade: still held at cost
     third = buy(rt, server, collateral_decision(rt), price="0.45")
-    assert third["status"] == "rejected" and "max_open_usd" in third["error"]
+    # The lagging listing also shows as drift now (the custodian's word is reconciled):
+    # either refusal holds the cap.
+    assert third["status"] == "rejected" and (
+        "max_open_usd" in third["error"] or third["error"] == polymarket.DRIFT_REFUSAL)
+    reserved, book = polymarket.local_commitments(rt.polymarket)
+    assert reserved + book == Decimal("4.1")  # what the cap is weighed against
 
 
 def test_the_principal_cap_counts_what_the_world_holds_while_the_listing_lags():
@@ -531,7 +536,10 @@ def test_the_principal_cap_counts_what_the_world_holds_while_the_listing_lags():
     server.fake._cash += Decimal("10")  # a deposit: $45 of principal against a $40 cap
     polymarket.tick(rt)
     refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30", market="fake-3")
-    assert refused["status"] == "rejected" and refused["error"] == polymarket.PRINCIPAL_REFUSAL
+    assert refused["status"] == "rejected" and refused["error"] in (
+        polymarket.PRINCIPAL_REFUSAL, polymarket.DRIFT_REFUSAL)
+    account = rt.polymarket.account(rt)
+    assert polymarket.principal_excess(rt.polymarket, account) == polymarket.PRINCIPAL_REFUSAL
 
 
 def test_a_positions_listing_is_read_to_its_end_or_the_pot_is_unavailable():
@@ -810,3 +818,18 @@ def test_resolution_reads_rotate_over_what_the_world_holds_or_has_resting_now():
         polymarket.tick(rt)
     reads = [path for _method, path in server.calls[before:] if path.startswith("/markets/")]
     assert reads == ["/markets/fake-1"] * 3
+
+
+def test_a_misbooked_cost_basis_shows_as_drift_never_hidden_by_the_larger_valuation():
+    """Sol P0 on #177: reconciliation valued each token at the larger of the custodian's
+    listing and the world's own book, so a cost basis booked too high (and its profit)
+    reconciled to zero drift. The custodian's word is what the books are checked against."""
+    rt, server = live_world()
+    buy(rt, server, collateral_decision(rt), price="0.45")  # 10 at 0.41
+    polymarket.tick(rt)
+    assert Decimal(polymarket.reconcile(rt)["drift"]) == 0
+    held = rt.polymarket.cursor["book"][token(server)]
+    rt.polymarket.cursor["book"][token(server)] = [held[0], "0.51"]  # $1.00 too high
+    rt.polymarket.settled += Decimal(1)  # and the $1.00 of profit it would book
+    assert Decimal(polymarket.reconcile(rt)["drift"]) == Decimal(-1)
+    assert rt.polymarket.drifting

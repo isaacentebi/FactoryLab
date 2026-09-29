@@ -471,3 +471,32 @@ def test_a_matched_trade_moves_nothing_and_a_failed_one_leaves_nothing_behind():
     server.settle("CONFIRMED")
     assert server.fake._cash == cash - Decimal("4.1")
     assert server.fake._positions[token]["size"] == 10
+
+
+def _legs(token, *rows):
+    return [{"id": trade_id, "status": "CONFIRMED", "match_time": "100",
+             "taker_order_id": order_id, "size": "10", "price": price, "fee_rate_bps": "0",
+             "maker_orders": [], **extra}
+            for trade_id, order_id, price, extra in rows]
+
+
+@pytest.mark.parametrize("nanos", [True, False])
+def test_cost_basis_follows_execution_order_never_trade_ids(nanos):
+    """Sol P0 on #177: fills were booked in trade-id order, so a buy with a lexically
+    later id than a sale made the sale look $1.00 more profitable. Executions follow
+    match_time_nano; within one instant the order is not invented: it is the one least
+    favourable to reported profit."""
+    venue, server = live_venue()
+    token = _token(server)
+    orders = {"0xbuy": {"token_id": token, "side": "buy", "size": "10", "price": "0.61"},
+              "0xsell": {"token_id": token, "side": "sell", "size": "10", "price": "0.59"}}
+    server.trades = _legs(token, ("t-9", "0xbuy", "0.61",
+                                  {"match_time_nano": "100000000001"} if nanos else {}),
+                          ("t-10", "0xsell", "0.59",
+                           {"match_time_nano": "100000000002"} if nanos else {}))
+    venue._credentials()
+    answer = venue.poll(now_ns=10**11, cursor={"after": 0, "book": {token: ["10", "0.41"]}},
+                        orders=orders)
+    sale = next(e for e in answer["events"] if not e["is_buy"])
+    assert Decimal(sale["realized_usd"]) == Decimal("0.80")  # (0.59 - 0.51) x 10
+    assert answer["cursor"]["book"][token] == ["10", "0.51"]

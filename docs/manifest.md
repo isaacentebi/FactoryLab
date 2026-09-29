@@ -2671,7 +2671,16 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   inventory at cost; the principal counts each token at the larger of the listing and
   that inventory; the positions listing is read page by page to an empty page (or the
   pot is unavailable); and no buy is taken while the last reconciliation found money
-  gone that the books do not explain (`polymarket.drift` below zero).
+  gone that the books do not explain (`polymarket.drift` below zero, beyond the open
+  fees' reserve and `AVG_PRICE_TOLERANCE` a listed share). The reconciliation is
+  against the custodian's own listing, never the larger of it and the world's book: a
+  cost basis booked too high shows as drift, and a listing that lags holds new risk
+  until it catches up.
+* **Execution order.** Confirmed legs are booked per token in the order they executed
+  (`match_time_nano`), never by trade id. Legs whose order the venue does not
+  establish (one instant, or one second where a leg states only its second) are booked
+  in the order, of those that keep the holding nonnegative, that reports the least
+  profit.
 * **Opening first.** No live order is taken ("the polymarket pot's opening is not yet
   read") and no fill is booked (`polymarket.poll_deferred`) before the pot's opening,
   the baseline its reconciliation is measured from, has been read. A cancelled or

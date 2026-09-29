@@ -935,6 +935,14 @@ class LivePolymarket(PolymarketReader):
         for trade in rows:
             status = str(trade.get("status", "")).upper().removeprefix("TRADE_STATUS_")
             at = int(_dec(trade.get("match_time", "0")))
+            # The execution's instant: match_time_nano where the venue states it, else
+            # only its second (Sol P0 on #177: never the trade id's lexical order).
+            nano = trade.get("match_time_nano")
+            try:
+                instant = (int(_dec(nano)), True) if nano not in (None, "") else (
+                    at * 1_000_000_000, False)
+            except (ValueError, ArithmeticError):
+                instant = (at * 1_000_000_000, False)
             legs = []
             if str(trade.get("taker_order_id", "")) in orders:
                 legs.append((str(trade["taker_order_id"]), trade.get("size"),
@@ -954,11 +962,10 @@ class LivePolymarket(PolymarketReader):
                     pending.append(at)
                     continue
                 state["seen"][key] = at
-                found.append((at, key, order_id, _dec(size), _dec(price), taker, fee_bps))
-        events = []
-        for at, _key, order_id, size, price, taker, fee_bps in sorted(found):
-            events.append(self._fill_event(state, orders[order_id], order_id, size, price,
-                                           taker, at, fee_bps))
+                found.append({"instant": instant[0], "exact": instant[1], "at": at,
+                              "key": key, "order_id": order_id, "size": _dec(size),
+                              "price": _dec(price), "taker": taker, "fee_bps": fee_bps})
+        events = self._in_execution_order(state, orders, found)
         if not ended:
             state["page"] = page_cursor
             state.setdefault("pending", [])
@@ -977,6 +984,72 @@ class LivePolymarket(PolymarketReader):
             after = min(after, min(pending) - 1)
         state["after"] = max(0, after)
         return events
+
+    def _in_execution_order(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
+                            found: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Book confirmed legs in the order they executed, as the venue states it.
+
+        Sol P0 on #177: cost basis follows execution order, never trade ids. Legs are
+        ordered per token by their execution instant (``match_time_nano``). Legs whose
+        order the venue does not establish (the same instant, or the same second where
+        one of them states only its second) form one group, and no chronology is
+        invented for it: of the orderings that keep the holding nonnegative (buys first,
+        sales first, or buys above the running cost, sales, then the rest), the one
+        booked is the one that reports the least profit.
+        """
+        by_token: dict[str, list[dict[str, Any]]] = {}
+        for leg in found:
+            by_token.setdefault(orders[leg["order_id"]]["token_id"], []).append(leg)
+        booked: list[tuple[int, int, dict[str, Any]]] = []
+        for token, legs in sorted(by_token.items()):
+            legs.sort(key=lambda leg: (leg["instant"], leg["key"]))
+            groups: list[list[dict[str, Any]]] = []
+            for leg in legs:
+                last = groups[-1][-1] if groups else None
+                if last is not None and (
+                        leg["instant"] == last["instant"]
+                        or (not (leg["exact"] and last["exact"])
+                            and leg["at"] == last["at"])):
+                    groups[-1].append(leg)
+                else:
+                    groups.append([leg])
+            for group in groups:
+                for leg in self._least_profit(state, orders, token, group):
+                    event = self._fill_event(
+                        state, orders[leg["order_id"]], leg["order_id"], leg["size"],
+                        leg["price"], leg["taker"], leg["at"], leg["fee_bps"])
+                    event["ts_ns"] = leg["instant"]
+                    booked.append((group[0]["instant"], len(booked), event))
+        return [event for _instant, _n, event in sorted(booked, key=lambda b: b[:2])]
+
+    @staticmethod
+    def _least_profit(state: dict[str, Any], orders: dict[str, dict[str, str]], token: str,
+                      group: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if len(group) == 1:
+            return group
+        held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
+        buys = [leg for leg in group if orders[leg["order_id"]]["side"] == "buy"]
+        sells = [leg for leg in group if orders[leg["order_id"]]["side"] != "buy"]
+        options = [buys + sells, sells + buys,
+                   [b for b in buys if b["price"] > avg] + sells
+                   + [b for b in buys if b["price"] <= avg]]
+
+        def realized(order: list[dict[str, Any]]) -> Decimal | None:
+            size, cost, total = held, avg, Decimal(0)
+            for leg in order:
+                if orders[leg["order_id"]]["side"] == "buy":
+                    cost = (size * cost + leg["size"] * leg["price"]) / (size + leg["size"])
+                    size += leg["size"]
+                else:
+                    if leg["size"] > size:
+                        return None
+                    total += (leg["price"] - cost) * leg["size"]
+                    size -= leg["size"]
+            return total
+
+        scored = [(realized(o), n, o) for n, o in enumerate(options)]
+        valid = [item for item in scored if item[0] is not None]
+        return min(valid)[2] if valid else options[0]
 
     @staticmethod
     def _fill_event(state: dict[str, Any], order: dict[str, str], order_id: str,
