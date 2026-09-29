@@ -160,23 +160,16 @@ uv run pytest -m soak -n 2
 ```
 
 Running the soak tier is REQUIRED, and its output is returned with the gate's:
-- for any change to a module that owns checkpointed state: one that sets, deletes,
-  prunes or releases something the checkpoint carries (read from the code by
-  `checkpoint_state_owners` in `tests/conftest.py`: today every runtime mixin that
-  retains or prunes state, the settlement and charter books, `runtime/venue.py`'s fee
-  history, `runtime/markets.py`'s measured consequences, `settlement/forecast.py`'s
-  released forecasts);
-- for any change under `factorylab/kernel/`, `factorylab/learners/`,
-  `factorylab/versioning/`, to `factorylab/runtime/resume.py`, or to the gauntlet
-  (`tests/gauntlet/`, `scripts/gauntlet.py`);
+- for any change under `factorylab/`, or to the gauntlet (`tests/gauntlet/`,
+  `scripts/gauntlet.py`), except `*.md` files (`SOAK_REQUIRED`, `tests/conftest.py`);
 - before any world launch;
 - on request.
 
-It is enforced locally. A soak run certifies its tree (appends the tree hash, uncommitted
-and untracked files included, to `factorylab-soak-passes` in the git common directory)
-only when it is the whole tier (`-m soak`, no file arguments, no `-k`, `--deselect`,
-`--ignore`, `--lf`, `--ff`, `-x`, `--collect-only` or `--setup-only`), every test it
-collected passed its call, and the tree did not change while it ran. A whole gate run
+It is enforced locally. Only `uv run pytest -m soak` (optionally with `-n <workers>`)
+certifies a tree, recording its hash in `factorylab-soak-passes` in the git common
+directory, and only when `PYTEST_ADDOPTS` is empty, no ini option is overridden, no
+soak test is deselected, every collected soak test passed, and the tree did not change
+while it ran; any other soak run says why it certified nothing. A whole gate run
 (`-m gate` or `-m "check or gate"`, no file arguments, no `-k`) on a tree that changed a
 required path since `origin/main` fails until that exact tree is certified, and fails if
 the tree changed while it ran. Run soak first, then the whole gate. This guards against

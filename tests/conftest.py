@@ -269,7 +269,7 @@ def shared_result(_scripted_run_cache):
 #   slow   kills and resumes real subprocesses
 #   soak   the long runs (``-m soak``): the checkpoint plateau and the gauntlet's long
 #          worlds, whose short lengths run in gate. REQUIRED for a change to any of
-#          ``soak_required`` paths, before any world launch, and on request (AGENTS.md,
+#          ``SOAK_REQUIRED`` paths, before any world launch, and on request (AGENTS.md,
 #          Verify gate); a whole gate run enforces it (``_SoakRequirement``)
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
 _SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run", "shared_run",
@@ -807,80 +807,20 @@ class _GateBudget:
                   red=True)
 
 
-#: Paths whose change always requires a soak pass (AGENTS.md, Verify gate), beside the
-#: modules that own checkpointed state (``checkpoint_state_owners``): the kernel, the
-#: learners, the version organ, the checkpoint itself, and the gauntlet.
-SOAK_REQUIRED_ALWAYS = (
-    "factorylab/kernel/", "factorylab/learners/", "factorylab/versioning/",
-    "factorylab/runtime/resume.py", "tests/gauntlet/", "scripts/gauntlet.py",
-)
-#: The packages whose modules can own checkpointed state (the world's adapters own the
-#: venue's, not the factory's).
-_STATE_PACKAGES = ("charter", "cortex", "kernel", "learners", "runtime", "settlement",
-                   "versioning")
-_MUTATORS = frozenset({"add", "append", "clear", "discard", "extend", "insert", "pop",
-                       "popitem", "remove", "setdefault", "update"})
+#: A change under these requires a soak pass (AGENTS.md, Verify gate): everything the
+#: factory runs, and the gauntlet. When in doubt, it is required.
+SOAK_REQUIRED = ("factorylab/", "tests/gauntlet/", "scripts/gauntlet.py")
+#: Except these, which cannot change what a world retains, prices or recovers.
+SOAK_EXEMPT_SUFFIXES = (".md",)
 #: The file, in the repository's common git directory (shared by its worktrees), listing
 #: the tree hashes on which the whole soak tier passed.
 SOAK_PASSES = "factorylab-soak-passes"
 
 
-def checkpoint_state_names() -> frozenset[str]:
-    """Every attribute the checkpoint carries, as its owner's source spells it: the
-    runtime's fields, the kernel's and the receipt books' owners, and each component's
-    fields (``resume._RUNTIME_FIELDS``, ``_KERNEL_FIELDS``, ``_RECEIPT_BOOKS``,
-    ``_COMPONENT_FIELDS``; a ``_Class__field`` prefix is the source's ``__field``)."""
-    from factorylab.runtime import resume
-
-    names = {*resume._RUNTIME_FIELDS, *resume._KERNEL_FIELDS,
-             *(path.split(".")[0] for path in resume._RECEIPT_BOOKS)}
-    for owner, prefix, fields in resume._COMPONENT_FIELDS:
-        names.add(owner)
-        mangled = prefix.startswith("_") and prefix.endswith("__")
-        names |= {("__" if mangled else prefix) + field for field in fields}
-    return frozenset(names)
-
-
-def _state_root(node) -> str | None:
-    """The attribute right on ``self`` or ``rt`` that ``node`` (an assignment or delete
-    target, or a mutating call's receiver) reaches: ``self.x[k].y`` is ``x``."""
-    attribute = None
-    while isinstance(node, (ast.Attribute, ast.Subscript)):
-        if isinstance(node, ast.Attribute):
-            attribute = node.attr
-        node = node.value
-    return attribute if isinstance(node, ast.Name) and node.id in ("self", "rt") else None
-
-
-def _mutates_state(tree: ast.AST, names: frozenset[str]) -> bool:
-    """Whether a module assigns, deletes or mutates (``_MUTATORS``) checkpointed state."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
-            targets = [node.target]
-        elif isinstance(node, ast.Delete):
-            targets = node.targets
-        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-              and node.func.attr in _MUTATORS):
-            targets = [node.func.value]
-        else:
-            continue
-        if any(_state_root(target) in names for target in targets):
-            return True
-    return False
-
-
-def checkpoint_state_owners(root: Path) -> frozenset[str]:
-    """The modules under ``_STATE_PACKAGES`` that write checkpointed state: they set,
-    delete, prune or release something the checkpoint carries, so a change to one can
-    change what a world retains."""
-    names = checkpoint_state_names()
-    return frozenset(
-        str(path.relative_to(root))
-        for package in _STATE_PACKAGES
-        for path in sorted((root / "factorylab" / package).rglob("*.py"))
-        if _mutates_state(ast.parse(path.read_text()), names))
+def soak_required(paths: list[str]) -> list[str]:
+    """The paths among ``paths`` whose change requires a soak pass."""
+    return [path for path in paths if path.startswith(SOAK_REQUIRED)
+            and not path.endswith(SOAK_EXEMPT_SUFFIXES)]
 
 
 def _git(root: Path, *args: str, env: dict | None = None) -> str | None:
@@ -916,32 +856,64 @@ def _changed_since_main(root: Path) -> list[str] | None:
     return sorted({*changed.split(), *untracked.split()})
 
 
-def soak_required(paths: list[str], root: Path = _TESTS_ROOT.parent) -> list[str]:
-    """The paths among ``paths`` whose change requires a soak pass: under
-    ``SOAK_REQUIRED_ALWAYS``, or a module that owns checkpointed state."""
-    owners = checkpoint_state_owners(root)
-    return [path for path in paths
-            if path.startswith(SOAK_REQUIRED_ALWAYS) or path in owners]
+def uncertifiable(args, environ, option) -> str | None:
+    """Why a soak run with these invocation ``args``, environment and options certifies
+    nothing, or None. Only exactly ``-m soak``, optionally with ``-n <workers>`` and
+    ``-p`` for xdist's internals, certifies: no ``PYTEST_ADDOPTS``, no ``-o``, no
+    stepwise, and anything else named (a file, ``-k``, ``--deselect``, ...) is out."""
+    if environ.get("PYTEST_ADDOPTS", "").strip():
+        return "PYTEST_ADDOPTS is set"
+    if getattr(option, "stepwise", False) or getattr(option, "stepwise_skip", False):
+        return "stepwise is on"
+    if getattr(option, "override_ini", None):
+        return "an ini option is overridden (-o)"
+    args, marks = list(args), None
+    while args:
+        arg = args.pop(0)
+        if arg == "-m" and args:
+            marks = args.pop(0)
+        elif arg == "-n" and args and args[0].isdigit() or arg == "-p" and args and (
+                args[0].startswith("xdist")):
+            args.pop(0)
+        elif arg.startswith("-n") and arg[2:].isdigit():
+            continue
+        else:
+            return f"the run names {arg!r}: only -m soak, -n <workers> and -p xdist certify"
+    return None if marks == "soak" else "the run is not -m soak"
 
 
-#: Options that select part of a run or run no test calls: a soak run under any of them
-#: certifies nothing.
-_PARTIAL_OPTIONS = ("keyword", "deselect", "ignore", "ignore_glob", "collectonly",
-                    "setuponly", "setupplan", "lf", "failedfirst", "exitfirst")
+class _SoakDeselections:
+    """Counts the soak tests a collection deselected, in each process that collects; an
+    xdist worker tells its controller. A certifying run deselects none."""
+
+    def __init__(self):
+        self.count = 0
+
+    def pytest_deselected(self, items):
+        self.count += sum(1 for item in items if item.get_closest_marker("soak"))
+
+    def pytest_sessionfinish(self, session):
+        if hasattr(session.config, "workerinput"):
+            session.config.workeroutput["factorylab_soak_deselected"] = self.count
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_testnodedown(self, node, error):
+        self.count += getattr(node, "workeroutput", {}).get("factorylab_soak_deselected", 0)
 
 
 class _SoakRequirement:
-    """The soak tier, enforced (a local guard against honest mistakes, not a security
-    boundary: the record is plain text).
+    """The soak tier, enforced: a guard against honest mistakes, not a security boundary
+    (the record is plain text).
 
-    A soak run certifies its tree only when it is the whole tier as the repository
-    defines it (``-m soak``, no file arguments, none of ``_PARTIAL_OPTIONS``), every
-    test it collected produced a passing call, and the tree is the same at its end as at
-    its start: then the tree's hash is appended to ``SOAK_PASSES``. A whole gate run
-    (``-m gate`` or ``-m "check or gate"``, no file arguments, no ``-k``) on a tree that
-    changed a soak-required path since ``origin/main`` (``soak_required``) fails unless
-    that tree is certified, and fails if the tree changed while it ran. Without git (or
-    ``origin/main``) nothing is judged, and the run says so.
+    A soak run certifies its tree (appends its hash to ``SOAK_PASSES``) only when its
+    invocation is exactly the whole tier (``uncertifiable``), it deselected no soak test
+    (``_SoakDeselections``), every test it collected passed its call, and the tree is
+    the same at its end as at its start; anything else runs as usual and says why it
+    certified nothing. A whole gate run (``-m gate`` or ``-m "check or gate"``, no file
+    arguments, no ``-k``) on a tree that changed a soak-required path since
+    ``origin/main`` (``soak_required``) fails unless that tree is certified, and fails if
+    the tree changed while it ran. Without git (or ``origin/main``) nothing is judged,
+    and the run says so.
     """
 
     def __init__(self, root: Path):
@@ -954,12 +926,6 @@ class _SoakRequirement:
     def _whole(config) -> bool:
         return (config.args_source is pytest.Config.ArgsSource.TESTPATHS
                 and not config.option.keyword)
-
-    @staticmethod
-    def _whole_soak(config) -> bool:
-        return (config.args_source is pytest.Config.ArgsSource.TESTPATHS
-                and (config.option.markexpr or "").strip() == "soak"
-                and not any(getattr(config.option, name, None) for name in _PARTIAL_OPTIONS))
 
     def _record(self) -> Path | None:
         common = _git(self.root, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -985,12 +951,19 @@ class _SoakRequirement:
         if report.when == "call" and report.passed:
             self.passed.add(report.nodeid)
 
-    def _certified(self, session) -> bool:
-        return (self._whole_soak(session.config)
-                and session.exitstatus == pytest.ExitCode.OK
-                and self.tiers == {"soak"} and bool(self.collected)
-                and self.passed == self.collected
-                and _tree_hash(self.root) == self.tree)
+    def _why_not_certified(self, session) -> str | None:
+        config = session.config
+        deselections = config.pluginmanager.get_plugin("factorylab-soak-deselections")
+        why = uncertifiable(config.invocation_params.args, os.environ, config.option)
+        if why is None and deselections is not None and deselections.count:
+            why = f"{deselections.count} soak test(s) deselected"
+        if why is None and session.exitstatus != pytest.ExitCode.OK:
+            why = "the run did not pass"
+        if why is None and not (self.collected and self.passed == self.collected):
+            why = "not every collected soak test passed its call"
+        if why is None and _tree_hash(self.root) != self.tree:
+            why = "the tree changed while it ran"
+        return why
 
     @pytest.hookimpl(trylast=True)
     def pytest_sessionfinish(self, session):
@@ -1000,12 +973,13 @@ class _SoakRequirement:
         if record is None:
             return
         if "soak" in self.tiers and "gate" not in self.tiers:
-            if self._certified(session):
+            why = self._why_not_certified(session)
+            if why is None:
                 with record.open("a") as passes:
                     passes.write(self.tree + "\n")
                 self.note = f"soak passed whole on tree {self.tree[:12]}: recorded"
             else:
-                self.note = "soak run not recorded: not the whole tier, passing, on one tree"
+                self.note = f"soak run not recorded: {why}"
             return
         if "gate" not in self.tiers:
             return
@@ -1014,7 +988,7 @@ class _SoakRequirement:
             self.note = "soak requirement not judged: no git or no origin/main"
             return
         now = _tree_hash(self.root)
-        required = soak_required(changed, self.root)
+        required = soak_required(changed)
         passed = record.read_text().split() if record.exists() else []
         if now != self.tree:
             self.problem = (f"the tree changed while the gate ran ({self.tree[:12]} -> "
@@ -1041,6 +1015,7 @@ def pytest_configure(config):
     directories = _TemporaryDirectories()
     # Registered while configuring: pytest calls its (historic) pytest_configure now.
     config.pluginmanager.register(directories, "factorylab-temporary-directories")
+    config.pluginmanager.register(_SoakDeselections(), "factorylab-soak-deselections")
     # Only the process that sees every report judges the budget: the controller under
     # xdist, or the one process without it.
     if not hasattr(config, "workerinput"):
