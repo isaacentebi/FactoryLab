@@ -204,13 +204,17 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "position or spot balance, a positive size when supplied, and a size "
                 "that survives venue precision rounding.",
                 "cancel": "A fake cancellation names a known order on the supplied coin. A "
-                "live cancellation names a nonzero decimal integer venue identity; "
-                "already-terminal orders and a lookup bound to another id are refused.",
+                "live cancellation names a nonzero decimal integer venue identity; one that "
+                "names no coin is sent on the order's own market as the venue's open orders "
+                "state it, never on every market; already-terminal orders and a lookup "
+                "bound to another id are refused.",
                 "leverage": "Spot has no leverage. Perp leverage is a positive integer. The "
                 "default random-walk fake also caps it at default_fake_max_leverage; "
-                "a supplied fake adapter uses its own max_leverage. Live acceptance "
-                "uses the venue's ceiling. Recorded-market leverage and other "
-                "recorded-market refusals are published in venue.instruments.",
+                "a supplied fake adapter uses its own max_leverage. Live leverage above a "
+                "market's listed max_leverage is refused before signing, and a market "
+                "whose listed margin is isolated takes an isolated setting. "
+                "Recorded-market leverage and other recorded-market refusals are "
+                "published in venue.instruments.",
                 "fake_margin": "At an exposure-increasing simulated fill, total per-coin "
                 "absolute notional divided by that coin's leverage does not exceed "
                 "perp equity. Spot buys reserve cost plus fees from available USDC "
