@@ -144,6 +144,9 @@ def _load_dotenv() -> None:
         ("openrouter.key", "OPENROUTER_API_KEY"),
         ("hyperliquid.key", "HL_PRIVATE_KEY"),
         ("reserve.key", "RESERVE_PRIVATE_KEY"),
+        # The polymarket pot's signer (world/polymarket_clob.py), read only by a world
+        # whose [polymarket] block takes live orders.
+        ("polymarket.key", "POLYMARKET_PRIVATE_KEY"),
     ):
         keyfile = Path.cwd() / filename
         if not (keyfile.exists() or keyfile.is_symlink()):

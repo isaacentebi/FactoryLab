@@ -90,6 +90,16 @@ def test_a_world_without_the_block_has_no_surface_and_a_named_block_is_hashed():
     with pytest.raises(ValueError, match="simulated venue"):
         manifest_from_dict({**raw, "polymarket": {"enabled": True, "venue": "live",
                                                   "collateral_usd": "5"}})
+    # Live orders are real money: only the world named 'funded', under its gate.
+    with pytest.raises(ValueError, match="only allowed in the world named 'funded'"):
+        manifest_from_dict({**raw, "polymarket": {
+            "enabled": True, "venue": "live", "orders": True, "principal_usd": "50",
+            "funder": "0x" + "ab" * 20}})
+    with pytest.raises(ValueError, match="require polymarket.funder"):
+        manifest_from_dict({**raw, "polymarket": {"enabled": True, "venue": "live",
+                                                  "orders": True}})
+    with pytest.raises(ValueError, match="the simulated venue always takes writes"):
+        manifest_from_dict({**raw, "polymarket": {"enabled": True, "orders": True}})
 
 
 def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
@@ -130,7 +140,8 @@ def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():
 
     rt = world()
     specs = {k: v for k, v in rt.tool_specs.items() if k.startswith("polymarket.")}
-    assert set(specs) == {*polymarket.READS, polymarket.ACCOUNT, *polymarket.WRITES}
+    assert set(specs) == {*polymarket.READS, polymarket.ACCOUNT, polymarket.OPEN_ORDERS,
+                          *polymarket.WRITES}
     for spec in specs.values():
         for example in spec["args_schema"]["examples"]:
             validate_schema(example, spec["args_schema"])
@@ -141,7 +152,8 @@ def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():
         assert not any(word in text for word in ("should", "profit", "opportunit", "edge",
                                                  "recommend", "consider", "worth", "better"))
     live = world(venue="live")
-    assert not any(t in live.tool_specs for t in (*polymarket.WRITES, polymarket.ACCOUNT))
+    assert not any(t in live.tool_specs for t in (*polymarket.WRITES, polymarket.ACCOUNT,
+                                                  polymarket.OPEN_ORDERS))
 
 
 # --- reads and the jail ----------------------------------------------------------------------

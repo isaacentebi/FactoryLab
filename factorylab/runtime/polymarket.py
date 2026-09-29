@@ -1,11 +1,12 @@
 """Polymarket event markets in a running world: tools, custody, intents, settlement.
 
 A world that enables ``[polymarket]`` gets a surface, not a strategy: three reads
-of the public market (search, one market's contract, one token's book), an
-account read of its own pot, and on the simulated venue two writes (a limit
-order and its cancellation). Nothing here asks a seat to use any of it, and no
-description says it would be good to (AGENTS.md: physics is enforced, not
-announced).
+of the public market (search, one market's contract, one token's book), two
+reads of its own pot (its positions, its open orders), and where the pot exists
+two writes (a limit order and its cancellation): on the simulated venue, or signed
+on Polymarket's live CLOB (``world/polymarket_clob.py``). Nothing here asks a seat
+to use any of it, and no description says it would be good to (AGENTS.md: physics
+is enforced, not announced).
 
 Why the surface exists at all: the population already sells forecasts inside
 the loop and is scored on them by Brier. An event market is the same kind of
@@ -69,6 +70,8 @@ from factorylab.kernel.money import usd_to_micro
 CUSTODY = "polymarket"
 READS = ("polymarket.search", "polymarket.market", "polymarket.book")
 ACCOUNT = "polymarket.positions"
+#: The pot's resting orders, read from the same account read as the positions.
+OPEN_ORDERS = "polymarket.open_orders"
 WRITES = ("polymarket.place_limit", "polymarket.cancel")
 KIND = "polymarket"
 #: The tools whose answers carry text third parties wrote.
@@ -95,8 +98,10 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
 
     A read of the public market API (or of the seeded simulated venue) pays no one,
     so it carries no price: the wallet moves only when money moves. What a write
-    costs is the market's own, paid from and settled into the polymarket pot.
+    costs is the market's own, paid from and settled into the polymarket pot: the
+    price to the matched side and the market's fee, both real counterparties.
     """
+    live = getattr(spec, "venue", "fake") == "live"
     token = {"type": "string", "pattern": r"^[0-9]{1,100}$", "minLength": 1}
     decimal = {"type": ["string", "number"]}
     tools = {
@@ -126,6 +131,10 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
                 "The polymarket custody pot: USDC, what resting orders hold, outcome "
                 "tokens held and open orders. Free.",
                 {}, [], [{}], 0),
+            OPEN_ORDERS: (
+                "The polymarket pot's resting orders: order id, token id, side, price, "
+                "size and what remains unfilled. Free.",
+                {}, [], [{}], 0),
             "polymarket.place_limit": (
                 "Place a good-until-cancelled limit order for outcome tokens of one "
                 "Polymarket market, paid from and settled into the polymarket pot. size is "
@@ -133,7 +142,11 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
                 "market's tick. A buy holds price x size USDC while it rests; a sell holds "
                 "the tokens. An order that fills on arrival pays the market's taker fee. "
                 "When the market resolves, each winning token pays 1 USDC and each losing "
-                "token 0. Free to call.",
+                "token 0. " + (
+                    "The order is signed by the pot's wallet and sent to Polymarket's CLOB "
+                    "on Polygon as a GTC order; its identity is its EIP-712 order hash. "
+                    "The pot's collateral is pUSD, Polymarket's USDC-backed token. "
+                    if live else "") + "Free to call.",
                 {"token_id": token, "side": {"type": "string", "enum": ["buy", "sell"]},
                  "size": decimal, "price": decimal},
                 ["token_id", "side", "size", "price"],
@@ -168,10 +181,13 @@ class PolymarketSurface:
     count of the current window, for ``max_orders_per_window``.
     """
 
-    def __init__(self, spec: Any, venue: Any, *, writes: bool) -> None:
+    def __init__(self, spec: Any, venue: Any, *, writes: bool, live: bool = False) -> None:
         self.spec = spec
         self.venue = venue
         self.writes = writes
+        # Live orders: the venue is Polymarket's CLOB (``world/polymarket_clob.py``),
+        # journaled as an outside service, so its state lives here, not in the adapter.
+        self.live = live
         self.intents: dict[str, dict[str, Any]] = {}
         self.order_ids: dict[str, str] = {}  # order id -> client id
         self.window_orders: tuple[int, int] = (0, 0)
@@ -200,9 +216,20 @@ class PolymarketSurface:
         # cancels and resolutions) and each held token's book were last read
         # successfully; what depends on a stream waits for its read.
         self.through: dict[str, int] = {}
+        # Every order's filled size as booked here, by order id: a fill beyond what its
+        # order ordered is quarantined, never owned (``_settle_fill``).
+        self.filled: dict[str, str] = {}
+        # The live venue's fill and resolution cursor (``LivePolymarket.poll``): carried
+        # in, returned, checkpointed, so a replay reads what the run read.
+        self.cursor: dict[str, Any] = {}
+        # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
+        self._account_memo: tuple | None = None
+        # The market each write was last weighed against, by token (transient): the one
+        # its live order is then built on.
+        self.checked: dict[str, dict] = {}
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
-              "opening", "token_markets", "open_reads", "through")
+              "opening", "token_markets", "open_reads", "through", "filled", "cursor")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -225,11 +252,25 @@ class PolymarketSurface:
         """The Polymarket writes a decision made, as durable intents, in submission order."""
         return [intent for intent in self.intents.values() if intent["handle"] == handle]
 
-    def account(self) -> dict[str, Any] | None:
-        """The simulated pot, read from the venue's own books without I/O, or None."""
+    def account(self, rt: Any = None) -> dict[str, Any] | None:
+        """The pot as its custodian states it, or None in a world without one.
+
+        The simulated pot is read from the venue's own books without I/O. The live pot
+        is read through the journal (a replay reads what the run read), once per tick
+        and Polymarket write (``_tick_key``): a write can move it, nothing else here can.
+        """
         if not self.writes:
             return None
-        return self.venue.target.account()
+        if not self.live:
+            return self.venue.target.account()
+        key = None if rt is None else _tick_key(rt)
+        if key is not None and self._account_memo is not None and self._account_memo[0] == key:
+            return self._account_memo[1]
+        account = self.venue.account(markets=dict(self.token_markets),
+                                     resolved=dict(self.cursor.get("resolved", {})))
+        if key is not None:
+            self._account_memo = (key, account)
+        return account
 
 
 def install(rt: Any) -> None:
@@ -237,8 +278,11 @@ def install(rt: Any) -> None:
 
     Guarantees a world that does not enable the block is untouched: no attribute,
     no tool, no pot. The simulated venue is journalled as deterministic (a replay
-    re-runs it); the live reader is journalled like every other outside read, so
-    a replay returns what was read rather than reading again.
+    re-runs it); the live reader and the live order venue are journalled like every
+    other outside service, so a replay returns what was read rather than reading
+    again, and an order interrupted in flight resumes uncertain, never resent
+    (``RecoveryJournal.call``). The live order venue signs only for an intent this
+    surface ledgered first (``LivePolymarket.intent_of``).
     """
     spec = rt.m.polymarket
     if not spec.enabled:
@@ -246,14 +290,26 @@ def install(rt: Any) -> None:
     from factorylab.runtime.resume import JournalProxy
     from factorylab.world.polymarket import FakePolymarket, PolymarketReader
 
-    writes = spec.venue == "fake"
-    target = (FakePolymarket(seed=spec.seed,
-                             start_usdc=Decimal(spec.collateral_micro) / 1_000_000)
-              if writes else PolymarketReader())
-    venue = JournalProxy(target, rt.ledger, "polymarket", deterministic=writes)
+    simulated = spec.venue == "fake"
+    live = spec.venue == "live" and spec.orders
+    writes = simulated or live
+    if simulated:
+        target = FakePolymarket(seed=spec.seed,
+                                start_usdc=Decimal(spec.collateral_micro) / 1_000_000)
+    elif live:
+        from factorylab.world.polymarket_clob import live_venue
+
+        target = live_venue(spec, identity=lambda: (rt.m.exchange.client_namespace,
+                                                    getattr(rt, "launch_nonce", None)))
+    else:
+        target = PolymarketReader()
+    venue = JournalProxy(target, rt.ledger, "polymarket", deterministic=simulated)
     venue.observer = lambda method, args, kwargs, result: observe_answer(
         rt, method, args, kwargs, result)
-    rt.polymarket = PolymarketSurface(spec, venue, writes=writes)
+    rt.polymarket = PolymarketSurface(spec, venue, writes=writes, live=live)
+    if live:
+        # Chapter II §II.b: no order leaves this process without its durable intent.
+        target.intent_of = lambda client_id: rt.polymarket.intents.get(client_id)
     # registration -> [[wall ns, requests]] of its reads (and claim lookups) in the
     # sliding 10 s, each at the instant its last request was sent (``wall_now``).
     rt.polymarket_read_use = {}
@@ -537,8 +593,16 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
         return _refused(rt, action_id, handle, tool_id, invalid)
     if tool_id in WRITES:
         return _write(rt, surface, action_id, handle, tool_id, args, slot)
-    if tool_id == ACCOUNT:
-        return {**account_view(sanitized(surface.account())), "as_of_ns": rt.clock.now_ns}
+    if tool_id in (ACCOUNT, OPEN_ORDERS):
+        try:
+            view = account_view(sanitized(surface.account(rt)))
+        except Exception as exc:  # noqa: BLE001 - an unread pot states no amount
+            view = {"status": "unavailable",
+                    "reason": f"polymarket pot read failed: {type(exc).__name__}"}
+        if tool_id == OPEN_ORDERS and view["status"] == "observed":
+            view = {key: view[key] for key in ("status", "custody", "open_orders",
+                                               "observed_at_ns") if key in view}
+        return {**view, "as_of_ns": rt.clock.now_ns}
     from factorylab.world.polymarket import SEAT_READ_REQUESTS
 
     method, call = _read_call(tool_id, args)
@@ -613,11 +677,15 @@ def open_limit(spec: Any) -> int:
     A live reader runs only on the wall clock (``arm``). A world's ticks can take any
     wall time, long or short, and the bound below never refers to them.
 
-    **What reaches Polymarket.** Only a live-read world sends requests, and it holds
-    no positions: writes, and so positions and their marks, exist only on the
-    simulated venue, which sends nothing (``install``; a live world with writes is
-    refused at load, ``polymarket_live_writes_not_built``). So the kernel's requests
-    are its settlement reads alone.
+    **What reaches Polymarket.** A live world's public reads (the seats' and the
+    kernel's settlement reads) are bounded here. A live world with orders
+    (``orders = true``) also sends the pot's own requests (orders, cancels, lookups,
+    fills, its account, held tokens' marks and a write's market read): they are
+    counted by the pot's own budget, ``order_requests_per_10s`` in any sliding 10 s of
+    wall time, each before it is sent (``LivePolymarket.budget``), never stamped as a
+    public read, and the manifest holds ``read_requests_per_10s +
+    order_requests_per_10s`` within the 300 Gamma ``/markets`` publishes. So the
+    kernel's public requests are its settlement reads alone.
 
     **Open reads.** At any wall instant ``t`` at most ``max_readers ×
     seat_open_share <= N`` open reads count (admitted at or before ``t``, and still
@@ -861,15 +929,19 @@ def _read_refusal(rt: Any, seat: str, requests: int) -> str | None:
 def _write_market(rt: Any, surface: PolymarketSurface, token_id: str) -> dict | None:
     """The market listing ``token_id`` for a write's checks, through the journal and the
     world's lookup of the token (one GET by market id once it is known; a token no
-    market lists is not cached). Writes exist only on the simulated venue, which sends
-    Polymarket nothing."""
+    market lists is not cached). The simulated venue sends Polymarket nothing; the live
+    order venue sends these reads inside its own request budget
+    (``[polymarket] order_requests_per_10s``), never a seat's share or the kernel's
+    settlement reserve."""
     market_id = surface.token_markets.get(token_id)
+    live = surface.live
     if market_id is None:
-        listed = surface.venue.market_of_token(token_id)
+        listed = (surface.venue.write_market_of_token(token_id) if live
+                  else surface.venue.market_of_token(token_id))
         if listed is not None:
             surface.token_markets[token_id] = str(listed["market_id"])
         return listed
-    return surface.venue.market(market_id)
+    return surface.venue.write_market(market_id) if live else surface.venue.market(market_id)
 
 
 def _tick_key(rt: Any) -> tuple | None:
@@ -1030,10 +1102,12 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
         return "polymarket read unavailable"
     if market is None:
         return NOT_LISTED_REFUSAL
+    # The market this write was weighed against is the one its order is built on.
+    surface.checked[args["token_id"]] = market
     if not market["accepting_orders"]:
         return "market is not accepting orders"
     try:
-        account = surface.account()
+        account = surface.account(rt)
     except Exception as exc:  # noqa: BLE001 - unknown collateral blocks new risk
         return f"polymarket pot unavailable: {type(exc).__name__}"
     tick, minimum = _decimal(market.get("tick_size")), _decimal(market.get("min_order_size"))
@@ -1046,6 +1120,9 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
         return "order notional exceeds [polymarket] max_order_usd"
     buy = args["side"] == "buy"
     if buy:
+        above = principal_excess(surface, account)
+        if above is not None:
+            return above
         fee = taker_fee(market, size, price)
         if usd_to_micro(_open_exposure(account) + committed + notional,
                         rounding="ceil") > spec.max_open_micro:
@@ -1057,6 +1134,39 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
                      if p["token_id"] == args["token_id"]), Decimal(0))
         if size > held:
             return "sell exceeds the tokens the polymarket pot holds"
+    return None
+
+
+PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
+
+
+def held_at_cost(account: dict) -> Decimal:
+    """The pot's value on its own books: USDC, plus every open token at cost, plus every
+    resolved token not yet redeemed at its payout (``payout`` on the position), which
+    is what it redeems for."""
+    tokens = Decimal(0)
+    for position in account["positions"]:
+        size = Decimal(position["size"])
+        paid = position.get("payout")
+        tokens += size * (Decimal(paid) if paid is not None else Decimal(position["avg_px"]))
+    return Decimal(account["usdc"]) + tokens
+
+
+def principal_excess(surface: PolymarketSurface, account: dict) -> str | None:
+    """Why the pot holds more principal than the manifest's cap, or None.
+
+    The pot's principal is what it holds beyond what it has itself settled: its value
+    on its own books less the P&L its fills and resolutions settled (``settled``), so
+    what the world earned never counts against the cap and a deposit always does.
+    Guarantees no new risk is taken on principal above ``principal_micro`` (essay
+    II.II.b, the hard cast); a cancellation and a sell are never refused by it.
+    """
+    cap = getattr(surface.spec, "principal_micro", None)
+    if cap is None:
+        return None
+    principal = held_at_cost(account) - surface.settled
+    if usd_to_micro(principal, rounding="ceil") > cap:
+        return PRINCIPAL_REFUSAL
     return None
 
 
@@ -1125,6 +1235,21 @@ def _write(rt: Any, surface: PolymarketSurface, action_id: str, handle: str, too
              else surface.intents[surface.order_ids[args["order_id"]]]["args"]["token_id"])
     intent = {"handle": handle, "client_id": client_id, "operation": tool_id,
               "args": dict(args), "result": {"status": "uncertain"}}
+    if surface.live and tool_id == "polymarket.place_limit":
+        # The CLOB takes no client id: an order's identity is its EIP-712 hash, fixed by
+        # its fields and a salt derived from the client id. It is durable in the intent
+        # before anything is sent, so a lost answer is looked up by it, never resent.
+        try:
+            identity = surface.venue.order_identity(
+                client_id=client_id, token_id=args["token_id"], is_buy=args["side"] == "buy",
+                size=Decimal(str(args["size"])), price=Decimal(str(args["price"])),
+                market=_order_facts(surface.checked.get(args["token_id"])))
+        except Exception as exc:  # noqa: BLE001 - an order that cannot be built is refused
+            rt.venue_attempts[handle] = str(exc)[:200]
+            return rt._refuse_order(handle, f"polymarket order not built: {str(exc)[:200]}",
+                                    kind="polymarket.refused")
+        intent["order_hash"] = identity["order_hash"]
+        intent["order_identity"] = identity
     rt.ledger.append({"kind": "polymarket.intent", **intent})
     surface.intents[client_id] = intent
     rt.consequences.order_intent(client_id, handle, coin_of(token))
@@ -1150,9 +1275,20 @@ def _write(rt: Any, surface: PolymarketSurface, action_id: str, handle: str, too
 
 
 def _recover(rt: Any, surface: PolymarketSurface, client_id: str) -> dict[str, Any]:
-    """Ask the venue what it holds under an identity; never resubmit it."""
+    """Ask the venue what it holds under an identity; never resubmit it.
+
+    A live order is looked up by the order hash its intent recorded before submission
+    (a cancel by the hash of the order it cancels); the simulated venue by client id.
+    """
+    intent = surface.intents[client_id]
     try:
-        result = surface.venue.lookup(client_id)
+        if surface.live:
+            target = (intent.get("order_hash") if intent["operation"] == "polymarket.place_limit"
+                      else intent["args"]["order_id"])
+            result = surface.venue.lookup(client_id, order_id=target,
+                                          cancel=intent["operation"] == "polymarket.cancel")
+        else:
+            result = surface.venue.lookup(client_id)
     except Exception as exc:  # noqa: BLE001
         result = {"status": "uncertain", "error": f"recovery exception: {type(exc).__name__}"}
     answer = _record(rt, surface, client_id, result)
@@ -1198,15 +1334,20 @@ def _record(rt: Any, surface: PolymarketSurface, client_id: str,
 # --- time and settlement --------------------------------------------------------------------
 
 def tick(rt: Any) -> None:
-    """Reconcile unanswered writes, then move the simulated venue and settle what it did.
+    """Reconcile unanswered writes, then read what the venue did and settle it.
 
     Guarantees an uncertain intent is asked about at most ``UNCERTAIN_ORDER_POLLS``
     times, each answer ledgered once, and is then released as unknown exactly as
-    a Hyperliquid intent is (``VenueMixin._give_up_on_order``).
+    a Hyperliquid intent is (``VenueMixin._give_up_on_order``). The simulated venue
+    moves on the world's clock; the live venue's confirmed fills and resolutions are
+    read from the cursor the surface carries (``LivePolymarket.poll``), and the event
+    stream counts as read through now only when that read was complete.
     """
     from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
 
     surface = rt.polymarket
+    # The tick's account is read afresh: what the venue did since is in it.
+    surface._account_memo = None
     if not surface.writes:
         if surface.venue.deterministic:
             # A simulated read-only venue (``simulate_reads``) still moves and resolves,
@@ -1226,12 +1367,58 @@ def tick(rt: Any) -> None:
             rt._replay_deferred(rt.consequences.release_unresolved(client_id, rt.n), before)
             continue
         _recover(rt, surface, client_id)
-    settle(rt, surface.venue.advance(rt.clock.now_ns))
-    # Every event the venue held through now was handed over and accounted.
-    surface.through["events"] = rt.clock.now_ns
+    if surface.live:
+        # The live venue's fills and resolutions since the cursor, read through the
+        # journal with the cursor carried in and out: a replay reads what the run read
+        # and resumes from the cursor its checkpoint holds.
+        try:
+            answer = surface.venue.poll(now_ns=rt.clock.now_ns, cursor=surface.cursor,
+                                        orders=_live_orders(surface))
+        except Exception as exc:  # noqa: BLE001 - an unread stream holds what waits on it
+            rt.ledger.append({"kind": "polymarket.poll_unavailable",
+                              "reason": type(exc).__name__, "ts": rt.clock.now_ns})
+        else:
+            surface.cursor = answer["cursor"]
+            settle(rt, answer["events"])
+            if answer.get("complete"):
+                # Every fill the venue confirmed through the cursor was handed over.
+                surface.through["events"] = rt.clock.now_ns
+    else:
+        settle(rt, surface.venue.advance(rt.clock.now_ns))
+        # Every event the venue held through now was handed over and accounted.
+        surface.through["events"] = rt.clock.now_ns
     confirm_terminal(rt)
     mark(rt)
     reconcile(rt)
+
+
+def _order_facts(market: dict | None) -> dict[str, Any]:
+    """What an order is built on from its market: tick, neg-risk flag and fee schedule."""
+    if market is None:
+        raise ValueError("no market was read for this order")
+    return {"tick_size": market.get("tick_size"), "neg_risk": bool(market.get("neg_risk")),
+            "fees": dict(market.get("fees") or {})}
+
+
+def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
+    """This world's live orders the fill poll reads for: order hash -> token, side, size,
+    price, market and fee schedule, each as its intent recorded them (an order is booked
+    only against its own intent, never against the venue's word of what it was). An
+    order whose fills are all booked and whose token has resolved reads nothing more."""
+    orders = {}
+    resolved = surface.cursor.get("resolved", {})
+    for order_id, client_id in surface.order_ids.items():
+        intent = surface.intents[client_id]
+        args, identity = intent["args"], intent.get("order_identity") or {}
+        token = str(args["token_id"])
+        if token in resolved and order_id in surface.cursor.get("terminal", ()):
+            continue
+        orders[order_id] = {"token_id": token, "side": str(args["side"]),
+                            "size": str(args["size"]), "price": str(args["price"]),
+                            "market_id": surface.token_markets.get(token),
+                            "fee_rate": str(identity.get("fee_rate", "0")),
+                            "fee_exponent": str(identity.get("fee_exponent", "1"))}
+    return orders
 
 
 def confirm_terminal(rt: Any) -> None:
@@ -1250,7 +1437,8 @@ def confirm_terminal(rt: Any) -> None:
         if client_id is None or order.remaining or order.confirmed is not None:
             continue
         try:
-            answer = surface.venue.lookup(client_id)
+            answer = (surface.venue.lookup(client_id, order_id=order.order_id)
+                      if surface.live else surface.venue.lookup(client_id))
         except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
             continue
         if (answer.get("status") in ("filled", "cancelled", "rejected")
@@ -1268,8 +1456,9 @@ def mark(rt: Any) -> None:
     with no two-sided book, or whose book is unreadable, loses its mark rather than
     keeping a stale one or taking an invented one, so its lot is not marked and its
     decision falls back as any unobserved consequence does. It runs only where the
-    pot holds positions, which is only on the simulated venue (``tick``): it sends
-    Polymarket nothing, so it needs no share of the request budget.
+    pot holds positions (``tick``): the simulated venue sends Polymarket nothing, and
+    the live order venue reads each mark inside the pot's own request budget
+    (``LivePolymarket.mark_book``), never a seat's share or the settlement reserve.
     """
     surface = rt.polymarket
     # Every token a lot holds, and every token an open outcome held at any recorded
@@ -1277,7 +1466,10 @@ def mark(rt: Any) -> None:
     for coin in sorted({coin for coin, market in rt.consequences.graded_instruments()
                         if market == "event"}):
         try:
-            book = surface.venue.order_book(coin.removeprefix("PM:"), 1)
+            # The live order venue reads a held token's book inside its own request
+            # budget, never a seat's share or the settlement reserve.
+            book = (surface.venue.mark_book(coin.removeprefix("PM:")) if surface.live
+                    else surface.venue.order_book(coin.removeprefix("PM:"), 1))
         except Exception:  # noqa: BLE001 - an unread book advances nothing
             book = None
         if book is not None:
@@ -1307,13 +1499,12 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     """
     surface = rt.polymarket
     try:
-        account = surface.account()
+        account = surface.account(rt)
     except Exception as exc:  # noqa: BLE001 - an unreadable pot is not reconciled
         rt.ledger.append({"kind": "polymarket.reconcile_unavailable",
                           "reason": type(exc).__name__, "ts": rt.clock.now_ns})
         return None
-    held = Decimal(account["usdc"]) + sum(
-        (Decimal(p["size"]) * Decimal(p["avg_px"]) for p in account["positions"]), Decimal(0))
+    held = held_at_cost(account)
     if surface.opening is None:
         surface.opening = held - surface.settled
         rt.ledger.append({"kind": "polymarket.opening", "usdc": str(surface.opening),
@@ -1323,6 +1514,12 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
               "held_at_cost": str(held), "drift": str(drift)}
     if abs(drift) > Decimal("0.000001"):
         rt.ledger.append({"kind": "polymarket.drift", **result, "ts": rt.clock.now_ns})
+    above = principal_excess(surface, account)
+    if above is not None:
+        result["principal_exceeded"] = True
+        rt.ledger.append({"kind": "polymarket.principal_exceeded", **result,
+                          "principal_micro": surface.spec.principal_micro,
+                          "ts": rt.clock.now_ns})
     return result
 
 
@@ -1363,10 +1560,25 @@ def _settle_fill(rt: Any, event: dict) -> None:
                **({"ts_ns": int(event["ts_ns"])} if event.get("ts_ns") is not None else {})}
     rt.ledger.append({"kind": "polymarket.fill", **payload, "market_id": event["market_id"],
                       "ts": rt.clock.now_ns})
+    surface = rt.polymarket
     rt.polymarket.settled += Decimal(event["realized_usd"]) - Decimal(event["fee_usd"])
     delta = (usd_to_micro(event["realized_usd"], rounding="nearest")
              - usd_to_micro(event["fee_usd"], rounding="nearest"))
     owner_handle = rt._order_owner(order_id)
+    # Per-order fill completeness: an order's fills never sum past what it ordered.
+    # A fill that would is the venue's report disagreeing with the order it answers:
+    # its money is the pot's (it moved), owned by no decision, and the consequence
+    # book quarantines it with its evidence (``ReturnConsequences.observe``).
+    client_id = surface.order_ids.get(order_id)
+    booked = Decimal(surface.filled.get(order_id, "0")) + Decimal(str(event["size"]))
+    if client_id is not None and booked > Decimal(str(surface.intents[client_id]["args"]["size"])):
+        rt.ledger.append({"kind": "polymarket.fill_quarantined", "order_id": order_id,
+                          "size": str(event["size"]),
+                          "ordered": str(surface.intents[client_id]["args"]["size"]),
+                          "booked": surface.filled.get(order_id, "0"), "ts": rt.clock.now_ns})
+        owner_handle = None
+    else:
+        surface.filled[order_id] = str(booked)
     _book_pot(rt, delta, f"fill:{order_id}", "exchange_pnl", owner_handle)
     rt.consequences.observe("Fill", payload, rt.n)
     _tell(rt, owner_handle, {"kind": "polymarket_fill", "order_id": order_id,
@@ -1458,6 +1670,21 @@ def claim_share(rt: Any, owner: str, handle: str, micro: int, reason: str) -> in
     return share
 
 
+def custody_books(rt: Any) -> dict[str, int]:
+    """The pot's own books: ``claimed + unattributed == booked``, always.
+
+    ``booked`` is every settlement the pot ledgered (``venue.settled`` with ``custody =
+    "polymarket"``: fills net of fees, and resolutions), ``claimed`` what the owners'
+    claims hold of it (``claim_share``), and ``unattributed`` what no return owns: a
+    resolution several decisions shared, a quarantined fill, a claim a retired seat
+    could not take. Like ``BudgetBook.venue_unattributed``, beside it and never in it.
+    """
+    surface = rt.polymarket
+    claimed = sum(surface.claims.values())
+    return {"booked_micro": surface.booked, "claimed_micro": claimed,
+            "unattributed_micro": surface.booked - claimed}
+
+
 def _tell(rt: Any, handle: str | None, outcome: dict[str, Any]) -> None:
     """A fact the venue produced is its decision's news; the money moves on the payoff."""
     if handle is None:
@@ -1479,7 +1706,7 @@ def custody(rt: Any) -> dict[str, Any] | None:
     if surface is None or not surface.writes:
         return None
     try:
-        account = sanitized(surface.account())
+        account = sanitized(surface.account(rt))
     except Exception as exc:  # noqa: BLE001 - an unreadable pot is unavailable, not zero
         return unavailable(f"polymarket pot read failed: {type(exc).__name__}")
     return observed(account["observed_at_ns"], network="polygon",
@@ -1504,10 +1731,16 @@ def pots_view(rt: Any) -> dict[str, Any]:
         {"token_id": p["token_id"], "market_id": p["market_id"], "outcome": p["outcome"],
          "size": p["size"],
          "cost_micro": usd_to_micro(Decimal(p["size"]) * Decimal(p["avg_px"]),
-                                    rounding="floor")}
+                                    rounding="floor"),
+         # A resolved token not yet redeemed is worth its payout, what it redeems for.
+         **({"payout": p["payout"],
+             "value_micro": usd_to_micro(Decimal(p["size"]) * Decimal(p["payout"]),
+                                         rounding="floor")}
+            if p.get("payout") is not None else {})}
         for p in account["positions"]]
     usdc = usd_to_micro(account["usdc"], rounding="floor") if observed else None
-    value = None if usdc is None else usdc + sum(t["cost_micro"] for t in tokens)
+    value = None if usdc is None else usdc + sum(t.get("value_micro", t["cost_micro"])
+                                                 for t in tokens)
     pots["polymarket"] = value
     pots["polymarket_usdc"] = usdc
     pots["polymarket_tokens"] = tokens
@@ -1534,15 +1767,23 @@ def wind_down(rt: Any) -> dict[str, Any]:
     surface = rt.polymarket
     report: dict[str, Any] = {"cancelled": 0, "residual": []}
     try:
-        for order in surface.account()["open_orders"]:
+        for order in surface.account(rt)["open_orders"]:
             client_id = f"kill:{order['order_id']}"
             rt.ledger.append({"kind": "polymarket.wind_down", "op": "cancel",
                               "client_id": client_id, "order_id": order["order_id"]})
+            # The kernel's own cancellation is an intent like any other, durable above,
+            # before the live venue will sign it (``LivePolymarket.intent_of``).
+            if surface.live:
+                surface.intents.setdefault(client_id, {
+                    "handle": "kill", "client_id": client_id, "operation": "polymarket.cancel",
+                    "args": {"order_id": order["order_id"]}, "result": {"status": "uncertain"}})
             result = surface.venue.cancel(client_id=client_id, order_id=order["order_id"])
+            if client_id in surface.intents:
+                surface.intents[client_id]["result"] = dict(result)
             rt.ledger.append({"kind": "polymarket.wind_down_result", "client_id": client_id,
                               "result": result})
             report["cancelled"] += result.get("status") == "cancelled"
-        still = sanitized(surface.account())
+        still = sanitized(surface.account(rt))
         report["residual"] = [{key: p[key] for key in ("token_id", "market_id", "outcome",
                                                        "size", "avg_px")}
                               for p in still["positions"]]
