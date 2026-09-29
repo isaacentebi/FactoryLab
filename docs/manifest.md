@@ -2005,7 +2005,11 @@ account's equity sums every clearinghouse read. USDC reaches a HIP-3 dex only th
 the venue (the account's DEX abstraction, which the operator sets, or a transfer the
 world does not sign); an order the dex cannot margin is the venue's refusal. Leverage
 above a market's `max_leverage` is refused before it is signed. A cancel naming no coin
-is sent on the order's own market, as the venue's open orders state it.
+is sent on the order's own market, as the venue's open orders state it. Each named dex's
+mids and rates reads keep their own delivered-through watermark (`hl:mids:<dex>`,
+`hl:rates:<dex>`, from `dex_answers`): a dex that did not answer holds back the
+consequences on its own markets, never another dex's, and a partial read never
+advances them.
 
 **Not selected.** HIP-4 outcome markets (`#<10 x outcome + side>` coins, `outcomeMeta`)
 and spot pairs quoted in another token (USDH, USDT0, USDE) are not markets of a world:

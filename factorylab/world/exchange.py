@@ -1548,10 +1548,26 @@ class HyperliquidExchange:
         self._last_mids = mids
         return dict(mids)
 
+    def dex_answers(self) -> dict[str, list[str]]:
+        """Which named HIP-3 dexes answered the last ``mids`` and ``funding`` read.
+
+        Guarantees ``{"mids": [...], "rates": [...]}``, each the dexes whose read of that
+        kind answered with a well-formed response the last time it was made, in named
+        order: a dex absent here stated nothing that read, so its markets' watermarks
+        stay where they were (``LiveVenue``; Chapter II §III.b). Journaled as a read.
+        """
+        answered = self.__dict__.get("_dex_answered") or {}
+        return {kind: list(answered.get(kind, ())) for kind in ("mids", "rates")}
+
+    def _answered(self, kind: str, dexes: list[str]) -> None:
+        self.__dict__.setdefault("_dex_answered", {})[kind] = tuple(dexes)
+
     def _dex_mids(self) -> dict:
         """Every named HIP-3 dex's mids, one ``allMids`` read a dex; a dex whose read
-        failed contributes nothing (its markets are unpriced by this read)."""
+        failed contributes nothing (its markets are unpriced by this read) and is not
+        among the dexes that answered (``dex_answers``)."""
         out: dict = {}
+        answered: list[str] = []
         for dex in getattr(self, "dexes", ()):
             try:
                 answer = self._guarded("all_mids", lambda dex=dex: self._info.all_mids(dex))
@@ -1559,6 +1575,7 @@ class HyperliquidExchange:
                 continue
             if not isinstance(answer, dict):
                 continue
+            answered.append(dex)
             for name, value in answer.items():
                 # One halted or malformed HIP-3 price is that market's absence, never
                 # the whole read's: a dex's listing changes under its deployer.
@@ -1569,6 +1586,7 @@ class HyperliquidExchange:
                 if (isinstance(name, str) and name.startswith(f"{dex}:")
                         and price.is_finite() and price > 0):
                     out[name] = value
+        self._answered("mids", answered)
         return out
 
     def _dex_contexts(self, dex: str) -> Any:
@@ -1595,6 +1613,7 @@ class HyperliquidExchange:
         pairs = list(zip(meta["universe"], ctxs, strict=False))
         # One read per named HIP-3 dex, bounded by the dexes, never by the markets. A
         # dex that did not answer, or answered malformed, states no rate this read.
+        answered: list[str] = []
         for dex in getattr(self, "dexes", ()):
             try:
                 answer = self._dex_contexts(dex)
@@ -1602,6 +1621,8 @@ class HyperliquidExchange:
                 pairs.extend(zip(dex_meta["universe"], dex_ctxs, strict=False))
             except (VenueUnavailable, TypeError, ValueError, KeyError):
                 continue
+            answered.append(dex)
+        self._answered("rates", answered)
         now_ns = time.time_ns()
         out: list[FundingEvent] = []
         for asset, ctx in pairs:

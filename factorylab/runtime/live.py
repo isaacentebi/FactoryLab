@@ -382,6 +382,20 @@ class LiveVenue:
                            {"coin": p.coin, "rate": str(p.rate), "paid_usd": str(p.paid_usd),
                             "payment_id": p.id, "observed_at_ns": now_ns}) for p in payments]
 
+    def _through_dexes(self, kind: str, now_ns: int) -> None:
+        """Advance ``<kind>:<dex>`` for each HIP-3 dex that answered this read, and no
+        other: a dex that did not answer holds back its own markets' consequences
+        (``lots.instrument_streams``), never another dex's (Chapter II §III.b)."""
+        answers = getattr(self.exchange, "dex_answers", None)
+        if answers is None:
+            return
+        try:
+            answered = answers().get(kind) or ()
+        except Exception:  # noqa: BLE001 - an unreadable answer set advances nothing
+            return
+        for dex in answered:
+            self.through[f"{kind}:{dex}"] = now_ns
+
     def _broadcast(self) -> frozenset[str] | None:
         """Return this tick's trading markets, or None when nothing bounds the broadcast."""
         if self.markets is None:
@@ -473,6 +487,7 @@ class LiveVenue:
         try:
             mids = self.exchange.mids()
             self.through["mids"] = now_ns
+            self._through_dexes("mids", now_ns)
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             mids = {}
         for coin, mid in mids.items():
@@ -493,6 +508,7 @@ class LiveVenue:
         try:
             funding = self.exchange.funding()
             self.through["rates"] = now_ns
+            self._through_dexes("rates", now_ns)
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             # VenueUnavailable is a RuntimeError: an unanswered funding read emits no
             # funding event this tick, which is true, and says nothing about rates.

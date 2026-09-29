@@ -475,3 +475,33 @@ def test_a_price_cross_on_a_hip3_coin_fires_through_the_real_observation_path():
         fired.append([row["fired"] for row in rt.ledger.items()
                       if row.get("kind") == "watcher.evaluated"][-1])
     assert fired == [False, True]
+
+
+def test_a_dex_whose_funding_read_failed_holds_its_own_watermark_back(venue):
+    """Codex P1 on #178: a HIP-3 dex's failed rate read left a partial answer that
+    advanced the shared rates watermark, so a named trade on that dex could settle
+    without its funding evidence. Each dex keeps its own watermark: one dex down holds
+    its own markets back, never the others."""
+    from types import SimpleNamespace
+
+    from factorylab.runtime.live import LiveVenue
+    from factorylab.runtime.venue import VenueMixin
+    from factorylab.settlement.lots import instrument_streams
+
+    assert instrument_streams("xyz:TSLA", "perp", acting=False) == (
+        "hl:mids:xyz", "hl:rates:xyz")
+    assert instrument_streams("BTC", "perp", acting=False) == ("hl:mids", "hl:rates")
+    ex = venue()
+    tick = LiveVenue(ex, markets=lambda: ("BTC", "xyz:TSLA"), bounded=True)
+    hour = 3_600 * 10**9
+    tick.on_tick(hour)
+    ex._info.fail.add(("metaAndAssetCtxs", "xyz"))
+    tick.on_tick(2 * hour)
+    world = SimpleNamespace(venue=tick, consequence_fills=None)
+    through = lambda *streams: VenueMixin._stream_through(world, streams)  # noqa: E731
+    assert through("rates") == 2 * hour - 1
+    assert through("rates:xyz") == hour - 1  # held back at the last answered read
+    assert through("mids:xyz") == 2 * hour - 1
+    ex._info.fail.clear()
+    tick.on_tick(3 * hour)
+    assert through("rates:xyz") == 3 * hour - 1

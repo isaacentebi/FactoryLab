@@ -26748,7 +26748,7 @@
     "factorylab/settlement/vocabulary.py": "2805fe20978480c467e7eebb3ea2b758c711654e83a618d8678475c6c5eab4a8",
     "factorylab/world/connector.py": "226ee503dcae74737ca857082d5341972e7397281ed2730a754483a6247999a8",
     "factorylab/world/evm.py": "2ba9bba6877e3bd40d7cf487f7feda5526ec6c565b54c3b284b64fbfa8b10360",
-    "factorylab/world/exchange.py": "b39ef4403df3359d624c5ba3ea3c5e9a025a338b4ca5b0b45c8cf8c44558b82e",
+    "factorylab/world/exchange.py": "4f39329bf48eed71fe1ef6b3acd474a8dcf0fad504a63b03987578886d74a9f1",
     "factorylab/world/tape.py": "c9fbb5dd281c10f646187d37a9453082ff8c133a307aa7f1020e21d3f1d84054",
     "factorylab/world/treasury.py": "68e172bc767a6fef31ddd9e8404fd3486444838867abfe65f589ca0dbb68dcf4",
     "factorylab/world/treasury_rails.py": "3bf9d4ca6b608029666bae14a9f003ed25ad113abce3bb51762e7c5bfc897a4a",

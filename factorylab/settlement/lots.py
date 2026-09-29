@@ -170,7 +170,9 @@ VENUE_FEE_MARKETS = ("perp", "spot")
 #: funding payments (its funding-rate prints are ``hl:rates``, which only named trades
 #: read); Polymarket's events (its fills, cancels and resolutions, one feed) and each
 #: token's book (``pm:book:<instrument>``, its marks). Vault writes open no lot, so no
-#: consequence reads a vault stream.
+#: consequence reads a vault stream. A builder-deployed (HIP-3) dex answers its own mids
+#: and rates reads, so its perps read ``hl:mids:<dex>`` and ``hl:rates:<dex>``: one dex
+#: that did not answer holds back its own markets, never another dex's.
 FACT_STREAMS = ("hl:mids", "hl:rates", "hl:fills", "hl:funding", "pm:events", "pm:book")
 
 
@@ -202,7 +204,9 @@ def instrument_streams(coin: str, market: str, *, acting: bool = True) -> tuple[
         return (f"pm:book:{coin}", "pm:events") if acting else (f"pm:book:{coin}",)
     if market == "spot":
         return ("hl:mids", "hl:fills") if acting else ("hl:mids",)
-    return ("hl:mids", "hl:fills", "hl:funding") if acting else ("hl:mids", "hl:rates")
+    dex = f":{coin.split(':', 1)[0]}" if ":" in coin else ""
+    return ((f"hl:mids{dex}", "hl:fills", "hl:funding") if acting
+            else (f"hl:mids{dex}", f"hl:rates{dex}"))
 
 
 def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, str | None]:
