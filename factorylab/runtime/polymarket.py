@@ -1085,7 +1085,8 @@ def taker_fee(market: dict, size: Decimal, price: Decimal) -> Decimal:
 
 def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
             tool_id: str, args: dict, *, committed: Decimal = Decimal(0),
-            window_count: int | None = None) -> str | None:
+            window_count: int | None = None,
+            selling: Decimal = Decimal(0)) -> str | None:
     """Why this write would be refused before any intent, or None.
 
     Guarantees new exposure is weighed against the polymarket pot alone: a buy
@@ -1160,9 +1161,10 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     else:
         held = next((Decimal(p["available"]) for p in account["positions"]
                      if p["token_id"] == args["token_id"]), Decimal(0))
-        if size > held:
+        # ``selling``: what earlier sells of the same batch offer of the token.
+        if size + selling > held:
             return "sell exceeds the tokens the polymarket pot holds"
-        if surface.live and size > acquired(surface, account, args["token_id"]):
+        if surface.live and size + selling > acquired(surface, account, args["token_id"]):
             return ACQUIRED_REFUSAL
     return None
 
@@ -1182,10 +1184,41 @@ def acquired(surface: PolymarketSurface, account: dict, token_id: str) -> Decima
     """
     book = surface.cursor.get("book", {}).get(str(token_id))
     held = Decimal(book[0]) if book else Decimal(0)
-    offered = sum((Decimal(o["remaining"]) for o in account["open_orders"]
-                   if o["side"] == "sell" and o["token_id"] == str(token_id)
-                   and o["order_id"] in surface.order_ids), Decimal(0))
-    return held - offered
+    own = _own_hashes(surface)
+    listed = sum((Decimal(o["remaining"]) for o in account["open_orders"]
+                  if o["side"] == "sell" and o["token_id"] == str(token_id)
+                  and o["order_id"] in own), Decimal(0))
+    # The world's own records bound the listing from below (Sol P2 on #177): a sell
+    # the venue does not list yet (answer lost, listing lagging) still offers its tokens.
+    return held - max(listed, _local_sells(surface, str(token_id)))
+
+
+def _local_sells(surface: PolymarketSurface, token_id: str) -> Decimal:
+    """What this world's sell placements on ``token_id`` may still take from what it
+    holds: each one not rejected, on what it may still fill or has matched and not yet
+    booked (its size while it rests or is unanswered; once terminal its matched size less
+    its failed legs)."""
+    cancelled = _cancelled(surface)
+    failed = surface.cursor.get("failed", {})
+    total = Decimal(0)
+    for intent in surface.intents.values():
+        args = intent["args"]
+        if (intent["operation"] != "polymarket.place_limit" or args.get("side") != "sell"
+                or str(args.get("token_id")) != token_id):
+            continue
+        result = intent["result"]
+        if result.get("status") == "rejected" or intent.get("terminal"):
+            continue
+        order_id = str(intent.get("order_hash") or result.get("order_id"))
+        if cancelled.get(order_id) is not None:
+            quantity = cancelled[order_id] - Decimal(str(failed.get(order_id, "0")))
+        elif result.get("status") in ("filled", "cancelled"):
+            quantity = Decimal(str(result.get("filled_size") or "0")) - Decimal(
+                str(failed.get(order_id, "0")))
+        else:
+            quantity = Decimal(str(args["size"]))
+        total += max(Decimal(0), quantity - Decimal(surface.filled.get(order_id, "0")))
+    return total
 
 
 PRINCIPAL_REFUSAL = "the polymarket pot holds more principal than [polymarket] principal_usd"
@@ -1360,6 +1393,7 @@ def batch_refusal(rt: Any, seat: str, handle: str,
     """
     surface = rt.polymarket
     committed, placed = Decimal(0), set()
+    selling: dict[str, Decimal] = {}
     window, count = surface.window_orders
     count = count if window == rt.window.index else 0
     for index, (slot, tool_id, args) in enumerate(writes):
@@ -1371,12 +1405,16 @@ def batch_refusal(rt: Any, seat: str, handle: str,
             if key in placed:
                 return index, "the same order is placed twice in one batch"
             placed.add(key)
+        token = str(args.get("token_id"))
         reason = refusal(rt, surface, seat, handle, tool_id, args, committed=committed,
-                         window_count=count)
+                         window_count=count, selling=selling.get(token, Decimal(0)))
         if reason:
             return index, reason
         if tool_id == "polymarket.place_limit":
             count += 1
+            if args.get("side") == "sell":
+                # The tokens earlier sells of the batch offer (Sol P2 on #177).
+                selling[token] = selling.get(token, Decimal(0)) + Decimal(str(args["size"]))
             if args.get("side") == "buy":
                 size, price = Decimal(str(args["size"])), Decimal(str(args["price"]))
                 market = _write_market(rt, surface, args["token_id"]) or {}

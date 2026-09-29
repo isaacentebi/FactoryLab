@@ -347,7 +347,8 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "listing and that inventory; the positions listing is read to its end or the "
                 "pot is unavailable; no buy is taken while the pot's last reconciliation found "
                 "money gone that its books do not explain. A sell fits the tokens this world's "
-                "confirmed fills acquired, less its resting sells, never tokens the wallet held"
+                "confirmed fills acquired, less its sells not yet booked, listed or "
+                "not, never tokens the wallet held"
                 " otherwise. The pot's own requests (orders, cancels, lookups, fills, account, "
                 "marks and a write's market read) are at most order_requests_per_10s in any "
                 "sliding 10 s of wall time; one past it is not sent and reads as unavailable.",
@@ -364,7 +365,8 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "and batch commitments fits this pot's available USDC. A sell fits "
                 "this pot's available tokens, never another custodian's assets.",
                 "batch": "Duplicate placements are refused. Earlier buys reserve notional "
-                "and possible taker fees, and earlier orders count toward the window "
+                "and possible taker fees, earlier sells reserve their tokens, and "
+                "earlier orders count toward the window "
                 "cap. Existing intents are retries; client identities cannot change "
                 "operation or arguments.",
             },

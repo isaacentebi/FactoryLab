@@ -54,6 +54,7 @@ class FakeClob:
         self.fail_lookups = 0  # order lookups that fail before one answers
         self.fail_balance = 0  # balance reads that fail before one answers
         self.lose_cancel_answer = False  # the next DELETE /order executes, its answer lost
+        self.orders_lag = False  # /data/orders does not list resting orders yet
         self.page_size: int | None = None  # rows a /data/trades page carries; None: all
 
     # ---- the transport
@@ -94,7 +95,8 @@ class FakeClob:
             return self._order(path.rsplit("/", 1)[1])
         if path == "/data/orders":
             return {"data": [self._order(h) for h, o in self.orders.items()
-                             if o["pm"] in self.fake._orders], "next_cursor": clob.END_CURSOR}
+                             if o["pm"] in self.fake._orders and not self.orders_lag],
+                    "next_cursor": clob.END_CURSOR}
         if path == "/data/trades":
             rows = [t for t in self.trades + self.extra_fills
                     if int(t["match_time"]) > int(query.get("after", "0"))]

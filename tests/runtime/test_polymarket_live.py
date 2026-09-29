@@ -892,3 +892,35 @@ def test_a_failed_trade_releases_its_matched_quantity_once_the_order_is_terminal
     assert polymarket.local_commitments(rt.polymarket)[0] == 0
     assert buy(rt, server, collateral_decision(rt), price="0.45")["status"] in (
         "filled", "resting")
+
+
+def _owns_ten(rt, server):
+    buy(rt, server, collateral_decision(rt), price="0.45", slot="tool:9")  # 10, confirmed
+    polymarket.tick(rt)
+
+
+def test_a_batch_of_sells_is_weighed_against_the_tokens_together():
+    """Sol P2 on #177: two sells of 10 against 10 owned tokens each passed alone, so the
+    batch was admitted whole and the venue could leave one leg standing."""
+    rt, server = live_world()
+    _owns_ten(rt, server)
+    handle = collateral_decision(rt)
+    sell = {"token_id": token(server), "side": "sell", "size": "10"}
+    refused = polymarket.batch_refusal(rt, "seed-decider", handle, [
+        ("tool:0", "polymarket.place_limit", {**sell, "price": "0.50"}),
+        ("tool:1", "polymarket.place_limit", {**sell, "price": "0.51"})])
+    assert refused is not None and refused[0] == 1
+
+
+def test_a_sell_counts_the_world_s_sells_the_venue_does_not_list_yet():
+    """Sol P2 on #177: a sell whose answer was lost is not among the world's listed
+    orders; a second sell of the same tokens was admitted against them."""
+    rt, server = live_world()
+    _owns_ten(rt, server)
+    server.lose_answer = True
+    server.fail_lookups = 10**6
+    buy(rt, server, collateral_decision(rt), side="sell", price="0.50")
+    server.orders_lag = True  # nor does the venue list it yet
+    rt.polymarket._account_memo = None
+    second = buy(rt, server, collateral_decision(rt), side="sell", price="0.51")
+    assert second["status"] == "rejected" and second["error"] == polymarket.ACQUIRED_REFUSAL

@@ -2705,7 +2705,8 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   an order or a cancel the venue has not answered for reports `unknown`, never `flat`; its report counts only the world's orders and tokens, and
   `polymarket.open_orders` lists only the world's orders.
 * **Only what the world acquired is sold.** A sell fits the tokens this world's
-  confirmed fills hold, less its resting sells ("sell exceeds the tokens this world's
+  confirmed fills hold, less its sells not yet booked, whether the venue lists them yet
+  or not, and less what earlier sells of the same batch offer ("sell exceeds the tokens this world's
   confirmed fills acquired"): a token the wallet held otherwise has no cost on the
   pot's books and is the funder's, outside the world.
 * **Custody.** `claimed + unattributed == booked` on the pot's own books
