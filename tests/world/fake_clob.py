@@ -66,6 +66,7 @@ class FakeClob:
         self.page_size: int | None = None  # rows a /data/trades page carries; None: all
         self.order_answer = None  # rewrites each order row it answers (a field omitted, say)
         self.position_row = None  # rewrites each /positions row
+        self.post_answer = None  # rewrites the answer to an executed POST /order
 
     # ---- the transport
 
@@ -88,6 +89,8 @@ class FakeClob:
         self._check_l2(method, path, headers, body or "")
         if path == "/order" and method == "POST":
             answer = self._post(json.loads(body))
+            if self.post_answer is not None:
+                answer = self.post_answer(answer)
             if self.lose_answer:
                 self.lose_answer = False
                 raise clob.PolymarketUnavailable("transport: TimeoutError")

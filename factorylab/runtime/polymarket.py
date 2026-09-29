@@ -1184,44 +1184,20 @@ def held_at_cost(account: dict) -> Decimal:
 
 
 def principal_at_risk(surface: PolymarketSurface) -> Decimal:
-    """The principal the world has put at risk, from its own durable records alone.
+    """The principal the world has committed, from its own durable intents alone.
 
-    Architect's decision on Sol's third review of #177: every buy that may have
-    executed or may still execute (a placement not rejected: its size while it may
-    still fill; once proven over, what it matched less its failed legs), at its limit
-    price. Every order is post-only on every venue kind, so no fee enters it; a trade
-    that says otherwise halts buying (``MAKER_ONLY_REFUSAL``). It is the world's
-    lifetime outlay: no resolution, payout or redemption gives room back (architect's
-    decision on Sol's round-4 review), so once the cap is used, buying stops for the
-    world's life. No wallet balance and no listing enters it, so no one's deposit,
-    withdrawal or omission makes room.
+    Architect's decision on Sol's round-6 review of #177: the cap bounds lifetime signed
+    commitments, ``size x limit`` of every placement the world ever signed, forever.
+    Nothing gives room back: no cancel, terminal read-back, matched size, failed leg,
+    quarantine or resolution, and no venue response field is trusted for it. The one
+    exception is a submission the venue refused outright (``venue_refused``: an explicit
+    4xx error body answering the POST, or the simulated venue's rejection): that order
+    never existed. A timeout, a 5xx or a malformed answer counts in full.
     """
-    cancelled, failed = _cancelled(surface), surface.cursor.get("failed", {})
-    finished = set(surface.cursor.get("terminal", ()))
-    total = Decimal(0)
-    for intent in surface.intents.values():
-        if intent["operation"] != "polymarket.place_limit":
-            continue
-        result, args = intent["result"], intent["args"]
-        order_id = str(intent.get("order_hash") or result.get("order_id"))
-        # Never below what was booked from CONFIRMED trades, whatever any read-back
-        # says (Sol P1, round 5, on #177).
-        booked = Decimal(surface.filled.get(order_id, "0"))
-        size = Decimal(str(args["size"]))
-        if result.get("status") == "rejected" or intent.get("terminal"):
-            quantity = Decimal(0)
-        elif order_id in finished:
-            quantity = booked
-        elif not _terminal(surface, intent):
-            quantity = size
-        else:
-            # A terminal order's matched quantity is the venue's statement or unknown,
-            # never 0: unknown counts its whole size.
-            matched = _matched(surface, intent, cancelled)
-            quantity = size if matched is None else matched - Decimal(str(
-                failed.get(order_id, "0")))
-        total += max(booked, quantity, Decimal(0)) * Decimal(str(args["price"]))
-    return total
+    return sum((Decimal(str(intent["args"]["size"])) * Decimal(str(intent["args"]["price"]))
+                for intent in surface.intents.values()
+                if intent["operation"] == "polymarket.place_limit"
+                and not intent["result"].get("venue_refused")), Decimal(0))
 
 
 #: The pot does not agree with its custodian: money left it that its books do not explain.
@@ -1538,8 +1514,8 @@ def tick(rt: Any) -> None:
             rt.ledger.append({"kind": "polymarket.poll_unavailable",
                               "reason": type(exc).__name__, "ts": rt.clock.now_ns})
         else:
+            _halt_on_contradiction(rt, surface, answer.get("contradictions") or {})
             surface.cursor = answer["cursor"]
-            _halt_on_contradiction(rt, surface)
             settle(rt, answer["events"])
             if answer.get("complete"):
                 # Every fill the venue confirmed through the cursor was handed over.
@@ -1553,12 +1529,14 @@ def tick(rt: Any) -> None:
     reconcile(rt)
 
 
-def _halt_on_contradiction(rt: Any, surface: PolymarketSurface) -> None:
+def _halt_on_contradiction(rt: Any, surface: PolymarketSurface,
+                           found: dict[str, str]) -> None:
     """Halt buying for the world's life on any trade leg the poll found contradicting the
     post-only venue (a taker role, a fee), at any settlement status and on any sighting
-    (Sol P1, round 5, on #177). The legs are kept in the checkpointed cursor and the halt
-    in ``contradicted``; it is ledgered once, as drift, never as a booked fee."""
-    found = surface.cursor.get("contradictions") or {}
+    (Sol P1, round 5, on #177), found in the raw rows before any is parsed and kept
+    apart from the poll's cursor, so a read that failed cannot erase it (round 6). The
+    halt is ``contradicted``, checkpointed; it is ledgered once, as drift, never as a
+    booked fee."""
     if found and not surface.contradicted:
         surface.contradicted = True
         rt.ledger.append({"kind": "polymarket.drift",
@@ -1943,13 +1921,6 @@ def _settle_fill(rt: Any, event: dict) -> None:
         owner_handle = None
     else:
         surface.filled[order_id] = str(booked)
-    if event.get("contradiction"):
-        # A leg that contradicts the maker-only venue (a taker, a fee): it is drift the
-        # books cannot explain, never a guessed fee, and it stops buying for the world's
-        # life (architect's decision on Sol's round-4 review of #177).
-        surface.contradicted = True
-        rt.ledger.append({"kind": "polymarket.drift", "reason": event["contradiction"],
-                          "order_id": order_id, "ts": rt.clock.now_ns})
     try:
         rt.consequences.observe("Fill", payload, rt.n)
     except ValueError as exc:

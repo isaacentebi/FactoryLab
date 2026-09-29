@@ -318,7 +318,7 @@ def test_fake_refuses_off_tick_prices_small_orders_and_any_sale():
         assert answer["status"] == "rejected"
 
 
-def test_fake_resolution_cancels_resting_orders_and_redeems_the_pot():
+def test_fake_resolution_cancels_resting_orders_and_keeps_the_tokens_resolved():
     fake = venue(resolutions={"fake-1": (5, 1)})
     yes_token, no_token = (o["token_id"] for o in fake.market("fake-1")["outcomes"])
     fake._markets["fake-1"]["mid"] = Decimal("0.41")  # "a" rests one tick under the ask
@@ -335,7 +335,11 @@ def test_fake_resolution_cancels_resting_orders_and_redeems_the_pot():
     [resolution] = [e for e in events if e["kind"] == "resolution"]
     assert resolution["token_id"] == yes_token and resolution["payout"] == "0"
     assert Decimal(resolution["realized_usd"]) == Decimal("-4.1")
-    assert fake.account()["positions"] == [] and fake.account()["open_orders"] == []
+    # The resolved tokens stay in custody at their payout; nothing is redeemed.
+    account = fake.account()
+    assert account["open_orders"] == [] and Decimal(account["usdc"]) == Decimal("95.9")
+    assert [(p["token_id"], p["size"], p["payout"]) for p in account["positions"]] == [
+        (yes_token, "10", "0")]
     assert fake.market("fake-1")["closed"] is True
     late = fake.place(client_id="late", token_id=yes_token, is_buy=True, size=Decimal(10),
                       price=Decimal("0.50"))

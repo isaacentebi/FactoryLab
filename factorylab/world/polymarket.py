@@ -527,9 +527,10 @@ class FakePolymarket:
     other rests and fills at its own price once the moving mid crosses it. A resting
     buy holds ``price * size`` USDC. A maker pays no fee, so no fill here is charged
     one.
-    At a scripted resolution every resting order on the market is cancelled and
-    every token redeems into the pot: 1 USDC a winning token, 0 a losing one,
-    0.5 each on a 50-50 answer. Client ids are idempotent: repeating one returns
+    At a scripted resolution every resting order on the market is cancelled and every
+    token held stays in the pot, resolved, worth its payout: 1 USDC a winning token, 0
+    a losing one, 0.5 each on a 50-50 answer. As on the live venue, nothing redeems it
+    into spendable USDC. Client ids are idempotent: repeating one returns
     the first answer and never trades twice.
     """
 
@@ -696,7 +697,8 @@ class FakePolymarket:
                  "outcome_name": self._markets[self._tokens[token][0]]["outcomes"][
                      self._tokens[token][1]],
                  "size": str(p["size"]), "avg_px": str(p["avg_px"]),
-                 "available": str(p["size"])}
+                 "available": str(p["size"]),
+                 **({"payout": str(p["payout"])} if "payout" in p else {})}
                 for token, p in sorted(self._positions.items()) if p["size"] > 0],
             "open_orders": [self._order_view(o) for o in self._orders.values()],
             "observed_at_ns": self._now_ns,
@@ -742,8 +744,10 @@ class FakePolymarket:
             return self.lookup(client_id)
 
         def reject(reason: str) -> dict[str, Any]:
+            # The venue's refusal of the submission, as the live venue's explicit 4xx:
+            # the order never existed.
             result = {"order_id": None, "status": "rejected", "filled_size": "0",
-                      "avg_px": None, "error": reason}
+                      "avg_px": None, "error": reason, "venue_refused": True}
             self._client_results[client_id] = result
             return dict(result)
 
@@ -866,8 +870,10 @@ class FakePolymarket:
                 continue
             size = position["size"]
             realized = (payout - position["avg_px"]) * size
-            self._cash += payout * size
-            position["size"] = Decimal(0)
+            # The payout stays in custody as resolved tokens, worth their payout, as on
+            # the live venue: nothing redeems them into spendable cash (Sol P2, round 6,
+            # on #177).
+            position["payout"] = payout
             self._events.append({
                 "kind": "resolution", "market_id": market["market_id"],
                 "condition_id": market["condition_id"], "token_id": token,

@@ -1113,15 +1113,19 @@ def test_a_read_back_missing_or_contradicting_its_matched_size_is_unknown():
     assert (read["status"], read["filled_size"]) == ("cancelled", "5")
 
 
-def test_lifetime_outlay_never_falls_below_what_was_booked():
-    """Whatever a terminal read-back says, the outlay counts every booked execution."""
+def test_the_cap_is_every_signed_commitment_but_an_outright_refusal():
+    """Whatever became of a placement, its size x limit stays committed; only the
+    venue's outright refusal of the submission frees it."""
     placed = {"operation": "polymarket.place_limit", "order_hash": "0x1",
               "args": {"side": "buy", "size": "10", "price": "0.30"},
-              "result": {"status": "cancelled", "filled_size": "2"}}
-    surface = SimpleNamespace(intents={"c": placed}, cursor={}, filled={"0x1": "5"})
-    assert polymarket.principal_at_risk(surface) == Decimal("1.5")
-    placed["result"] = {"status": "cancelled"}  # it did not say what matched: unknown
-    assert polymarket.principal_at_risk(surface) == Decimal(3)
+              "result": {"status": "cancelled", "filled_size": "0"}}
+    surface = SimpleNamespace(intents={"c": placed}, cursor={}, filled={})
+    for result in ({"status": "cancelled", "filled_size": "0"}, {"status": "cancelled"},
+                   {"status": "rejected"}, {"status": "uncertain"}):
+        placed["result"] = result
+        assert polymarket.principal_at_risk(surface) == Decimal(3)
+    placed["result"] = {"status": "rejected", "venue_refused": True}
+    assert polymarket.principal_at_risk(surface) == 0
 
 
 @pytest.mark.parametrize("status", ["MATCHED", "MINED", "CONFIRMED", "FAILED"])
@@ -1184,7 +1188,6 @@ def test_a_leg_that_fails_after_the_cancel_is_never_confirmed_executed():
         polymarket.tick(rt)
     (order,) = rt.consequences.table.orders
     assert (order.remaining, order.executed, order.confirmed) == (0, 0, 0)
-    assert polymarket.principal_at_risk(rt.polymarket) == 0
 
 
 def test_a_fully_filled_order_stops_pulling_the_fill_read_back():
@@ -1233,3 +1236,68 @@ def test_a_venue_row_missing_a_quantity_is_unread_never_zero():
     refused = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
                   price="0.20")
     assert refused["error"].startswith("polymarket pot unavailable")
+
+
+def test_the_cap_counts_every_signed_placement_whatever_became_of_it():
+    """Architect's decision on Sol's round-6 review of #177: the cap bounds lifetime
+    signed commitments, size x limit of every placement, forever. No cancel, read-back,
+    matched size, failed leg, quarantine or resolution gives room back."""
+    rt, server = live_world(principal="5")
+    handle = collateral_decision(rt)
+    order_id = buy(rt, server, handle)["order_id"]  # 10 at 0.30: 3 signed
+    cancel = rt._run_tool("seed-decider", handle, {
+        "tool": "polymarket.cancel", "args": {"order_id": order_id}}, slot="tool:1")[0]
+    assert (cancel["status"], cancel["filled_size"]) == ("cancelled", "0")
+    for _ in range(2):
+        polymarket.tick(rt)
+    assert polymarket.principal_at_risk(rt.polymarket) == Decimal(3)
+    again = buy(rt, server, collateral_decision(rt), slot="tool:2", market="fake-2")
+    assert again["error"] == polymarket.PRINCIPAL_REFUSAL
+
+
+def test_only_an_explicit_venue_refusal_of_the_submission_frees_its_commitment():
+    """A POST the venue answers with an explicit 4xx error body never became an order;
+    a malformed acknowledgement, or a 4xx with no body, proves nothing: the order is
+    uncertain, counted whole, and stays a cancellation target (Sol P1, round 6)."""
+    rt, server = live_world(principal="10")
+    crossing = buy(rt, server, collateral_decision(rt), price="0.45")  # the ask is 0.41
+    assert crossing["status"] == "rejected"
+    assert polymarket.principal_at_risk(rt.polymarket) == 0
+    server.post_answer = lambda answer: {k: v for k, v in answer.items() if k != "success"}
+    unsure = buy(rt, server, collateral_decision(rt), slot="tool:1")
+    assert unsure["status"] != "rejected"
+    server.post_answer = None
+    (placed,) = [i for i in rt.polymarket.intents.values()
+                 if i["operation"] == "polymarket.place_limit" and i["args"]["price"] == "0.30"]
+    assert placed["order_hash"] in polymarket._live_targets(rt.polymarket)
+    assert polymarket.principal_at_risk(rt.polymarket) == Decimal(3)
+    def refuse_bare():
+        raise clob.ClobHttpError(400)  # a 4xx whose body states nothing
+
+    server.on_post = refuse_bare
+    bare = buy(rt, server, collateral_decision(rt), slot="tool:2", market="fake-2",
+               price="0.20")
+    assert bare["status"] != "rejected"
+    assert polymarket.principal_at_risk(rt.polymarket) == Decimal(5)
+
+
+def test_a_malformed_row_never_discards_a_contradiction_found_beside_it():
+    """Sol P1 (round 6) on #177: a fee on one leg of this world's is found before any
+    row is parsed, and kept outside the poll's transactional cursor, so a malformed leg
+    in the same read, which leaves the read unread, cannot erase the halt."""
+    rt, server = live_world()
+    order_id = buy(rt, server, collateral_decision(rt))["order_id"]
+    row = _partial(rt, server, order_id)
+    row["maker_orders"][0]["fee_rate_bps"] = "500"
+    server.trades.append({"id": "t-bad", "status": "FAILED",
+                          "match_time": signed_s(rt, order_id), "taker_order_id": "0xo",
+                          "size": "1", "price": "0.30", "maker_orders": [
+                              {"order_id": order_id, "matched_amount": "garbage",
+                               "price": "0.30", "side": "BUY"}]})
+    for _ in range(2):
+        polymarket.tick(rt)
+    assert order_id not in rt.polymarket.filled  # the read is unread: nothing booked
+    assert rt.polymarket.contradicted
+    refused = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+                  price="0.20")
+    assert refused["error"] == polymarket.MAKER_ONLY_REFUSAL

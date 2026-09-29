@@ -1073,3 +1073,23 @@ def test_an_empty_polymarket_book_is_read_and_its_lot_reaches_patience():
         rt.tick_through_ns = rt.consequences.tick_through_ns = rt.clock.now_ns
     payoff = rt.consequences.payoff(handle)
     assert payoff is not None and payoff.censored == "no_mark"
+
+
+def test_a_simulated_resolution_leaves_the_payout_in_custody_as_unredeemed_tokens():
+    """Sol P2 (round 6) on #177: as on the live venue, a resolution pays nothing into
+    spendable cash; the winning tokens stay in custody at their payout until redeemed,
+    which neither venue does by itself. The pot reconciles, and a buy the cash cannot
+    carry is refused."""
+    rt = world(fake=still_fake(start_usdc=Decimal("4.10"),
+                               resolutions={"fake-1": (10**12, 0)}))
+    handle = collateral_decision(rt)
+    maker_buy(rt, handle)  # 10 YES at 0.41: 4.10 spent
+    rt.clock.now_ns = 10**12
+    advance(rt, 1)
+    account = rt.polymarket.venue.target.account()
+    assert Decimal(account["usdc"]) == 0
+    [position] = account["positions"]
+    assert (position["size"], position["payout"]) == ("10", "1")
+    assert Decimal(polymarket.reconcile(rt)["drift"]) == 0
+    refused = buy(rt, collateral_decision(rt), market="fake-2", price="0.20", slot="tool:1")
+    assert "available USDC" in refused["error"]

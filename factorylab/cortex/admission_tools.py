@@ -326,21 +326,22 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
             "order_requests_per_10s": manifest.polymarket.order_requests_per_10s,
             "rules": {
                 "principal": "When principal_micro is set, a buy is refused when the world's "
-                "principal at risk plus the buy would exceed principal_micro. The principal "
-                "at risk is the world's own record: every buy that may have executed or may "
-                "still execute (its size while it may still fill; once over, what it matched "
-                "less its failed legs; a matched quantity the venue does not state counts "
-                "the whole order), at its limit price, and never less than what was booked. "
-                "It is the world's lifetime outlay: no resolution, payout or redemption gives"
-                " room back, so once the cap is used, buying stops for the world's life. No "
-                "wallet balance or listing enters it: no deposit, withdrawal or omission "
-                "makes room. Cancellations are not refused by it.",
+                "lifetime signed commitment plus the buy would exceed principal_micro. The "
+                "commitment is size times limit price of every placement the world ever "
+                "signed, forever: no cancel, read-back, matched size, failed leg, "
+                "quarantine, resolution, payout or redemption gives room back, so once the "
+                "cap is used, buying stops for the world's life. Only an order the venue "
+                "refused outright does not count: an explicit 4xx error answering its "
+                "submission, or the simulated venue's rejection; a timeout, a 5xx or a "
+                "malformed answer counts in full. No wallet balance or listing enters it. "
+                "Cancellations are not refused by it.",
                 "maker": "Every order, on every venue kind, is a GTC post-only limit order: "
                 "it rests as a maker, and the venue rejects one that would cross before it "
                 "executes. A maker is charged no fee, so no fee is booked; a trade that "
                 "reports this world's order as a taker, or a fee on it, at any settlement "
-                "status and on any sighting, contradicts that: it is recorded as drift, and "
-                "buying stops for the world's life. A fill beyond "
+                "status and on any sighting, contradicts that, read from the raw trade rows before "
+                "any is parsed: it is recorded as drift, and buying stops for the world's "
+                "life. A fill beyond "
                 "its order's size is booked to the pot owned by no decision.",
                 "live": "With live_orders, an order is signed by the pot's wallet and sent to "
                 "Polymarket's CLOB; the pot's collateral is pUSD, Polymarket's USDC-backed "

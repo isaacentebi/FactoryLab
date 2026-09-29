@@ -343,11 +343,14 @@ def l2_headers(creds: Credentials, address: str, timestamp: int, method: str, pa
 
 class ClobHttpError(RuntimeError):
     """A CLOB answer outside 2xx. ``status`` is the HTTP status; ``code`` a local reading
-    of the body (never the body itself)."""
+    of the body (never the body itself); ``explicit`` whether the body stated an error
+    (by default, whether it was read as one)."""
 
-    def __init__(self, status: int, code: str | None = None) -> None:
+    def __init__(self, status: int, code: str | None = None,
+                 explicit: bool | None = None) -> None:
         super().__init__(f"HTTP {status}" + (f": {code}" if code else ""))
         self.status, self.code = status, code
+        self.explicit = code is not None if explicit is None else explicit
 
 
 class _NoRedirect(request.HTTPRedirectHandler):
@@ -396,7 +399,9 @@ def http_send(method: str, url: str, headers: dict[str, str], body: str | None,
             parsed = None
         finally:
             exc.close()
-        raise ClobHttpError(exc.code, refusal_code(parsed)) from None
+        stated = isinstance(parsed, dict) and any(
+            isinstance(parsed.get(k), str) and parsed[k].strip() for k in ("error", "errorMsg"))
+        raise ClobHttpError(exc.code, refusal_code(parsed), stated) from None
     except (error.URLError, TimeoutError, OSError) as exc:
         raise PolymarketUnavailable(f"transport: {type(exc).__name__}") from None
     with response:
@@ -449,21 +454,40 @@ def _dec(value: Any) -> Decimal:
 FEE_FIELDS = ("fee_rate_bps", "fee", "fee_usd", "fees")
 
 
-def _contradiction(taker: bool, fee_bps: Any, row: dict[str, Any]) -> str | None:
-    """Why a leg of this world's contradicts the post-only venue, or None: it is the
-    trade's taker, or a fee is stated on it (an unreadable fee is a stated one)."""
-    if taker:
-        return "the venue reports this post-only order as a taker"
-    for value in (fee_bps, *(row.get(f) for f in FEE_FIELDS)):
-        if value in (None, ""):
+def scan_contradictions(rows: Any, orders: Any) -> dict[str, str]:
+    """Every leg of this world's in raw trade ``rows`` that contradicts the post-only
+    venue: leg -> why. A leg is the trade's taker, or states a fee that is not a plain
+    zero (an unreadable one is stated). It reads each row as it came, at any settlement
+    status and on every sighting, and never raises: a malformed row beside a
+    contradiction cannot hide it (architect's decision on Sol's round-6 review of #177).
+    """
+    found: dict[str, str] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
             continue
-        try:
-            if _dec(value) == 0:
+        trade = str(row.get("id"))
+        taker = row.get("taker_order_id")
+        if isinstance(taker, str) and taker in orders:
+            found[f"{trade}:{taker}:1"] = "the venue reports this post-only order as a taker"
+        makers = row.get("maker_orders")
+        for maker in makers if isinstance(makers, list) else []:
+            if not isinstance(maker, dict):
                 continue
-        except (ValueError, ArithmeticError):
-            pass
-        return "the venue reports a fee on this maker fill"
-    return None
+            order_id = maker.get("order_id")
+            if isinstance(order_id, str) and order_id in orders and any(
+                    _charged(maker.get(field)) for field in FEE_FIELDS):
+                found[f"{trade}:{order_id}:0"] = "the venue reports a fee on this maker fill"
+    return found
+
+
+def _charged(value: Any) -> bool:
+    """Whether a fee field states a charge: present and not a plain zero."""
+    if value is None or value == "":
+        return False
+    try:
+        return Decimal(str(value)) != 0
+    except (ArithmeticError, ValueError):
+        return True
 
 
 #: The CLOB's order statuses, read as the runtime's.
@@ -680,10 +704,15 @@ class LivePolymarket(PolymarketReader):
         except BudgetSpent:
             return self._rejected(order_id, "polymarket order request budget spent")
         except ClobHttpError as exc:
-            if exc.status >= 500 or exc.code == "duplicated":
-                return {"order_id": order_id, "status": "uncertain",
-                        "error": f"order answer: {exc}"}
-            return self._rejected(order_id, exc.code or f"rejected by the venue: HTTP {exc.status}")
+            if 400 <= exc.status < 500 and exc.explicit and exc.code != "duplicated":
+                # The venue's explicit refusal of the submission: the order never
+                # existed, so its commitment is never consumed (architect's decision on
+                # Sol's round-6 review of #177).
+                return {**self._rejected(order_id, exc.code or f"HTTP {exc.status}"),
+                        "venue_refused": True}
+            # A 5xx, a duplicate or a refusal that states nothing proves nothing.
+            return {"order_id": order_id, "status": "uncertain",
+                    "error": f"order answer: {exc}"}
         return self._placed(order_id, size, answer)
 
     @staticmethod
@@ -695,11 +724,18 @@ class LivePolymarket(PolymarketReader):
         if not isinstance(answer, dict):
             return {"order_id": order_id, "status": "uncertain",
                     "error": "order answer is not an object"}
-        if answer.get("success") is not True:
-            code = refusal_code(answer.get("errorMsg"))
+        # Only an explicit ``success: false`` with the venue's reason is a rejection;
+        # a missing or malformed field is uncertain (Sol P1, round 6, on #177), so the
+        # hash stays a cancellation target and is looked up, never forgotten.
+        stated = answer.get("errorMsg")
+        if answer.get("success") is False and isinstance(stated, str) and stated.strip():
+            code = refusal_code(stated)
             if code == "duplicated":
                 return {"order_id": order_id, "status": "uncertain", "error": "duplicated"}
             return self._rejected(order_id, code or "rejected by the venue")
+        if answer.get("success") is not True:
+            return {"order_id": order_id, "status": "uncertain",
+                    "error": "order answer states no outcome"}
         if answer.get("orderID") and str(answer["orderID"]).lower() != order_id.lower():
             return {"order_id": order_id, "status": "uncertain",
                     "error": "venue answered another order id"}
@@ -855,12 +891,14 @@ class LivePolymarket(PolymarketReader):
 
     def poll(self, *, now_ns: int, cursor: dict[str, Any],
              orders: dict[str, dict[str, str]]) -> dict[str, Any]:
-        """The pot's fills and resolutions since ``cursor``: ``{events, cursor, complete}``.
+        """The pot's fills and resolutions since ``cursor``: ``{events, cursor,
+        contradictions, complete}``.
 
         Guarantees each fill of one of ``orders`` (this world's orders, as their intents
         name them) is reported exactly once, when its trade is CONFIRMED, in the shape
         ``FakePolymarket`` reports it, with no fee (a post-only maker is never charged;
-        a leg that says otherwise carries its ``contradiction``); a FAILED
+        a leg that says otherwise is in ``contradictions``, found before any row is
+        parsed and returned even when the read fails); a FAILED
         trade is reported never; a trade not yet final holds the cursor so it is read
         again. A held token's market is read (one a poll, in turn) and, once it has a
         payout, one ``resolution`` is reported for what the pot holds of it, and each of
@@ -880,7 +918,11 @@ class LivePolymarket(PolymarketReader):
         state.setdefault("turn", 0)
         events: list[dict[str, Any]] = []
         complete = True
-        for step in (lambda trial: self._fills(trial, orders),
+        # Contradictions of the post-only venue found in the raw rows, before any is
+        # parsed, kept outside the transactional cursor (architect's decision on Sol's
+        # round-6 review of #177): a read that fails later cannot erase them.
+        contradictions: dict[str, str] = {}
+        for step in (lambda trial: self._fills(trial, orders, contradictions),
                      lambda trial: self._resolutions(trial, orders, now_ns)):
             # Each step works on a copy and commits only whole: a read that failed half
             # way leaves the cursor where it was, and what it would have reported is
@@ -895,10 +937,11 @@ class LivePolymarket(PolymarketReader):
             state = trial
             events.extend(found)
         # A read that stopped at the page bound resumes where it stopped (``page``).
-        return {"events": events, "cursor": state,
+        return {"events": events, "cursor": state, "contradictions": contradictions,
                 "complete": complete and "page" not in state}
 
-    def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]]) -> list[dict]:
+    def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
+               contradictions: dict[str, str]) -> list[dict]:
         if not orders:
             return []
         # Outstanding is what may still fill or has matched unbooked, by the runtime's
@@ -921,23 +964,24 @@ class LivePolymarket(PolymarketReader):
             page = self._l2("GET", "/data/trades", query={
                 "maker_address": self.funder, "after": str(state["after"]),
                 "next_cursor": page_cursor})
-            rows.extend(page.get("data", []) if isinstance(page, dict) else [])
+            batch = page.get("data", []) if isinstance(page, dict) else []
+            contradictions.update(scan_contradictions(batch, orders))
+            rows.extend(batch)
             page_cursor = page.get("next_cursor") if isinstance(page, dict) else END_CURSOR
             if not page_cursor or page_cursor == END_CURSOR:
                 ended = True
                 break
         found, pending = [], []
-        contradictions = state.setdefault("contradictions", {})
         for trade in rows:
             status = str(trade.get("status", "")).upper().removeprefix("TRADE_STATUS_")
             legs = []
             if str(trade.get("taker_order_id", "")) in orders:
                 legs.append((str(trade["taker_order_id"]), trade.get("size"),
-                             trade.get("price"), True, trade.get("fee_rate_bps"), trade))
+                             trade.get("price"), True))
             for maker in trade.get("maker_orders") or []:
                 if str(maker.get("order_id", "")) in orders:
                     legs.append((str(maker["order_id"]), maker.get("matched_amount"),
-                                 maker.get("price"), False, maker.get("fee_rate_bps"), maker))
+                                 maker.get("price"), False))
             if not legs:
                 continue
             # A trade of this world's is identified and timed by the venue's own
@@ -953,16 +997,7 @@ class LivePolymarket(PolymarketReader):
                 instant = int(_dec(nano)) if nano not in (None, "") else at * 1_000_000_000
             except (ValueError, ArithmeticError):
                 instant = at * 1_000_000_000
-            for order_id, _size, _price, taker, fee_bps, row in legs:
-                # Every sighting of every leg, at any status and however often it was
-                # seen before, is read for what would contradict the post-only venue
-                # (Sol P1 on #177): a disclosure is never filtered out as a duplicate.
-                # It is kept in the cursor, which the runtime halts on; money is still
-                # booked from CONFIRMED trades alone.
-                reason = _contradiction(taker, fee_bps, row)
-                if reason:
-                    contradictions[f"{trade_id}:{order_id}:{int(taker)}"] = reason
-            for order_id, size, price, taker, fee_bps, _row in legs:
+            for order_id, size, price, taker in legs:
                 key = f"{trade_id}:{order_id}:{int(taker)}"
                 if key in state["seen"]:
                     continue
@@ -979,14 +1014,13 @@ class LivePolymarket(PolymarketReader):
                 state["seen"][key] = at
                 found.append({"instant": instant, "at": at, "key": key,
                               "order_id": order_id, "size": _dec(size),
-                              "price": _dec(price), "taker": taker, "fee_bps": fee_bps})
+                              "price": _dec(price)})
         # Every leg is a post-only buy: what the pot holds of a token and its average
         # cost do not depend on the order legs are booked in, and no fee is charged.
         events = []
         for leg in sorted(found, key=lambda leg: (leg["instant"], leg["key"])):
             event = self._fill_event(state, orders[leg["order_id"]], leg["order_id"],
-                                     leg["size"], leg["price"], leg["taker"], leg["at"],
-                                     leg["fee_bps"])
+                                     leg["size"], leg["price"], leg["at"])
             event["ts_ns"] = leg["instant"]
             events.append(event)
         if not ended:
@@ -1010,13 +1044,10 @@ class LivePolymarket(PolymarketReader):
 
     @staticmethod
     def _fill_event(state: dict[str, Any], order: dict[str, str], order_id: str,
-                    size: Decimal, price: Decimal, taker: bool, at: int,
-                    fee_bps: Any = None) -> dict[str, Any]:
+                    size: Decimal, price: Decimal, at: int) -> dict[str, Any]:
         token = order["token_id"]
-        # A post-only order is never a taker and a maker is never charged: a leg that
-        # says otherwise contradicts the published venue. It is reported, never booked
-        # as a fee (architect's decision on Sol's round-4 review of #177).
-        contradiction = _contradiction(taker, fee_bps, {})
+        # No fee is ever booked: a post-only maker is never charged, and a leg that
+        # says otherwise halts buying instead (``scan_contradictions``).
         held, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
         # A buy: the holding grows at its average cost; nothing is realised until the
         # token's resolution pays it.
@@ -1028,8 +1059,7 @@ class LivePolymarket(PolymarketReader):
         return {"kind": "fill", "order_id": order_id, "token_id": token,
                 "market_id": order.get("market_id"), "is_buy": True, "size": str(size),
                 "px": str(price), "fee_usd": "0",
-                "realized_usd": "0", "ts_ns": at * 1_000_000_000,
-                **({"contradiction": contradiction} if contradiction else {})}
+                "realized_usd": "0", "ts_ns": at * 1_000_000_000}
 
     def _resolutions(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                      now_ns: int) -> list[dict]:
