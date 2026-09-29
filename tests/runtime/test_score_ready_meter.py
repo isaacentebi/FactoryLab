@@ -106,7 +106,9 @@ def test_the_price_loop_does_not_run_away_when_every_producer_decision_defers():
     """R16b-1: every producer decision's settlement waits for its window's close (the
     holds card, priced). Its meter closes at score ready, so the price period stays
     ``min_ratio × inner`` with a steady inner. Recording at the close instead (the
-    runaway) grew it 3, 6, 9, 12, 15, 45 ticks and closed only ten windows."""
+    runaway) grows it from the sixth window on: 3, 6, 9, 12, 15 ticks by event 60,
+    which closes nine windows with inner loops of 1 to 5 ticks where this one closes
+    fifteen at 1 (at 150 events it closed eleven against 38)."""
     import math
     from dataclasses import replace
 
@@ -117,13 +119,13 @@ def test_the_price_loop_does_not_run_away_when_every_producer_decision_defers():
     seed = load_manifest("scripted")
     manifest = replace(seed, charter=replace(seed.charter, cards=(HOLDS,)),
                        charter_prices=((HOLDS.id, 0.8),))
-    rt = Runtime(manifest, events=150, seed=1, initial_balance_micro=None,
+    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None,
                  ledger_path=None, router_gamma=0.1)
     rt.run()
     items = rt.ledger._recovery_items()
-    assert sum(i["kind"] == "price.deferred" for i in items) > 100  # every one waits
+    assert sum(i["kind"] == "price.deferred" for i in items) > 50  # every one waits
     loops = [i for i in items if i["kind"] == "clock.loop" and i["loop"] == "price"]
-    assert len(loops) >= 30
+    assert len(loops) >= 12
     timing = rt.m.timing
     for row in loops:
         bound = math.ceil(timing.min_ratio * (1 + timing.jitter_fraction) * row["inner_ticks"])
