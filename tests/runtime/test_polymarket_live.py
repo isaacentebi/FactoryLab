@@ -866,3 +866,51 @@ def test_no_blanket_allowance_hides_a_small_unexplained_loss():
     refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
                   market="fake-2")
     assert refused["error"] == polymarket.DRIFT_REFUSAL
+
+
+def test_a_kill_cancels_a_resting_order_the_listing_omits():
+    """Sol P1 on #177: an acknowledged resting buy missing from the orders listing got no
+    cancel, and the kill reported flat with a real order resting."""
+    rt, server = live_world()
+    buy(rt, server, collateral_decision(rt))  # rests
+    server.orders_lag = True
+    rt.polymarket._account_memo = None
+    report = polymarket.wind_down(rt)
+    assert ("DELETE", "/order") in server.calls and server.fake._orders == {}
+    assert report["cancelled"] == 1
+
+
+def test_a_kill_counts_what_the_world_holds_when_the_listing_omits_it():
+    """Sol P1 on #177: a confirmed 10-share position missing from the positions listing
+    left the kill reporting flat with no residual."""
+    rt, server = live_world()
+    buy(rt, server, collateral_decision(rt), price="0.45")
+    polymarket.tick(rt)
+    server.hidden_positions = {token(server)}
+    rt.polymarket._account_memo = None
+    report = polymarket.wind_down(rt)
+    assert report["exposure_state"] == "wind_down_pending"
+    assert [p["size"] for p in report["residual"]] == ["10"]
+
+
+def test_one_failed_read_or_cancel_never_stops_the_kill_reaching_every_order():
+    """Sol P1 on #177: a failed balance read stopped the kill before any cancel, and a
+    failed first cancel stopped the second."""
+    rt, server = live_world()
+    buy(rt, server, collateral_decision(rt))
+    buy(rt, server, collateral_decision(rt), market="fake-2", price="0.50")
+    server.fail_balance = 1
+    rt.polymarket._account_memo = None
+    live = rt.polymarket.venue.target
+    cancel, attempts = live.cancel, []
+
+    def first_fails(**kwargs):
+        attempts.append(kwargs["order_id"])
+        if len(attempts) == 1:
+            raise clob.PolymarketUnavailable("transport: TimeoutError")
+        return cancel(**kwargs)
+
+    live.cancel = first_fails
+    report = polymarket.wind_down(rt)
+    assert len(attempts) == 2 and len(server.fake._orders) == 1
+    assert report["exposure_state"] == "unknown"

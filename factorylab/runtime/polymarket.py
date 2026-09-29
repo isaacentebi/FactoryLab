@@ -2091,32 +2091,47 @@ def _unsettled(surface: PolymarketSurface) -> tuple[list[dict], list[str]]:
     return matched_rows, unanswered
 
 
-def _own_view(surface: PolymarketSurface, account: dict) -> dict:
-    """A pot read cut to what is this world's: its own orders, and of each position no
-    more than its own confirmed fills hold (a resolved token's, what the world held when
-    it was paid, as far as the wallet still holds it). The simulated pot is the world's
-    whole."""
-    if not surface.live:
-        return account
-    book = surface.cursor.get("book", {})
+def _terminal(surface: PolymarketSurface, intent: dict) -> bool:
+    """Whether a placement is proven over: rejected, filled or cancelled by the venue's
+    word, cancelled by an acknowledged cancel, or read terminal by the poll."""
+    order_id = str(intent.get("order_hash") or intent["result"].get("order_id"))
+    return (intent["result"].get("status") in ("rejected", "filled", "cancelled")
+            or bool(intent.get("terminal"))
+            or _cancelled(surface).get(order_id) is not None
+            or order_id in surface.cursor.get("terminal", ()))
+
+
+def _live_targets(surface: PolymarketSurface) -> list[str]:
+    """Every order hash of this world's that may still rest: each durable placement not
+    proven over, from its intent alone, never from a listing (Sol P1 on #177)."""
+    return sorted({str(intent["order_hash"]) for intent in surface.intents.values()
+                   if intent["operation"] == "polymarket.place_limit"
+                   and intent.get("order_hash") and not _terminal(surface, intent)})
+
+
+def _live_residual(surface: PolymarketSurface, account: dict | None) -> list[dict]:
+    """What the world holds, bounded below by its own confirmed book (Sol P1 on #177):
+    an unresolved token cannot leave the pot but by resolution (the venue takes BUY
+    orders only), so a listing that omits it proves nothing. A resolved token not yet
+    redeemed is what the world held when paid, as far as the listing, when read, still
+    shows it (a redemption takes it out)."""
+    listed = {} if account is None else {p["token_id"]: p for p in sanitized(account)[
+        "positions"]}
+    rows = []
     resolved = surface.cursor.get("resolved", {})
     redeemable = surface.cursor.get("redeemable", {})
-    traded = {str(surface.intents[c]["args"]["token_id"]) for c in surface.order_ids.values()}
-    positions = []
-    for p in account["positions"]:
-        token = p["token_id"]
-        if token not in traded:
-            continue
-        size = Decimal(p["size"])
-        # What this world holds: its booked inventory, or once resolved what it held
-        # when paid; the funder's own tokens of the same outcome are never its.
-        own = (Decimal(redeemable.get(token, "0")) if token in resolved
-               else Decimal(book.get(token, ("0", "0"))[0]))
-        size = min(size, own)
-        if size > 0:
-            positions.append({**p, "size": str(size)})
-    return {**account, "positions": positions,
-            "open_orders": _own_orders(surface, account["open_orders"])}
+    for token, (size, avg) in sorted(surface.cursor.get("book", {}).items()):
+        own = Decimal(size)
+        if token in resolved:
+            own = Decimal(redeemable.get(token, "0"))
+            if account is not None:
+                own = min(own, Decimal(listed[token]["size"]) if token in listed
+                          else Decimal(0))
+        if own > 0:
+            rows.append({"token_id": token, "market_id": surface.token_markets.get(token),
+                         "outcome": (listed.get(token) or {}).get("outcome"),
+                         "size": str(own), "avg_px": str(avg)})
+    return rows
 
 
 def wind_down(rt: Any) -> dict[str, Any]:
@@ -2133,50 +2148,59 @@ def wind_down(rt: Any) -> dict[str, Any]:
 
     surface = rt.polymarket
     report: dict[str, Any] = {"cancelled": 0, "residual": []}
+    unknown = False
     try:
-        # Only this world's orders (Codex P1 on #177): the wallet may rest orders placed
-        # by hand or by another process, and the kill has no claim on them.
-        targets = [str(o["order_id"])
-                   for o in _own_orders(surface, surface.account(rt)["open_orders"])]
-        if surface.live:
-            # A placement known only by its durable hash may rest though no read shows
-            # it (Sol P1 on #177): it is cancelled by its hash too.
-            _matched, unanswered = _unsettled(surface)
-            targets += [h for h in unanswered if h not in targets]
-        uncertain = False
-        for order_id in targets:
-            order = {"order_id": order_id}
-            client_id = f"kill:{order['order_id']}"
+        # Only this world's orders (Codex P1 on #177), and every one of them: on the live
+        # venue the targets are its durable placements that may still rest, whatever a
+        # listing says (Sol P1: an omission from a listing never proves an order gone).
+        targets = (_live_targets(surface) if surface.live else
+                   [str(o["order_id"]) for o in surface.account(rt)["open_orders"]])
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        report["error"], targets, unknown = type(exc).__name__, [], True
+    for order_id in targets:
+        # Each cancel on its own (Sol P1 on #177): one failure never stops the next.
+        client_id = f"kill:{order_id}"
+        try:
             rt.ledger.append({"kind": "polymarket.wind_down", "op": "cancel",
-                              "client_id": client_id, "order_id": order["order_id"]})
+                              "client_id": client_id, "order_id": order_id})
             # The kernel's own cancellation is an intent like any other, durable above,
             # before the live venue will sign it (``LivePolymarket.intent_of``).
             if surface.live:
                 surface.intents.setdefault(client_id, {
                     "handle": "kill", "client_id": client_id, "operation": "polymarket.cancel",
-                    "args": {"order_id": order["order_id"]}, "result": {"status": "uncertain"}})
-            result = surface.venue.cancel(client_id=client_id, order_id=order["order_id"])
-            if client_id in surface.intents:
-                surface.intents[client_id]["result"] = dict(result)
-            rt.ledger.append({"kind": "polymarket.wind_down_result", "client_id": client_id,
-                              "result": result})
-            report["cancelled"] += result.get("status") == "cancelled"
-            uncertain |= result.get("status") == "uncertain"
-        surface._account_memo = None  # the cancels may have moved it
-        still = sanitized(_own_view(surface, surface.account(rt)))
+                    "args": {"order_id": order_id}, "result": {"status": "uncertain"}})
+            result = surface.venue.cancel(client_id=client_id, order_id=order_id)
+        except Exception as exc:  # noqa: BLE001 - an unanswered cancel is unknown
+            result = {"order_id": order_id, "status": "uncertain",
+                      "error": f"cancel exception: {type(exc).__name__}"}
+        if client_id in surface.intents:
+            surface.intents[client_id]["result"] = dict(result)
+        rt.ledger.append({"kind": "polymarket.wind_down_result", "client_id": client_id,
+                          "result": result})
+        report["cancelled"] += result.get("status") == "cancelled"
+        unknown |= result.get("status") == "uncertain"
+    surface._account_memo = None  # the cancels may have moved it
+    try:
+        account = surface.account(rt)
+    except Exception as exc:  # noqa: BLE001 - the report stands on the world's records
+        report["error"], account, unknown = type(exc).__name__, None, True
+    if surface.live:
+        report["residual"] = _live_residual(surface, account)
+        open_orders = _live_targets(surface)
+        matched, unanswered = _unsettled(surface)
+    else:
+        still = sanitized(account) if account is not None else {"positions": [],
+                                                                "open_orders": []}
         report["residual"] = [{key: p[key] for key in ("token_id", "market_id", "outcome",
                                                        "size", "avg_px")}
                               for p in still["positions"]]
-        report["open_orders"] = len(still["open_orders"])
-        matched, unanswered = _unsettled(surface) if surface.live else ([], [])
-        report["unsettled"], report["unanswered"] = matched, unanswered
-        # Matched but unconfirmed quantity is exposure; an order or a cancel the venue
-        # has not answered for leaves the pot unknown, never flat (Sol P1 on #177).
-        report["exposure_state"] = (
-            UNKNOWN if uncertain or unanswered else
-            PENDING if still["positions"] or still["open_orders"] or matched else FLAT)
-    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
-        report["error"] = type(exc).__name__
-        report["exposure_state"] = UNKNOWN
+        open_orders, matched, unanswered = still["open_orders"], [], []
+    report["open_orders"] = len(open_orders)
+    report["unsettled"], report["unanswered"] = matched, unanswered
+    # Matched but unconfirmed quantity is exposure; an order, a cancel or a read the
+    # venue has not answered leaves the pot unknown, never flat (Sol P1 on #177).
+    report["exposure_state"] = (
+        UNKNOWN if unknown or unanswered else
+        PENDING if report["residual"] or open_orders or matched else FLAT)
     rt.ledger.append({"kind": "polymarket.wind_down_report", **report})
     return report

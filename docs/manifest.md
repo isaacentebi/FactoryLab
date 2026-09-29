@@ -2694,10 +2694,14 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   raises out of the tick.
 * **Only the world's own, all of it.** The live wallet may hold orders and tokens that
   another signer placed or the funder brought: a kill cancels only the orders this world
-  owns, which are those the venue acknowledged and those only their durable intents know
-  (answer lost, released unresolved), each cancelled by its hash; matched but
-  unconfirmed quantity is reported as `unsettled` exposure (`wind_down_pending`), and
-  an order or a cancel the venue has not answered for reports `unknown`, never `flat`; its report counts only the world's orders and tokens, and
+  owns and every one of them, which are its durable placements not proven over (filled,
+  cancelled, rejected or read terminal), taken from its intents and never from a
+  listing, each cancelled by its hash, each on its own, so one failed read or cancel
+  never stops the next; the residual is bounded below by the world's own confirmed book
+  (an unresolved token cannot leave the pot but by resolution), so a listing's omission
+  never proves flat; matched but unconfirmed quantity is reported as `unsettled`
+  exposure (`wind_down_pending`), and an order, a cancel or a read the venue has not
+  answered reports `unknown`, never `flat`; its report counts only the world's orders and tokens, and
   `polymarket.open_orders` lists only the world's orders.
 * **BUY orders only.** Version 1 of the venue takes BUY orders only
   (`polymarket.place_limit`'s `side` is `buy`; anything else is refused before any
