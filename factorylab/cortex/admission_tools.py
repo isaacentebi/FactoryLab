@@ -325,10 +325,15 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
             "live_orders": manifest.polymarket.venue == "live" and manifest.polymarket.orders,
             "order_requests_per_10s": manifest.polymarket.order_requests_per_10s,
             "rules": {
-                "principal": "When principal_micro is set, a buy is refused while the pot's "
-                "value on its own books (USDC, open tokens at cost, resolved unredeemed "
-                "tokens at their payout) less what its fills and resolutions settled "
-                "exceeds principal_micro. Cancellations are not refused by it.",
+                "principal": "When principal_micro is set, a buy is refused when the world's "
+                "principal at risk plus the buy would exceed principal_micro. The principal "
+                "at risk is the world's own record: every buy that may have executed or may "
+                "still execute (its size while it may still fill; once over, what it matched "
+                "less its failed legs), at its limit price plus the most fee it can be "
+                "charged (the larger of its schedule's rate and 5% of its cash value, the CTF"
+                " Exchange's maxFeeRateBps default), less the payouts its resolutions paid "
+                "it. No wallet balance or listing enters it: no deposit, withdrawal or "
+                "omission makes room. Cancellations are not refused by it.",
                 "live": "With live_orders, an order is a GTC limit order on Polymarket's "
                 "CLOB, signed by the pot's wallet; its identity is its EIP-712 order hash, "
                 "recorded with the intent before it is sent, and a lost answer is looked up "
@@ -341,14 +346,12 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "is booked before it. A cancelled or otherwise terminal order holds only what"
                 " it matched and is not yet booked. A buy's exposure and collateral also "
                 "count, from the world's own records, every buy not yet booked from a "
-                "confirmed trade and its booked inventory at cost, and the principal counts "
-                "each token at the larger of the positions listing and that inventory; the "
-                "positions listing is read to its end or the pot is unavailable; no buy is "
-                "taken while the pot's last reconciliation found money gone that its books do"
-                " not explain. The pot's own requests (orders, cancels, lookups, fills, "
-                "account, marks and a write's market read) are at most order_requests_per_10s"
-                " in any sliding 10 s of wall time; one past it is not sent and reads as "
-                "unavailable.",
+                "confirmed trade and its booked inventory at cost; the positions listing is "
+                "read to its end or the pot is unavailable; no buy is taken while the pot's "
+                "last reconciliation found money gone that its books do not explain. The "
+                "pot's own requests (orders, cancels, lookups, fills, account, marks and a "
+                "write's market read) are at most order_requests_per_10s in any sliding 10 s "
+                "of wall time; one past it is not sent and reads as unavailable.",
                 "arguments": "Schema, string length and token pattern checks precede dispatch. "
                 "Size and price are finite decimals, not booleans; size is positive "
                 "and price is strictly between zero and one.",

@@ -2415,7 +2415,7 @@ venue's writes. The keys, all fixed for the world's life:
 | `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs, and with `orders = true` signed orders on the CLOB (`world/polymarket_clob.py`, `LivePolymarket`; "Live orders" below) |
 | `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (a live pot is what its wallet holds) and above `principal_usd` |
 | `orders` | `false` | live orders: registers the pot, its two reads and its two writes on the live venue. Refused with `venue = "fake"` (which always takes writes); requires `funder` and `principal_usd`; admitted only in the world named `funded`, under the same gate as a mainnet venue (`exchange.client_namespace`, the ratified charter and roster digests, `charter.launch`), because Polymarket's one network, Polygon, is real money |
-| `principal_usd` | absent | the pot's principal cap: while the pot's value on its own books (USDC, open tokens at cost, resolved unredeemed tokens at their payout) less what its fills and resolutions settled exceeds it, every buy is refused before any intent ("the polymarket pot holds more principal than [polymarket] principal_usd") and each reconciliation ledgers `polymarket.principal_exceeded`; a cancellation never is. What the pot earns never counts against it; a deposit always does. Positive exact USD |
+| `principal_usd` | absent | the cap on the world's principal at risk, from its own records alone: every buy that may have executed or may still execute (its size while it may still fill; once over, what it matched less its failed legs) at its limit price plus the most fee it can be charged (the larger of its schedule's rate and `PLATFORM_MAX_FEE_RATE`, 5% of cash value, the CTF Exchange's `maxFeeRateBps` default, which `getMaxFeeRate()` reads on chain), less the payouts its resolutions paid it. A buy that would take it past the cap is refused before any intent ("the polymarket pot holds more principal than [polymarket] principal_usd"); a cancellation never is. No wallet balance and no listing enters it, so nobody's deposit, withdrawal or omission makes room. Positive exact USD |
 | `funder` | absent | the pot's wallet (lower-case 0x address), the orders' maker and the Data API's `user` |
 | `signature_type` | `0` | how the exchange verifies the pot's signature: 0 EOA (the key's own address must be `funder`), 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (a Deposit Wallet) |
 | `order_requests_per_10s` | `60` | the pot's own requests (orders, cancels, lookups, fills, its account, held tokens' marks and a write's market read) per sliding 10 s of wall time, each counted before it is sent; one past it is not sent. A resumed pot counts its whole allowance as sent at the resume, since the process that died may have sent it in its last 10 s. At most 200 (`/balance-allowance`'s published limit, the tightest endpoint these reach besides Gamma `/markets`), and with `orders`, `read_requests_per_10s + order_requests_per_10s` is at most 300, Gamma `/markets`' |
@@ -2669,8 +2669,7 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   positions) are separate reads that lag each other, so a live buy's exposure and
   collateral also count every buy placement not yet booked from a CONFIRMED trade (its
   price and possible taker fee on what it may still fill or has matched) and the booked
-  inventory at cost; the principal counts each token at the larger of the listing and
-  that inventory; the positions listing is read page by page to an empty page (or the
+  inventory at cost; the positions listing is read page by page to an empty page (or the
   pot is unavailable); and no buy is taken while the last reconciliation found money
   gone that the books do not explain (`polymarket.drift` below zero; no
   allowance is made, so a real rounding mismatch shows as drift too). The reconciliation is
@@ -2729,7 +2728,8 @@ What the owner provides before a live world: a Polygon wallet (a Deposit Wallet,
 `signature_type = 3`, or an allowlisted EOA, `0`) as `funder`, its signing key in
 `polymarket.key` (mode 0400 or 0600, read into `POLYMARKET_PRIVATE_KEY`); pUSD in it
 at most `principal_usd`; POL for the approvals and redemptions; the approvals above,
-and `GET /balance-allowance/update` once; the jurisdiction check
+and `GET /balance-allowance/update` once; a read of both exchanges' `getMaxFeeRate()`
+at most 500 bps (the principal's fee bound, `PLATFORM_MAX_FEE_RATE`); the jurisdiction check
 (https://docs.polymarket.com/api-reference/geoblock). The first live smoke is one GTC
 buy of the market's minimum size at a price that does not cross, its lookup by hash,
 and its cancel.

@@ -221,25 +221,24 @@ def test_polymarket_principal_and_order_budget_are_enforced_at_their_published_b
     from dataclasses import replace
 
     from factorylab.cortex.admission_tools import tool_admission_schematics
-    from factorylab.runtime.polymarket import PRINCIPAL_REFUSAL, principal_excess
+    from factorylab.runtime.polymarket import PLATFORM_MAX_FEE_RATE, principal_at_risk
     from factorylab.runtime.worlds import PolymarketSpec
     from factorylab.world.polymarket_clob import BudgetSpent, RequestBudget
 
     manifest = replace(load_manifest("scripted"), polymarket=PolymarketSpec(
         enabled=True, principal_micro=40_000_000, order_requests_per_10s=7))
     facts = tool_admission_schematics(manifest)["polymarket_orders"]
-    cap = facts["principal_micro"]
-    surface = SimpleNamespace(spec=manifest.polymarket, settled=Decimal(0), live=False,
-                              open_fees=[])
-
-    def pot(usdc, tokens="0", avg="0.5"):
-        return {"usdc": usdc, "positions": [{"size": tokens, "avg_px": avg}]}
-
-    assert principal_excess(surface, pot(str(Decimal(cap) / 1_000_000))) is None
-    assert principal_excess(surface, pot("39.999999", "0.000002", "1")) == PRINCIPAL_REFUSAL
-    # What the pot earned itself never counts against its principal.
-    surface.settled = Decimal(5)
-    assert principal_excess(surface, pot("45")) is None
+    assert facts["principal_micro"] == 40_000_000
+    resting = {"operation": "polymarket.place_limit", "order_hash": "0x1",
+               "args": {"side": "buy", "size": "10", "price": "0.30"},
+               "result": {"status": "resting"}}
+    surface = SimpleNamespace(intents={"c": resting}, cursor={}, filled={},
+                              paid_out=Decimal(0))
+    # The world's own outlay: its size at its limit, plus the most fee the exchange lets
+    # it be charged; a payout its resolution paid returns it.
+    assert principal_at_risk(surface) == Decimal(3) * (1 + PLATFORM_MAX_FEE_RATE)
+    surface.paid_out = Decimal(5)
+    assert principal_at_risk(surface) == Decimal("3.15") - 5
     budget = RequestBudget(facts["order_requests_per_10s"], wall=lambda: 10**18)
     for _ in range(facts["order_requests_per_10s"]):
         budget.take()

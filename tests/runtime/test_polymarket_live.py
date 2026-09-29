@@ -131,16 +131,6 @@ def test_the_pot_cannot_be_spent_twice():
     assert len(posts) == 1
 
 
-def test_a_pot_above_its_principal_cap_takes_no_new_risk():
-    rt, server = live_world(principal="40")  # the wallet holds 50
-    handle = collateral_decision(rt)
-    result = buy(rt, server, handle)
-    assert result["status"] == "rejected" and "principal_usd" in result["error"]
-    assert rt.polymarket.intents == {}
-    polymarket.reconcile(rt)
-    assert items(rt, "polymarket.principal_exceeded")
-
-
 def test_a_manifest_pot_above_its_principal_cap_is_refused():
     with pytest.raises(ValueError, match="exceeds polymarket.principal_usd"):
         PolymarketSpec(enabled=True, collateral_micro=50_000_000, principal_micro=40_000_000)
@@ -289,10 +279,10 @@ def test_the_pot_s_requests_past_their_budget_are_not_sent():
 
 
 def test_the_published_limits_are_the_enforced_ones():
-    rt, server = live_world(principal="40")
+    rt, server = live_world(principal="3")  # a buy of 10 at 0.30 may take 3.15
     facts = rt.institution_section("admission")["tools"]["polymarket_orders"]
     spec = rt.m.polymarket
-    assert facts["principal_micro"] == spec.principal_micro == 40_000_000
+    assert facts["principal_micro"] == spec.principal_micro == 3_000_000
     assert facts["order_requests_per_10s"] == spec.order_requests_per_10s
     assert facts["live_orders"] is True
     assert rt.polymarket.venue.target.budget.limit == facts["order_requests_per_10s"]
@@ -482,25 +472,6 @@ def test_the_exposure_cap_holds_while_the_venue_s_listings_lag():
         "max_open_usd" in third["error"] or third["error"] == polymarket.DRIFT_REFUSAL)
     reserved, book = polymarket.local_commitments(rt.polymarket)
     assert reserved + book == Decimal("4.1")  # what the cap is weighed against
-
-
-def test_the_principal_cap_counts_what_the_world_holds_while_the_listing_lags():
-    """Astra P1 on #177: inventory absent from the positions listing (index lag or
-    truncation) left principal under the cap in the check while it was over it."""
-    rt, server = live_world(fake=still_fake(start_usdc=Decimal(35)), principal="40",
-                            max_order_micro=30_000_000)
-    polymarket.tick(rt)
-    assert buy(rt, server, collateral_decision(rt), size="30",
-               price="0.45")["status"] == "filled"  # $12.30 of the pot's $35 is tokens
-    polymarket.tick(rt)
-    server.hidden_positions = {token(server)}
-    server.fake._cash += Decimal("10")  # a deposit: $45 of principal against a $40 cap
-    polymarket.tick(rt)
-    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30", market="fake-3")
-    assert refused["status"] == "rejected" and refused["error"] in (
-        polymarket.PRINCIPAL_REFUSAL, polymarket.DRIFT_REFUSAL)
-    account = rt.polymarket.account(rt)
-    assert polymarket.principal_excess(rt.polymarket, account) == polymarket.PRINCIPAL_REFUSAL
 
 
 def test_a_positions_listing_is_read_to_its_end_or_the_pot_is_unavailable():
@@ -946,3 +917,38 @@ def test_a_released_placement_cancelled_by_the_kill_is_not_left_unanswered():
     report = polymarket.wind_down(rt)
     assert report["cancelled"] == 1 and report["unanswered"] == []
     assert report["exposure_state"] == "flat"
+
+
+def test_principal_at_risk_is_the_world_s_own_outlay_never_the_wallet():
+    """Architect's decision on Sol's third review of #177: the principal is the world's
+    own ledger (every buy that may have executed or may still execute, at its limit plus
+    the most fee it could be charged, less the payouts the world has received), so no
+    deposit, withdrawal or listing omission by anyone makes room or takes it away."""
+    rt, server = live_world(principal="10")  # the wallet holds $50 of the funder's
+    assert buy(rt, server, collateral_decision(rt), price="0.45")["status"] == "filled"
+    polymarket.tick(rt)
+    assert polymarket.principal_at_risk(rt.polymarket) == Decimal("4.725")  # 4.5 x 1.05
+    server.hidden_positions = {token(server)}
+    server.fake._cash += Decimal(100)  # a deposit makes no room
+    rt.polymarket._account_memo = None
+    rt.polymarket.drifting = False  # drift is its own halt, not tested here
+    assert buy(rt, server, collateral_decision(rt), price="0.30", market="fake-2",
+               slot="tool:1")["status"] == "resting"  # 3 x 1.05: 7.875 of 10
+    third = buy(rt, server, collateral_decision(rt), price="0.30", market="fake-3")
+    assert third["status"] == "rejected" and third["error"] == polymarket.PRINCIPAL_REFUSAL
+
+
+def test_a_resolution_s_payout_is_the_only_thing_that_returns_room():
+    fake = still_fake(resolutions={"fake-1": (10**15, 0)})
+    rt, server = live_world(fake=fake, principal="5")
+    buy(rt, server, collateral_decision(rt), price="0.45")  # 4.725 of 5 at risk
+    polymarket.tick(rt)
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.10",
+                  market="fake-2")
+    assert refused["error"] == polymarket.PRINCIPAL_REFUSAL
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    polymarket.tick(rt)
+    assert polymarket.principal_at_risk(rt.polymarket) == Decimal("-5.275")  # 10 paid
+    assert buy(rt, server, collateral_decision(rt), size="5", price="0.10",
+               market="fake-2")["status"] == "resting"

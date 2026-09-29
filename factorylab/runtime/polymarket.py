@@ -228,6 +228,8 @@ class PolymarketSurface:
         # Fills whose fee their execution did not state (``execution_fee``): open until
         # the custodian's balance settles them (``reconcile``); no new risk meanwhile.
         self.open_fees: list[dict[str, Any]] = []
+        # Every payout the world's resolutions paid it: what returns principal's room.
+        self.paid_out = Decimal(0)
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
         self._account_memo: tuple | None = None
         # The market each write was last weighed against, by token (transient): the one
@@ -236,7 +238,7 @@ class PolymarketSurface:
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
               "opening", "token_markets", "open_reads", "through", "filled", "cursor", "open_fees",
-              "drifting")
+              "drifting", "paid_out")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -1085,7 +1087,8 @@ def taker_fee(market: dict, size: Decimal, price: Decimal) -> Decimal:
 
 def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
             tool_id: str, args: dict, *, committed: Decimal = Decimal(0),
-            window_count: int | None = None) -> str | None:
+            window_count: int | None = None,
+            principal_committed: Decimal = Decimal(0)) -> str | None:
     """Why this write would be refused before any intent, or None.
 
     Guarantees new exposure is weighed against the polymarket pot alone: a buy
@@ -1147,10 +1150,13 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
         return FEE_OPEN_REFUSAL
     if surface.live and surface.drifting:
         return DRIFT_REFUSAL
-    above = principal_excess(surface, account)
-    if above is not None:
-        return above
     fee = taker_fee(market, size, price)
+    cap = spec.principal_micro
+    if cap is not None and usd_to_micro(
+            principal_at_risk(surface) + principal_committed
+            + size * price * (1 + _fee_bound(market.get("fees"))),
+            rounding="ceil") > cap:
+        return PRINCIPAL_REFUSAL
     exposure, available = _open_exposure(account), Decimal(account["usdc_available"])
     if surface.live:
         # Astra P1 on #177: the venue's listings (open orders, positions, balance)
@@ -1188,27 +1194,52 @@ def held_at_cost(account: dict) -> Decimal:
     return Decimal(account["usdc"]) + tokens
 
 
-def principal_excess(surface: PolymarketSurface, account: dict) -> str | None:
-    """Why the pot holds more principal than the manifest's cap, or None.
+#: The most fee the exchange lets a fill charge, as a share of its cash value: the
+#: CTF Exchange's ``maxFeeRateBps``, 500 by default (ctf-exchange-v2 ``Fees.sol``;
+#: ``getMaxFeeRate()`` reads the live one, which its admin can set). A schedule's rate
+#: can change at match time; this bound, or the schedule's own rate if larger, holds.
+PLATFORM_MAX_FEE_RATE = Decimal("0.05")
 
-    The pot's principal is what it holds beyond what it has itself settled: its value
-    on its own books less the P&L its fills and resolutions settled (``settled``), so
-    what the world earned never counts against the cap and a deposit always does.
-    Guarantees no new risk is taken on principal above ``principal_micro`` (essay
-    II.II.b, the hard cast); a cancellation and a sell are never refused by it.
+
+def _fee_bound(fees: dict | None) -> Decimal:
+    """The most fee, as a share of cash value, an order under ``fees`` can be charged."""
+    rate = _decimal((fees or {}).get("rate")) if (fees or {}).get("enabled") else None
+    return max(PLATFORM_MAX_FEE_RATE, rate or Decimal(0))
+
+
+def principal_at_risk(surface: PolymarketSurface) -> Decimal:
+    """The principal the world has put at risk, from its own durable records alone.
+
+    Architect's decision on Sol's third review of #177: every buy that may have
+    executed or may still execute (a placement not rejected: its size while it may
+    still fill; once proven over, what it matched less its failed legs), at its limit
+    price plus the most fee it can be charged (``_fee_bound``), less every payout the
+    world's resolutions paid it (``paid_out``). No wallet balance and no listing enters
+    it, so no one's deposit, withdrawal or omission makes room or takes it away.
     """
-    cap = getattr(surface.spec, "principal_micro", None)
-    if cap is None:
-        return None
-    held = held_at_cost(account)
-    if surface.live:
-        # A token the positions listing does not show yet (index lag, truncation) is
-        # still the world's: each token counts at the larger of the two valuations.
-        held = Decimal(account["usdc"]) + _live_tokens_value(surface, account)
-    principal = held - surface.settled
-    if usd_to_micro(principal, rounding="ceil") > cap:
-        return PRINCIPAL_REFUSAL
-    return None
+    cancelled, failed = _cancelled(surface), surface.cursor.get("failed", {})
+    finished = set(surface.cursor.get("terminal", ()))
+    total = Decimal(0)
+    for intent in surface.intents.values():
+        if intent["operation"] != "polymarket.place_limit":
+            continue
+        result, args = intent["result"], intent["args"]
+        if result.get("status") == "rejected" or intent.get("terminal"):
+            continue
+        order_id = str(intent.get("order_hash") or result.get("order_id"))
+        if order_id in finished:
+            quantity = Decimal(surface.filled.get(order_id, "0"))
+        elif not _terminal(surface, intent):
+            quantity = Decimal(str(args["size"]))
+        else:
+            matched = cancelled.get(order_id)
+            if matched is None:
+                matched = Decimal(str(result.get("filled_size") or "0"))
+            quantity = matched - Decimal(str(failed.get(order_id, "0")))
+        identity = intent.get("order_identity") or {}
+        bound = max(PLATFORM_MAX_FEE_RATE, Decimal(str(identity.get("fee_rate") or "0")))
+        total += max(Decimal(0), quantity) * Decimal(str(args["price"])) * (1 + bound)
+    return total - surface.paid_out
 
 
 #: The pot does not agree with its custodian: money left it that its books do not explain.
@@ -1277,22 +1308,6 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
     return reserved, book
 
 
-def _live_tokens_value(surface: PolymarketSurface, account: dict) -> Decimal:
-    """Each token at the larger of what the positions listing and the world's own book
-    say of it: a lagging or truncated listing never makes the pot look smaller."""
-    listed: dict[str, Decimal] = {}
-    for p in account["positions"]:
-        paid = p.get("payout")
-        listed[p["token_id"]] = Decimal(p["size"]) * (
-            Decimal(paid) if paid is not None else Decimal(p["avg_px"]))
-    resolved = surface.cursor.get("resolved", {})
-    for token, (size, avg) in surface.cursor.get("book", {}).items():
-        value = Decimal(size) * (Decimal(resolved[token]) if token in resolved
-                                 else Decimal(avg))
-        listed[token] = max(listed.get(token, Decimal(0)), value)
-    return sum(listed.values(), Decimal(0))
-
-
 def batch_refusal(rt: Any, seat: str, handle: str,
                   writes: list[tuple[str, str, dict]]) -> tuple[int, str] | None:
     """The first Polymarket write of a batch that would be refused, and why, or None.
@@ -1305,7 +1320,7 @@ def batch_refusal(rt: Any, seat: str, handle: str,
     beside the others.
     """
     surface = rt.polymarket
-    committed, placed = Decimal(0), set()
+    committed, placed, at_risk = Decimal(0), set(), Decimal(0)
     window, count = surface.window_orders
     count = count if window == rt.window.index else 0
     for index, (slot, tool_id, args) in enumerate(writes):
@@ -1318,7 +1333,7 @@ def batch_refusal(rt: Any, seat: str, handle: str,
                 return index, "the same order is placed twice in one batch"
             placed.add(key)
         reason = refusal(rt, surface, seat, handle, tool_id, args, committed=committed,
-                         window_count=count)
+                         window_count=count, principal_committed=at_risk)
         if reason:
             return index, reason
         if tool_id == "polymarket.place_limit":
@@ -1327,6 +1342,7 @@ def batch_refusal(rt: Any, seat: str, handle: str,
                 size, price = Decimal(str(args["size"])), Decimal(str(args["price"]))
                 market = _write_market(rt, surface, args["token_id"]) or {}
                 committed += size * price + taker_fee(market, size, price)
+                at_risk += size * price * (1 + _fee_bound(market.get("fees")))
     return None
 
 
@@ -1803,12 +1819,6 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     # reconciliation unknown, and new exposure waits on it. No allowance is made (Sol
     # P1: a blanket one hid real losses); a drift is never booked as a fee (Codex P1).
     surface.drifting = drift < Decimal("-0.000001")
-    above = principal_excess(surface, account)
-    if above is not None:
-        result["principal_exceeded"] = True
-        rt.ledger.append({"kind": "polymarket.principal_exceeded", **result,
-                          "principal_micro": surface.spec.principal_micro,
-                          "ts": rt.clock.now_ns})
     return result
 
 
@@ -1932,6 +1942,7 @@ def _settle_resolution(rt: Any, event: dict) -> None:
     # did; several holders share one unattributed row, and each is told its own
     # FIFO share through the consequence book instead.
     rt.polymarket.settled += Decimal(event["realized_usd"])
+    rt.polymarket.paid_out += Decimal(event["payout"]) * Decimal(event["size"])
     _book_pot(rt, usd_to_micro(event["realized_usd"], rounding="nearest"),
               f"resolution:{token}", "resolution", holders[0] if len(holders) == 1 else None)
     for handle, micro in realized.items():
