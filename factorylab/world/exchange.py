@@ -1541,6 +1541,12 @@ class HyperliquidExchange:
             # price read is the number of dexes, never the number of markets. A dex
             # that did not answer states no price for its markets this read: they are
             # absent, never served from an older read (Chapter II §III.b).
+            # Chapter II §III.b: a partial answer is not an answer. The first dex's
+            # must price every live perp it lists and every USDC pair, or the read
+            # failed and no watermark moves.
+            wanted = (*self._live_perps(""), *getattr(self, "_spot_names", {}))
+            if any(self._wire_coin(c) not in raw for c in wanted):
+                raise ValueError("incomplete mids response")
             raw = {**raw, **self._dex_mids()}
             mids = {c: Decimal(str(raw[self._wire_coin(c)]))
                     for c in (*getattr(self, "_listed_coins", self.coins),
@@ -1581,19 +1587,41 @@ class HyperliquidExchange:
                 continue
             if not isinstance(answer, dict):
                 continue
-            answered.append(dex)
-            for name, value in answer.items():
-                # One halted or malformed HIP-3 price is that market's absence, never
-                # the whole read's: a dex's listing changes under its deployer.
+            # A dex answered only when it priced every live market it lists, each a
+            # finite positive number (Chapter II §III.b: a partial answer is not an
+            # answer): otherwise none of its prices is used and its watermark holds.
+            # One dex's failure is never another's, nor the first dex's.
+            prices = {}
+            for name in self._live_perps(dex):
                 try:
-                    price = Decimal(str(value))
-                except (ArithmeticError, ValueError):
-                    continue
-                if (isinstance(name, str) and name.startswith(f"{dex}:")
-                        and price.is_finite() and price > 0):
-                    out[name] = value
+                    price = Decimal(str(answer[name]))
+                except (KeyError, ArithmeticError, ValueError, TypeError):
+                    break
+                if not price.is_finite() or price <= 0:
+                    break
+                prices[name] = answer[name]
+            else:
+                out.update(prices)
+                answered.append(dex)
         self._answered("mids", answered)
         return out
+
+    def _live_perps(self, dex: str) -> tuple[str, ...]:
+        """The live (listed, not delisted) perps of ``dex`` as the listing states them;
+        for an adapter built without per-market terms, its listed coins (first dex)."""
+        terms = getattr(self, "_terms", None)
+        if not terms:
+            return tuple(getattr(self, "_listed_coins", self.coins)) if not dex else ()
+        # The listing is the launch listing: grouped by dex once, not walked a read.
+        grouped = self.__dict__.get("_live_by_dex")
+        if grouped is None or grouped[0] != len(terms):
+            by_dex: dict[str, list[str]] = {}
+            for name, row in terms.items():
+                if not row["delisted"]:
+                    by_dex.setdefault(row["dex"], []).append(name)
+            grouped = (len(terms), {d: tuple(names) for d, names in by_dex.items()})
+            self.__dict__["_live_by_dex"] = grouped
+        return grouped[1].get(dex, ())
 
     def _dex_contexts(self, dex: str) -> Any:
         """One HIP-3 dex's ``metaAndAssetCtxs`` (the SDK's reader takes no dex)."""
@@ -1610,43 +1638,60 @@ class HyperliquidExchange:
         import time
 
         raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
-        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
-            raise VenueUnavailable("invalid funding response")
-        meta, ctxs = raw
-        if (not isinstance(meta, dict) or not isinstance(meta.get("universe"), list)
-                or not isinstance(ctxs, list)):
-            raise VenueUnavailable("invalid funding response")
-        pairs = list(zip(meta["universe"], ctxs, strict=False))
+        now_ns = time.time_ns()
+        # Chapter II §III.b: a partial answer is not an answer. The first dex's contexts
+        # must state every market's rate, or the read failed and no watermark moves.
+        out = self._rate_rows(raw, now_ns)
+        if out is None:
+            raise VenueUnavailable("invalid or incomplete funding response")
         # One read per named HIP-3 dex, bounded by the dexes, never by the markets. A
-        # dex that did not answer, or answered malformed, states no rate this read.
+        # dex that did not answer, or answered incompletely, states no rate this read
+        # and is not among the dexes that answered (its rates:<dex> watermark holds).
         answered: list[str] = []
         for dex in getattr(self, "dexes", ()):
             try:
-                answer = self._dex_contexts(dex)
-                dex_meta, dex_ctxs = answer
-                pairs.extend(zip(dex_meta["universe"], dex_ctxs, strict=False))
-            except (VenueUnavailable, TypeError, ValueError, KeyError):
+                rows = self._rate_rows(self._dex_contexts(dex), now_ns)
+            except VenueUnavailable:
                 continue
+            if rows is None:
+                continue
+            out.extend(rows)
             answered.append(dex)
         self._answered("rates", answered)
-        now_ns = time.time_ns()
+        return out
+
+    @staticmethod
+    def _rate_rows(raw: Any, now_ns: int) -> list[FundingEvent] | None:
+        """One perp dex's ``metaAndAssetCtxs`` answer as rates, or None when it is not a
+        complete one: a context for every market of its universe, each with a name and
+        a finite rate, and a premium that is finite or absent. An oracle price that is
+        not a positive number is absent (it is an optional field)."""
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            return None
+        meta, ctxs = raw
+        if (not isinstance(meta, dict) or not isinstance(meta.get("universe"), list)
+                or not isinstance(ctxs, list) or len(ctxs) != len(meta["universe"])):
+            return None
         out: list[FundingEvent] = []
-        for asset, ctx in pairs:
-            if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
-                continue
-            name = asset["name"]
+        for asset, ctx in zip(meta["universe"], ctxs, strict=True):
             try:
+                name = asset["name"]
+                if not isinstance(name, str) or not name:
+                    return None
                 rate = Decimal(str(ctx["funding"]))
                 premium = Decimal(str(ctx["premium"])) if ctx.get("premium") is not None else None
                 if not rate.is_finite() or premium is not None and not premium.is_finite():
-                    continue
+                    return None
+            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
+                return None
+            try:
                 mark = (Decimal(str(ctx["oraclePx"]))
                         if ctx.get("oraclePx") is not None else None)
                 if mark is not None and (not mark.is_finite() or mark <= 0):
                     mark = None
-                out.append(FundingEvent(name, rate, premium, now_ns, mark))
-            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
-                continue
+            except (TypeError, ValueError, ArithmeticError):
+                mark = None  # an unreadable optional price is absent, never a mark
+            out.append(FundingEvent(name, rate, premium, now_ns, mark))
         return out
 
     def account(self) -> AccountState:

@@ -256,6 +256,12 @@ def test_malformed_oracle_context_never_becomes_a_mark(ctx):
     exchange._info = SimpleNamespace(meta_and_asset_ctxs=lambda: [
         {"universe": [{"name": "BTC"}]}, [ctx]])
     exchange._guarded = lambda name, call: call()
+    if not isinstance(ctx, dict) or "funding" not in ctx:
+        # A context that states no rate makes the answer incomplete: the read fails
+        # (Codex P1 on #178) and nothing, a mark least of all, is invented from it.
+        with pytest.raises(VenueUnavailable):
+            exchange.funding()
+        return
     assert all(row.mark is None for row in exchange.funding())
 
 

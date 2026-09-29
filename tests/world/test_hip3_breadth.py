@@ -356,12 +356,83 @@ def test_a_hip3_label_canonicalizes_like_any_other():
     assert canonical_label(made.lower()) == made
 
 
-def test_a_halted_hip3_price_is_that_markets_absence_not_the_whole_reads(venue):
+def test_a_halted_hip3_price_fails_that_dexs_read_never_the_whole_reads(venue):
+    """A dex whose answer does not price every live market it lists has not answered
+    (Codex P1 on #178): none of its mids is used and its watermark holds; the first dex
+    and every other dex are unaffected."""
     ex = venue()
     real = ex._info.all_mids
     ex._info.all_mids = lambda dex="": ({**real(dex), "xyz:TSLA": "0"} if dex else real())
     mids = ex.mids()
-    assert "xyz:TSLA" not in mids and "xyz:GOLD" in mids and "BTC" in mids
+    assert not any(c.startswith("xyz:") for c in mids) and "BTC" in mids
+    assert ex.dex_answers()["mids"] == []
+
+
+def _partial(ex, kind, dex, answer):
+    """``ex``'s venue answering ``kind`` for ``dex`` with ``answer`` (called on the real)."""
+    if kind == "allMids":
+        real = ex._info.all_mids
+        ex._info.all_mids = lambda d="": answer(real(d)) if d == dex else real(d)
+    elif dex:
+        real = ex._info.post
+        ex._info.post = lambda path, body: (answer(real(path, body)) if body.get("dex") == dex
+                                            else real(path, body))
+    else:
+        real = ex._info.meta_and_asset_ctxs
+        ex._info.meta_and_asset_ctxs = lambda: answer(real())
+
+
+def _truncated(answer):
+    meta, ctxs = answer
+    return [meta, ctxs[:-1]]
+
+
+def _malformed(answer):
+    meta, ctxs = answer
+    return [meta, [{**ctxs[0], "funding": "not-a-rate"}, *ctxs[1:]]]
+
+
+def _empty(answer):
+    return [answer[0], []]
+
+
+@pytest.mark.parametrize("damage", [_truncated, _malformed, _empty])
+def test_an_incomplete_dex_funding_answer_is_a_failed_read_for_that_dex(venue, damage):
+    """Codex P1 on #178: a HIP-3 dex's contexts that unpacked but did not state every
+    market's rate were marked answered, so rates:<dex> advanced with rates missing."""
+    ex = venue()
+    _partial(ex, "metaAndAssetCtxs", "xyz", damage)
+    rates = {f.coin for f in ex.funding()}
+    assert ex.dex_answers()["rates"] == []
+    assert not any(c.startswith("xyz:") for c in rates) and "BTC" in rates
+
+
+@pytest.mark.parametrize("damage", [_truncated, _malformed, _empty])
+def test_an_incomplete_first_dex_funding_answer_fails_the_read(venue, damage):
+    from factorylab.world.exchange import VenueUnavailable
+
+    ex = venue()
+    _partial(ex, "metaAndAssetCtxs", "", damage)
+    with pytest.raises(VenueUnavailable):
+        ex.funding()
+
+
+def test_a_dex_mids_answer_missing_a_listed_market_is_a_failed_read_for_that_dex(venue):
+    ex = venue()
+    _partial(ex, "allMids", "xyz", lambda mids: {k: v for k, v in mids.items()
+                                                 if k != "xyz:GOLD"})
+    mids = ex.mids()
+    assert ex.dex_answers()["mids"] == []
+    assert "xyz:TSLA" not in mids and "BTC" in mids
+
+
+def test_a_first_dex_mids_answer_missing_a_listed_market_fails_the_read(venue):
+    from factorylab.world.exchange import VenueUnavailable
+
+    ex = venue()
+    _partial(ex, "allMids", "", lambda mids: {k: v for k, v in mids.items() if k != "ETH"})
+    with pytest.raises(VenueUnavailable):
+        ex.mids()
 
 
 def test_a_cancel_whose_order_is_not_open_sends_nothing_and_can_be_sent_later(venue):
@@ -614,3 +685,4 @@ def test_a_live_listing_is_read_once_per_fee_schedule_read_not_once_a_tick(monke
     rt._read_fee_schedule()  # a new schedule read may have moved the listing
     rt._traded_instruments()
     assert len(reads) == 3  # the schedule's own read, then the block's
+
