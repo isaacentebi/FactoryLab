@@ -29,6 +29,7 @@ from factorylab.charter.provenance import (
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
 from factorylab.runtime.observations import observation_for
+from factorylab.world import universe
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
@@ -134,8 +135,10 @@ class ModelTier:
     extra_body: tuple[tuple[str, Any], ...] = ()
     # How the route carries a request's I/O contract (Chapter II §II.b: physics is
     # enforced, not announced): "json_object" asks the host for JSON syntax alone;
-    # "json_schema" hands the contract to the host's constrained decoder. A transport
-    # fact about the route, fixed for the world's life.
+    # "json_schema" hands the contract to the host's constrained decoder;
+    # "json_schema_strict" hands it the part strict decoders compile, with strict
+    # decoding on (``openai_wire.strict_schema``). A transport fact about the route,
+    # fixed for the world's life.
     contract: str = "json_object"
     # The last day (UTC, "YYYY-MM-DD") the model's training data may cover, as its
     # provider states it; None when unknown. A world replaying a recorded tape refuses
@@ -144,7 +147,7 @@ class ModelTier:
 
 
 #: The ways a route may carry a request's contract (``ModelTier.contract``).
-MODEL_CONTRACTS = ("json_object", "json_schema")
+MODEL_CONTRACTS = ("json_object", "json_schema", "json_schema_strict")
 
 
 @dataclass(frozen=True)
@@ -822,8 +825,12 @@ class WorldManifest:
         return {m.id: dict(m.extra_body) for m in self.models if m.extra_body}
 
     def schema_contract_models(self) -> frozenset[str]:
-        """The model ids whose route carries the contract as a JSON schema."""
+        """The model ids whose route carries the contract as a JSON schema, not strict."""
         return frozenset(m.id for m in self.models if m.contract == "json_schema")
+
+    def strict_contract_models(self) -> frozenset[str]:
+        """The model ids whose route carries the contract as a strict JSON schema."""
+        return frozenset(m.id for m in self.models if m.contract == "json_schema_strict")
 
     def canonical_json(self) -> str:
         """Guarantees the manifest hashes every key the world runs under, at any value.
@@ -868,19 +875,39 @@ class WorldManifest:
             with urlopen(request, timeout=5) as response:
                 return json.load(response)
 
+        def dex_metadata(dex):
+            request = Request(f"https://{host}/info",
+                              data=json.dumps({"type": "meta", "dex": dex}).encode(),
+                              headers={"Content-Type": "application/json"})
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        dexes = universe.named_dexes(self.exchange.coins)
         try:
             perps, spot = metadata("meta"), metadata("spotMeta")
             coins = {row["name"] for row in perps["universe"]}
             tokens = {row["index"]: row["name"] for row in spot["tokens"]}
             pairs = {f"{tokens[row['tokens'][0]]}/{tokens[row['tokens'][1]]}"
                      for row in spot["universe"]}
+            usdc = next((row["index"] for row in spot["tokens"] if row["name"] == "USDC"),
+                        None)
+            foreign = []
+            for dex in dexes:
+                dex_meta = dex_metadata(dex)
+                coins |= {row["name"] for row in dex_meta["universe"]}
+                if dex_meta.get("collateralToken", usdc) != usdc:
+                    foreign.append(dex)
         except (OSError, ValueError, KeyError, TypeError, IndexError):
             return {"status": "unavailable", "coins": list(self.exchange.coins),
                     "spot_pairs": list(self.exchange.spot_pairs)}
-        missing_coins = sorted(set(self.exchange.coins) - coins)
-        missing_pairs = sorted(set(self.exchange.spot_pairs) - pairs)
-        return {"status": "invalid" if missing_coins or missing_pairs else "valid",
-                "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs}
+        missing_coins = sorted(set(universe.explicit_markets(self.exchange.coins)) - coins)
+        missing_pairs = sorted(set(universe.explicit_markets(self.exchange.spot_pairs)) - pairs)
+        missing_dexes = sorted(dex for dex in dexes
+                               if not any(coin.startswith(f"{dex}:") for coin in coins))
+        return {"status": ("invalid" if missing_coins or missing_pairs or missing_dexes
+                           or foreign else "valid"),
+                "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs,
+                "missing_dexes": missing_dexes, "non_usdc_dexes": sorted(foreign)}
 
     def _validate_funded_admission(self) -> None:
         """Real money launches only on a fresh identity space and the ratified charter.
@@ -1200,8 +1227,9 @@ class WorldManifest:
         share = self.exchange.public_read_weight_per_minute // readers
         published = [tool for tool in _BASE_WEIGHT
                      if tool not in VAULT_READS or self.exchange.vault_tools]
-        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}))
-        weight = public_read_weight(heaviest, {})
+        dexes = len(universe.named_dexes(self.exchange.coins))
+        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}, dexes))
+        weight = public_read_weight(heaviest, {}, dexes)
         if share < weight:
             return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
                     f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")
@@ -1292,7 +1320,8 @@ class WorldManifest:
         if (type(tape.start_ns) is not int or type(tape.end_ns) is not int
                 or not 0 < tape.start_ns < tape.end_ns):
             raise ValueError("exchange.tape span must be two increasing ns instants")
-        missing = set(self.exchange.coins) | set(self.exchange.spot_pairs)
+        missing = set(universe.explicit_markets(self.exchange.coins))
+        missing |= set(universe.explicit_markets(self.exchange.spot_pairs))
         missing -= set(tape.markets)
         if missing:
             raise ValueError(f"exchange.tape recorded no mids for {sorted(missing)}")
@@ -1885,6 +1914,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             or not p.split("/")[0] for p in spot_pairs)
             or len(set(spot_pairs)) != len(spot_pairs)):
         raise ValueError("venue.spot_pairs must be a unique list of BASE/USDC pairs")
+    coins = ex.get("coins", ["BTC", "ETH"])
+    if not isinstance(coins, list) or len(set(map(str, coins))) != len(coins):
+        raise ValueError("exchange.coins must be a unique list of coins or selectors")
+    # Selectors (``*``, ``<dex>:*``, ``*/USDC``) are resolved against the venue's listing
+    # at launch and pinned for the world's life (factorylab/world/universe.py).
+    universe.validate(coins, spot_pairs)
     tape = ex.get("tape")
     if tape is not None:
         if not isinstance(tape, dict) or set(tape) - {
@@ -1903,7 +1938,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         tape=tape,
         client_namespace=ex.get("client_namespace"),
         mainnet=bool(ex.get("mainnet", False)),
-        coins=tuple(ex.get("coins", ["BTC", "ETH"])),
+        coins=tuple(coins),
         spot_pairs=tuple(spot_pairs),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
@@ -2156,10 +2191,10 @@ def _model_contract(model: dict) -> str:
     if value not in MODEL_CONTRACTS:
         raise ValueError(f"models.contract must be one of {', '.join(MODEL_CONTRACTS)}; "
                          f"{model.get('id')!r} has {value!r}")
-    if value == "json_schema" and model.get("provider") not in ("openrouter", "venice"):
+    if value != "json_object" and model.get("provider") not in ("openrouter", "venice"):
         # Only these adapters can carry a schema; anywhere else the key would be a
         # promise of enforcement that nothing keeps.
-        raise ValueError(f"models.contract json_schema needs an openrouter or venice "
+        raise ValueError(f"models.contract {value} needs an openrouter or venice "
                          f"route; {model.get('id')!r} is {model.get('provider', 'fake')!r}")
     return value
 

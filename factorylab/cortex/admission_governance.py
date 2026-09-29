@@ -87,10 +87,11 @@ def governance_admission_schematics(manifest) -> dict:
         },
         "learner": {
             "target": "assembly_id names a registered assembly with no existing own learner.",
-            "actions": "Action labels are unique after canonicalization. Three-part buy/sell "
-                       "labels with xs/s/m/l/xl sizes lowercase side and size and uppercase coin. "
-                       "verdict/conformity numeric labels in [0,1] round to one decimal. Other "
-                       "labels remain exact.",
+            "actions": "Action labels are unique after canonicalization. Buy/sell labels "
+                       "side:coin:size with xs/s/m/l/xl sizes, the coin every part between (a "
+                       "HIP-3 coin carries its dex), lowercase side and size and uppercase "
+                       "coin. verdict/conformity numeric labels in [0,1] round to one decimal. "
+                       "Other labels remain exact.",
         },
         "model": {
             "unique_version": "The full model id is not already priced in this world.",

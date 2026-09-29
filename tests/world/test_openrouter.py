@@ -345,6 +345,37 @@ def test_a_json_schema_route_sends_the_schema_to_the_decoder(completion, req):
     assert transport.calls[2][2]["response_format"] == {"type": "json_object"}
 
 
+def test_a_json_schema_strict_route_sends_the_strict_schema_with_strict_on(completion, req):
+    """Chapter II §II.b: a strict route's decoder gets what strict decoders compile, and
+    the request's own contract is unchanged (the kernel validates against all of it)."""
+    import copy
+    from dataclasses import replace as replaced
+
+    from factorylab.world.openai_wire import strict_schema
+
+    schema = {**SCHEMA, "propertyNames": {"pattern": "^[a-z]+$"},
+              "properties": {"verdict": {"type": "number", "minimum": 0, "maximum": 1}}}
+    before = copy.deepcopy(schema)
+    transport = FakeTransport([completion, dict(completion), dict(completion)])
+    provider = OpenRouterProvider(transport=transport, strict_models=["test/flash"])
+    provider.complete(replaced(req, json_object=True, response_schema=schema))
+    payload = transport.calls[0][2]
+    assert payload["response_format"] == {"type": "json_schema", "json_schema": {
+        "name": "outcome", "strict": True, "schema": strict_schema(schema)}}
+    assert payload["response_format"]["json_schema"]["schema"] == {
+        "type": "object", "properties": {"verdict": {
+            "type": "number", "minimum": 0, "maximum": 1}},
+        "required": ["verdict"], "additionalProperties": True}
+    assert payload["provider"] == {"require_parameters": True}
+    assert schema == before
+    # Keyed on the model whatever effort suffix; a request asking only for JSON sends JSON.
+    provider.complete(replaced(req, model_id="test/flash@low", json_object=True,
+                               response_schema=schema))
+    assert transport.calls[1][2]["response_format"]["json_schema"]["strict"] is True
+    provider.complete(replaced(req, json_object=True))
+    assert transport.calls[2][2]["response_format"] == {"type": "json_object"}
+
+
 def test_a_default_route_keeps_json_object_when_a_request_carries_a_schema(completion, req):
     from dataclasses import replace as replaced
 

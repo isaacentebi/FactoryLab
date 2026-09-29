@@ -68,6 +68,9 @@ def _record(tmp_path, rows, *, venue_fees):
         ledger.append({"kind": "event", "event": {"kind": "Tick", "ts_ns": now[0]}})
         for event in live.on_tick(now[0]):
             ledger.append({"kind": "event", "event": event})
+        # The tick reads no book (Chapter II §IV.c); a seat's venue.order_book read goes
+        # through the same recorded adapter, and the diary keeps it for the tape.
+        exchange.order_book("BTC", 20)
     path = tmp_path / "events.json"
     path.write_text(json.dumps(list(ledger.items())))
     return Tape.from_data(cut(path)), list(ledger.items())

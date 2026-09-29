@@ -135,6 +135,26 @@ section is unchanged. OpenAI-hosted routes stay on the default: their hosts
 refuse a schema whose root is a union, and strict mode would require every
 property and close every object, which is a different contract.
 
+`"json_schema_strict"` sends the same schema with `strict: true`, after removing
+every keyword outside the set strict decoders commonly compile
+(`openai_wire.STRICT_KEYWORDS`: `type`, `properties`, `required`,
+`additionalProperties`, `items`, `enum`, `anyOf`, `$ref`, `$defs`, `description`,
+the numeric bounds, `minItems` and `maxItems`). The removed keywords are those hosts
+refused with HTTP 400: `propertyNames` (the field-name rule), `pattern`,
+`dependentRequired` and `minProperties`/`maxProperties` (a child request's
+propensity). A reference inside a `$defs` entry becomes `{}`, so no definition is
+recursive (a child `outcome_schema` is carried to its first level). Removing an
+assertion only widens what the schema admits, so a reply the decoder may produce is
+never one the full schema forbids by a rule the strict schema kept, and a rule it
+removed is still published in the prompt's `outcome_schema` and still enforced: the
+kernel validates every reply against the full contract, as on any other route. The
+request, its prompt and its `response_schema` are the same on every route; only the
+`response_format` differs. Objects stay open, so a strict decoder still admits any
+field name; hosts that refuse a union at the root (OpenAI, Mistral, ByteDance Seed,
+Meta, 29 September 2026), open objects (OpenAI) or any `$ref` (Google AI Studio)
+refuse this contract too, before generation. Same keys and rules as `json_schema`
+otherwise: `openrouter` and `venice` routes only, fixed for the world's life.
+
 `models[].training_cutoff` is the last UTC day (`"YYYY-MM-DD"`) a model's training
 data may cover, as its provider states it; absent (the default) means unknown. It is
 fixed for the world's life and hashed. It binds only a world that replays a recorded
@@ -568,7 +588,9 @@ The request states this contract as structure, and the published schema is the
 enforced one (§II.b). Every round's `outcome_schema` is rebuilt by one function
 (`producing_contract`) from the facts the kernel checks: before the decision
 acts, a producing answer is `anyOf` (a) the kind's answer with `counterfactual`
-required and its `coin` an `enum` of the instruments the venue lists, or, when the
+required and its `coin` an `enum` of the instruments the venue lists (while it lists at
+most `LISTED_ENUM_MAX`, 64; above that the coin is a string naming the listing by
+reference, and the kernel checks it against the same listing), or, when the
 decision may place an answer order and the kind owns one, (b) `action: "order"`
 with `coin`, `side` and `size` required. After a venue write the venue accepted or
 left `uncertain`, the field is optional. With nothing listed it is absent. The kernel
@@ -1898,13 +1920,123 @@ are allowed).
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
 
+## The market universe: selectors in `exchange.coins` and `venue.spot_pairs`
+
+The venue is the world, not architecture (AGENTS.md), and which of its markets the
+population uses is its own business (rule 1). `exchange.coins` and `venue.spot_pairs`
+name markets explicitly (`BTC`, `xyz:TSLA`, `PURR/USDC`) or by selector
+(`factorylab/world/universe.py`):
+
+| Selector | In | Selects |
+|---|---|---|
+| `*` | `exchange.coins` | every live (not delisted) perp of Hyperliquid's first perp dex |
+| `<dex>:*` | `exchange.coins` | every live perp of that builder-deployed (HIP-3) dex; `<dex>` is 1-16 letters and digits |
+| `*/USDC` | `venue.spot_pairs` | every USDC-quoted spot pair |
+
+No key is added, so a world that names no selector keeps its manifest hash and runs
+exactly as before. Load-time invariants: `exchange.coins` is a unique list; a selector
+is one of the three forms above and sits in its own list (a malformed one, or `*/USDC`
+in `exchange.coins`, is refused); a market on a dex names the dex as `<dex>:<coin>`.
+Every dex a coin list names (by selector or by a market on it) is read and traded by the
+live adapter (`HyperliquidExchange(dexes=...)`); a named dex must be margined in USDC,
+or the adapter refuses to start (the world's money is USDC). `validate_venue_metadata`
+names missing coins, pairs and dexes, and dexes margined in another token.
+
+**Resolved once, pinned for life** (Chapter II §II). At launch the selectors are
+resolved against the venue's instrument listing: explicit names as written, then each
+selector's live markets in the listing's order, none twice; a selector that selects
+nothing refuses the launch. The resolved lists are the world's trading seed, ledgered
+once as `venue.universe` (`selectors`, `coins`, `spot_pairs`) and carried in every
+checkpoint's `config.universe`; a resume is handed them and never resolves again, so a
+market the venue lists later is not added and one it delists stays named (the venue
+refuses its orders). A `market` registration still adds a listed market outside the
+universe, under its novelty trial. A schematics render reads no venue and resolves
+nothing: it seeds the explicit names alone. The random-walk simulated venue
+(`fastloop.simulation_manifest`) lists no HIP-3 dex, so that simulated world keeps the
+first-dex selectors and drops the dex ones; a tape replay keeps every name, and its
+selectors resolve against what the tape recorded, HIP-3 markets included.
+
+**Published.** `world.trading_markets` carries, beside the explicit and registered
+markets by class, `universe`: the selectors as written, the count each class resolved
+to, and the rule; never the resolved list, whose size would follow the venue's.
+`world.read {"section": "markets"}` (retrieved only, never in a prompt) returns the
+venue's own instrument record of every market the world may trade: lot size, tick
+size, price significant figures, `min_order_value_usd`, a perp's `max_leverage` and
+`margin` (`cross`, or `isolated` for a market the venue margins isolated only:
+`onlyIsolated`, or a HIP-3 `marginMode` of `strictIsolated` or `noCross`), its `dex`
+for a HIP-3 market, `delisted` where the venue delisted it, and this account's
+`taker_fee_rate` and `maker_fee_rate`. The world block's `venue` and
+`market_data_as_of` carry the broadcast markets only (below).
+
+**Fees per market.** A first-dex perp and a spot pair state the account's `userFees`
+rates for their class. A HIP-3 perp states the venue's published scaling of them
+(hyperliquid.gitbook.io/hyperliquid-docs/trading/fees): both rates times `1 + d` for a
+`deployerFeeScale` d below 1, else `2d`; times 0.1 in growth mode; a positive rate
+times `1 - activeReferralDiscount` (which also applies to every market while nonzero).
+The rate a fill actually pays is the venue's own `fee` on that fill, the counterparty
+the wallet moves by; the published rate prices the road not taken.
+
+**The tick's cost follows the world, not the venue** (Chapter II §IV.c). A price read
+is one batched `allMids` per perp dex (the first dex's answer carries spot), funding
+one `metaAndAssetCtxs` per dex, the account one `clearinghouseState` per dex plus the
+spot state: a tick's venue requests grow with the named dexes, never with the markets.
+No order book is read on the tick: a book is read when a seat asks
+(`venue.order_book`), and the tape recorder samples books off the path. In a world
+with a universe, the tick broadcasts (`MarketMid`, rate `Funding`, the settled funding
+reads, `funding.regime`) only its explicit markets, its registered markets and the
+markets it is in play on: a market a named trade or an open consequence still reads (any
+listed market, traded or not: permission to trade is not the obligation to observe), an
+instrument an open return holds or held, an order intent not yet released, and a
+position or spot balance in the tick's account read. A former market's settled funding
+cursor is read again only while a boundary of it is still owed. A world with no
+selector broadcasts its trading markets, as before. A producer's tick payload carries
+the broadcast markets' mids only; every other listed mid is one `venue.mids` read away. A simulated or recorded venue
+advances only that set and the markets it holds a position, balance or order on: no
+other market's mid, history or event is made on the tick (the random walk's other
+markets hold their last price; a recording answers any market's mid from its rows).
+
+**HIP-3 on the live adapter.** A HIP-3 coin is `dex:COIN` everywhere (orders, fills,
+positions, books). The SDK resolves its asset id (`100000 + 10000 x dex index + index`)
+because the adapter is built with the named dexes. A market order on a HIP-3 perp is
+priced at the perp precision rule the listing publishes (the SDK rounds any asset id
+at or above 10,000 as spot). A HIP-3 perp is margined against its own dex's
+clearinghouse: `collateral_view` reports that dex's account value and margin, and the
+account's equity sums every clearinghouse read. USDC reaches a HIP-3 dex only through
+the venue (the account's DEX abstraction, which the operator sets, or a transfer the
+world does not sign); an order the dex cannot margin is the venue's refusal. Leverage
+above a market's `max_leverage` is refused before it is signed. A cancel naming no coin
+is sent on the order's own market, as the venue's open orders state it. Each named dex's
+mids and rates reads keep their own delivered-through watermark (`hl:mids:<dex>`,
+`hl:rates:<dex>`, from `dex_answers`): a dex that did not answer holds back the
+consequences on its own markets, never another dex's, and a partial read never
+advances them.
+
+**Not selected.** HIP-4 outcome markets (`#<10 x outcome + side>` coins, `outcomeMeta`)
+and spot pairs quoted in another token (USDH, USDT0, USDE) are not markets of a world:
+the world's money is USDC, an outcome settles in its own quote and fee rule, and the SDK
+this adapter signs with does not resolve an outcome's asset id.
+
 ## Recorded tapes: `[exchange.tape]`
 
 `exchange.tape` is absent by default (the fake venue walks its seeded random
 path) and fixed for the world's life when present. It names the recorded market a
 fake venue replays: a past paid run's diary, cut to its market data
-(`factorylab/world/tape.py`, `scripts/fastloop.py tape`). A tape is the world, not
-architecture. The keys:
+(`factorylab/world/tape.py`, `scripts/fastloop.py tape`), or a read-only recording of a
+whole universe (`scripts/record_tape.py`, `factorylab/world/recorder.py`). A tape is the
+world, not architecture. The recorder resolves the same selectors a manifest does
+(`*`, `<dex>:*`, `*/USDC`) and reads only public endpoints, batched: per poll one
+`allMids` per perp dex, one `metaAndAssetCtxs` per dex every `--funding-every` polls (a
+perp's funding row is kept where it changed, `legacy` regime), and `--books-per-poll`
+`l2Book` reads rotating through the universe at `--book-depth` levels, so its cost
+follows the dexes, never the markets. It signs nothing; its one account read is
+`userFees` of a public `--fee-user` (default the zero address, the venue's base
+schedule), whose rates (scaled per HIP-3 market as the live listing is) are the tape's
+`venue_read` fee steps from the first instant. A poll is one flushed journal line, so an
+interrupted recording keeps what it read; `--compact <journal>` rebuilds the tape. A
+recorded listing row names each market's lot, tick, precision, order floor, leverage
+limit, margin mode and dex. Replay reads the listing row, a market's spreads and the
+smallest recorded level by index, so a universe of hundreds of markets costs one pass
+of the recording, not one per market. The keys:
 
 | Key | Meaning |
 |---|---|
@@ -2606,6 +2738,12 @@ otherwise (`tool.refused`, naming the seat's own use and share). The seats' tota
 is capped by the shares, one seat a slot at a time, at `public_read_weight_per_minute`
 (480), which leaves the kernel the rest of the venue's 1200 (720); the physical
 per-IP limit is the venue's own (a 429), which `_guarded` backs off from.
+A read the live adapter sends once per perp dex weighs that much more for each HIP-3 dex
+the manifest names (`PER_DEX_WEIGHT`: `venue.mids` 2, `venue.funding` 20,
+`venue.open_orders` 20, `venue.positions` 2), priced before it is sent and published
+in each tool's description and in `world.read {"section":"admission"}`
+(`per_dex_weights`, `named_hip3_dexes`); a world whose slot share cannot cover the
+heaviest read so priced is refused at load.
 
 **A read answered earlier in the tick is not sent again.** Within one world tick,
 until a venue or treasury write that can change what the venue answers (an order,

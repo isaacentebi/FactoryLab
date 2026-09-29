@@ -110,8 +110,9 @@ class ModelRequest:
     effort: str = "medium"
     json_object: bool = False
     #: The reply's contract as a JSON schema (``wire_schema``), for a route whose
-    #: manifest ``contract`` is ``json_schema`` (Chapter II §II.b: physics is
-    #: enforced, not announced). Any other route asks for a JSON object alone.
+    #: manifest ``contract`` is ``json_schema``, or ``json_schema_strict``, which sends
+    #: ``openai_wire.strict_schema`` of it (Chapter II §II.b: physics is enforced, not
+    #: announced). Any other route asks for a JSON object alone.
     response_schema: dict[str, Any] | None = None
     #: The call's own deadline in seconds, stated by whoever runs it (the runtime
     #: states a ratio of its delivered tick, Chapter II §IV.c; time audit T8). None

@@ -602,6 +602,8 @@ def _read_only(name: str) -> bool:
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index", "instruments", "refresh_fee_rates",
+        # Which HIP-3 dexes answered the adapter's last mids and funding reads.
+        "dex_answers",
         # The live adapter's count of venue request weight it has sent: a read of its
         # own counter, replayed from the journal and never a write to the venue.
         "request_weight_sent",
@@ -1069,6 +1071,9 @@ def runtime_state(rt) -> Checkpoint:
         "config": {
             "events": rt.events_budget, "seed": rt.seed, "initial_balance_micro": rt.initial,
             "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
+            # The universe the manifest's selectors resolved to at launch, pinned for
+            # the world's life: a resume is handed it and never resolves again.
+            **({"universe": rt.universe} if getattr(rt, "universe", None) else {}),
         },
         "adapters": {name: {"name": getattr(getattr(rt, name).target, "name", name),
                             "deterministic": getattr(rt, name).deterministic,
@@ -1512,8 +1517,9 @@ def restore_runtime(rt, state: dict) -> None:
         # Rebuild from the launch seed, exactly as bootstrap did, so the restored
         # schemas match byte for byte before registered markets are replayed below.
         tool_log = rt.venue_tools.log
-        rt.venue_tools = VenueTools(rt.exchange, coins=rt.m.exchange.coins,
-                                   spot_pairs=rt.m.exchange.spot_pairs,
+        seed = rt._seed_spec()
+        rt.venue_tools = VenueTools(rt.exchange, coins=seed.coins,
+                                   spot_pairs=seed.spot_pairs,
                                    max_leverage=rt.m.tools.max_leverage)
         rt.venue_tools.log = tool_log
         rt._refresh_venue_schemas()

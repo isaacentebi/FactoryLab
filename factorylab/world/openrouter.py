@@ -111,6 +111,7 @@ class OpenRouterProvider:
         web_config: Mapping[str, Mapping[str, Any]] | None = None,
         extra_body: Mapping[str, Mapping[str, Any]] | None = None,
         schema_models: Iterable[str] = (),
+        strict_models: Iterable[str] = (),
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
@@ -130,6 +131,9 @@ class OpenRouterProvider:
         # hand the contract to the host's decoder (Chapter II §II.b). Every other
         # route asks for JSON syntax alone.
         self._schema_models = frozenset(schema_models)
+        # The model ids whose ``contract`` is ``json_schema_strict``: the host constrains
+        # decoding to the part of the contract strict decoders compile (``strict_schema``).
+        self._strict_models = frozenset(strict_models)
         self._transport = transport if transport is not None else self._default_transport
         # The deadline of the completion in flight (``ModelRequest.timeout_s``), set
         # only for the duration of that one call.
@@ -235,8 +239,10 @@ class OpenRouterProvider:
                 if rest:
                     parts.append({"type": "text", "text": rest})
                 payload["messages"][-1] = {**final, "content": parts}
-        contract = response_format(req, schema_route=any(
-            k in self._schema_models for k in (req.model_id, wire_id, base_id)))
+        keys = (req.model_id, wire_id, base_id)
+        contract = response_format(
+            req, schema_route=any(k in self._schema_models for k in keys),
+            strict_route=any(k in self._strict_models for k in keys))
         if contract is not None:
             # The contract is applied after the manifest's extra body, so an extra body
             # can never turn a structured request into free text or loosen its schema.

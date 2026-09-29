@@ -11,6 +11,7 @@ from typing import Any
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import (
     JUDGING_FIELDS,
+    LISTED_ENUM_MAX,
     MAX_PROGRAM_STATE_BYTES,
     SEED_KIND_LINES,
     SEED_SYSTEM_PROMPT,
@@ -150,6 +151,12 @@ MOVING_INSTITUTION_KEYS = frozenset({"clock"})
 #: prefix rendered and the validators read -- never a second copy of it.
 # Chapter II §I.b: detailed admission facts are retrieved, never standing instructions.
 RETRIEVABLE_ADMISSION_SECTIONS = frozenset({"admission", "proposals", "trials", "reserve"})
+#: Venue sections retrieved only by ``world.read``, never carried in a prompt: every
+#: market this world may trade, with its terms (Chapter II §I.b: tools, prices and limits
+#: are public). A universe of hundreds of markets is one read away, never a prefix.
+RETRIEVABLE_VENUE_SECTIONS = frozenset({"markets"})
+#: Every section ``world.read`` serves that no prompt carries.
+RETRIEVABLE_SECTIONS = RETRIEVABLE_ADMISSION_SECTIONS | RETRIEVABLE_VENUE_SECTIONS
 
 INSTITUTION_SECTIONS = frozenset({
     "a_return_may_include", "accounting_facts", "action_labels", "assemblies",
@@ -369,8 +376,10 @@ class SchematicsMixin:
             "optional otherwise. Without it, or with a coin the venue does not list, the "
             "return is malformed. It is not required while nothing is listed. Each "
             "request's outcome schema states this for that request as a union: an answer "
-            "with counterfactual required, its coin one of the listed coins, or, where an "
-            "answer order may be placed, an answer order with coin, side and size"
+            "with counterfactual required, its coin one of the listed coins (enumerated "
+            f"while the venue lists at most {LISTED_ENUM_MAX}, else named by reference to "
+            "the listing and checked against it), or, where an answer order may be placed, "
+            "an answer order with coin, side and size"
         ),
         "verdict": (
             "evaluator returns (required in an answer; a decline is its own form): the "
@@ -708,16 +717,18 @@ class SchematicsMixin:
             "mechanics": mechanics,
             "composition": SEED_SYSTEM_PROMPT,
             "venue_listing": (
-                "venue is the instrument record of each market in trading_markets. The "
-                "venue lists far more than those: call the venue.instruments public read "
-                "for the whole listing, and register a market proposal to trade one of them. "
+                "venue is the instrument record of each market in trading_markets that "
+                "the tick broadcasts; world.read section markets returns the record of "
+                "every market this world may trade, trading_markets.universe included. "
+                "The venue lists far more than those: call the venue.instruments public "
+                "read for the whole listing, and register a market proposal to trade one "
+                "of them. "
                 "venue.mids, venue.funding, venue.candles, venue.order_book and "
                 "venue.funding_history read any listed coin or pair without registering it. "
                 f"The venue reads are held by seats with a venue read slot, at most "
                 f"{self.m.exchange.max_readers}: your YOU block says whether you hold one."
             ),
-            "trading_markets": {"perp": list(self.venue_tools.coins),
-                                "spot": list(self.venue_tools.spot_pairs)},
+            "trading_markets": self._trading_markets_section(),
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
                            "timeout_s": self.m.connectors.timeout_s,
@@ -956,6 +967,8 @@ class SchematicsMixin:
         """
         if name in RETRIEVABLE_ADMISSION_SECTIONS:
             return self._admission_section(name)
+        if name in RETRIEVABLE_VENUE_SECTIONS:
+            return self._markets_section()
         if name not in INSTITUTION_SECTIONS:
             raise ValueError(f"no institutional section named {name!r}")
         block = self._institutional_block()
@@ -1016,7 +1029,7 @@ class SchematicsMixin:
         part of the stable prefix.
         """
         handles = sorted((set(institutions) - INSTITUTION_INLINE_KEYS
-                          - MOVING_INSTITUTION_KEYS) | RETRIEVABLE_ADMISSION_SECTIONS)
+                          - MOVING_INSTITUTION_KEYS) | RETRIEVABLE_SECTIONS)
         tool = "world.read" if "world.read" in getattr(self, "tool_specs", {}) else None
         return {
             "sections": handles,
@@ -1395,6 +1408,104 @@ class SchematicsMixin:
         """
         return self.charter.render(price_label="in world.card_prices")
 
+    def _trading_markets_section(self) -> dict[str, Any]:
+        """The markets this world may trade, stated so its size never follows the venue's.
+
+        Guarantees, for a world whose manifest names no selector, exactly its trading
+        markets by class, as before. For a world with a universe
+        (factorylab/world/universe.py): the explicit and registered markets by class,
+        and the universe as the manifest's selectors and the count each class resolved
+        to at launch, with the route to every market's record; the resolved list itself
+        is ``world.read`` section ``markets``, never carried in a prompt.
+        """
+        from factorylab.world import universe as universe_names
+
+        pinned = getattr(self, "universe", None)
+        declared = (universe_names.selectors(self.m.exchange.coins)
+                    or universe_names.selectors(self.m.exchange.spot_pairs))
+        if not pinned and not declared:
+            return {"perp": list(self.venue_tools.coins),
+                    "spot": list(self.venue_tools.spot_pairs)}
+        # A schematics render reads no venue, so its selectors are not resolved yet.
+        pinned = pinned or {"coins": [], "spot_pairs": []}
+        tools = self.venue_tools
+
+        selected = set(pinned["coins"]) | set(pinned["spot_pairs"])
+        explicit = (set(universe_names.explicit_markets(self.m.exchange.coins))
+                    | set(universe_names.explicit_markets(self.m.exchange.spot_pairs)))
+        named = [m for m in (*tools.coins, *tools.spot_pairs)
+                 if m not in selected or m in explicit]
+        return {
+            "perp": [m for m in named if m in tools.coins],
+            "spot": [m for m in named if m in tools.spot_pairs],
+            "universe": {
+                "selectors": {
+                    "coins": list(universe_names.selectors(self.m.exchange.coins)),
+                    "spot_pairs": list(universe_names.selectors(self.m.exchange.spot_pairs))},
+                "resolved": ({"perp": len(pinned["coins"]), "spot": len(pinned["spot_pairs"])}
+                             if getattr(self, "universe", None) else
+                             {"status": "unavailable",
+                              "reason": "resolved against the venue's listing at launch; "
+                                        "this render reads no venue"}),
+                "rule": ("* is every live perp of the venue's first perp dex, <dex>:* every "
+                         "live perp of that HIP-3 dex, */USDC every USDC-quoted spot pair. "
+                         "Resolved against the venue's listing at launch and fixed for the "
+                         "world's life: a market listed later is not added. Every resolved "
+                         "market is tradeable, with perp and spot above."),
+                "records": 'world.read {"section": "markets"}'},
+        }
+
+    def _markets_section(self) -> dict[str, Any]:
+        """Every market this world may trade, with the venue's own record of its terms.
+
+        Guarantees the records are exactly the venue's listing rows (lot size, tick
+        size, price precision, order floor, a perp's leverage limit and margin mode,
+        this account's fee rates) for the markets ``world.trading_markets`` states,
+        the universe's resolved markets included, unabridged and unrewritten: the
+        terms the venue adapter enforces are the ones retrieved here (Chapter II §II.b).
+        """
+        listing = self._venue_listing()
+        if not isinstance(listing, dict) or "perp" not in listing and "spot" not in listing:
+            return listing
+        traded = {"perp": set(self.venue_tools.coins), "spot": set(self.venue_tools.spot_pairs)}
+        return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
+                for market, rows in listing.items() if market in traded}
+
+    def _listing_key(self) -> Any:
+        """When the venue's listing may have changed since it was read: a live venue's
+        listing is its launch listing and this account's fee rates, which move only when
+        the fee schedule is read again (``_read_fee_schedule``), so it is read once per
+        schedule read, never once a tick (a listing of thousands of rows would enter the
+        diary every tick); a simulated or recorded venue's may move every tick."""
+        if getattr(self, "live", False):
+            return ("fees", (getattr(self, "fee_schedule", None) or {}).get("read_ns"))
+        return ("tick", self.ticks_consumed)
+
+    def _venue_listing(self) -> Any:
+        """The venue's instrument listing, read once per ``_listing_key`` (the memo)."""
+        return self._venue_listing_indexed()[0]
+
+    def _venue_listing_indexed(self) -> tuple[Any, dict]:
+        """The listing and its rows by ``(market, coin)`` with their listing position."""
+        key = self._listing_key()
+        memo = getattr(self, "_instruments_memo", None)
+        if memo is None or memo[0] != key:
+            from factorylab.runtime.published import NotYetRead
+
+            try:
+                listing = self.exchange.instruments()
+            except NotYetRead as exc:
+                from factorylab.runtime.custody import unavailable
+
+                return unavailable(str(exc)), {}
+            index = ({(market, row.get("coin")): (pos, row)
+                      for market, rows in listing.items() if isinstance(rows, list)
+                      for pos, row in enumerate(rows) if isinstance(row, dict)}
+                     if isinstance(listing, dict) else {})
+            memo = (key, listing, index)
+            self._instruments_memo = memo
+        return memo[1], memo[2]
+
     def _traded_instruments(self) -> dict[str, list[dict[str, Any]]]:
         """The instrument record of each market this world may trade, and no other.
 
@@ -1421,24 +1532,23 @@ class SchematicsMixin:
         registered mid-tick still finds its record here because the raw listing,
         not the filtered block, is what is held.
         """
-        tick = self.ticks_consumed
-        memo = getattr(self, "_instruments_memo", None)
-        if memo is None or memo[0] != tick:
-            from factorylab.runtime.published import NotYetRead
-
-            try:
-                listing = self.exchange.instruments()
-            except NotYetRead as exc:
-                # A schematics render (runtime/published.py, §I.b) reads no venue: the
-                # listing is published as not read, never as an empty or invented one.
-                from factorylab.runtime.custody import unavailable
-
-                return unavailable(str(exc))
-            memo = (tick, listing)
-            self._instruments_memo = memo
-        traded = {"perp": set(self.venue_tools.coins), "spot": set(self.venue_tools.spot_pairs)}
-        return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
-                for market, rows in memo[1].items()}
+        # A schematics render (runtime/published.py, §I.b) reads no venue: the listing
+        # is published as not read, never as an empty or invented one.
+        listing, index = self._venue_listing_indexed()
+        if not isinstance(listing, dict) or "status" in listing and "perp" not in listing:
+            return listing
+        # The markets the tick broadcasts: a world's trading markets, and for a world
+        # with a universe those it is in play on (``_broadcast_markets``); the rest of
+        # the universe's records are ``world.read`` section ``markets``. Rows are found
+        # by market, never by a scan of the listing, and kept in listing order.
+        perps, pairs = self._tradeable_sets()
+        picked: dict[str, list] = {market: [] for market in listing}
+        for coin in dict.fromkeys(self._broadcast_markets()):
+            for market, allowed in (("perp", perps), ("spot", pairs)):
+                if coin in allowed and (market, coin) in index and market in picked:
+                    picked[market].append(index[(market, coin)])
+        return {market: [row for _pos, row in sorted(rows, key=lambda item: item[0])]
+                for market, rows in picked.items()}
 
     def _polymarket_reads_section(self) -> dict[str, Any]:
         """The kernel's open-read limit on Polymarket, as a published limit (II.I.b)."""
@@ -1816,7 +1926,11 @@ class SchematicsMixin:
         limit = 2 * self.tick_clock.interval_ns
         out: dict[str, Any] = {}
         seen = self._seat_recent_mids()
-        for coin in sorted(self.venue_tools.coins) + sorted(self.venue_tools.spot_pairs):
+        # The broadcast markets: a world's trading markets, or, with a universe, the
+        # markets it is in play on; never one row per market of a universe.
+        shown = set(self._broadcast_markets())
+        for coin in (sorted(set(self.venue_tools.coins) & shown)
+                     + sorted(set(self.venue_tools.spot_pairs) & shown)):
             prints = seen.get(coin)
             if not prints:
                 out[coin] = {"as_of_utc": None, "age": None, "missing": True, "stale": True}

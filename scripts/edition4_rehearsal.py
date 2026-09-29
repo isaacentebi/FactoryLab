@@ -668,18 +668,21 @@ def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = 
     config = {m.id: dict(m.reasoning) for m in manifest.models if m.reasoning}
     extra = manifest.extra_body_config()
     schema_models = manifest.schema_contract_models()
+    strict_models = manifest.strict_contract_models()
     openrouter = None
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
             raise RehearsalRefused("openrouter_credential_missing")
         openrouter = OpenRouterProvider(reasoning_config=config,
                                         web_config=manifest.web_config(), extra_body=extra,
-                                        schema_models=schema_models)
+                                        schema_models=schema_models,
+                                        strict_models=strict_models)
     venice = None
     if "venice" in providers:
         if os.environ.get("VENICE_API_KEY"):
             venice = VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
-                                    schema_models=schema_models)
+                                    schema_models=schema_models,
+                                    strict_models=strict_models)
         elif os.environ.get("RESERVE_PRIVATE_KEY"):
             transport, reserve_client = _venice_reserve_transport()
 
@@ -691,7 +694,8 @@ def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = 
 
             venice = CapturedReserveVenice(
                 transport=transport, reasoning_config=config,
-                web_config=manifest.web_config(), schema_models=schema_models)
+                web_config=manifest.web_config(), schema_models=schema_models,
+                strict_models=strict_models)
         else:
             raise RehearsalRefused("venice_prepaid_credential_missing")
     # Runtime must never inherit the reserve private key. The captured transport can
