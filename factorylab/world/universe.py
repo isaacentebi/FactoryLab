@@ -70,7 +70,10 @@ def validate(coins: Iterable[Any], spot_pairs: Iterable[Any]) -> None:
             raise ValueError("*/USDC selects spot pairs: it belongs in venue.spot_pairs")
         if ":" in name:
             dex, rest = name.split(":", 1)
-            if not DEX_NAME.fullmatch(dex) or not rest or ":" in rest and rest != "*":
+            # A dex market's name is ``*`` (the selector) or carries no ``*`` or ``:`` at
+            # all: ``xyz:TS*LA`` would read as a market no venue lists.
+            if (not DEX_NAME.fullmatch(dex) or not rest
+                    or rest != "*" and ("*" in rest or ":" in rest)):
                 raise ValueError(f"exchange.coins entry {name!r} does not name a perp dex "
                                  "market as <dex>:<coin> or select one as <dex>:*")
         elif "*" in name and name != PERPS_ALL:
