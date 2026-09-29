@@ -281,6 +281,27 @@ class FakeExchange:
     # The account this venue's books are, as a leader or depositor names it. A class
     # attribute, not a field: the fake has one account and it is not configurable.
     _address = FAKE_ACCOUNT
+    #: The markets a world with a universe watches (``runtime/venue.py``,
+    #: ``_broadcast_markets``), set on the instance before each advance; None moves
+    #: every listed market, as a world without a universe always has. A class
+    #: attribute, so a venue no universe world drives checkpoints exactly as before.
+    watched: tuple[str, ...] | None = None
+
+    def _moving(self, markets) -> list[str]:
+        """The markets an advance moves: every one, or with ``watched`` set, the watched
+        ones and every market this venue holds a position, a balance or an order on
+        (Chapter II §IV.c: a tick's work follows the world, not the listing). A spot
+        pair moves its base with it."""
+        markets = list(dict.fromkeys(markets))
+        watched = self.__dict__.get("watched")
+        if watched is None:
+            return markets
+        keep = {*watched, *self._positions, *self._spot_positions,
+                *(order.coin for order in self._resting.values()),
+                *(flight["order"].coin
+                  for flight in (self.__dict__.get("_inflight") or {}).values())}
+        keep |= {pair.split("/")[0] for pair in sorted(keep) if "/" in pair}
+        return [market for market in markets if market in keep]
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed)
@@ -324,9 +345,9 @@ class FakeExchange:
         self._now_ns = ts_ns
         self._step += 1
         events: list[WorldEvent] = []
-        for coin in dict.fromkeys((*self.coins, *self.listed_coins,
-                                   *(p.split("/")[0] for p in
-                                     (*self.spot_pairs, *self.listed_spot_pairs)))):
+        for coin in self._moving((*self.coins, *self.listed_coins,
+                                  *(p.split("/")[0] for p in
+                                    (*self.spot_pairs, *self.listed_spot_pairs)))):
             self._mids[coin] = self._next_price(coin)
             self._mid_history[coin].append((ts_ns, self._mids[coin]))
             events.append(
@@ -337,7 +358,7 @@ class FakeExchange:
                     {"coin": coin, "mid": str(self._mids[coin])},
                 )
             )
-        for pair in dict.fromkeys((*self.spot_pairs, *self.listed_spot_pairs)):
+        for pair in self._moving((*self.spot_pairs, *self.listed_spot_pairs)):
             self._mids[pair] = self._mids[pair.split("/")[0]]
             self._mid_history[pair].append((ts_ns, self._mids[pair]))
             events.append(WorldEvent(WorldEventKind.MARKET_MID, ts_ns, self.name,
@@ -374,8 +395,12 @@ class FakeExchange:
 
     # ---- protocol
 
-    def mids(self) -> dict[str, Decimal]:
-        return dict(self._mids)
+    def mids(self, markets=None) -> dict[str, Decimal]:
+        """Every market's mid, or with ``markets`` those alone: a read's work follows
+        what is asked, never the listing (Chapter II §IV.c)."""
+        if markets is None:
+            return dict(self._mids)
+        return {m: self._mids[m] for m in markets if m in self._mids}
 
     def funding(self) -> list[FundingEvent]:
         return [FundingEvent(c, self.funding_rate, None, self._now_ns)
@@ -460,9 +485,12 @@ class FakeExchange:
     def _place(self, order: Order) -> OrderResult:
         if order.coin not in (self.spot_pairs if order.market == "spot" else self.coins):
             return OrderResult(None, "rejected", Decimal(0), None, "unknown coin")
-        if order.market == "spot" and (order.size % Decimal("0.000001")
+        # The listing's lot and tick (``instruments``) bind both markets: published is
+        # enforced (Chapter II §II.b).
+        if (order.size % Decimal("0.000001")
                 or order.limit_px is not None and order.limit_px % Decimal("0.01")):
-            return OrderResult(None, "rejected", Decimal(0), None, "invalid spot tick or lot size")
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               f"invalid {order.market} tick or lot size")
         if self.min_order_value_usd:
             px = order.limit_px if order.limit_px is not None else self._mids[order.coin]
             if order.size * px < self.min_order_value_usd:
@@ -808,6 +836,8 @@ class FakeExchange:
         rate = format((self.fee_bps / Decimal(10_000)).normalize(), "f")
         return {market: [{"coin": c, "lot_size": "0.000001", "tick_size": "0.01",
                           "min_order_value_usd": str(self.min_order_value_usd),
+                          **({"max_leverage": int(self.max_leverage), "margin": "cross"}
+                             if market == "perp" else {}),
                           "taker_fee_rate": rate, "maker_fee_rate": rate}
                          for c in coins]
                 for market, coins in (
@@ -841,7 +871,7 @@ class FakeExchange:
 
     def _apply_funding(self) -> list[WorldEvent]:
         events: list[WorldEvent] = []
-        for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
+        for coin in self._moving((*self.coins, *self.listed_coins)):
             self._funding_history.append(FundingEvent(coin, self.funding_rate, None, self._now_ns))
             pos = self._positions.get(coin)
             paid = Decimal(0)
@@ -1142,6 +1172,64 @@ class FakeExchange:
 # --------------------------------------------------------------------- hyperliquid
 
 
+#: How a market's fee rates follow from an account's ``userFees`` answer, as the venue's
+#: fee schedule states it (hyperliquid.gitbook.io/hyperliquid-docs/trading/fees): a
+#: HIP-3 perp scales a positive rate by ``1 + d`` for a ``deployerFeeScale`` d below 1,
+#: else ``2d``; growth mode multiplies both rates by 0.1; a positive rate is multiplied
+#: by ``1 - activeReferralDiscount``. A negative maker rate (a rebate) takes only the
+#: growth-mode factor.
+FEE_SCALING_BASIS = ("fraction of notional: this account's userFees rate for the market "
+                     "class; a positive rate times the HIP-3 fee scale (1 + deployerFeeScale "
+                     "below 1, else 2 x deployerFeeScale) and 1 - activeReferralDiscount; "
+                     "both rates times 0.1 in growth mode")
+
+
+def scaled_fee_rates(base: dict, *, deployer_fee_scale: Any = None, growth_mode: bool = False,
+                     referral: Any = None) -> dict:
+    """One market's taker and maker rates from its class's ``base`` rates (Chapter II §I.b).
+
+    ``base`` is ``{"taker_fee_rate", "maker_fee_rate", "fee_basis"}`` or an unread-rate
+    statement, which is returned unchanged. Guarantees ``base`` itself, unchanged, when
+    no scaling applies (a first-dex perp or a spot pair with no active referral
+    discount); otherwise the venue's published formula (``FEE_SCALING_BASIS``) applied
+    exactly, in decimal; and an unread-rate statement, never a number, when a term the
+    formula needs is not a rate.
+    """
+    if "taker_fee_rate" not in base:
+        return dict(base)
+    try:
+        ref = Decimal(str(referral if referral is not None else "0"))
+        if not ref.is_finite() or not 0 <= ref < 1:
+            raise ValueError("invalid referral discount")
+    except (ArithmeticError, ValueError):
+        return {"fee_rates": "unavailable",
+                "reason": "the venue's userFees referral discount is not a rate"}
+    scale = growth = Decimal(1)
+    if deployer_fee_scale is not None:
+        try:
+            d = Decimal(str(deployer_fee_scale))
+            if not d.is_finite() or d < 0:
+                raise ValueError("invalid deployer fee scale")
+        except (ArithmeticError, ValueError):
+            return {"fee_rates": "unavailable",
+                    "reason": "the venue's deployerFeeScale is not a rate"}
+        scale = d + 1 if d < 1 else 2 * d
+    if growth_mode:
+        growth = Decimal("0.1")
+    if scale == 1 and growth == 1 and ref == 0:
+        return dict(base)
+    taker = Decimal(base["taker_fee_rate"]) * scale * growth * (1 - ref)
+    maker = Decimal(base["maker_fee_rate"]) * growth
+    if maker > 0:
+        maker = maker * scale * (1 - ref)
+
+    def text(rate: Decimal) -> str:
+        return format(rate.normalize(), "f") if rate else "0"
+
+    return {"taker_fee_rate": text(taker), "maker_fee_rate": text(maker),
+            "fee_basis": FEE_SCALING_BASIS}
+
+
 class HyperliquidExchange:
     """Hyperliquid perpetuals and configured USDC spot pairs via the official SDK.
 
@@ -1167,6 +1255,7 @@ class HyperliquidExchange:
         coins: tuple[str, ...] = ("BTC", "ETH"),
         timeout: float = 20.0,
         spot_pairs: tuple[str, ...] = (),
+        dexes: tuple[str, ...] = (),
     ) -> None:
         from hyperliquid.info import Info
         from hyperliquid.utils import constants
@@ -1175,7 +1264,12 @@ class HyperliquidExchange:
         self.base_url = constants.MAINNET_API_URL if mainnet else constants.TESTNET_API_URL
         self.coins = coins
         self.spot_pairs = spot_pairs
-        self._info = Info(self.base_url, skip_ws=True, timeout=timeout)
+        # The builder-deployed (HIP-3) perp dexes this adapter reads and trades, by name
+        # (Hyperliquid's ``perpDexs``). Each is its own clearinghouse, book and listing;
+        # the SDK resolves its ``dex:COIN`` names to asset ids only when told the dexes.
+        self.dexes = tuple(dexes)
+        perp_dexs = ["", *self.dexes] if self.dexes else None
+        self._info = Info(self.base_url, skip_ws=True, timeout=timeout, perp_dexs=perp_dexs)
         self._address = address
         self._exchange: Any | None = None
         key = os.environ.get(key_env)
@@ -1186,15 +1280,20 @@ class HyperliquidExchange:
             wallet = Account.from_key(key)
             self._address = self._address or wallet.address
             self._exchange = HLExchange(wallet, self.base_url, account_address=self._address,
-                                        timeout=timeout)
-        meta = self._info.meta()
-        self._sz_decimals = {a["name"]: int(a["szDecimals"]) for a in meta["universe"]}
-        self._listed_coins = tuple(self._sz_decimals)
+                                        perp_dexs=perp_dexs, timeout=timeout)
+        spot_meta = self._info.spot_meta()
+        usdc = next((t["index"] for t in spot_meta["tokens"] if t["name"] == "USDC"), None)
+        self._sz_decimals = {}
+        self._terms = {}
+        self._configure_perps("", self._info.meta(), usdc)
+        for dex in self.dexes:
+            self._configure_perps(dex, self._info.meta(dex=dex), usdc)
+        self._listed_coins = tuple(self._terms)
         self._spot_names = {}
         self._spot_tokens = {}
         # Spot metadata is read whatever the manifest configures: a fill is classified
         # by the venue's own universe, never by the subset this world may trade.
-        self._configure_spot(self._info.spot_meta())
+        self._configure_spot(spot_meta)
         self.transient_failures = 0
         self.account_fallbacks = 0
         self._last_mids: dict[str, Decimal] | None = None
@@ -1228,7 +1327,10 @@ class HyperliquidExchange:
                 reason = "the venue's userFees answer did not state them"
             except Exception as exc:  # noqa: BLE001 - an unread rate is unavailable
                 reason = f"the venue's userFees read failed: {type(exc).__name__}"
-        self._fee_answer = answer if isinstance(answer, dict) else {}
+        # A failed refresh keeps the last answer the rates in force were read from, so
+        # a market's scaling (its referral discount) never changes without a new read.
+        self._fee_answer = (answer if isinstance(answer, dict)
+                            else getattr(self, "_fee_answer", None) or {})
         rates: dict[str, dict[str, str]] = {}
         for market, (taker, maker) in self.FEE_FIELDS.items():
             try:
@@ -1258,6 +1360,36 @@ class HyperliquidExchange:
         markets = sorted(market for market, row in fresh.items() if "taker_fee_rate" in row)
         return {"status": "ok" if markets else "unavailable",
                 "answer": dict(self._fee_answer), "markets": markets}
+
+    def _configure_perps(self, dex: str, meta: dict, usdc: int | None) -> None:
+        """Record one perp dex's listing and each market's terms, as the venue states them.
+
+        Guarantees every listed perp of ``dex`` has its lot precision and its terms: the
+        dex it trades on, the venue's ``maxLeverage``, whether it is margined isolated
+        only (``onlyIsolated``, or a HIP-3 ``marginMode`` of ``strictIsolated`` or
+        ``noCross``), whether it is delisted, and its HIP-3 fee terms
+        (``deployerFeeScale``, ``growthMode``). Raises ``ValueError`` for a builder dex
+        whose collateral is not USDC: the world's money is USDC (the venue is the world;
+        a dex margined in another token is a market this world cannot fund).
+        """
+        if dex and meta.get("collateralToken", usdc) != usdc:
+            raise ValueError(f"perp dex {dex!r} is margined in token "
+                             f"{meta.get('collateralToken')}, not USDC")
+        for asset in meta["universe"]:
+            name = asset["name"]
+            isolated = (bool(asset.get("onlyIsolated"))
+                        or asset.get("marginMode") in ("strictIsolated", "noCross"))
+            self._sz_decimals[name] = int(asset["szDecimals"])
+            self._terms[name] = {
+                "dex": dex,
+                "max_leverage": (int(asset["maxLeverage"])
+                                 if asset.get("maxLeverage") is not None else None),
+                "margin": "isolated" if isolated else "cross",
+                "delisted": bool(asset.get("isDelisted")),
+                "deployer_fee_scale": (str(asset["deployerFeeScale"])
+                                       if dex and asset.get("deployerFeeScale") is not None
+                                       else None),
+                "growth_mode": asset.get("growthMode") == "enabled"}
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
@@ -1292,17 +1424,46 @@ class HyperliquidExchange:
         """Classify by the venue's spot universe, never by the manifest's traded subset."""
         return coin in getattr(self, "_spot_universe", {})
 
+    def _market_fees(self, coin: str, market: str) -> dict:
+        """``coin``'s own taker and maker rates, or the market's unread-rate statement.
+
+        Guarantees a first-dex perp or a spot pair states exactly the account's
+        ``userFees`` rates for its class (unchanged text) while no referral discount is
+        active, and a HIP-3 perp, or any market under an active referral discount, the
+        venue's published scaling of them (``scaled_fee_rates``): never a pooled rate
+        from another market, never a number where the venue stated none.
+        """
+        base = (getattr(self, "_fee_rates", None) or {}).get(
+            market, {"fee_rates": "unavailable", "reason": "the venue was not asked"})
+        terms = (getattr(self, "_terms", None) or {}).get(coin, {}) if market == "perp" else {}
+        answer = getattr(self, "_fee_answer", None) or {}
+        return scaled_fee_rates(base, deployer_fee_scale=terms.get("deployer_fee_scale"),
+                                growth_mode=bool(terms.get("growth_mode")),
+                                referral=answer.get("activeReferralDiscount"))
+
+    def _perp_row(self, coin: str) -> dict:
+        """The venue's per-market perp terms: leverage limit, margin mode, dex, listing."""
+        terms = (getattr(self, "_terms", None) or {}).get(coin)
+        if terms is None:
+            return {}
+        return {**({"max_leverage": terms["max_leverage"]}
+                   if terms["max_leverage"] is not None else {}),
+                "margin": terms["margin"],
+                **({"dex": terms["dex"]} if terms["dex"] else {}),
+                **({"delisted": True} if terms["delisted"] else {})}
+
     def instruments(self) -> dict:
-        """Expose lot precision, the venue's price precision rule, its order floor and
-        this account's fee rates for the market, as the venue stated them at start."""
-        fees = getattr(self, "_fee_rates", None) or {}
+        """Expose lot precision, the venue's price precision rule, its order floor, each
+        perp's leverage limit and margin mode, and this account's fee rates for the
+        market, as the venue stated them at start (Chapter II §I.b: the schematics,
+        prices and limits included, are public)."""
         return {market: [{"coin": c, "lot_size": str(Decimal(1).scaleb(-self._sz_decimals[c])),
                           "tick_size": str(Decimal(1).scaleb(
                               -(8 if market == "spot" else 6) + self._sz_decimals[c])),
                           "price_significant_figures": 5, "integer_prices_allowed": True,
                           "min_order_value_usd": MIN_ORDER_VALUE_USD,
-                          **fees.get(market, {"fee_rates": "unavailable",
-                                              "reason": "the venue was not asked"})}
+                          **(self._perp_row(c) if market == "perp" else {}),
+                          **self._market_fees(c, market)}
                          for c in coins]
                 for market, coins in (("perp", getattr(self, "_listed_coins", self.coins)),
                                       ("spot", tuple(getattr(self, "_spot_names", {}))))}
@@ -1364,7 +1525,9 @@ class HyperliquidExchange:
 
     # ---- reads
 
-    def mids(self) -> dict[str, Decimal]:
+    def mids(self, markets=None) -> dict[str, Decimal]:
+        """Every listed market's mid, one batched read a perp dex; with ``markets``, the
+        same read's answer for those alone (the venue answers every market a request)."""
         import time
 
         # A failed read is unavailable, never the last prices served as live ones:
@@ -1374,6 +1537,17 @@ class HyperliquidExchange:
         try:
             if not isinstance(raw, dict):
                 raise ValueError("invalid mids response")
+            # One batched read per perp dex (``allMids`` with ``dex``): the cost of a
+            # price read is the number of dexes, never the number of markets. A dex
+            # that did not answer states no price for its markets this read: they are
+            # absent, never served from an older read (Chapter II §III.b).
+            # Chapter II §III.b: a partial answer is not an answer. The first dex's
+            # must price every live perp it lists and every USDC pair, or the read
+            # failed and no watermark moves.
+            wanted = (*self._live_perps(""), *getattr(self, "_spot_names", {}))
+            if any(self._wire_coin(c) not in raw for c in wanted):
+                raise ValueError("incomplete mids response")
+            raw = {**raw, **self._dex_mids()}
             mids = {c: Decimal(str(raw[self._wire_coin(c)]))
                     for c in (*getattr(self, "_listed_coins", self.coins),
                               *getattr(self, "_spot_names", {}))
@@ -1384,7 +1558,75 @@ class HyperliquidExchange:
             raise VenueUnavailable("mids normalization failed") from exc
         self.__dict__["_last_mids_ns"] = time.time_ns()
         self._last_mids = mids
-        return dict(mids)
+        return dict(mids) if markets is None else {m: mids[m] for m in markets if m in mids}
+
+    def dex_answers(self) -> dict[str, list[str]]:
+        """Which named HIP-3 dexes answered the last ``mids`` and ``funding`` read.
+
+        Guarantees ``{"mids": [...], "rates": [...]}``, each the dexes whose read of that
+        kind answered with a well-formed response the last time it was made, in named
+        order: a dex absent here stated nothing that read, so its markets' watermarks
+        stay where they were (``LiveVenue``; Chapter II §III.b). Journaled as a read.
+        """
+        answered = self.__dict__.get("_dex_answered") or {}
+        return {kind: list(answered.get(kind, ())) for kind in ("mids", "rates")}
+
+    def _answered(self, kind: str, dexes: list[str]) -> None:
+        self.__dict__.setdefault("_dex_answered", {})[kind] = tuple(dexes)
+
+    def _dex_mids(self) -> dict:
+        """Every named HIP-3 dex's mids, one ``allMids`` read a dex; a dex whose read
+        failed contributes nothing (its markets are unpriced by this read) and is not
+        among the dexes that answered (``dex_answers``)."""
+        out: dict = {}
+        answered: list[str] = []
+        for dex in getattr(self, "dexes", ()):
+            try:
+                answer = self._guarded("all_mids", lambda dex=dex: self._info.all_mids(dex))
+            except VenueUnavailable:
+                continue
+            if not isinstance(answer, dict):
+                continue
+            # A dex answered only when it priced every live market it lists, each a
+            # finite positive number (Chapter II §III.b: a partial answer is not an
+            # answer): otherwise none of its prices is used and its watermark holds.
+            # One dex's failure is never another's, nor the first dex's.
+            prices = {}
+            for name in self._live_perps(dex):
+                try:
+                    price = Decimal(str(answer[name]))
+                except (KeyError, ArithmeticError, ValueError, TypeError):
+                    break
+                if not price.is_finite() or price <= 0:
+                    break
+                prices[name] = answer[name]
+            else:
+                out.update(prices)
+                answered.append(dex)
+        self._answered("mids", answered)
+        return out
+
+    def _live_perps(self, dex: str) -> tuple[str, ...]:
+        """The live (listed, not delisted) perps of ``dex`` as the listing states them;
+        for an adapter built without per-market terms, its listed coins (first dex)."""
+        terms = getattr(self, "_terms", None)
+        if not terms:
+            return tuple(getattr(self, "_listed_coins", self.coins)) if not dex else ()
+        # The listing is the launch listing: grouped by dex once, not walked a read.
+        grouped = self.__dict__.get("_live_by_dex")
+        if grouped is None or grouped[0] != len(terms):
+            by_dex: dict[str, list[str]] = {}
+            for name, row in terms.items():
+                if not row["delisted"]:
+                    by_dex.setdefault(row["dex"], []).append(name)
+            grouped = (len(terms), {d: tuple(names) for d, names in by_dex.items()})
+            self.__dict__["_live_by_dex"] = grouped
+        return grouped[1].get(dex, ())
+
+    def _dex_contexts(self, dex: str) -> Any:
+        """One HIP-3 dex's ``metaAndAssetCtxs`` (the SDK's reader takes no dex)."""
+        return self._guarded("meta_and_asset_ctxs", lambda: self._info.post(
+            "/info", {"type": "metaAndAssetCtxs", "dex": dex}))
 
     def funding(self) -> list[FundingEvent]:
         """The venue's current funding rates; raises VenueUnavailable when it did not answer.
@@ -1396,30 +1638,60 @@ class HyperliquidExchange:
         import time
 
         raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
+        now_ns = time.time_ns()
+        # Chapter II §III.b: a partial answer is not an answer. The first dex's contexts
+        # must state every market's rate, or the read failed and no watermark moves.
+        out = self._rate_rows(raw, now_ns)
+        if out is None:
+            raise VenueUnavailable("invalid or incomplete funding response")
+        # One read per named HIP-3 dex, bounded by the dexes, never by the markets. A
+        # dex that did not answer, or answered incompletely, states no rate this read
+        # and is not among the dexes that answered (its rates:<dex> watermark holds).
+        answered: list[str] = []
+        for dex in getattr(self, "dexes", ()):
+            try:
+                rows = self._rate_rows(self._dex_contexts(dex), now_ns)
+            except VenueUnavailable:
+                continue
+            if rows is None:
+                continue
+            out.extend(rows)
+            answered.append(dex)
+        self._answered("rates", answered)
+        return out
+
+    @staticmethod
+    def _rate_rows(raw: Any, now_ns: int) -> list[FundingEvent] | None:
+        """One perp dex's ``metaAndAssetCtxs`` answer as rates, or None when it is not a
+        complete one: a context for every market of its universe, each with a name and
+        a finite rate, and a premium that is finite or absent. An oracle price that is
+        not a positive number is absent (it is an optional field)."""
         if not isinstance(raw, (list, tuple)) or len(raw) != 2:
-            raise VenueUnavailable("invalid funding response")
+            return None
         meta, ctxs = raw
         if (not isinstance(meta, dict) or not isinstance(meta.get("universe"), list)
-                or not isinstance(ctxs, list)):
-            raise VenueUnavailable("invalid funding response")
-        now_ns = time.time_ns()
+                or not isinstance(ctxs, list) or len(ctxs) != len(meta["universe"])):
+            return None
         out: list[FundingEvent] = []
-        for asset, ctx in zip(meta["universe"], ctxs, strict=False):
-            if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
-                continue
-            name = asset["name"]
+        for asset, ctx in zip(meta["universe"], ctxs, strict=True):
             try:
+                name = asset["name"]
+                if not isinstance(name, str) or not name:
+                    return None
                 rate = Decimal(str(ctx["funding"]))
                 premium = Decimal(str(ctx["premium"])) if ctx.get("premium") is not None else None
                 if not rate.is_finite() or premium is not None and not premium.is_finite():
-                    continue
+                    return None
+            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
+                return None
+            try:
                 mark = (Decimal(str(ctx["oraclePx"]))
                         if ctx.get("oraclePx") is not None else None)
                 if mark is not None and (not mark.is_finite() or mark <= 0):
                     mark = None
-                out.append(FundingEvent(name, rate, premium, now_ns, mark))
-            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
-                continue
+            except (TypeError, ValueError, ArithmeticError):
+                mark = None  # an unreadable optional price is absent, never a mark
+            out.append(FundingEvent(name, rate, premium, now_ns, mark))
         return out
 
     def account(self) -> AccountState:
@@ -1430,6 +1702,13 @@ class HyperliquidExchange:
         spot = mids = None
         try:
             st = self._guarded("user_state", lambda: self._info.user_state(self._address))
+            # Each HIP-3 dex is its own clearinghouse: one ``clearinghouseState`` read a
+            # named dex, so the account read's cost is bounded by the dexes, never by
+            # the markets. Half an account is not an account: any unanswered dex falls
+            # back with the rest (below).
+            dex_states = {dex: self._guarded("user_state", lambda dex=dex:
+                                             self._info.user_state(self._address, dex))
+                          for dex in getattr(self, "dexes", ())}
             if getattr(self, "spot_pairs", ()):
                 spot = self._guarded("spot_user_state", lambda:
                                      self._info.spot_user_state(self._address))
@@ -1446,18 +1725,27 @@ class HyperliquidExchange:
         summary = st["marginSummary"]
         positions: list[Position] = []
         in_effect: dict[str, Decimal] = {}
-        for ap in st.get("assetPositions", []):
-            p = ap["position"]
-            size = Decimal(str(p["szi"]))
-            if size == 0:
-                continue
-            entry = Decimal(str(p["entryPx"])) if p.get("entryPx") else Decimal(0)
-            positions.append(Position(p["coin"], size, entry))
-            leverage = _position_leverage(p.get("leverage"))
-            if leverage is not None:
-                in_effect[p["coin"]] = leverage
+        for state in (st, *dex_states.values()):
+            for ap in state.get("assetPositions", []):
+                p = ap["position"]
+                size = Decimal(str(p["szi"]))
+                if size == 0:
+                    continue
+                entry = Decimal(str(p["entryPx"])) if p.get("entryPx") else Decimal(0)
+                positions.append(Position(p["coin"], size, entry))
+                leverage = _position_leverage(p.get("leverage"))
+                if leverage is not None:
+                    in_effect[p["coin"]] = leverage
         # The leverage the venue reports in effect for each open position, as read.
         self.__dict__["_position_leverage"] = in_effect
+        # Each HIP-3 dex's own margin summary: the pool its perps are margined against.
+        dex_summaries = {dex: state["marginSummary"] for dex, state in dex_states.items()}
+        self.__dict__["_dex_summaries"] = {"": summary, **dex_summaries}
+        dex_value = sum((Decimal(str(row["accountValue"])) for row in dex_summaries.values()),
+                        Decimal(0))
+        dex_margin = sum((Decimal(str(row["totalMarginUsed"]))
+                          for row in dex_summaries.values()), Decimal(0))
+        dex_raw = [row.get("totalRawUsd") for row in dex_summaries.values()]
         balances = []
         unpriced: list[str] = []
         spot_value = Decimal(0)
@@ -1480,17 +1768,22 @@ class HyperliquidExchange:
                     spot_value += total * mark
         observed_at = time.time_ns()
         self.__dict__["_last_account_ns"] = observed_at
+        raw_usd = (None if summary.get("totalRawUsd") is None
+                   or any(value is None for value in dex_raw)
+                   else Decimal(str(summary["totalRawUsd"])) + sum(
+                       (Decimal(str(value)) for value in dex_raw), Decimal(0)))
         self._last_account = AccountState(
-            equity_usd=Decimal(str(summary["accountValue"])) + spot_value,
-            perps_equity_usd=Decimal(str(summary["accountValue"])),
+            # Every perp clearinghouse this adapter reads (the first dex and each named
+            # HIP-3 dex) is perps equity; the spot book is not.
+            equity_usd=Decimal(str(summary["accountValue"])) + dex_value + spot_value,
+            perps_equity_usd=Decimal(str(summary["accountValue"])) + dex_value,
             cash_usd=Decimal(str(st.get("withdrawable", summary["accountValue"]))),
             positions=tuple(positions),
-            margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
+            margin_used_usd=Decimal(str(summary["totalMarginUsed"])) + dex_margin,
             spot_balances=tuple(balances),
             observed_at_ns=observed_at,
             unpriced=tuple(unpriced),
-            reconciliation_cash_usd=(Decimal(str(summary["totalRawUsd"]))
-                                     if summary.get("totalRawUsd") is not None else None),
+            reconciliation_cash_usd=raw_usd,
         )
         return self._last_account
 
@@ -1520,10 +1813,24 @@ class HyperliquidExchange:
         account = self.account()
         spot = "/" in coin or market == "spot"
         leverage = self._acknowledged_leverage(coin)
+        terms = (getattr(self, "_terms", None) or {}).get(coin, {})
+        dex = terms.get("dex", "")
+        # A perp is margined against its own dex's clearinghouse alone: the first dex's
+        # account value for a first-dex perp, a HIP-3 dex's for its perps. With no
+        # named dex the perps equity is the first dex's, as it always was.
+        summaries = self.__dict__.get("_dex_summaries") or {}
+        own = summaries.get(dex) if getattr(self, "dexes", ()) else None
+        eligible = (Decimal(str(own["accountValue"])) if own is not None
+                    else account.perps_equity_usd)
+        margin_used = (Decimal(str(own["totalMarginUsed"])) if own is not None
+                       else account.margin_used_usd)
         holds: Decimal | None = Decimal(0)
         for order in self.open_orders():
             if "/" in order["coin"]:
                 continue
+            if own is not None and (getattr(self, "_terms", None) or {}).get(
+                    order["coin"], {}).get("dex", "") != dex:
+                continue  # another clearinghouse's order holds nothing of this one
             order_leverage = self._acknowledged_leverage(order["coin"])
             if order_leverage is None:
                 holds = None  # the venue has not said what this order holds
@@ -1537,11 +1844,12 @@ class HyperliquidExchange:
             available[base] = next(
                 (b.available for b in account.spot_balances if b.coin == base), Decimal(0))
         return {
-            "account_mode": getattr(self, "_account_mode", "cross"),
+            "account_mode": ("isolated" if terms.get("margin") == "isolated" and not spot
+                             else getattr(self, "_account_mode", "cross")),
             "collateral_asset": "USDC",
             # Perps equity: the venue's account value without the spot book.
-            "eligible_equity_usd": account.perps_equity_usd,
-            "margin_used_usd": account.margin_used_usd,
+            "eligible_equity_usd": eligible,
+            "margin_used_usd": margin_used,
             "open_order_holds_usd": holds,
             "holds_included_in_margin_used": False,
             "leverage_for_instrument": Decimal(1) if spot else leverage,
@@ -1820,6 +2128,11 @@ class HyperliquidExchange:
         """Return normalized resting orders for the configured address."""
         if not self._address:
             raise RuntimeError("open_orders() needs an address or a private key")
+        rows = list(self._guarded("open_orders", lambda: self._info.open_orders(self._address)))
+        # Each HIP-3 dex keeps its own book of this account's orders: one read a dex.
+        for dex in getattr(self, "dexes", ()):
+            rows.extend(self._guarded("open_orders", lambda dex=dex:
+                                      self._info.open_orders(self._address, dex)))
         return [
             {
                 "order_id": str(o["oid"]),
@@ -1828,7 +2141,7 @@ class HyperliquidExchange:
                 "size": Decimal(str(o["sz"])),
                 "price": Decimal(str(o["limitPx"])),
             }
-            for o in self._guarded("open_orders", lambda: self._info.open_orders(self._address))
+            for o in rows
         ]
 
     # ---- writes
@@ -1966,7 +2279,16 @@ class HyperliquidExchange:
             mid = float(Decimal(str(mids[wire])))
             if not isfinite(mid) or mid <= 0:
                 raise ValueError("invalid market quote")
-            price = self._exchange._slippage_price(wire, is_buy, SDKExchange.DEFAULT_SLIPPAGE, mid)
+            if dex:
+                # The SDK rounds any asset id at or above 10,000 as spot (8 decimals),
+                # which a HIP-3 perp's ids (100,000 and up) are not: its price obeys the
+                # perp rule, so it is rounded here, by the rule the listing publishes.
+                slip = Decimal(str(SDKExchange.DEFAULT_SLIPPAGE))
+                price = self._round_price(coin, Decimal(str(mids[wire])) * (
+                    1 + slip if is_buy else 1 - slip), is_buy, spot=False)
+            else:
+                price = self._exchange._slippage_price(
+                    wire, is_buy, SDKExchange.DEFAULT_SLIPPAGE, mid)
             price = self._wire_number(price)
             sz = self._wire_number(size)
         except Exception as exc:
@@ -1996,7 +2318,28 @@ class HyperliquidExchange:
             return dict(results[client_id])
         if client_id not in results:
             results[client_id] = {"status": "uncertain", "order_id": order_id}
-            for name in (coin,) if coin is not None else self.coins:
+            # The order's own market, never a walk over every market this world may
+            # trade: with a universe of hundreds, a cancel naming no coin would send a
+            # cancel per market. The venue's open-order read names the order's coin.
+            if coin is None:
+                try:
+                    coin = next((row["coin"] for row in self.open_orders()
+                                 if row["order_id"] == order_id), None)
+                except (RuntimeError, OSError, ValueError, KeyError, TypeError):
+                    coin = None
+            if coin is None:
+                # Nothing was sent: the identity is not held as a submitted cancel, so a
+                # retry reads the open orders again and may send it.
+                result = self.lookup(client_id, order_id=order_id)
+                results.pop(client_id, None)
+                if result.status == "cancelled":
+                    return {"status": "cancelled", "order_id": order_id}
+                if result.status in ("filled", "rejected"):
+                    return {"status": "rejected", "order_id": order_id,
+                            "error": "order already terminal"}
+                return {"status": "uncertain", "order_id": order_id,
+                        "error": "the order is not among the venue's open orders"}
+            for name in (coin,):
                 try:
                     response = self._exchange.cancel(self._wire_coin(name), int(order_id))
                     if response.get("status") == "err":
@@ -2089,8 +2432,18 @@ class HyperliquidExchange:
             return {"status": "rejected", "error": "no signing key"}
         if type(leverage) is not int or leverage < 1:
             return {"status": "rejected", "error": "leverage must be a positive integer"}
+        terms = (getattr(self, "_terms", None) or {}).get(coin, {})
+        if terms.get("max_leverage") is not None and leverage > terms["max_leverage"]:
+            # The listing publishes max_leverage; the venue refuses above it, so a
+            # request above it is refused here, before it is signed (Chapter II §II.b).
+            return {"status": "rejected",
+                    "error": f"leverage above the venue's max_leverage "
+                             f"{terms['max_leverage']} for {coin}"}
         try:
-            resp = self._exchange.update_leverage(leverage, coin, is_cross=True)
+            # An isolated-only market (``margin`` isolated in the listing) takes an
+            # isolated leverage setting; every other market stays cross.
+            resp = self._exchange.update_leverage(
+                leverage, coin, is_cross=terms.get("margin") != "isolated")
             if resp.get("status") == "ok":
                 # The collateral view discounts margin only at leverage the venue
                 # has acknowledged; this is where it becomes acknowledged.
@@ -2338,8 +2691,16 @@ def live_exchange(spec: Any, venue_class: Any = None, *,
     a manifest field: it is drawn once per launch and restored by resume, so the
     adapter itself stays a deterministic function of the identity it is given.
     """
+    from factorylab.world.universe import explicit_markets, named_dexes
+
+    # The manifest's selectors (``*``, ``dex:*``, ``*/USDC``) are resolved against the
+    # venue's listing at launch (``universe.resolve``); the adapter is built with the
+    # explicit names and every HIP-3 dex the manifest names, and nothing else.
+    dexes = named_dexes(spec.coins)
     exchange = (venue_class or HyperliquidExchange)(
-        mainnet=spec.mainnet, coins=spec.coins, spot_pairs=spec.spot_pairs,
+        mainnet=spec.mainnet, coins=explicit_markets(spec.coins),
+        spot_pairs=explicit_markets(spec.spot_pairs),
+        **({"dexes": dexes} if dexes else {}),
     )
     if getattr(spec, "client_namespace", None) is not None:
         exchange._client_namespace = spec.client_namespace

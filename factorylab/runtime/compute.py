@@ -1504,6 +1504,14 @@ class ComputeMixin:
             uses.pop(reader, None)
         return sum(weight for _ts, weight in kept)
 
+    def _venue_read_weight(self, tool_id: str, args: Any) -> int | None:
+        """The weight a seat's venue read sends, every request of it: the read's own
+        and one more per HIP-3 dex the manifest names (``public_read_weight``)."""
+        from factorylab.world.universe import named_dexes
+        from factorylab.world.venue_tools import public_read_weight
+
+        return public_read_weight(tool_id, args, len(named_dexes(self.m.exchange.coins)))
+
     def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
         """Refuse a seat's venue read its share cannot cover, before anything is sent.
 
@@ -1515,9 +1523,7 @@ class ComputeMixin:
         the venue's 1200. The venue itself enforces its per-IP limit (a 429), which the
         adapter backs off from. Any other tool passes untouched.
         """
-        from factorylab.world.venue_tools import public_read_weight
-
-        weight = public_read_weight(tool_id, args)
+        weight = self._venue_read_weight(tool_id, args)
         if weight is None or weight == 0:
             return None
         share, used = self.venue_read_share(), self._venue_read_used(seat)
@@ -1536,9 +1542,7 @@ class ComputeMixin:
         """Charge an admitted seat read its first-attempt weight, whether the tick already
         held the answer or the read is sent. A share is a quota on reads asked, so a seat
         cannot tell a tick's answer from a sent read (AGENTS.md rule 4)."""
-        from factorylab.world.venue_tools import public_read_weight
-
-        self._charge_venue_read(seat, public_read_weight(tool_id, args) or 0)
+        self._charge_venue_read(seat, self._venue_read_weight(tool_id, args) or 0)
 
     def _venue_weight_sent(self) -> int | None:
         """The live adapter's count of venue weight sent, or None.
@@ -1571,12 +1575,10 @@ class ComputeMixin:
         should the venue weigh more than documented, the seat's own share pays for it.
         A simulated venue reports nothing. Never raises.
         """
-        from factorylab.world.venue_tools import public_read_weight
-
         after = self._venue_weight_sent()
         if before is not None and after is not None and after >= before:
             self._charge_venue_read(
-                seat, max(0, after - before - (public_read_weight(tool_id, args) or 0)))
+                seat, max(0, after - before - (self._venue_read_weight(tool_id, args) or 0)))
 
     def _tool_price_bound(self, call: dict) -> int:
         """Variable tool prices fit the remaining request ceiling before dispatch."""

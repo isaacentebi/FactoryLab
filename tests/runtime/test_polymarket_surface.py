@@ -110,7 +110,9 @@ def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
             assert world.polymarket.collateral_micro == 0, path.name
             # A public read costs the factory nothing, so no world can price it (Wave 11).
             assert not hasattr(world.polymarket, "read_price_micro"), path.name
-    assert enabled == {"edition6-testnet-rehearsal.toml", "edition6-capital-loop.toml"}
+    assert enabled == {"edition6-testnet-rehearsal.toml", "edition6-capital-loop.toml",
+                       # A copy of the edition 6 rehearsal with the broad universe.
+                       "edition7-breadth-testnet.toml"}
 
 
 def test_a_free_read_is_published_free_and_debits_nothing():

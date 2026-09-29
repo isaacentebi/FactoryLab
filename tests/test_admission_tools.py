@@ -208,7 +208,9 @@ def test_venue_read_weight_boundary(facts):
         venue_read_share=lambda: 2,
         _venue_read_used=lambda _: 0,
         PUBLIC_READ_REFUSAL=ComputeMixin.PUBLIC_READ_REFUSAL,
+        m=SimpleNamespace(exchange=SimpleNamespace(coins=("BTC",))),
     )
+    rt._venue_read_weight = lambda tool, args: ComputeMixin._venue_read_weight(rt, tool, args)
     assert ComputeMixin._venue_read_refusal(rt, "seat", "venue.mids", {}) is None
     rt._venue_read_used = lambda _: 1
     assert ComputeMixin._venue_read_refusal(rt, "seat", "venue.mids", {})
