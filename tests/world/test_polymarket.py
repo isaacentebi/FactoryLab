@@ -366,3 +366,20 @@ def test_a_request_is_stamped_before_it_is_sent_and_counts_in_flight_or_failed()
     assert seen == [[1_000]]
     assert reader.requests_sent() == 1 and reader.drain_sends() == [1_000]
     assert reader.drain_sends() == []
+
+
+def test_fake_and_live_refuse_the_same_amounts_with_the_same_reason():
+    """Sol P2 (round 5) on #177: one amount rule on both venues. A size past two
+    decimals is refused by the simulated venue exactly as the live one refuses it."""
+    from factorylab.world.polymarket_clob import PolymarketRefused, order_amounts
+
+    fake = venue()
+    token = yes(fake)
+    for size, price in ((Decimal("10.001"), Decimal("0.30")),
+                        (Decimal("10"), Decimal("0.305")),
+                        (Decimal("0"), Decimal("0.30"))):
+        with pytest.raises(PolymarketRefused) as live:
+            order_amounts(size, price, fake.tick)
+        answer = fake.place(client_id=f"{size}@{price}", token_id=token, is_buy=True,
+                            size=size, price=price)
+        assert (answer["status"], answer["error"]) == ("rejected", str(live.value))

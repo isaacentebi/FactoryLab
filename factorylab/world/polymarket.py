@@ -53,7 +53,7 @@ import json
 import random
 import time
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
 from urllib import error, parse, request
 
@@ -467,6 +467,32 @@ class PolymarketReader:
         return None if mid is None else str(mid)
 
 
+#: ROUNDING_CONFIG of the official clients: decimals of price, size and USD amount per tick.
+ROUNDING = {
+    "0.1": (1, 2, 3), "0.01": (2, 2, 4), "0.005": (3, 2, 5),
+    "0.0025": (4, 2, 6), "0.001": (3, 2, 5), "0.0001": (4, 2, 6),
+}
+
+
+def amount_refusal(size: Decimal, price: Decimal, tick: Decimal) -> str | None:
+    """Why a limit order of ``size`` tokens at ``price`` is not one the exchange would
+    read exactly, or None. The one amount rule of every venue kind (Sol P2, round 5, on
+    #177: the simulated venue took a size the live one refuses): a price off the tick or
+    outside (0, 1), a size not positive or past its decimals, a notional past its."""
+    rounding = ROUNDING.get(format(tick.normalize(), "f"))
+    if rounding is None:
+        return f"tick size {tick} is not one Polymarket publishes"
+    _price_places, size_places, amount_places = rounding
+    if not tick <= price <= 1 - tick or price % tick:
+        return f"price is not on the market's {tick} tick inside (0, 1)"
+    if size <= 0 or size != size.quantize(Decimal(1).scaleb(-size_places), rounding=ROUND_DOWN):
+        return f"size must be positive with at most {size_places} decimals"
+    usd = price * size
+    if usd != usd.quantize(Decimal(1).scaleb(-amount_places), rounding=ROUND_DOWN):
+        return f"notional has more than {amount_places} decimals"
+    return None
+
+
 # --- the simulated venue ------------------------------------------------------------------
 
 #: The seeded listing. Questions are neutral placeholders on purpose: the fake is a
@@ -729,8 +755,9 @@ class FakePolymarket:
         market = self._markets[listed[0]]
         if market["closed"]:
             return reject("market is closed")
-        if not self.tick <= price <= 1 - self.tick or price % self.tick:
-            return reject(f"price must be on the {self.tick} tick inside (0, 1)")
+        refused = amount_refusal(size, price, self.tick)
+        if refused is not None:
+            return reject(refused)
         if size < self.min_order_size:
             return reject(f"size below the minimum order of {self.min_order_size}")
         if price >= self._best(token_id)[1]:
