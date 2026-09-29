@@ -1417,9 +1417,8 @@ class Runtime(
                 # The broadcast markets' mids alone (``_broadcast_markets``): a prompt's
                 # size never follows the venue's listing (Chapter II §IV.c); every other
                 # listed market's mid is one venue.mids read away.
-                shown = set(self._broadcast_markets())
-                payload["mids"] = {c: str(m) for c, m in self._tick_mids().items()
-                                   if c in shown}
+                payload["mids"] = {c: str(m) for c, m in
+                                   self._tick_mids(self._broadcast_markets()).items()}
             except RuntimeError as exc:  # VenueUnavailable and friends
                 # A price the venue would not give is weather, not death, and it is
                 # reported as unavailable rather than invented: the account read above

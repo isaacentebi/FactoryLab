@@ -395,8 +395,12 @@ class FakeExchange:
 
     # ---- protocol
 
-    def mids(self) -> dict[str, Decimal]:
-        return dict(self._mids)
+    def mids(self, markets=None) -> dict[str, Decimal]:
+        """Every market's mid, or with ``markets`` those alone: a read's work follows
+        what is asked, never the listing (Chapter II §IV.c)."""
+        if markets is None:
+            return dict(self._mids)
+        return {m: self._mids[m] for m in markets if m in self._mids}
 
     def funding(self) -> list[FundingEvent]:
         return [FundingEvent(c, self.funding_rate, None, self._now_ns)
@@ -1521,7 +1525,9 @@ class HyperliquidExchange:
 
     # ---- reads
 
-    def mids(self) -> dict[str, Decimal]:
+    def mids(self, markets=None) -> dict[str, Decimal]:
+        """Every listed market's mid, one batched read a perp dex; with ``markets``, the
+        same read's answer for those alone (the venue answers every market a request)."""
         import time
 
         # A failed read is unavailable, never the last prices served as live ones:
@@ -1546,7 +1552,7 @@ class HyperliquidExchange:
             raise VenueUnavailable("mids normalization failed") from exc
         self.__dict__["_last_mids_ns"] = time.time_ns()
         self._last_mids = mids
-        return dict(mids)
+        return dict(mids) if markets is None else {m: mids[m] for m in markets if m in mids}
 
     def dex_answers(self) -> dict[str, list[str]]:
         """Which named HIP-3 dexes answered the last ``mids`` and ``funding`` read.

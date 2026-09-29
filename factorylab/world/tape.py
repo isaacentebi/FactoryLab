@@ -878,12 +878,16 @@ class TapeVenue(FakeExchange):
         """``market``'s latest recorded mid at or before the venue's instant, or None."""
         return self._tape.mid_at(market, self._now_ns)
 
-    def mids(self) -> dict[str, Decimal]:
+    def mids(self, markets=None) -> dict[str, Decimal]:
         """Each market's latest recorded mid as the venue last read it (and a pair's base
         at the pair's); a market with no recorded row yet is absent, whatever else put
         a price in the fake's table."""
         out: dict[str, Decimal] = {}
-        for market in self._quoted():
+        # With ``markets``, those alone: a read's work follows what is asked, never the
+        # recording's breadth (Chapter II §IV.c).
+        asked = (self._quoted() if markets is None else
+                 [m for m in dict.fromkeys(markets) if ("mids", m) in self._tape._index])
+        for market in asked:
             # Read from the recording at the venue's instant, which an advance that did
             # not move this market (``watched``) left where it was: the same row.
             row = self._recorded(market)

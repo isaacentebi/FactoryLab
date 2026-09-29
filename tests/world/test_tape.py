@@ -396,3 +396,19 @@ def test_a_tape_advances_only_the_markets_the_world_watches(n):
     assert sum(len(h) for h in venue._mid_history.values()) == 5
     mids = venue.mids()
     assert len(mids) == n and mids[f"M{n - 1}"] == Decimal(100 + n - 1 + 5)
+
+
+@pytest.mark.parametrize("n", [3, 3000])
+def test_a_recorded_mids_read_asked_for_markets_reads_those_alone(n, monkeypatch):
+    tape = _broad_tape(n)
+    venue = TapeVenue(tape, coins=(), start_cash_usd=Decimal(1000))
+    looked: list[str] = []
+    recorded = TapeVenue._recorded
+
+    def counted(self, market):
+        looked.append(market)
+        return recorded(self, market)
+
+    monkeypatch.setattr(TapeVenue, "_recorded", counted)
+    assert venue.mids(("M0", "M1")) == {"M0": Decimal(100), "M1": Decimal(101)}
+    assert looked == ["M0", "M1"]

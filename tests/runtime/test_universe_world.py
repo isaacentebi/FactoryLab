@@ -178,14 +178,18 @@ def test_the_schematics_render_of_a_selector_world_resolves_nothing_and_says_so(
     assert block["trading_markets"]["perp"] == []
 
 
-def _produced(n: int, reply: dict):
+def _produced(n: int, reply: dict, in_play: str | None = None):
     """One producer request of a universe world over ``n`` extra markets: the prompt the
     seat read, its outcome schema, and the (status, reason) the kernel recorded."""
     from tests.runtime.test_counterfactual_contract import Seat, _published, _returned
     from tests.runtime.test_loop import _consequence_produce
 
     seat = Seat(reply)
-    rt = Runtime(universe_manifest(), events=0, seed=1, initial_balance_micro=None,
+    manifest = universe_manifest()
+    if in_play is not None:  # named explicitly: broadcast on every tick
+        manifest = replace(manifest, exchange=replace(manifest.exchange,
+                                                      coins=(in_play, "*")))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
                  ledger_path=None, router_gamma=.1, provider=seat, exchange=fake(n))
     rt._manage_reserve_window()
     handle, _event = _consequence_produce(rt)
@@ -300,3 +304,25 @@ def test_the_broadcast_set_is_built_without_scanning_the_universe_each_call(monk
     # A registration changes the fixed membership, and the next call sees it.
     rt._admit_market("NEW", "perp")
     assert "NEW" in rt._broadcast_markets()
+
+
+def test_a_producer_requests_mids_read_only_the_markets_it_shows(monkeypatch):
+    """Codex P2 on #178: the tick's mids read copied every simulated market before the
+    prompt filtered them. The simulated venue is asked for the broadcast markets alone:
+    the read's size is the same at 3 and at 3000 markets."""
+    sizes = {}
+    mids = FakeExchange.mids
+
+    for n in (3, 3000):
+        read: list[int] = []
+
+        def counted(self, markets=None, _read=read):
+            answer = mids(self) if markets is None else mids(self, markets)
+            _read.append(len(answer))
+            return answer
+
+        monkeypatch.setattr(FakeExchange, "mids", counted)
+        _produced(n, {"action": "hold", "counterfactual": {"coin": "BTC", "side": "buy"}},
+                  in_play="C1")
+        sizes[n] = read
+    assert sizes[3] == sizes[3000] == [1]

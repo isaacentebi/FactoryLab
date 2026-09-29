@@ -846,7 +846,7 @@ class VenueMixin:
         self.__dict__["_broadcast_memo"] = (key, base, observable)
         return base, observable
 
-    def _tick_mids(self) -> dict[str, Decimal]:
+    def _tick_mids(self, markets=None) -> dict[str, Decimal]:
         """The venue's mid prices, read once for the tick that reads them.
 
         The same memo #89 gave the venue's instrument listing, for the same reason.
@@ -864,13 +864,29 @@ class VenueMixin:
         here. Everything a price has a consequence for — the tick broadcast, fills,
         funding, marking positions at a window boundary, a watcher's trigger, and the
         population's own paid ``venue.mids`` call — reads the venue itself.
+
+        ``markets``: the markets the caller needs. A simulated or recorded venue in a
+        world with a universe is asked for those alone, so the read's work follows the
+        world, not the listing (Chapter II §IV.c); a live venue answers every market in
+        one request whatever is asked, so it is read whole, once a tick. Guarantees the
+        mids of ``markets`` (every market when None) that the venue states.
         """
         tick = self.ticks_consumed
         memo = getattr(self, "_mids_memo", None)
-        if memo is None or memo[0] != tick:
+        if markets is not None and getattr(self, "universe", None) and not self.live:
+            wanted = set(markets)
+            if memo is None or memo[0] != tick or len(memo) == 2:
+                memo = (tick, {}, frozenset())
+            missing = tuple(sorted(wanted - memo[2]))
+            if missing:
+                memo = (tick, {**memo[1], **self.exchange.mids(missing)}, memo[2] | set(missing))
+                self._mids_memo = memo
+            return {m: memo[1][m] for m in sorted(wanted) if m in memo[1]}
+        if memo is None or memo[0] != tick or len(memo) > 2:
             memo = (tick, self.exchange.mids())
             self._mids_memo = memo
-        return dict(memo[1])
+        mids = dict(memo[1])
+        return mids if markets is None else {m: mids[m] for m in markets if m in mids}
 
     def _tick_account_observation(self) -> tuple[AccountState | None, str | None, int]:
         """One account read a tick, its failure included, as ``(account, reason, at_ns)``.
@@ -1427,7 +1443,7 @@ class VenueMixin:
         check weighs it: a perp order's initial margin at the venue's leverage, a spot
         buy's cost. Zero where the venue has not said enough to know."""
         try:
-            mids = self._tick_mids()
+            mids = self._tick_mids((coin,))
             mark = max(mids[coin], price or mids[coin])
             if "/" in coin:
                 return size * mark if is_buy else Decimal(0)
@@ -1763,7 +1779,7 @@ class VenueMixin:
         available: Decimal | None = None
         try:
             view = self._collateral_view(coin, "spot" if spot else "perp")
-            mids = self._tick_mids()
+            mids = self._tick_mids((coin,))
             mark = max(mids[coin], price or mids[coin])
             # What earlier writes of the same batch already take from this pool is
             # not free for this one: it rides as headroom (``venue_batch_refusal``).
