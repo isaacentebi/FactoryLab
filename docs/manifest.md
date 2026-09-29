@@ -209,8 +209,7 @@ serialised once per runtime by `cortex/schematics.py:_stable_prefix_text`,
 carried on the world block under `stable_prefix`, and reused byte-for-byte:
 every request in a world renders the same string object, and a runtime restored
 from a checkpoint recomputes the same bytes from the same restored state, which
-is what DeepSeek's and OpenAI's automatic prefix caching keys on with no
-`cache_control` marker. It is a function of the charter's norms, the tool set
+is what a provider's prefix cache keys on. It is a function of the charter's norms, the tool set
 with its prices and the proposal kinds, and of nothing else — a seat registered,
 a card repriced or a charter edition bumped no longer breaks every cached prefix
 in the world. The reviewer's own instruction: byte stability "does not require
@@ -231,7 +230,23 @@ followed by the identical prefix, and a provider keys on nothing more than that
 identical leading sequence. Handle-scoped memory, where a world registers it, is
 the one thing that precedes the prefix and costs that assembly the hit.
 
-After the prefix come the `YOU` block, the `WORLD UPDATE` block, and then the
+When the prefix ends its own line (a blank line), the reply contract follows it:
+`OUTCOME SCHEMA` and `OUTCOME CONTRACT`, whose text is a function of the seat's
+schema alone. Together they are the request's cacheable run
+(`Request.cache_prefix`, `CACHE_PREFIX_SECTIONS`), and the model request states
+its length as `cache_prefix_chars` without changing a byte for it. Behind a
+prefix that runs on into the next section (a grounded judge's `OPERATING
+ACCESS` block), and in a request with no prefix, the contract keeps its place
+after the work, byte for byte; only its position ever moves, never its text.
+The OpenRouter adapter uses the length twice (§IV.a: speed is cash burn): it
+names the call's sticky-routing `session_id` by a digest of the model, the
+system message, any earlier messages and the run, so calls that share a run stay
+on the host that holds it; and for `anthropic/`, `google/` and `openai/` model
+ids, whose hosts cached no shared lead without one, it sends the final user
+message as two adjacent text parts split at the run's end, the first marked
+`cache_control: {"type": "ephemeral"}`. The model reads the same string.
+
+After the prefix and any contract come the `YOU` block, the `WORLD UPDATE` block, and then the
 work. `WORLD UPDATE` is the world's moving facts in §8's order:
 `observation_window` (the measurement window, the tick, and how fresh each price
 source is), `changes_since_last_successful_delivery` (C2's coalesced fold, or a
@@ -262,8 +277,8 @@ Where the provider reports `usage.prompt_tokens_details.cached_tokens`, the
 runtime records it as `usage.cached_tokens` on the `invocation` item, beside two
 bounded diagnostic hashes: `prompt_cache.stable_prefix_sha256` identifies the rendered
 stable block, and `prompt_cache.effective_leading_messages_sha256` identifies
-the system message, any preceding handle-scoped messages, and that block in
-their effective order. No prompt prose is added to the invocation record. These
+the system message, any preceding handle-scoped messages, and the cacheable run
+(the block, and the reply contract when it leads) in their effective order. No prompt prose is added to the invocation record. These
 hashes distinguish local prefix drift or memory reordering from a reported miss
 on identical local input; they do not claim that an upstream cache must hit.
 Cost metering is unchanged: OpenRouter's reported `usage.cost` already carries

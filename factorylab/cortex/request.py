@@ -88,8 +88,8 @@ def _outcome_id(item: Any) -> Any:
 # block at the head of the first user message — never in the system message, which
 # carries the assembly's own prompt and nothing the population wrote — so
 # consecutive calls to one assembly begin with byte-identical text and a provider's
-# automatic prefix cache (DeepSeek and OpenAI cache on an identical prefix, with no
-# cache_control marker) can hit. Everything not named here moves — the account,
+# prefix cache can hit (automatic, or at the breakpoint an adapter places at the end
+# of ``Request.cache_prefix``). Everything not named here moves — the account,
 # the mids, the pots, the reserve, the card prices,
 # the scoring values the runtime's own adaptation changes, the governance queue,
 # the measured tick — and is rendered after the block, inside ``INPUTS`` with the
@@ -117,6 +117,29 @@ STABLE_WORLD_KEYS = frozenset({
 # fixed prefix once and reusing its exact bytes; it does not require copying every
 # institutional description into that prefix."
 PREFIX_WORLD_KEY = "stable_prefix"
+# The prompt sections that lead every request, in order, because they hold still
+# between one seat's calls: the world's stable block, then the reply contract. They
+# are the provider's cacheable prefix (``Request.cache_prefix``); every other
+# section moves and trails them.
+CACHE_PREFIX_SECTIONS = ("stable_prefix", "outcome_schema", "outcome_contract")
+
+
+def cache_lead(sections: tuple[tuple[str, str], ...]) -> str:
+    """The cacheable run ``sections`` open with (``Request.cache_prefix``), or "".
+
+    Guarantees the result is the concatenation of the longest run of
+    ``CACHE_PREFIX_SECTIONS`` the sections open with, in order, and so a prefix of
+    the rendered prompt; the empty string when they do not open with a non-empty
+    stable block.
+    """
+    lead: list[str] = []
+    for (name, text), expected in zip(sections, CACHE_PREFIX_SECTIONS, strict=False):
+        if name != expected:
+            break
+        lead.append(text)
+    return "".join(lead) if lead and lead[0] else ""
+
+
 # The world keys the prefix's capability index is built from. They stay in the world
 # block, which more than the prompt reads, and are rendered only through the index:
 # ``tools`` and ``proposal_shapes`` published a second, longer copy of exactly what
@@ -620,8 +643,14 @@ class Request:
         Guarantees the pairs concatenate to exactly ``prompt_text()``, so the
         bytes counted per section are the bytes actually sent and a measurement
         of the prompt's shape can never drift from the prompt. The order is the
-        contract: the stable block first, so a provider's prefix cache can hit;
-        then this seat's own account of itself; then the work.
+        cache's, and carries no meaning: every section is headed and complete in
+        itself. What holds still leads, widest first — the world's stable block,
+        then the reply contract (``CACHE_PREFIX_SECTIONS``), which is fixed for a
+        seat while its schema is — so a provider's prefix cache can hit on all
+        of it (§IV.a: speed is cash burn); then this seat's own account of
+        itself; then the work. The contract leads only behind a stable block
+        that ends its own line, so that its header still opens one; otherwise it
+        keeps its place after the work.
         """
         inputs = ({**self.inputs, "world": self._inputs_world()}
                   if isinstance(self.inputs.get("world"), dict) else self.inputs)
@@ -679,21 +708,46 @@ class Request:
                 and all(type(limit) is int for limit in tool_call_limits)
                 and len(common_tool_call_limits) == 1) else ""
         )
-        blocks.extend([
+        blocks.append(
+            ("completion_criterion", f"COMPLETION CRITERION\n{self.completion_criterion}"))
+        # The reply contract is a function of the schema alone, which a seat keeps
+        # from call to call, so after a world's stable block it rides in the
+        # leading, cacheable run, straight after that block. Each part keeps its own
+        # text and its separator; only its position moves. It moves only behind a
+        # block that ends its own line (a blank line), where its header still opens
+        # a line: a request with no stable block, or one whose block runs on into
+        # the next section, keeps the contract after its work, byte for byte.
+        contract = (
             ("outcome_schema",
              "OUTCOME SCHEMA\n"
              f"{json.dumps(self.outcome_schema, sort_keys=True, separators=_COMPACT)}"
-             f"{tool_call_instruction}"),
+             f"{tool_call_instruction}\n\n"),
             # What every return must satisfy, once per request and immediately
             # after the schema it is about: the tool-round protocol and, unless the
             # schema publishes it as a form, the refusal form (smuggling audit D1).
-            ("outcome_contract", outcome_contract(self.outcome_schema)),
-            ("completion_criterion", f"COMPLETION CRITERION\n{self.completion_criterion}"),
-        ])
+            ("outcome_contract", f"{outcome_contract(self.outcome_schema)}\n\n"),
+        )
         joined = [(name, text + ("\n\n" if index + 1 < len(blocks) else ""))
                   for index, (name, text) in enumerate(blocks)]
-        return (("stable_prefix", self.stable_prefix()), ("you", self.seat_text()),
-                ("world_update", self.world_update_text()), *joined)
+        stable = self.stable_prefix()
+        seat = (("you", self.seat_text()), ("world_update", self.world_update_text()))
+        if not stable.endswith("\n\n"):
+            return (("stable_prefix", stable), *seat, *joined[:-1], *contract, joined[-1])
+        return (("stable_prefix", stable), *contract, *seat, *joined)
+
+    def cache_prefix(self) -> str:
+        """The leading run of ``prompt_text()`` that repeats across a seat's calls.
+
+        Guarantees ``prompt_text()`` begins with exactly this string: the
+        ``CACHE_PREFIX_SECTIONS`` in order — the world's stable block and, when
+        it ends its own line, the reply contract — and no byte of this call's own
+        account, update, request or inputs; the empty string for a request with
+        no stable block. Two calls of one seat under one world state and one
+        schema therefore return the same string, which is what a provider's
+        prefix cache keys on and where an explicit cache breakpoint belongs
+        (§IV.a: speed is cash burn).
+        """
+        return cache_lead(self.sections())
 
     def section_bytes(self) -> dict[str, int]:
         """UTF-8 bytes rendered per prompt section, plus the whole under ``total``.
@@ -710,12 +764,13 @@ class Request:
 
         Guarantees the rendering is a pure function of the request's fields and
         contains no parent or channel information the executor does not need to
-        do the work; that it opens with ``stable_prefix()`` and that nothing
-        which moves between calls precedes that block; that the seat's own
-        account of itself (``YOU``) heads the changing part, once; and that the
-        world it publishes is the whole world exactly once — the stable facts in
-        the block, the seat-scoped ones in ``YOU``, the rest inside ``INPUTS``,
-        by the partition ``_world_split`` and ``SEAT_WORLD_KEYS`` make.
+        do the work; that it opens with ``cache_prefix()`` — ``stable_prefix()``
+        and, behind a block that ends its own line, the reply contract — and that
+        nothing which moves between a seat's calls precedes that run; that the
+        seat's own account of itself (``YOU``) heads the changing part, once; and
+        that the world it publishes is the whole world exactly once — the stable
+        facts in the block, the seat-scoped ones in ``YOU``, the rest inside
+        ``INPUTS``, by the partition ``_world_split`` and ``SEAT_WORLD_KEYS`` make.
 
         The handle, deadline, ceiling and liable budget now appear, in ``YOU``.
         They are facts about this decision that the decider was never shown, and

@@ -458,15 +458,7 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
     ``response_schema``; never from the request's prose. A request with neither
     reads as requiring nothing.
     """
-    schema: Any = None
-    marker = "OUTCOME SCHEMA\n"
-    tail = _kernel_tail(text)
-    if marker in tail:
-        line = tail.split(marker, 1)[1].split("\n", 1)[0]
-        try:
-            schema = json.loads(line)
-        except (ValueError, json.JSONDecodeError):
-            schema = None
+    schema: Any = _rendered_schema(text)
     if not isinstance(schema, dict) and req is not None:
         schema = req.response_schema
     if not isinstance(schema, dict):
@@ -477,15 +469,9 @@ def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
 def _contract_schema(req: ModelRequest | None, text: str) -> dict | None:
     """The request's outcome schema, from the same trusted sources as
     ``outcome_required``: the rendered ``OUTCOME SCHEMA`` line, else the wire schema."""
-    marker = "OUTCOME SCHEMA\n"
-    tail = _kernel_tail(text)
-    if marker in tail:
-        try:
-            schema = json.loads(tail.split(marker, 1)[1].split("\n", 1)[0])
-        except (ValueError, json.JSONDecodeError):
-            schema = None
-        if isinstance(schema, dict):
-            return schema
+    schema = _rendered_schema(text)
+    if isinstance(schema, dict):
+        return schema
     schema = req.response_schema if req is not None else None
     return schema if isinstance(schema, dict) else None
 
@@ -673,14 +659,7 @@ def contract_requires(req: ModelRequest | None, text: str) -> frozenset[str]:
     """The fields EVERY admitted answer shape requires: what the contract obliges any
     answer to carry, from the same trusted sources as ``outcome_required``. A mixed
     contract (a producer's return or a verdict) obliges neither."""
-    schema: Any = None
-    marker = "OUTCOME SCHEMA\n"
-    tail = _kernel_tail(text)
-    if marker in tail:
-        try:
-            schema = json.loads(tail.split(marker, 1)[1].split("\n", 1)[0])
-        except (ValueError, json.JSONDecodeError):
-            schema = None
+    schema: Any = _rendered_schema(text)
     if not isinstance(schema, dict) and req is not None:
         schema = req.response_schema
     if not isinstance(schema, dict):
@@ -708,6 +687,39 @@ def _kernel_tail(text: str) -> str:
     start = head + len("\n\nINPUTS\n")
     newline = text.find("\n", start)
     return "" if newline < 0 else text[newline:]
+
+
+def _kernel_head(text: str) -> str:
+    """The part of a prompt before its REQUEST header: only the kernel writes there.
+
+    Under a world's stable block the reply contract leads the prompt
+    (``Request.sections``: the cacheable run), ahead of the seat's account, the
+    update and the author's description, so nothing an author wrote precedes it.
+    Read to the first REQUEST header line, which an author's text cannot come
+    before."""
+    if text.startswith("REQUEST\n"):
+        return ""
+    at = text.find("\nREQUEST\n")
+    return text if at < 0 else text[:at + 1]
+
+
+def _rendered_schema(text: str) -> Any:
+    """The rendered ``OUTCOME SCHEMA`` line, parsed, from kernel-written text only.
+
+    Read from the head of the prompt, where a request under a world block renders
+    it, and otherwise from the tail after the last INPUTS line, where a request
+    without one does; never from an author's description. None when neither holds
+    a readable one."""
+    marker = "OUTCOME SCHEMA\n"
+    for region in (_kernel_head(text), _kernel_tail(text)):
+        at = region.find(marker)
+        if at < 0 or (at > 0 and region[at - 1] != "\n"):
+            continue
+        try:
+            return json.loads(region[at + len(marker):].split("\n", 1)[0])
+        except (ValueError, json.JSONDecodeError):
+            return None
+    return None
 
 
 def _scoring_keys(text: str) -> frozenset[str]:
@@ -805,7 +817,7 @@ def _inputs_from_prompt(text: str) -> dict[str, Any]:
         end = min(
             (text.index(header, start)
              for header in ("\n\nSUBJECT PROPENSITY", "\n\nPROPENSITY", "\n\nSCORING",
-                            "\n\nOUTCOME SCHEMA")
+                            "\n\nOUTCOME SCHEMA", "\n\nCOMPLETION CRITERION")
              if header in text[start:]),
             default=-1,
         )

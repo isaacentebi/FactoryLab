@@ -38,6 +38,7 @@ from factorylab.cortex.request import (
     ChildRequest,
     Request,
     Return,
+    cache_lead,
     validate_propensity,
 )
 from factorylab.cortex.sandbox import MAX_PROGRAM_TIMEOUT_S
@@ -191,18 +192,22 @@ class Assembly:
         The cache hit that placement keeps is the per-assembly one, which is
         where the volume is: this assembly's system text is a constant, so its
         own consecutive calls open with the identical ``system`` message
-        followed by the identical stable block, which is all DeepSeek's and
-        OpenAI's automatic prompt caching asks for — they key on an identical
-        leading token sequence and need no ``cache_control`` marker, so none is
-        sent. Handle-scoped memory, when a world registers it, is the one thing
-        that precedes the block and costs that assembly the hit.
+        followed by the identical stable block and reply contract
+        (``Request.cache_prefix``), which is all an automatic prompt cache
+        (OpenAI's, Gemini's, DeepSeek's) keys on. The request states how long
+        that run is (``cache_prefix_chars``) and changes no byte for it, so an
+        adapter can key sticky routing on it and place an explicit breakpoint
+        after it for a host that needs one. Handle-scoped memory, when a world
+        registers it, is the one thing that precedes the block and costs that
+        assembly the hit.
         """
         req = (stamped if stamped is not None
                else replace(req, inputs={**req.inputs, "you": self.spec.id}))
         messages: list[dict[str, Any]] = []
         if self.spec.memory_policy == "handle-scoped" and req.parent_handle:
             messages.extend(self.memory.get(req.parent_handle, []))
-        messages.append({"role": "user", "content": req.prompt_text()})
+        sections = req.sections()
+        messages.append({"role": "user", "content": "".join(text for _n, text in sections)})
         policy = req.scoring_channel == "policy"
         # Essay II.IV.c: neither the factory nor its control apparatus may be slower
         # than its environment, so the loop's own cost is kept down wherever that
@@ -234,6 +239,7 @@ class Assembly:
             effort=self.spec.effort,
             json_object=True,
             response_schema=response_schema,
+            cache_prefix_chars=len(cache_lead(sections)),
         )
 
     def invoke(self, req: Request) -> Return:

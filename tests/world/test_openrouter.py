@@ -1,5 +1,5 @@
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from io import BytesIO
 from urllib import error, request
@@ -387,3 +387,83 @@ def test_extra_body_keeps_its_routing_but_cannot_replace_the_contract(completion
         replaced(req, json_object=True, response_schema=SCHEMA))
     assert transport.calls[0][2]["provider"] == {"order": ["HostA"],
                                                  "require_parameters": True}
+
+
+# §IV.a, speed is cash burn: a repeated lead is routed to the host that holds it, and a
+# host that caches only at a marker gets one, with no byte the model reads changed.
+LEAD = "WORLD CONTRACT " * 200
+MEMORY = {"role": "assistant", "content": "earlier turn"}
+
+
+def _cached_request(model_id, tail, **changes):
+    return ModelRequest(model_id, "System text",
+                        (MEMORY, {"role": "user", "content": LEAD + tail}),
+                        max_tokens=100, **{"cache_prefix_chars": len(LEAD), **changes})
+
+
+def test_one_lead_on_one_model_shares_one_sticky_session(completion):
+    transport = FakeTransport([dict(completion) for _ in range(5)])
+    provider = OpenRouterProvider(transport=transport)
+    provider.complete(_cached_request("qwen/qwen3.8-flash", "YOU\ncall one"))
+    provider.complete(_cached_request("qwen/qwen3.8-flash", "YOU\ncall two, longer"))
+    provider.complete(_cached_request("qwen/qwen3.8-max", "YOU\ncall one"))
+    provider.complete(replace(_cached_request("qwen/qwen3.8-flash", "YOU\ncall one"),
+                              system="Another system"))
+    provider.complete(_cached_request("qwen/qwen3.8-flash", "YOU\nx", cache_prefix_chars=0))
+    one, two, other_model, other_system, unmarked = (call[2] for call in transport.calls)
+    assert one["session_id"] == two["session_id"]
+    assert len(one["session_id"]) == 64
+    assert LEAD.strip() not in one["session_id"]
+    assert other_model["session_id"] != one["session_id"]
+    assert other_system["session_id"] != one["session_id"]
+    assert "session_id" not in unmarked
+    # An implicit-cache route is sent the prompt exactly as it was, one string.
+    assert one["messages"] == [{"role": "system", "content": "System text"}, MEMORY,
+                               {"role": "user", "content": LEAD + "YOU\ncall one"}]
+
+
+def test_an_explicit_cache_host_gets_one_breakpoint_at_the_end_of_the_lead(completion):
+    transport = FakeTransport([dict(completion) for _ in range(3)])
+    provider = OpenRouterProvider(transport=transport)
+    req = _cached_request("anthropic/claude-sonnet-5.5@low", "YOU\nthis call")
+    provider.complete(req)
+    provider.complete(_cached_request("openai/gpt-6-luna", "YOU\nthis call"))
+    provider.complete(_cached_request("google/gemini-3.8-flash", "YOU\nthis call"))
+    for _method, _path, payload in transport.calls:
+        system, memory, final = payload["messages"]
+        # The system message and every earlier turn are untouched ...
+        assert system == {"role": "system", "content": "System text"} and memory == MEMORY
+        assert final["role"] == "user"
+        head, tail = final["content"]
+        # ... and the final message reads the same string, split at the lead.
+        assert head == {"type": "text", "text": LEAD, "cache_control": {"type": "ephemeral"}}
+        assert tail == {"type": "text", "text": "YOU\nthis call"}
+        assert head["text"] + tail["text"] == req.messages[-1]["content"]
+        assert sum("cache_control" in part for part in final["content"]) == 1
+    # The request itself is not edited by the wire it was sent on.
+    assert req.messages[-1]["content"] == LEAD + "YOU\nthis call"
+
+
+def test_a_breakpoint_is_never_placed_where_the_request_names_no_lead(completion):
+    transport = FakeTransport([dict(completion) for _ in range(5)])
+    provider = OpenRouterProvider(transport=transport)
+    whole = _cached_request("anthropic/claude-sonnet-5.5", "")
+    provider.complete(whole)
+    for chars in (-1, True, len(LEAD) + 1):
+        provider.complete(replace(whole, cache_prefix_chars=chars))
+    provider.complete(_cached_request("anthropic/claude-sonnet-5.5", "", cache_prefix_chars=0))
+    all_lead, *refused = (call[2] for call in transport.calls)
+    # A lead that is the whole message is one marked part, with no empty tail.
+    assert all_lead["messages"][-1]["content"] == [
+        {"type": "text", "text": LEAD, "cache_control": {"type": "ephemeral"}}]
+    for payload in refused:
+        assert payload["messages"][-1]["content"] == LEAD
+        assert "session_id" not in payload
+
+
+def test_a_manifest_session_id_wins_over_the_derived_one(completion):
+    transport = FakeTransport([dict(completion)])
+    OpenRouterProvider(transport=transport,
+                       extra_body={"qwen/qwen3.8-flash": {"session_id": "manifest-own"}}
+                       ).complete(_cached_request("qwen/qwen3.8-flash", "YOU\nx"))
+    assert transport.calls[0][2]["session_id"] == "manifest-own"

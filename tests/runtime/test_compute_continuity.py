@@ -38,12 +38,15 @@ def test_invocation_records_bounded_effective_prefix_hashes(monkeypatch):
                    if row["kind"] == "invocation"
                    and str(row["handle"]).startswith("cache-witness-")]
     assert len(invocations) == 2
-    stable = replace(
-        requests[0], inputs={**requests[0].inputs, "you": "seed-decider"}
-    ).stable_prefix()
+    stamped = replace(requests[0], inputs={**requests[0].inputs, "you": "seed-decider"})
+    stable = stamped.stable_prefix()
+    # The leading run is the stable block and the reply contract, exactly as sent.
+    lead = stamped.cache_prefix()
+    assert lead.startswith(stable)
+    assert all(request.messages[-1]["content"].startswith(lead) for request in captured)
     leading = [
         {"role": "system", "content": captured[0].system},
-        {"role": "user", "content": stable},
+        {"role": "user", "content": lead},
     ]
     encoded = json.dumps(leading, sort_keys=True, separators=(",", ":"),
                          ensure_ascii=False).encode("utf-8")
