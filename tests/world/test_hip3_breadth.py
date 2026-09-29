@@ -344,3 +344,53 @@ def test_a_failed_fee_refresh_keeps_the_scaling_its_rates_were_read_with(venue):
     ex.refresh_fee_rates()
     assert {r["coin"]: r["taker_fee_rate"] for r in ex.instruments()["perp"]} == before
     assert before["BTC"] == "0.000405"  # 0.00045 x (1 - 0.1)
+
+
+@pytest.mark.parametrize("tool,read", [("venue.mids", "mids"), ("venue.funding", "funding"),
+                                       ("venue.open_orders", "open_orders"),
+                                       ("venue.positions", "account")])
+def test_a_seat_read_is_priced_at_every_request_it_sends_one_per_dex(venue, tool, read):
+    """Codex P1 on #178: a read sends one request per perp dex, so its admission weight
+    is every one of them, before it is sent, never the first dex's alone."""
+    from factorylab.world.venue_tools import public_read_weight
+
+    ex = venue()
+    before = ex.request_weight_sent()
+    getattr(ex, read)()
+    assert ex.request_weight_sent() - before == public_read_weight(tool, {}, dexes=1)
+    assert public_read_weight(tool, {}, dexes=1) > public_read_weight(tool, {})
+
+
+def test_admission_refuses_a_per_dex_read_the_share_cannot_cover():
+    from dataclasses import replace
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+    from factorylab.world.exchange import FakeExchange
+    from factorylab.world.scripted import ScriptedProvider
+
+    base = load_manifest("scripted")
+    # One named dex doubles the heaviest read (40), so each of 16 slots needs 40.
+    manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "xyz:TSLA"),
+                                              public_read_weight_per_minute=640))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(), exchange=FakeExchange())
+    seat = next(iter(rt.assemblies))
+    share = rt.venue_read_share()
+    assert share == 40
+    rt.venue_read_use[rt._reader_id(seat)] = [[rt.clock.now_ns, share - 30]]
+    refused = rt._venue_read_refusal(seat, "venue.funding", {})
+    assert refused is not None and "this read sends 40" in refused
+    spec = rt.tool_specs["venue.funding"]["description"]
+    assert "weighs 40" in spec
+
+
+def test_a_world_whose_read_share_cannot_cover_a_per_dex_read_is_refused_at_load():
+    from dataclasses import replace
+
+    from factorylab.runtime.worlds import load_manifest
+
+    base = load_manifest("scripted")
+    manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "xyz:TSLA")))
+    assert "cannot cover venue.funding at 40" in manifest.read_share_problem()
+    assert base.read_share_problem() is None

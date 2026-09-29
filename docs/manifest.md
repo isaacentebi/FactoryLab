@@ -2730,6 +2730,12 @@ otherwise (`tool.refused`, naming the seat's own use and share). The seats' tota
 is capped by the shares, one seat a slot at a time, at `public_read_weight_per_minute`
 (480), which leaves the kernel the rest of the venue's 1200 (720); the physical
 per-IP limit is the venue's own (a 429), which `_guarded` backs off from.
+A read the live adapter sends once per perp dex weighs that much more for each HIP-3 dex
+the manifest names (`PER_DEX_WEIGHT`: `venue.mids` 2, `venue.funding` 20,
+`venue.open_orders` 20, `venue.positions` 2), priced before it is sent and published
+in each tool's description and in `world.read {"section":"admission"}`
+(`per_dex_weights`, `named_hip3_dexes`); a world whose slot share cannot cover the
+heaviest read so priced is refused at load.
 
 **A read answered earlier in the tick is not sent again.** Within one world tick,
 until a venue or treasury write that can change what the venue answers (an order,

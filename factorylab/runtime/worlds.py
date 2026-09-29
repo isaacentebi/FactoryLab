@@ -1227,8 +1227,9 @@ class WorldManifest:
         share = self.exchange.public_read_weight_per_minute // readers
         published = [tool for tool in _BASE_WEIGHT
                      if tool not in VAULT_READS or self.exchange.vault_tools]
-        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}))
-        weight = public_read_weight(heaviest, {})
+        dexes = len(universe.named_dexes(self.exchange.coins))
+        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}, dexes))
+        weight = public_read_weight(heaviest, {}, dexes)
         if share < weight:
             return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
                     f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")

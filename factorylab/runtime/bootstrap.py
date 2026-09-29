@@ -882,13 +882,17 @@ class BootstrapMixin:
             self.treasury.vault_custody = True
         from factorylab.world.venue_tools import (
             _BASE_WEIGHT,
+            PER_DEX_WEIGHT,
             TICK_ANSWER_FACT,
             VENUE_WEIGHT_PER_MINUTE,
         )
 
         budget = manifest.exchange.public_read_weight_per_minute
         seats = manifest.exchange.max_readers
+        dexes = len(universe_names.named_dexes(manifest.exchange.coins))
         for tool_id, weight in _BASE_WEIGHT.items():
+            # A read sent once per perp dex weighs every request it sends.
+            weight += PER_DEX_WEIGHT.get(tool_id, 0) * dexes
             if tool_id not in self.tool_specs:
                 continue
             # A limit is a published fact (essay II.I.b), never advice.

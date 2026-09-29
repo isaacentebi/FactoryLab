@@ -65,7 +65,9 @@ def test_a_malformed_selector_is_refused_at_load(coins, pairs, message):
 def test_a_manifest_with_selectors_loads_and_keeps_them_as_written():
     data = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
     data["exchange"]["coins"] = ["*", "xyz:*", "BTC"]
-    data.setdefault("venue", {})["spot_pairs"] = ["*/USDC"]
+    # A named dex doubles the per-dex reads: 40 a slot covers the heaviest.
+    data.setdefault("venue", {}).update(spot_pairs=["*/USDC"],
+                                        public_read_weight_per_minute=640)
     m = manifest_from_dict(data)
     assert m.exchange.coins == ("*", "xyz:*", "BTC")
     assert m.exchange.spot_pairs == ("*/USDC",)

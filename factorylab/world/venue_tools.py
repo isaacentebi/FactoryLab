@@ -180,6 +180,11 @@ _BASE_WEIGHT = {"venue.instruments": 0, "venue.mids": 2, "venue.order_book": 2,
                 # userVaultEquities and leadingVaults
                 "venue.vault_positions": 40}
 _ITEMS_PER_WEIGHT = {"venue.candles": ("n", 60, 200), "venue.funding_history": ("n", 20, 100)}
+#: The seat reads the live adapter sends once per perp dex it reads, and the weight each
+#: named builder-deployed (HIP-3) dex adds: allMids, metaAndAssetCtxs, openOrders and
+#: clearinghouseState, one request a dex (``HyperliquidExchange``).
+PER_DEX_WEIGHT = {"venue.mids": 2, "venue.funding": 20, "venue.open_orders": 20,
+                  "venue.positions": 2}
 #: The span a seat's venue read share is counted over: any sliding minute.
 READ_WINDOW_NS = 60_000_000_000
 #: Each seat read and the adapter method (and arguments, from the read's own) that
@@ -200,17 +205,20 @@ TICK_ANSWER_FACT = (
     "answer, and sends no request.")
 
 
-def public_read_weight(tool_id: str, args: Any) -> int | None:
+def public_read_weight(tool_id: str, args: Any, dexes: int = 0) -> int | None:
     """The documented weight of one attempt of a seat's venue read, or None for any other tool.
 
     Guarantees the weight never undercounts a well-formed call's first attempt: an
     item count that is missing or out of its schema's range is counted at the
-    schema's maximum. Retries are not in it; they are charged as the adapter sends
-    them.
+    schema's maximum, and a read the adapter sends once per perp dex
+    (``PER_DEX_WEIGHT``) is counted once for each of the ``dexes`` HIP-3 dexes the
+    world names besides the first. Retries are not in it; they are charged as the
+    adapter sends them.
     """
     base = _BASE_WEIGHT.get(tool_id)
     if base is None:
         return None
+    base += PER_DEX_WEIGHT.get(tool_id, 0) * dexes
     extra = _ITEMS_PER_WEIGHT.get(tool_id)
     if extra is None:
         return base

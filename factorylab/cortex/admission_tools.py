@@ -31,6 +31,7 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
     )
     from factorylab.world.exchange import FakeExchange
     from factorylab.world.treasury import FEE_FREE
+    from factorylab.world.universe import named_dexes
     from factorylab.world.vaults import (
         CREATE_FEE_USD,
         DESCRIPTION_LENGTH,
@@ -38,7 +39,12 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
         MIN_CREATE_USD,
         NAME_LENGTH,
     )
-    from factorylab.world.venue_tools import _BASE_WEIGHT, _ITEMS_PER_WEIGHT, READ_WINDOW_NS
+    from factorylab.world.venue_tools import (
+        _BASE_WEIGHT,
+        _ITEMS_PER_WEIGHT,
+        PER_DEX_WEIGHT,
+        READ_WINDOW_NS,
+    )
     from factorylab.world.x402 import TOP_UP_MICRO
 
     return {
@@ -143,6 +149,10 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
         "venue_reads": {
             "window_ns": READ_WINDOW_NS,
             "base_weights": dict(_BASE_WEIGHT),
+            # A read the live adapter sends once per perp dex weighs this much more for
+            # each HIP-3 dex the world names (``named_hip3_dexes``).
+            "per_dex_weights": dict(PER_DEX_WEIGHT),
+            "named_hip3_dexes": len(named_dexes(manifest.exchange.coins)),
             "item_weights": {
                 tool: {"argument": key, "items_per_weight": per, "fallback_items": most}
                 for tool, (key, per, most) in _ITEMS_PER_WEIGHT.items()
@@ -150,7 +160,8 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
             "rules": {
                 "slot": "Venue and Polymarket public reads require a venue reader slot.",
                 "weight": "Schema-invalid reads are refused before admission or charge. A read's "
-                "base weight plus ceiling(items/items_per_weight) fits its seat's "
+                "base weight plus per_dex_weights times named_hip3_dexes plus "
+                "ceiling(items/items_per_weight) fits its seat's "
                 "remaining sliding-window share. A zero-weight read uses no share. "
                 "Cached tick answers still consume the same slot admission charge.",
                 "market": "Public reads use listed instruments; funding_history refuses spot "

@@ -24177,7 +24177,7 @@
         "rules",
         "weight"
       ],
-      "value": "Schema-invalid reads are refused before admission or charge. A read's base weight plus ceiling(items/items_per_weight) fits its seat's remaining sliding-window share. A zero-weight read uses no share. Cached tick answers still consume the same slot admission charge.",
+      "value": "Schema-invalid reads are refused before admission or charge. A read's base weight plus per_dex_weights times named_hip3_dexes plus ceiling(items/items_per_weight) fits its seat's remaining sliding-window share. A zero-weight read uses no share. Cached tick answers still consume the same slot admission charge.",
       "enforced": [
         141
       ],
@@ -26735,7 +26735,7 @@
     "factorylab/kernel/registry.py": "7e848639de72db3937110978339005251a001e86bd5684dfda927b99f84a798c",
     "factorylab/kernel/reserve.py": "11373ac82be95c9800c266b4fb5a1dbc035688602a2999c2bad4395c4d098a64",
     "factorylab/runtime/composition.py": "07901c7e1c6e2ebed31fe7dd009f21e9d2a00dd8a027f0b2b5307af5243627cc",
-    "factorylab/runtime/compute.py": "a0b0a5cac799e433071a590b6409016582b4c6affb30f106f05775a45723fd1c",
+    "factorylab/runtime/compute.py": "4c9505ade970688c7fe540b07f110344ac405504294a156ffe3436bfb7e51814",
     "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
     "factorylab/runtime/polymarket.py": "32f74d37169698156e6dc79c8b17bfd8b8b55977756a4f5638c943ff68e893d7",
@@ -26752,6 +26752,6 @@
     "factorylab/world/tape.py": "19616a86874b7acc1e7ece1252c9c57836973247b68782d8cf37cc96064de4e8",
     "factorylab/world/treasury.py": "68e172bc767a6fef31ddd9e8404fd3486444838867abfe65f589ca0dbb68dcf4",
     "factorylab/world/treasury_rails.py": "3bf9d4ca6b608029666bae14a9f003ed25ad113abce3bb51762e7c5bfc897a4a",
-    "factorylab/world/venue_tools.py": "1b950351844e308ee3c0d45f80241b97b2dd195a385a68b0a33bfaf32d5a7d6e"
+    "factorylab/world/venue_tools.py": "d964770a6a9338aa36bbdc33209f58987cc9c6c899864c6d77a1e1deb655f20f"
   }
 }

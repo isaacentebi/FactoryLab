@@ -569,6 +569,12 @@ cctp_forwarding = "never"
 # Every USDC-quoted spot pair, PURR/USDC and HYPE/USDC (the spot HYPE that pays the
 # population's own Core gas) among them.
 spot_pairs = ["*/USDC"]
+# One named HIP-3 dex (xyz) makes the per-dex reads (venue.mids, venue.funding,
+# venue.open_orders, venue.positions) send a second request each: venue.funding and
+# venue.open_orders weigh 40. The default 480 over 16 read slots is 30 a slot, which
+# cannot cover them, so the population's read budget is 640 (40 a slot), leaving the
+# kernel 560 of the venue's 1200 a minute (docs/manifest.md, "Seeing the world").
+public_read_weight_per_minute = 640
 # The venue's vaults are not a surface of this world. `vault_tools = true` here would
 # publish venue.vault_details/_positions/_create/_deposit/_withdraw and make vault
 # equity a venue pot (docs/manifest.md, "Vaults"); it changes the manifest hash.
