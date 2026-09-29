@@ -1471,11 +1471,25 @@ class SchematicsMixin:
         return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
                 for market, rows in listing.items() if market in traded}
 
+    def _listing_key(self) -> Any:
+        """When the venue's listing may have changed since it was read: a live venue's
+        listing is its launch listing and this account's fee rates, which move only when
+        the fee schedule is read again (``_read_fee_schedule``), so it is read once per
+        schedule read, never once a tick (a listing of thousands of rows would enter the
+        diary every tick); a simulated or recorded venue's may move every tick."""
+        if getattr(self, "live", False):
+            return ("fees", (getattr(self, "fee_schedule", None) or {}).get("read_ns"))
+        return ("tick", self.ticks_consumed)
+
     def _venue_listing(self) -> Any:
-        """The venue's instrument listing, read once a tick (the memo below)."""
-        tick = self.ticks_consumed
+        """The venue's instrument listing, read once per ``_listing_key`` (the memo)."""
+        return self._venue_listing_indexed()[0]
+
+    def _venue_listing_indexed(self) -> tuple[Any, dict]:
+        """The listing and its rows by ``(market, coin)`` with their listing position."""
+        key = self._listing_key()
         memo = getattr(self, "_instruments_memo", None)
-        if memo is None or memo[0] != tick:
+        if memo is None or memo[0] != key:
             from factorylab.runtime.published import NotYetRead
 
             try:
@@ -1483,10 +1497,14 @@ class SchematicsMixin:
             except NotYetRead as exc:
                 from factorylab.runtime.custody import unavailable
 
-                return unavailable(str(exc))
-            memo = (tick, listing)
+                return unavailable(str(exc)), {}
+            index = ({(market, row.get("coin")): (pos, row)
+                      for market, rows in listing.items() if isinstance(rows, list)
+                      for pos, row in enumerate(rows) if isinstance(row, dict)}
+                     if isinstance(listing, dict) else {})
+            memo = (key, listing, index)
             self._instruments_memo = memo
-        return memo[1]
+        return memo[1], memo[2]
 
     def _traded_instruments(self) -> dict[str, list[dict[str, Any]]]:
         """The instrument record of each market this world may trade, and no other.
@@ -1516,17 +1534,21 @@ class SchematicsMixin:
         """
         # A schematics render (runtime/published.py, §I.b) reads no venue: the listing
         # is published as not read, never as an empty or invented one.
-        listing = self._venue_listing()
+        listing, index = self._venue_listing_indexed()
         if not isinstance(listing, dict) or "status" in listing and "perp" not in listing:
             return listing
         # The markets the tick broadcasts: a world's trading markets, and for a world
         # with a universe those it is in play on (``_broadcast_markets``); the rest of
-        # the universe's records are ``world.read`` section ``markets``.
-        shown = set(self._broadcast_markets())
-        traded = {"perp": set(self.venue_tools.coins) & shown,
-                  "spot": set(self.venue_tools.spot_pairs) & shown}
-        return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
-                for market, rows in listing.items()}
+        # the universe's records are ``world.read`` section ``markets``. Rows are found
+        # by market, never by a scan of the listing, and kept in listing order.
+        perps, pairs = self._tradeable_sets()
+        picked: dict[str, list] = {market: [] for market in listing}
+        for coin in dict.fromkeys(self._broadcast_markets()):
+            for market, allowed in (("perp", perps), ("spot", pairs)):
+                if coin in allowed and (market, coin) in index and market in picked:
+                    picked[market].append(index[(market, coin)])
+        return {market: [row for _pos, row in sorted(rows, key=lambda item: item[0])]
+                for market, rows in picked.items()}
 
     def _polymarket_reads_section(self) -> dict[str, Any]:
         """The kernel's open-read limit on Polymarket, as a published limit (II.I.b)."""

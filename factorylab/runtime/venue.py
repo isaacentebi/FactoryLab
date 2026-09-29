@@ -816,6 +816,17 @@ class VenueMixin:
         out.extend(sorted(m for m in in_play if m in observable and m not in out))
         return tuple(out)
 
+    def _tradeable_sets(self) -> tuple[frozenset[str], frozenset[str]]:
+        """The perps and pairs this world may trade, kept until a registration changes
+        them, so a membership test never walks the universe."""
+        tools = self.venue_tools
+        key = (len(tools.coins), len(tools.spot_pairs))
+        memo = self.__dict__.get("_tradeable_memo")
+        if memo is None or memo[0] != key:
+            memo = (key, frozenset(tools.coins), frozenset(tools.spot_pairs))
+            self.__dict__["_tradeable_memo"] = memo
+        return memo[1], memo[2]
+
     def _broadcast_membership(self) -> tuple[tuple[str, ...], frozenset[str]]:
         """The broadcast set's fixed part and the markets it may observe, built once.
 
@@ -995,7 +1006,10 @@ class VenueMixin:
             if getattr(account, "stale", False):
                 return  # a peak is observed on a live account or not at all
             positions = account.positions
-            mids = self.exchange.mids() if positions else {}
+            # A universe world asks for its positions' mids alone (Chapter II §IV.c).
+            held = tuple(sorted({p.coin for p in positions if p.size}))
+            mids = ({} if not positions else self.exchange.mids(held)
+                    if getattr(self, "universe", None) else self.exchange.mids())
         except RuntimeError:
             return
         notionals: dict[str, Decimal] = {}

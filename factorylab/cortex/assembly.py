@@ -1130,12 +1130,14 @@ def producing_contract(shape: Any, *, listed: Any, answer_order: bool) -> Any:
     if listed is None:
         properties["counterfactual"] = deepcopy(COUNTERFACTUAL_FIELD)
         return {**shape, "properties": properties, "required": required}
-    listed = sorted(str(coin) for coin in listed)
+    # Counted before it is sorted: a listing above the bound is named by reference, and
+    # a request never sorts thousands of coins it will not enumerate (§IV.c).
+    listed = list(listed)
     if not listed:
         properties.pop("counterfactual", None)
         return {**shape, "properties": properties, "required": required}
     named = deepcopy(COUNTERFACTUAL_FIELD)
-    named["properties"]["coin"] = ({"type": "string", "enum": listed}
+    named["properties"]["coin"] = ({"type": "string", "enum": sorted(map(str, listed))}
                                    if len(listed) <= LISTED_ENUM_MAX
                                    else deepcopy(LISTED_COIN_BY_REFERENCE))
     properties["counterfactual"] = named

@@ -574,3 +574,43 @@ def test_a_spot_only_universe_anchors_its_launch_account_with_the_spot_book(monk
                    if item.get("kind") == "consequence.fill_baseline"]
     assert baseline["positions"] == {"spot:PURR": "5"}
     assert baseline["cash_micro_usd"]["spot"] == 10_000_000
+
+
+def test_a_live_listing_is_read_once_per_fee_schedule_read_not_once_a_tick(monkeypatch):
+    """Sibling sweep on #178: a live venue's listing (thousands of rows, each read
+    journaled in full) was read once a tick for the world block. It moves only when the
+    fee schedule is read again, so it is read once per schedule read."""
+    from dataclasses import replace
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+    from factorylab.world.scripted import ScriptedProvider
+
+    FakeInfo.n, FakeInfo.dexes = 200, {}
+    monkeypatch.setattr("hyperliquid.info.Info", FakeInfo)
+    monkeypatch.delenv("HL_PRIVATE_KEY", raising=False)
+    reads = []
+    listing = HyperliquidExchange.instruments
+
+    def counted(self):
+        reads.append(1)
+        return listing(self)
+
+    monkeypatch.setattr(HyperliquidExchange, "instruments", counted)
+    ex = HyperliquidExchange(address="0xabc", coins=(), spot_pairs=())
+    base = load_manifest("edition7-breadth-testnet")
+    manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "*")),
+                       assemblies=tuple(replace(a, max_tokens=1024) for a in base.assemblies))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(), exchange=ex)
+    rt._read_fee_schedule()
+    reads.clear()
+    for tick in range(10):
+        rt.ticks_consumed = tick
+        block = rt._traded_instruments()
+    assert len(reads) == 1
+    assert [row["coin"] for row in block["perp"]] == ["BTC"]
+    rt.clock.now_ns += 10**9
+    rt._read_fee_schedule()  # a new schedule read may have moved the listing
+    rt._traded_instruments()
+    assert len(reads) == 3  # the schedule's own read, then the block's
