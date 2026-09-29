@@ -463,40 +463,43 @@ def test_a_fill_books_the_fee_its_execution_charged_not_the_admission_schedule()
     assert Decimal(polymarket.reconcile(rt)["drift"]) == 0
 
 
-def test_a_fee_the_execution_does_not_state_is_reconciled_from_the_custodian():
-    rt, server = live_world()
-    polymarket.tick(rt)  # the pot's opening is read before any order, as a world's is
-    handle = collateral_decision(rt)
+def _unstated_fee_fill(rt, server, handle):
     buy(rt, server, handle, size="5", price="0.75", market="fake-2")
     for trade in server.trades:
-        trade.pop("fee_rate_bps")
+        trade.pop("fee_rate_bps")  # get-trades lists fee_rate_bps as optional
+
+
+def test_a_fee_its_trade_does_not_state_is_never_taken_from_a_balance_change():
+    """Codex P1 on #177: a fee inferred from the pot's drift cannot tell a fee from a
+    withdrawal on the wallet: the withdrawal was booked to the order's owner as its fee."""
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    _unstated_fee_fill(rt, server, handle)
+    server.fake._cash -= Decimal(1)  # someone withdraws $1 from the wallet
     polymarket.tick(rt)
     (fill,) = items(rt, "polymarket.fill")
-    assert fill["fee_usd"] == "0" and items(rt, "polymarket.fee_unresolved")
-    # The same tick's reconciliation reads what the custodian was charged.
-    (closed,) = items(rt, "polymarket.fee_reconciled")
-    assert closed["amount"] == -51_480  # 5 x 0.05 x 0.71 x 0.29, as the balance shows
-    fees = [i for i in items(rt, "venue.settled") if i["reference"].startswith("fee:")]
-    assert [(i["amount"], i["handle"]) for i in fees] == [(-51_480, handle)]
-    assert Decimal(polymarket.reconcile(rt)["drift"]) == 0 and not rt.polymarket.open_fees
-    # While a fee is open the pot's reconciliation is unknown: no new exposure.
-    rt.polymarket.open_fees.append({"order_id": "0x1", "handle": handle, "size": "1",
-                                    "px": "0.5"})
-    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
-                  market="fake-1")
-    assert refused["status"] == "rejected" and refused["error"] == polymarket.FEE_OPEN_REFUSAL
-    rt.polymarket.open_fees.clear()
+    assert fill["fee_usd"] == "0"
+    (item,) = items(rt, "polymarket.fee_unresolved")
+    assert item["handle"] == handle and len(rt.polymarket.open_fees) == 1
+    assert not [i for i in items(rt, "venue.settled") if i["reference"].startswith("fee:")]
+    assert rt.venue_deltas.get(handle, {}).get("polymarket", 0) == 0
+    # The drift is its own signal, attributed to no one: $1 is more than any fee.
+    assert items(rt, "polymarket.drift") and rt.polymarket.drifting
+
+
+def test_an_unstated_fee_holds_the_most_its_schedule_could_charge_and_blocks_nothing():
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    _unstated_fee_fill(rt, server, handle)
+    polymarket.tick(rt)
+    # 5 x 0.05 x 0.71 x 0.29 at the schedule its intent recorded, rounded up.
+    assert rt.polymarket.open_fees[0]["reserve"] == "0.05148"
+    reserved, _book = polymarket.local_commitments(rt.polymarket)
+    assert reserved == Decimal("0.05148")
+    # The fee it may have charged explains the drift it leaves: nothing is blocked.
+    assert not rt.polymarket.drifting
     assert buy(rt, server, collateral_decision(rt), size="5", price="0.30",
                market="fake-1")["status"] == "resting"
-
-
-def test_a_shortfall_no_open_fee_could_explain_closes_nothing():
-    rt, _server = live_world()
-    item = {"order_id": "0x1", "handle": None, "size": "1", "px": "0.5"}
-    rt.polymarket.open_fees.append(item)
-    polymarket._settle_open_fees(rt, rt.polymarket, Decimal("-2"))  # above 1 x 0.5 of cash
-    assert rt.polymarket.open_fees == [item] and items(rt, "polymarket.fee_unreconciled")
-    assert not items(rt, "polymarket.fee_reconciled")
 
 
 def test_the_exposure_cap_holds_while_the_venue_s_listings_lag():
@@ -569,8 +572,8 @@ def test_no_order_is_taken_before_the_pot_s_opening_is_read():
     for trade in server.trades:
         trade.pop("fee_rate_bps")
     polymarket.tick(rt)
-    (closed,) = items(rt, "polymarket.fee_reconciled")
-    assert closed["amount"] == -51_480
+    # The fee stays open, never closed from the balance, and never blocks a buy.
+    assert len(rt.polymarket.open_fees) == 1 and not rt.polymarket.drifting
 
 
 def test_a_cancelled_buy_releases_its_reservation():
