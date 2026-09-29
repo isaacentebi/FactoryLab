@@ -2672,8 +2672,8 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   inventory at cost; the principal counts each token at the larger of the listing and
   that inventory; the positions listing is read page by page to an empty page (or the
   pot is unavailable); and no buy is taken while the last reconciliation found money
-  gone that the books do not explain (`polymarket.drift` below zero, beyond
-  `AVG_PRICE_TOLERANCE` a listed share). The reconciliation is
+  gone that the books do not explain (`polymarket.drift` below zero; no
+  allowance is made, so a real rounding mismatch shows as drift too). The reconciliation is
   against the custodian's own listing, never the larger of it and the world's book: a
   cost basis booked too high shows as drift, and a listing that lags holds new risk
   until it catches up.

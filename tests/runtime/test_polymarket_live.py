@@ -851,3 +851,18 @@ def test_no_buy_is_taken_while_any_fee_is_unestablished():
     refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
                   market="fake-1")
     assert refused["status"] == "rejected" and refused["error"] == polymarket.FEE_OPEN_REFUSAL
+
+
+def test_no_blanket_allowance_hides_a_small_unexplained_loss():
+    """Sol P1 on #177: an allowance of 0.0001 a listed share absorbed a $0.001 withdrawal
+    against 10 held shares (and $10 against 100,000). No allowance is made: a real
+    rounding mismatch shows as drift too."""
+    rt, server = live_world()
+    buy(rt, server, collateral_decision(rt), price="0.45")  # 10 held, cost exact
+    polymarket.tick(rt)
+    server.fake._cash -= Decimal("0.001")
+    polymarket.tick(rt)
+    assert rt.polymarket.drifting
+    refused = buy(rt, server, collateral_decision(rt), size="5", price="0.30",
+                  market="fake-2")
+    assert refused["error"] == polymarket.DRIFT_REFUSAL

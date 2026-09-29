@@ -1215,20 +1215,6 @@ def principal_excess(surface: PolymarketSurface, account: dict) -> str | None:
 DRIFT_REFUSAL = "the polymarket pot does not reconcile with its custodian"
 
 
-#: What one share's cost may differ by between the Data API's ``avgPrice`` and the
-#: pot's own exact average cost: the listing's own precision, never a cost basis error.
-AVG_PRICE_TOLERANCE = Decimal("0.0001")
-
-
-def _listing_tolerance(surface: PolymarketSurface, account: dict) -> Decimal:
-    """The listing precision a live reconciliation allows: ``AVG_PRICE_TOLERANCE`` a
-    listed share. The simulated pot states its cost exactly."""
-    if not surface.live:
-        return Decimal(0)
-    return sum((Decimal(p["size"]) for p in account["positions"]), Decimal(0)) * (
-        AVG_PRICE_TOLERANCE)
-
-
 def _cancelled(surface: PolymarketSurface) -> dict[str, Decimal | None]:
     """Each order an acknowledged cancel proved terminal: order id -> the quantity the
     cancel's read-back says it matched (None where it did not say)."""
@@ -1785,9 +1771,9 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     if abs(drift) > Decimal("0.000001"):
         rt.ledger.append({"kind": "polymarket.drift", **result, "ts": rt.clock.now_ns})
     # Astra P1 on #177: money gone that the books do not explain leaves the pot's
-    # reconciliation unknown, and new exposure waits on it; the most the open fees could
-    # have charged is explained by them (Codex P1: a drift is never booked as a fee).
-    surface.drifting = drift < -(Decimal("0.000001") + _listing_tolerance(surface, account))
+    # reconciliation unknown, and new exposure waits on it. No allowance is made (Sol
+    # P1: a blanket one hid real losses); a drift is never booked as a fee (Codex P1).
+    surface.drifting = drift < Decimal("-0.000001")
     above = principal_excess(surface, account)
     if above is not None:
         result["principal_exceeded"] = True
