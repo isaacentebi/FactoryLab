@@ -941,51 +941,6 @@ DECLINE_FORM: dict[str, Any] = {
 }
 
 
-def deepcopy(value: Any, memo: dict | None = None) -> Any:
-    """``copy.deepcopy(value)``, faster on the JSON-shaped values contracts are built from.
-
-    Guarantees the value ``copy.deepcopy`` returns: an exact ``dict`` or ``list`` is
-    copied item by item (a dict's keys too), an exact ``str``, ``int``, ``float``,
-    ``bool`` or ``None`` is itself, a container reached twice is copied once and shared
-    as in the original (``memo``, keyed as ``copy.deepcopy`` keys it), and anything else
-    is ``copy.deepcopy`` with the same memo. Every request's published contract is
-    copied from the kernel's templates on each call (Chapter II §II.b: the contract a
-    request publishes is the one the kernel enforces), so this is on every call's path.
-    """
-    return _copy_json(value, {} if memo is None else memo)
-
-
-def _copy_json(value: Any, memo: dict) -> Any:
-    kind = type(value)
-    if kind is dict:
-        key = id(value)
-        out = memo.get(key)
-        if out is not None:
-            return out
-        out = memo[key] = {}
-        for k, v in value.items():
-            t = type(v)
-            out[k if type(k) is str else _copy_json(k, memo)] = (
-                v if t is str or t is int or t is float or t is bool or v is None
-                else _copy_json(v, memo))
-        return out
-    if kind is list:
-        key = id(value)
-        out = memo.get(key)
-        if out is not None:
-            return out
-        out = memo[key] = []
-        append = out.append
-        for v in value:
-            t = type(v)
-            append(v if t is str or t is int or t is float or t is bool or v is None
-                   else _copy_json(v, memo))
-        return out
-    if kind is str or kind is int or kind is float or kind is bool or value is None:
-        return value
-    return copy.deepcopy(value, memo)
-
-
 def judging_contract(kind: str, *, propensity: dict, register: dict,
                      forecasts: dict | None = None, about_handle: bool = True) -> dict:
     """The answers a judging kind's reply admits, as the kernel enforces them.
@@ -2038,3 +1993,48 @@ def _schema_definition(schema: Any, *, answer: bool = True) -> None:
             raise ValueError("anyOf must contain schemas")
         for alternative in schema["anyOf"]:
             _schema_definition(alternative, answer=answer)
+
+
+def deepcopy(value: Any, memo: dict | None = None) -> Any:
+    """``copy.deepcopy(value)``, faster on the JSON-shaped values contracts are built from.
+
+    Guarantees the value ``copy.deepcopy`` returns: an exact ``dict`` or ``list`` is
+    copied item by item (a dict's keys too), an exact ``str``, ``int``, ``float``,
+    ``bool`` or ``None`` is itself, a container reached twice is copied once and shared
+    as in the original (``memo``, keyed as ``copy.deepcopy`` keys it), and anything else
+    is ``copy.deepcopy`` with the same memo. Every request's published contract is
+    copied from the kernel's templates on each call (Chapter II §II.b: the contract a
+    request publishes is the one the kernel enforces), so this is on every call's path.
+    """
+    return _copy_json(value, {} if memo is None else memo)
+
+
+def _copy_json(value: Any, memo: dict) -> Any:
+    kind = type(value)
+    if kind is dict:
+        key = id(value)
+        out = memo.get(key)
+        if out is not None:
+            return out
+        out = memo[key] = {}
+        for k, v in value.items():
+            t = type(v)
+            out[k if type(k) is str else _copy_json(k, memo)] = (
+                v if t is str or t is int or t is float or t is bool or v is None
+                else _copy_json(v, memo))
+        return out
+    if kind is list:
+        key = id(value)
+        out = memo.get(key)
+        if out is not None:
+            return out
+        out = memo[key] = []
+        append = out.append
+        for v in value:
+            t = type(v)
+            append(v if t is str or t is int or t is float or t is bool or v is None
+                   else _copy_json(v, memo))
+        return out
+    if kind is str or kind is int or kind is float or kind is bool or value is None:
+        return value
+    return copy.deepcopy(value, memo)
