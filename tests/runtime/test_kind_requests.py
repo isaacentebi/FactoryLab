@@ -177,3 +177,55 @@ def test_a_self_request_stays_parent_selected_and_trains_no_router(monkeypatch):
     assert child["target"] == "seed-decider" and child["router"] is None
     assert decision.propensity.learner_state_hash == "parent-selected"
     assert not rt._router_sampled(decision)
+
+
+def _tv(a, b):
+    return 0.5 * sum(abs(a.get(x, 0.0) - b.get(x, 0.0)) for x in set(a) | set(b))
+
+
+@pytest.mark.parametrize("roles, charged", [(["producer"], True), (["evaluator"], False)])
+def test_a_request_routers_movement_bears_the_thrash_price_of_its_tier(monkeypatch, roles,
+                                                                       charged):
+    """Essay II.II.b, wave 16 I-10 (TH-1c on the edition-6 rehearsal replay): a request
+    router draws and learns like an event router, so a draw that moved its policy under a
+    thrash price attributed to its seats' tier is charged price × movement, and the
+    charge is ledgered when the child's round trains it. Before the fix the request
+    router's draw recorded no movement, so a moving producer-tier router escaped the
+    price that its tier's movement set."""
+    rt, req = _world(monkeypatch, "helper-a", "helper-b")
+    rt.stats.thrash = {"lambda": 0.4, "roles": roles}
+    rt._open_epoch(request_router_key("ProducerReturn"))  # the router, built as a draw would
+    state = rt.routers[request_router_key("ProducerReturn")][0]
+    state.last_draw = {"helper-a": 1.0}  # a previous draw, far from the next
+    rt._invoke_child("seed-decider", req, TASK, req.cost_ceiling)
+    (child,) = _children(rt)
+    prop = rt.queue.get(child["handle"]).propensity
+    now = dict(zip(prop.action_ids, prop.probs, strict=True))
+    assert state.last_draw == now  # the draw is the router's latest, charged or not
+    expected = min(rt.m.prices.penalty_cap, 0.4 * min(1.0, _tv(now, {"helper-a": 1.0})))
+    assert expected > 0
+    if not charged:
+        assert child["handle"] not in rt.thrash_charges
+        return
+    assert rt.thrash_charges[child["handle"]] == pytest.approx(expected)
+    rt.pending.pop(child["handle"], None)
+    rt.queue.settle(child["handle"], channel=CH_VERDICT, score=0.9,
+                    status=SettleStatus.SETTLED, definition_version="verdict-v1",
+                    sampling_ref=None)
+    rt._deliver_returns()
+    rows = [i for i in rt.ledger._recovery_items() if i["kind"] == "thrash.charged"]
+    assert [(r["handle"], r["router"]) for r in rows] == [(child["handle"],
+                                                          state.learner.id)]
+    assert rows[0]["charge"] == pytest.approx(expected)
+
+
+def test_a_self_request_moves_no_router_and_is_never_charged(monkeypatch):
+    rt, req = _world(monkeypatch)
+    rt.stats.thrash = {"lambda": 0.4, "roles": ["producer"]}
+    rt._open_epoch(request_router_key("ProducerReturn"))  # the router, built as a draw would
+    state = rt.routers[request_router_key("ProducerReturn")][0]
+    state.last_draw = {"helper-a": 1.0}  # a previous draw, far from the next
+    rt._invoke_child("seed-decider", req, replace(TASK, target="self"), req.cost_ceiling)
+    (child,) = _children(rt)
+    assert child["handle"] not in rt.thrash_charges
+    assert state.last_draw == {"helper-a": 1.0}
