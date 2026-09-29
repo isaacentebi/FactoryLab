@@ -1537,6 +1537,7 @@ def tick(rt: Any) -> None:
             return
     if surface.live:
         _discover(rt, surface)
+        _settle_cancels(rt, surface)
         # The live venue's fills and resolutions since the cursor, read through the
         # journal with the cursor carried in and out: a replay reads what the run read
         # and resumes from the cursor its checkpoint holds.
@@ -1612,6 +1613,49 @@ def _discover(rt: Any, surface: PolymarketSurface) -> None:
             rt.ledger.append({"kind": "polymarket.discovered", "client_id": client_id,
                               "handle": intent["handle"], "result": dict(answer)})
     surface.cursor = {**surface.cursor, "discover": turn + 1}
+
+
+def _settle_cancels(rt: Any, surface: PolymarketSurface) -> None:
+    """Settle each cancel released unresolved from the state of the order it cancels.
+
+    Codex P2 on #177: a cancel whose answer and every scheduled lookup failed is
+    released unresolved, and its order kept its unfilled notional reserved and its
+    decision's account pinned. The order's own status is read by its hash,
+    ``DISCOVERIES_PER_TICK`` a tick in turn, until the venue answers: cancelled, the
+    order's unfilled liability is released (``ReturnConsequences.cancel``) and its
+    placement records what it matched; filled, the cancel came too late; resting, it
+    did not take. The cancel is then settled; nothing is ever resent.
+    """
+    waiting = sorted(client_id for client_id, intent in surface.intents.items()
+                     if intent["operation"] == "polymarket.cancel"
+                     and intent.get("unresolved") and not intent.get("settled")
+                     and str(intent["args"]["order_id"]) in surface.order_ids)
+    if not waiting:
+        return
+    turn = int(surface.cursor.get("cancel_turn", 0))
+    for step in range(min(DISCOVERIES_PER_TICK, len(waiting))):
+        client_id = waiting[(turn + step) % len(waiting)]
+        order_id = str(surface.intents[client_id]["args"]["order_id"])
+        try:
+            answer = surface.venue.lookup(client_id, order_id=order_id)
+        except Exception:  # noqa: BLE001 - an unanswered lookup proves nothing
+            continue
+        status = answer.get("status")
+        if status not in ("cancelled", "filled", "resting"):
+            continue
+        placement_id = surface.order_ids[order_id]
+        placement = surface.intents[placement_id]
+        if status == "cancelled":
+            rt.consequences.cancel(order_id, rt.n)
+        if status in ("cancelled", "filled") and answer.get("filled_size") is not None:
+            surface.intents[placement_id] = {**placement, "result": {
+                **placement["result"], "status": status,
+                "filled_size": str(answer["filled_size"])}}
+        surface.intents[client_id] = {**surface.intents[client_id], "settled": True}
+        rt.ledger.append({"kind": "polymarket.cancel_settled", "client_id": client_id,
+                          "order_id": order_id, "result": dict(answer),
+                          "ts": rt.clock.now_ns})
+    surface.cursor = {**surface.cursor, "cancel_turn": turn + 1}
 
 
 def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:

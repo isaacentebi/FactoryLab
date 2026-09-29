@@ -53,6 +53,7 @@ class FakeClob:
         self.signer_address: str | None = None
         self.fail_lookups = 0  # order lookups that fail before one answers
         self.fail_balance = 0  # balance reads that fail before one answers
+        self.lose_cancel_answer = False  # the next DELETE /order executes, its answer lost
         self.page_size: int | None = None  # rows a /data/trades page carries; None: all
 
     # ---- the transport
@@ -81,7 +82,11 @@ class FakeClob:
                 raise clob.PolymarketUnavailable("transport: TimeoutError")
             return answer
         if path == "/order" and method == "DELETE":
-            return self._cancel(json.loads(body)["orderID"])
+            answer = self._cancel(json.loads(body)["orderID"])
+            if self.lose_cancel_answer:
+                self.lose_cancel_answer = False
+                raise clob.PolymarketUnavailable("transport: TimeoutError")
+            return answer
         if path.startswith("/data/order/"):
             if self.fail_lookups:
                 self.fail_lookups -= 1

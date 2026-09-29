@@ -768,3 +768,28 @@ def test_a_kill_after_resolution_reports_only_the_world_s_unredeemed_tokens():
     rt.polymarket._account_memo = None
     report = polymarket.wind_down(rt)
     assert [p["size"] for p in report["residual"]] == ["10"]
+
+
+def test_a_cancel_whose_answer_and_lookups_failed_is_settled_by_later_reads():
+    """Codex P2 on #177: a cancel released unresolved was never looked at again, so the
+    buy it cancelled kept its unfilled notional reserved forever."""
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    order_id = buy(rt, server, handle)["order_id"]  # 10 x 0.30 rests
+    server.lose_cancel_answer = True
+    server.fail_lookups = UNCERTAIN_ORDER_POLLS + 1
+    rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
+                                          "args": {"order_id": order_id}}, slot="tool:1")
+    for _ in range(UNCERTAIN_ORDER_POLLS + 1):
+        polymarket.tick(rt)
+    assert rt.polymarket.intents[f"{handle}:tool:1"]["unresolved"]
+    polymarket.tick(rt)
+    polymarket.tick(rt)
+    assert polymarket.local_commitments(rt.polymarket)[0] == 0
+    placement = rt.polymarket.intents[f"{handle}:tool:0"]
+    assert placement["result"]["status"] == "cancelled"
+    order = next(o for o in rt.consequences.table.orders if o.order_id == order_id)
+    assert order.remaining == 0  # the unfilled liability is released too
+

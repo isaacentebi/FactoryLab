@@ -2527,7 +2527,9 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   no more filled than was booked (wave 17b). A placement released unresolved (its
   answer and every scheduled lookup failed) is still looked up by its hash, two a tick
   in turn, until the venue answers, and its fills are read meanwhile: a confirmed trade
-  binds it to its decision, whose late money it is. A listing of trades longer than
+  binds it to its decision, whose late money it is. A cancel released unresolved is
+  settled the same way, from its order's own status read by hash: cancelled, the
+  order's unfilled liability and reservation are released. A listing of trades longer than
   one poll's page bound is read over several polls from the page it stopped at; a
   world's first read starts at its first tick, never at the wallet's history.
 * **Caps on the world's own records.** The venue's listings (balance, open orders,
