@@ -244,3 +244,29 @@ def test_a_counterfactual_on_a_listed_market_outside_the_universe_opens_and_sett
     refused = rt.venue_tools.call("venue.place_market",
                                   {"coin": "C5", "side": "buy", "size": "1"})
     assert "error" in refused
+
+
+def test_a_simulated_venue_advances_only_the_markets_the_world_watches(monkeypatch):
+    """Codex P1 on #178: the fake and tape venues walked every listed market each tick
+    (its mid, its history, its event) before the broadcast filter. With the same market
+    in play, per-tick work is the same at 3 and at 3000 markets."""
+    created: list[int] = []
+    advance = FakeExchange.advance
+
+    def counted(self, ts_ns):
+        events = advance(self, ts_ns)
+        created.append(len(events))
+        return events
+
+    monkeypatch.setattr(FakeExchange, "advance", counted)
+    work = {}
+    for n in (3, 3000):
+        created.clear()
+        rt = runtime(n)
+        rt.order_intents["c"] = {"args": {"coin": "C1"}, "operation": "venue.place_market"}
+        step = rt.tick_clock.interval_ns
+        for k in range(1, 6):
+            rt._settle_exchange_effects(rt._advance_venue(rt.clock.now_ns + k * step))
+        venue = rt.exchange.target
+        work[n] = (list(created), sum(len(h) for h in venue._mid_history.values()))
+    assert work[3] == work[3000] == ([1] * 5, 5)

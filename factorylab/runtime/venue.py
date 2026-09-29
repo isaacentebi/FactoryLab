@@ -610,6 +610,10 @@ class VenueMixin:
                 self.consequences.ledger.append({"kind": "consequence.funding_boundary",
                                                  "coin": coin, "boundary_ns": boundary})
                 self.consequences.table = self.consequences.table.capture_funding(coin, boundary)
+        if getattr(self, "universe", None):
+            # The venue moves only what the world watches (Chapter II §IV.c): the same
+            # set the tick broadcasts, and whatever the venue itself holds.
+            self.exchange.watched = tuple(sorted(self._broadcast_markets()))
         events = self.exchange.advance(ts_ns)
         self.advance_through_ns = max(getattr(self, "advance_through_ns", None) or ts_ns,
                                       ts_ns)

@@ -1990,8 +1990,10 @@ instrument an open return holds or held, an order intent not yet released, and a
 position or spot balance in the tick's account read. A former market's settled funding
 cursor is read again only while a boundary of it is still owed. A world with no
 selector broadcasts its trading markets, as before. A producer's tick payload carries
-the broadcast markets' mids only; every other listed mid is one `venue.mids` read away. A simulated or recorded venue's
-advance is filtered to the same set.
+the broadcast markets' mids only; every other listed mid is one `venue.mids` read away. A simulated or recorded venue
+advances only that set and the markets it holds a position, balance or order on: no
+other market's mid, history or event is made on the tick (the random walk's other
+markets hold their last price; a recording answers any market's mid from its rows).
 
 **HIP-3 on the live adapter.** A HIP-3 coin is `dex:COIN` everywhere (orders, fills,
 positions, books). The SDK resolves its asset id (`100000 + 10000 x dex index + index`)

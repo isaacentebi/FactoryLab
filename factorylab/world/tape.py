@@ -884,11 +884,14 @@ class TapeVenue(FakeExchange):
         a price in the fake's table."""
         out: dict[str, Decimal] = {}
         for market in self._quoted():
-            if market in self._mids and self._recorded(market) is not None:
-                out[market] = self._mids[market]
+            # Read from the recording at the venue's instant, which an advance that did
+            # not move this market (``watched``) left where it was: the same row.
+            row = self._recorded(market)
+            if row is not None:
+                out[market] = row[1]
                 base = market.split("/")[0]
                 if "/" in market and base not in self._tape.markets:
-                    out[base] = self._mids[market]
+                    out[base] = row[1]
         return out
 
     def candles(self, coin: str, interval: str, n: int) -> list[dict]:
@@ -934,7 +937,7 @@ class TapeVenue(FakeExchange):
         self._now_ns = ts_ns
         self._step += 1
         events: list[WorldEvent] = []
-        for market in self._quoted():
+        for market in self._moving(self._quoted()):
             row = self._tape.mid_at(market, ts_ns)
             if row is None:
                 continue
@@ -1088,7 +1091,7 @@ class TapeVenue(FakeExchange):
     def _charge(self, instant: int, sizes: dict[str, Decimal], ident: str) -> list[WorldEvent]:
         """Charge ``sizes`` (signed, in position-hours) at the recorded rate and mid."""
         events: list[WorldEvent] = []
-        for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
+        for coin in self._moving((*self.coins, *self.listed_coins)):
             if coin in self._settled_markets:
                 continue  # settled recordings charge only their published boundary evidence
             rate_row = self._tape.funding_at(coin, instant)

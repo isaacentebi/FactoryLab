@@ -367,3 +367,32 @@ def test_a_resting_limits_later_fills_state_the_maker_rate_and_a_venue_read_come
     rate, source, since, [provenance] = tape.fee_at("BTC", "maker", T + 40 * S)
     assert (source, since) == ("venue_read", T + 40 * S)
     assert provenance.startswith("exchange.instruments call ")
+
+
+def _broad_tape(n: int):
+    markets = [f"M{i}" for i in range(n)]
+    ticks = [1_790_000_000 * 10**9 + k * 10**10 for k in range(6)]
+    row = {"lot_size": "0.001", "tick_size": "0.01", "min_order_value_usd": "10"}
+    return Tape.from_data({
+        "format": TAPE_FORMAT, "venue": "hyperliquid-test", "declared_tick_ns": 10**10,
+        "ticks": ticks,
+        "mids": {m: [[ts, str(100 + i + k)] for k, ts in enumerate(ticks)]
+                 for i, m in enumerate(markets)},
+        "funding": {}, "funding_regime": {m: "legacy" for m in markets},
+        "settled_funding": {}, "books": {},
+        "instruments": {"perp": [{"coin": m, **row} for m in markets], "spot": []},
+        "fees": {}})
+
+
+@pytest.mark.parametrize("n", [3, 3000])
+def test_a_tape_advances_only_the_markets_the_world_watches(n):
+    """Codex P1 on #178: per-tick work (events, retained history) is the same at 3 and at
+    3000 recorded markets; an unwatched market still answers its recorded mid."""
+    tape = _broad_tape(n)
+    venue = TapeVenue(tape, coins=(), start_cash_usd=Decimal(1000))
+    venue.watched = ("M0",)
+    events = [len(venue.advance(ts)) for ts in tape.ticks[1:]]
+    assert events == [1] * 5
+    assert sum(len(h) for h in venue._mid_history.values()) == 5
+    mids = venue.mids()
+    assert len(mids) == n and mids[f"M{n - 1}"] == Decimal(100 + n - 1 + 5)

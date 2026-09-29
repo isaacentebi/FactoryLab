@@ -281,6 +281,27 @@ class FakeExchange:
     # The account this venue's books are, as a leader or depositor names it. A class
     # attribute, not a field: the fake has one account and it is not configurable.
     _address = FAKE_ACCOUNT
+    #: The markets a world with a universe watches (``runtime/venue.py``,
+    #: ``_broadcast_markets``), set on the instance before each advance; None moves
+    #: every listed market, as a world without a universe always has. A class
+    #: attribute, so a venue no universe world drives checkpoints exactly as before.
+    watched: tuple[str, ...] | None = None
+
+    def _moving(self, markets) -> list[str]:
+        """The markets an advance moves: every one, or with ``watched`` set, the watched
+        ones and every market this venue holds a position, a balance or an order on
+        (Chapter II §IV.c: a tick's work follows the world, not the listing). A spot
+        pair moves its base with it."""
+        markets = list(dict.fromkeys(markets))
+        watched = self.__dict__.get("watched")
+        if watched is None:
+            return markets
+        keep = {*watched, *self._positions, *self._spot_positions,
+                *(order.coin for order in self._resting.values()),
+                *(flight["order"].coin
+                  for flight in (self.__dict__.get("_inflight") or {}).values())}
+        keep |= {pair.split("/")[0] for pair in sorted(keep) if "/" in pair}
+        return [market for market in markets if market in keep]
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed)
@@ -324,9 +345,9 @@ class FakeExchange:
         self._now_ns = ts_ns
         self._step += 1
         events: list[WorldEvent] = []
-        for coin in dict.fromkeys((*self.coins, *self.listed_coins,
-                                   *(p.split("/")[0] for p in
-                                     (*self.spot_pairs, *self.listed_spot_pairs)))):
+        for coin in self._moving((*self.coins, *self.listed_coins,
+                                  *(p.split("/")[0] for p in
+                                    (*self.spot_pairs, *self.listed_spot_pairs)))):
             self._mids[coin] = self._next_price(coin)
             self._mid_history[coin].append((ts_ns, self._mids[coin]))
             events.append(
@@ -337,7 +358,7 @@ class FakeExchange:
                     {"coin": coin, "mid": str(self._mids[coin])},
                 )
             )
-        for pair in dict.fromkeys((*self.spot_pairs, *self.listed_spot_pairs)):
+        for pair in self._moving((*self.spot_pairs, *self.listed_spot_pairs)):
             self._mids[pair] = self._mids[pair.split("/")[0]]
             self._mid_history[pair].append((ts_ns, self._mids[pair]))
             events.append(WorldEvent(WorldEventKind.MARKET_MID, ts_ns, self.name,
@@ -846,7 +867,7 @@ class FakeExchange:
 
     def _apply_funding(self) -> list[WorldEvent]:
         events: list[WorldEvent] = []
-        for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
+        for coin in self._moving((*self.coins, *self.listed_coins)):
             self._funding_history.append(FundingEvent(coin, self.funding_rate, None, self._now_ns))
             pos = self._positions.get(coin)
             paid = Decimal(0)
