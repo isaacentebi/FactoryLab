@@ -779,7 +779,8 @@ class VenueMixin:
         exactly its trading markets (``_trading_markets``: the manifest's markets and
         every registration), as before. For a world with a universe: the manifest's
         explicit markets, every registered market, and every market the world is in
-        play on -- a named trade or an open consequence that still reads it
+        play on -- a named trade or an open consequence that still reads it, on any
+        market the venue lists (the world may name a trade it may not make)
         (``_fee_needs``), an instrument an open return holds or held
         (``graded_instruments``), an order intent not yet released, and a position or
         spot balance in the tick's account read. Every other market's price is one
@@ -811,8 +812,13 @@ class VenueMixin:
             in_play |= {p.coin for p in account.positions if p.size}
             in_play |= {f"{b.coin}/USDC" for b in account.spot_balances
                         if b.coin != "USDC" and b.total}
-        tradeable = set(markets)
-        out.extend(sorted(m for m in in_play if m in tradeable and m not in out))
+        # Permission to trade is not the obligation to observe: a named trade may name
+        # any market the venue lists (the counterfactual contract), so a consequence
+        # that reads one is broadcast whether or not the world may trade it; orders
+        # stay held to the pinned universe (venue tools). Anything else in play is a
+        # market the world trades, and nothing unlisted is ever broadcast.
+        observable = set(markets) | set(self._listed_instruments())
+        out.extend(sorted(m for m in in_play if m in observable and m not in out))
         return tuple(out)
 
     def _tick_mids(self) -> dict[str, Decimal]:

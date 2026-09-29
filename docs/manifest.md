@@ -1983,7 +1983,8 @@ No order book is read on the tick: a book is read when a seat asks
 (`venue.order_book`), and the tape recorder samples books off the path. In a world
 with a universe, the tick broadcasts (`MarketMid`, rate `Funding`, the settled funding
 reads, `funding.regime`) only its explicit markets, its registered markets and the
-markets it is in play on: a market a named trade or an open consequence still reads, an
+markets it is in play on: a market a named trade or an open consequence still reads (any
+listed market, traded or not: permission to trade is not the obligation to observe), an
 instrument an open return holds or held, an order intent not yet released, and a
 position or spot balance in the tick's account read. A former market's settled funding
 cursor is read again only while a boundary of it is still owed. A world with no

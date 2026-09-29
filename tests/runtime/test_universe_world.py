@@ -213,3 +213,34 @@ def test_a_counterfactual_off_the_listing_is_refused_when_named_by_reference():
         3000, {"action": "hold", "counterfactual": {"coin": "NOT-LISTED", "side": "buy"}})
     assert '"enum": ["BTC"' not in schema  # the listing is named, not enumerated
     assert returned == ("malformed", COUNTERFACTUAL_UNLISTED)
+
+
+def test_a_counterfactual_on_a_listed_market_outside_the_universe_opens_and_settles():
+    """Astra P1 on #178: the contract accepts any listed coin as a counterfactual, so the
+    world observes it whether or not it may trade it. Trading stays pinned: an order on
+    it is still refused."""
+    from tests.runtime.test_counterfactual_contract import Seat
+    from tests.runtime.test_loop import _consequence_produce
+
+    base = load_manifest("scripted")
+    manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "ETH"),
+                                              spot_pairs=("*/USDC",)))
+    seat = Seat({"action": "hold", "counterfactual": {"coin": "C5", "side": "buy"}})
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=seat, exchange=fake(8))
+    rt._manage_reserve_window()
+    rt._read_fee_schedule()  # the listing, as the first broadcast mid reads it
+    assert "C5" in rt._listed_instruments() and "C5" not in rt.venue_tools.coins
+    handle, _event = _consequence_produce(rt)
+    frozen = rt.reference_mids[handle]
+    assert frozen["coin"] == "C5" and frozen["open_ns"] is None
+    assert "C5" in rt._broadcast_markets()
+    step = rt.tick_clock.interval_ns
+    now = rt.clock.now_ns
+    while frozen.get("res") is None and now < rt.clock.now_ns + 10 * rt._horizon_ns():
+        now += step
+        rt._settle_exchange_effects(rt._advance_venue(now))
+    assert frozen["open_ns"] is not None and frozen["res"] is not None
+    refused = rt.venue_tools.call("venue.place_market",
+                                  {"coin": "C5", "side": "buy", "size": "1"})
+    assert "error" in refused
