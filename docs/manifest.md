@@ -2660,8 +2660,10 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   rejected. A process death between `polymarket.place` (or `polymarket.cancel`) and its
   answer resumes with the call uncertain (`RecoveryJournal.call`), never resent. Every
   other call the live venue journals is a read a resume re-runs (`order_identity`,
-  `poll`, `lookup`, `account`, `mark_book`, `write_market`, `write_market_of_token` and
-  the public reads); `drain_events`, which the live venue answers with nothing, is not
+  `poll`, `lookup`, `account`, `mark_book`, `write_market`, `write_market_of_token`,
+  `reserve_order_slot` and the public reads). A placement's submission slot is taken at
+  admission (`reserve_order_slot`), before its intent and signature: a placement the
+  budget cannot send is refused there, signs nothing and commits nothing; `drain_events`, which the live venue answers with nothing, is not
   called on it.
 * **Fills.** Read from `/data/trades` for this world's orders only, each fill booked
   once, when its trade is CONFIRMED; a FAILED trade never. The poll's cursor is carried

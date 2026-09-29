@@ -507,7 +507,8 @@ def test_a_placement_rejected_after_its_intent_is_not_polled():
     live = rt.polymarket.venue.target
     place = live.place
 
-    def spent(**kwargs):  # the budget is spent between the intent and the send
+    def spent(**kwargs):  # no slot held (a resumed process, say) and none left
+        live._reserved = 0
         live.budget.stamps = [1_790_000_000_000_000_000] * 12
         return place(**kwargs)
 
@@ -1301,3 +1302,32 @@ def test_a_malformed_row_never_discards_a_contradiction_found_beside_it():
     refused = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
                   price="0.20")
     assert refused["error"] == polymarket.MAKER_ONLY_REFUSAL
+
+
+def test_a_placement_the_budget_cannot_send_is_refused_before_it_is_signed():
+    """Architect's decision on #177: the submission's request slot is reserved at
+    admission, before the intent and the signature, so a spent budget refuses the
+    placement there: nothing is signed, nothing is committed against the cap."""
+    rt, server = live_world(principal="10")
+    venue = rt.polymarket.venue.target
+    signed = []
+    sign = clob.order_signature
+
+    def counting(*args, **kwargs):
+        signed.append(1)
+        return sign(*args, **kwargs)
+
+    clob.order_signature = counting
+    try:
+        handle = collateral_decision(rt)
+        account = rt.polymarket.account(rt)  # the tick's pot, read while there was room
+        assert account is not None
+        polymarket._write_market(rt, rt.polymarket, token(server))  # its market id known
+        venue.budget.spend_all()
+        venue.budget.stamps.pop()  # room for the write's market read, none to send it
+        refused = buy(rt, server, handle)
+        assert refused["error"] == "polymarket order request budget spent"
+        assert signed == [] and not items(rt, "polymarket.intent")
+        assert polymarket.principal_at_risk(rt.polymarket) == 0
+    finally:
+        clob.order_signature = sign

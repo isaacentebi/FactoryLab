@@ -1366,6 +1366,16 @@ def _write(rt: Any, surface: PolymarketSurface, action_id: str, handle: str, too
                                     kind="polymarket.refused")
         intent["order_hash"] = identity["order_hash"]
         intent["order_identity"] = identity
+        try:
+            # The submission's request slot, before the intent and the signature: a
+            # placement the budget cannot send is refused here and commits nothing
+            # (architect's decision on #177).
+            surface.venue.reserve_order_slot()
+        except Exception as exc:  # noqa: BLE001 - no slot, no order
+            reason = ("polymarket order request budget spent" if "budget" in str(exc)
+                      else f"polymarket order not reserved: {type(exc).__name__}")
+            rt.venue_attempts[handle] = reason
+            return rt._refuse_order(handle, reason, kind="polymarket.refused")
     rt.ledger.append({"kind": "polymarket.intent", **intent})
     surface.intents[client_id] = intent
     rt.consequences.order_intent(client_id, handle, coin_of(token))

@@ -358,7 +358,9 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 " not explain. The pot's own requests (orders, cancels, lookups, fills, "
                 "account, marks and a write's market read) are at most order_requests_per_10s"
                 " in any sliding 10 s of wall time; one past it is not sent and reads as "
-                "unavailable.",
+                "unavailable. A placement's submission slot is taken before its intent and"
+                " signature: a placement the budget cannot send is refused there, signs "
+                "nothing and commits nothing.",
                 "arguments": "Schema, string length and token pattern checks precede dispatch. "
                 "Size and price are finite decimals, not booleans; size is positive "
                 "and price is strictly between zero and one.",

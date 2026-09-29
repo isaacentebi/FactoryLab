@@ -597,7 +597,9 @@ def _read_only(name: str) -> bool:
             # The live order venue's reads (world/polymarket_clob.py): an order's
             # identity (a pure function of its fields), a fill poll that carries its
             # own cursor, and a held token's mark.
-            "order_identity", "poll", "mark_book", "write_market", "write_market_of_token"):
+            "order_identity", "poll", "mark_book", "write_market", "write_market_of_token",
+            # A submission slot taken at admission: local, re-taken by a resume.
+            "reserve_order_slot"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).

@@ -540,6 +540,8 @@ class LivePolymarket(PolymarketReader):
         self.key_env = key_env
         self._signer = signer
         self._creds: Credentials | None = None
+        # Submission slots taken at admission (``reserve_order_slot``), not yet sent.
+        self._reserved = 0
         #: () -> (namespace, launch nonce): the launch identity folded into every salt.
         self.identity = identity or (lambda: (None, None))
         #: client id -> its durable intent, or None; set by the runtime (``install``).
@@ -574,12 +576,25 @@ class LivePolymarket(PolymarketReader):
             self._creds = Credentials(answer["apiKey"], answer["secret"], answer["passphrase"])
         return self._creds
 
+    def reserve_order_slot(self) -> None:
+        """Take a placement's submission slot now, at admission, or raise ``BudgetSpent``.
+
+        Guarantees a placement the budget cannot send is refused before its intent and
+        its signature, so it never commits principal (architect's decision on #177);
+        ``place`` then sends in the slot taken here.
+        """
+        self._credentials()
+        self.budget.take()
+        self._reserved += 1
+
     def _l2(self, method: str, path: str, *, query: dict | None = None,
-            body: Any = None) -> Any:
-        """One authenticated CLOB request inside the pot's budget."""
+            body: Any = None, reserved: bool = False) -> Any:
+        """One authenticated CLOB request inside the pot's budget (``reserved``: in a
+        slot taken already)."""
         creds = self._credentials()
         text = "" if body is None else json.dumps(body, separators=(",", ":"))
-        self.budget.take()
+        if not reserved:
+            self.budget.take()
         now = int(self.wall()) // 1_000_000_000
         url = f"{self.clob_url}{path}" + (f"?{parse.urlencode(query)}" if query else "")
         return self.send(method, url, l2_headers(creds, self.signer().address, now, method,
@@ -681,12 +696,18 @@ class LivePolymarket(PolymarketReader):
                                     int(order["takerAmount"])) != (price, size)
                 or order["tokenId"] != str(int(token_id))):
             raise PolymarketRefused("the intent's order does not rebuild to its hash")
-        signature = order_signature(order, neg_risk, self.signer())
         order_id = intent["order_hash"]
+        # The submission's slot, taken before anything is signed: the one reserved at
+        # admission, else one now; a spent budget signs nothing.
         try:
             owner = self._credentials().key
+            if self._reserved:
+                self._reserved -= 1
+            else:
+                self.budget.take()
         except BudgetSpent:
             return self._rejected(order_id, "polymarket order request budget spent")
+        signature = order_signature(order, neg_risk, self.signer())
         body = {"order": {"salt": order["salt"], "maker": order["maker"],
                           "signer": order["signer"], "tokenId": order["tokenId"],
                           "makerAmount": order["makerAmount"],
@@ -700,7 +721,7 @@ class LivePolymarket(PolymarketReader):
                 # fee is ever charged: the venue charges takers only (trading/fees).
                 "owner": owner, "orderType": "GTC", "postOnly": True, "deferExec": False}
         try:
-            answer = self._l2("POST", "/order", body=body)
+            answer = self._l2("POST", "/order", body=body, reserved=True)
         except BudgetSpent:
             return self._rejected(order_id, "polymarket order request budget spent")
         except ClobHttpError as exc:
