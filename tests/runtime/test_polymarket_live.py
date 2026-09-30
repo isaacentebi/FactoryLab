@@ -1549,3 +1549,52 @@ def test_a_resolution_attributes_only_what_the_decision_s_lots_realised(monkeypa
     rows = [i for i in items(rt, "venue.settled") if i["reason"] == "resolution"]
     assert sum(i["amount"] for i in rows) == 7_000_000
     assert [i["amount"] for i in rows if i["handle"] is None] == [3_500_000]
+
+
+# --- Sol's round-9 review of #177 ----------------------------------------------------------
+
+
+def test_a_market_listing_one_token_twice_is_never_settled_against():
+    """#1: ten YES at $0.30 lose, but the resolution reply lists ``[YES, YES]`` with
+    payouts ``[1, 0]``. A market must name each outcome token once: the read is
+    malformed, and no payout is booked."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 1)})  # NO wins
+    rt, server = live_world(fake=fake)
+    order_id = maker_fill(rt, server, collateral_decision(rt), price="0.30")["order_id"]
+    polymarket.tick(rt)
+    assert rt.polymarket.filled[order_id] == "10"
+    yes = token(server)
+
+    def twice(row):
+        return {**row, "clobTokenIds": json.dumps([yes, yes]),
+                "outcomePrices": json.dumps(["1", "0"])} if row["closed"] else row
+
+    server.market_row = twice
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert not items(rt, "polymarket.resolution")
+    assert yes not in rt.polymarket.cursor.get("resolved", {})
+
+
+def test_a_sole_pending_placement_is_read_and_scanned():
+    """#2: the only placement lost its answer and its lookups fail, so no order is in
+    the settlement set yet; its trades are read all the same, from its signing time,
+    and a row naming it as taker halts buying."""
+    rt, server = live_world()
+    server.lose_answer = True
+    server.fail_lookups = 10**6
+    buy(rt, server, collateral_decision(rt))
+    (pending,) = rt.polymarket.intents.values()
+    assert pending["result"]["status"] == "uncertain"
+    assert polymarket._live_orders(rt.polymarket) == {}
+    server.trades.append({"id": "t-t", "status": "MATCHED",
+                          "match_time": signed_s_of(pending),
+                          "taker_order_id": pending["order_hash"],
+                          "asset_id": token(server), "side": "BUY", "size": "10",
+                          "price": "0.30", "maker_orders": []})
+    reads = len([c for c in server.calls if c == ("GET", "/data/trades")])
+    polymarket.tick(rt)
+    assert len([c for c in server.calls if c == ("GET", "/data/trades")]) > reads
+    assert rt.polymarket.contradicted

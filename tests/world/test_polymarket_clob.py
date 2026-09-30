@@ -649,3 +649,40 @@ def test_a_slot_that_expires_while_signing_is_renewed_before_the_send():
     assert withheld["status"] == "rejected" and withheld["withheld"] is True
     assert "unsigned" not in withheld and "venue_refused" not in withheld
     assert len([c for c in server.calls if c == ("POST", "/order")]) == posts
+
+
+def test_a_slot_that_expires_while_the_request_is_prepared_is_renewed_at_the_send():
+    """Sol P2 (round 9) on #177: a stall while the request's headers were prepared, after
+    the freshness check, sent on an expired slot. The check is at the transport, after
+    the request is prepared: renewed, or, with no slot left, the order is withheld."""
+    clock = {"now": 1_790_000_000_000_000_000}
+    venue, server = live_venue(budget=2, wall=lambda: clock["now"])
+    token, intent = _intent(venue, server, "c-1", price="0.30")
+    venue.intent_of = {"c-1": intent}.get
+    venue._credentials()
+    venue.budget.stamps.clear()
+    venue.reserve_order_slot()
+    real = clob.l2_headers
+    spend = {"after": False}
+
+    def slow(*args, **kwargs):
+        clock["now"] += 11 * 10**9  # an honest stall while the request is prepared
+        if spend["after"]:
+            venue.budget.stamps = [clock["now"]] * 2
+        return real(*args, **kwargs)
+
+    clob.l2_headers = slow
+    try:
+        assert _place(venue, token, price="0.30")["status"] == "resting"
+        window = [s for s in venue.budget.stamps if s > clock["now"] - clob.BUDGET_WINDOW_NS]
+        assert len(window) == 1
+        token, second = _intent(venue, server, "c-2", price="0.20")
+        venue.intent_of = {"c-1": intent, "c-2": second}.get
+        venue.reserve_order_slot()
+        spend["after"] = True
+        posts = len([c for c in server.calls if c == ("POST", "/order")])
+        withheld = _place(venue, token, price="0.20", client_id="c-2")
+    finally:
+        clob.l2_headers = real
+    assert withheld["status"] == "rejected" and withheld["withheld"] is True
+    assert len([c for c in server.calls if c == ("POST", "/order")]) == posts

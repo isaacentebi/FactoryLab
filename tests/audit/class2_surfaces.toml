@@ -724,6 +724,7 @@ sources = [
   "factorylab/world/polymarket_clob.py::LivePolymarket._credentials",
   "factorylab/world/polymarket_clob.py::LivePolymarket._fills",
   "factorylab/world/polymarket_clob.py::LivePolymarket._intended",
+  "factorylab/world/polymarket_clob.py::LivePolymarket._l2",
   "factorylab/world/polymarket_clob.py::LivePolymarket._open_orders",
   "factorylab/world/polymarket_clob.py::LivePolymarket._positions",
   "factorylab/world/polymarket_clob.py::LivePolymarket.cancel",

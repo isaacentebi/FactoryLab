@@ -1564,12 +1564,17 @@ def _signed(surface: PolymarketSurface, order_id: str) -> Any:
     return None
 
 
-def _signed_hashes(surface: PolymarketSurface) -> list[str]:
+def _signed_hashes(surface: PolymarketSurface) -> dict[str, dict[str, Any]]:
     """Every order hash this world may have signed, from its durable intents alone:
-    acknowledged, uncertain, pending or released (Sol P1, round 8, on #177)."""
-    return sorted({str(intent["order_hash"]) for intent in surface.intents.values()
-                   if intent["operation"] == "polymarket.place_limit"
-                   and intent.get("order_hash")})
+    acknowledged, uncertain, pending or released (Sol P1, round 8, on #177), with its
+    signed timestamp (ms) and whether it is not yet proven over (``open``): trades are
+    read while any may still fill, from the earliest such signing time (round 9)."""
+    return {str(intent["order_hash"]): {
+                "timestamp": str((intent.get("order_identity") or {}).get("order", {}).get(
+                    "timestamp", "0")),
+                "open": not _terminal(surface, intent)}
+            for intent in surface.intents.values()
+            if intent["operation"] == "polymarket.place_limit" and intent.get("order_hash")}
 
 
 #: Ticks between two ``polymarket.read_malformed`` rows of one reason: a stalled read is

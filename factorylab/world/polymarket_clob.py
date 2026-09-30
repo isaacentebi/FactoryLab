@@ -392,6 +392,11 @@ def http_send(method: str, url: str, headers: dict[str, str], body: str | None,
         raise PolymarketUnavailable("response is not JSON") from None
 
 
+class Withheld(Exception):
+    """A signed order not sent: its slot had left the budget's window at the transport,
+    and no slot was left to renew it. It never reached the venue."""
+
+
 class BudgetSpent(PolymarketUnavailable):
     """A pot request past ``order_requests_per_10s``: it was not sent."""
 
@@ -533,17 +538,24 @@ class LivePolymarket(PolymarketReader):
         self._reserved.append(self.budget.stamps[-1])
 
     def _l2(self, method: str, path: str, *, query: dict | None = None,
-            body: Any = None, reserved: bool = False) -> Any:
-        """One authenticated CLOB request inside the pot's budget (``reserved``: in a
-        slot taken already)."""
+            body: Any = None, slot: int | None = None) -> Any:
+        """One authenticated CLOB request inside the pot's budget. ``slot`` is the stamp of
+        a slot taken already: it is checked at the transport, after the request is
+        prepared and immediately before it is written (Sol P2, round 9), and renewed if it
+        has left the window; with none left, ``Withheld`` is raised and nothing is sent."""
         creds = self._credentials()
         text = "" if body is None else json.dumps(body, separators=(",", ":"))
-        if not reserved:
+        if slot is None:
             self.budget.take()
         now = int(self.wall()) // 1_000_000_000
         url = f"{self.clob_url}{path}" + (f"?{parse.urlencode(query)}" if query else "")
-        return self.send(method, url, l2_headers(creds, self.signer().address, now, method,
-                                                 path, text), text if body is not None else None)
+        headers = l2_headers(creds, self.signer().address, now, method, path, text)
+        if slot is not None and slot <= int(self.wall()) - BUDGET_WINDOW_NS:
+            try:
+                self.budget.take()
+            except BudgetSpent:
+                raise Withheld("the send's slot expired and none is left") from None
+        return self.send(method, url, headers, text if body is not None else None)
 
     def _public(self, url: str) -> Any:
         """One public GET the pot sends inside its own budget (never a seat's)."""
@@ -649,17 +661,6 @@ class LivePolymarket(PolymarketReader):
             return {**self._rejected(order_id, "polymarket order request budget spent"),
                     "unsigned": True}
         signature = order_signature(order, neg_risk, self.signer())
-        # The slot is checked again immediately before the send (Sol P2, round 8: a stall
-        # while signing let the slot slide out of the window): renewed if it did. If no
-        # slot is left, the signed order is not sent: it is withheld locally, never
-        # reached the venue and is no cancellation target, and, signed, it still counts
-        # against the cap.
-        if stamp <= int(self.wall()) - BUDGET_WINDOW_NS:
-            try:
-                self.budget.take()
-            except BudgetSpent:
-                return {**self._rejected(order_id, "polymarket order request budget spent"),
-                        "withheld": True}
         body = {"order": {"salt": order["salt"], "maker": order["maker"],
                           "signer": order["signer"], "tokenId": order["tokenId"],
                           "makerAmount": order["makerAmount"],
@@ -673,7 +674,14 @@ class LivePolymarket(PolymarketReader):
                 # fee is ever charged: the venue charges takers only (trading/fees).
                 "owner": owner, "orderType": "GTC", "postOnly": True, "deferExec": False}
         try:
-            answer = self._l2("POST", "/order", body=body, reserved=True)
+            answer = self._l2("POST", "/order", body=body, slot=stamp)
+        except Withheld:
+            # The slot is checked again at the transport (Sol P2, rounds 8 and 9: a stall
+            # while signing or preparing let it slide out of the window). With none left
+            # the signed order is not sent: withheld locally, it never reached the venue
+            # and is no cancellation target, and, signed, it still counts against the cap.
+            return {**self._rejected(order_id, "polymarket order request budget spent"),
+                    "withheld": True}
         except ClobHttpError as exc:
             reason = wire.refusal(exc.status, exc.body, order_id)
             if reason is not None:
@@ -813,7 +821,7 @@ class LivePolymarket(PolymarketReader):
     # ---- fills and resolutions
 
     def poll(self, *, now_ns: int, cursor: dict[str, Any],
-             orders: dict[str, dict[str, str]], own: Any = ()) -> dict[str, Any]:
+             orders: dict[str, dict[str, str]], own: Any = None) -> dict[str, Any]:
         """The pot's fills and resolutions since ``cursor``: ``{events, cursor,
         contradictions, malformed, complete}`` (``malformed``: why a read was unread).
 
@@ -847,10 +855,11 @@ class LivePolymarket(PolymarketReader):
         contradictions: dict[str, str] = {}
         malformed: list[str] = []
         # The contradiction scan reads for every order hash this world may have signed
-        # (``own``, from its durable intents, uncertain ones included; Sol P1, round 8),
-        # never only the orders it settles.
-        scanned = {str(h).lower() for h in (*orders, *own)}
-        for step in (lambda trial: self._fills(trial, orders, contradictions, scanned),
+        # (``own``: hash -> its signed timestamp and whether it may still fill, from its
+        # durable intents, uncertain ones included; Sol P1, rounds 8 and 9), never only
+        # the orders it settles, and trades are read while any of them may still fill.
+        own = dict(own or {})
+        for step in (lambda trial: self._fills(trial, orders, contradictions, own),
                      lambda trial: self._resolutions(trial, orders, now_ns)):
             # Each step works on a copy and commits only whole: a read that failed half
             # way leaves the cursor where it was, and what it would have reported is
@@ -871,13 +880,17 @@ class LivePolymarket(PolymarketReader):
                 "malformed": malformed, "complete": complete and "page" not in state}
 
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
-               contradictions: dict[str, str], scanned: set[str]) -> list[dict]:
-        if not orders:
+               contradictions: dict[str, str], own: dict[str, dict]) -> list[dict]:
+        pending = {h: o for h, o in own.items() if o.get("open")}
+        if not orders and not pending:
             return []
+        scanned = {str(h).lower() for h in (*orders, *own)}
         # Outstanding is what may still fill or has matched unbooked, by the runtime's
         # terminal evidence, booked fills and failed legs (``open``), never merely
-        # booked below size (Sol P2 on #177: a cancelled order re-scanned history).
-        outstanding = [int(o["timestamp"]) // 1000 for o in orders.values()
+        # booked below size (Sol P2 on #177: a cancelled order re-scanned history), and
+        # every signed placement not yet proven over, from its durable signing time.
+        outstanding = [int(o["timestamp"]) // 1000 for o in (*orders.values(),
+                                                              *pending.values())
                        if o.get("timestamp") is not None and o.get("open", True)]
         if "page" not in state:
             floor = (min(outstanding) - TRADE_OVERLAP_S) if outstanding else None

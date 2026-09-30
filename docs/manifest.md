@@ -2651,14 +2651,17 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   touches the books), everything lower-cased once, prices strictly inside (0, 1), sizes positive, statuses documented, a leg of
   this world's its signed order but for its size (its token, a BUY at exactly its
   limit, never more than its signed size, booked or not; architect's rule on Sol's
-  round-8 review), no row that is not an object),
+  round-8 review), a market naming each outcome token once, no row that is not an
+  object),
   and one that does not conform is malformed whole: a read is unread (its cursor does
   not move), an acknowledgement uncertain. No venue answer is trusted where it would
   give principal room (the cap counts every signed placement but a documented refusal), a quantity the venue
   does not state is unknown and never 0, and a trade row of this world's that reports
   it as a taker or states a fee on it halts buying: the rows are scanned before any is
   parsed, and the halt is kept apart from the poll's cursor, so a malformed row read
-  beside it cannot erase it; the scan matches this world's hashes in any case and
+  beside it cannot erase it. The scan reads for every order hash in the durable intents,
+  uncertain ones included, and trades are read while any of them may still fill, from
+  its signing time, whether or not it is yet in the settlement set; the scan matches this world's hashes in any case and
   reads any key whose name contains "fee" as a charge unless it is null or a
   decimal equal to zero (`"0"`, `0.0`, `"0.00"`; the documented `fee_rate_bps` is a
   string); an unreadable value is a charge. A read the door finds malformed stalls,
@@ -2682,7 +2685,8 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   `reserve_order_slot` and the public reads). A placement's submission slot is taken at
   admission (`reserve_order_slot`), before its intent and signature: a placement the
   budget cannot send is refused there, signs nothing and commits nothing. The slot is
-  checked again immediately before the send, after signing: renewed if it slid out of
+  checked again at the transport, after the request is prepared and immediately before
+  it is written: renewed if it slid out of
   the window, and if none is left the signed order is withheld, never sent, no
   cancellation target, and still counted against the cap. `drain_events`, which the
   live venue answers with nothing, is not called on it.

@@ -502,6 +502,11 @@ def market(answer: Any) -> dict[str, Any]:
         text(name, "outcome")
     for token in tokens:
         token_id(token, "clobTokenId")
+    if len(set(tokens)) != len(tokens):
+        # Sol P1 (round 9) on #177: [YES, YES] with payouts [1, 0] paid a losing YES. Each
+        # outcome token is named once, so each held token has exactly one payout; the
+        # payout itself is a resolved binary market's vector or none (``payout``).
+        raise Malformed("market names an outcome token twice")
     for stated in prices:
         paid = number(stated, "outcomePrice")
         if not 0 <= paid <= 1:

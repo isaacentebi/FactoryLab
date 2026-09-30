@@ -72,6 +72,7 @@ class FakeClob:
         self.post_answer = None  # rewrites the answer to an executed POST /order
         self.post_error = None  # raised after a POST /order executed (a lying refusal)
         self.trades_rows = None  # rewrites the rows of each /data/trades page
+        self.market_row = None  # rewrites each Gamma market row
 
     # ---- the transport
 
@@ -358,6 +359,10 @@ class FakeClob:
         return events
 
     def _raw_market(self, market: dict) -> dict:
+        row = self._raw_market_row(market)
+        return row if self.market_row is None else self.market_row(row)
+
+    def _raw_market_row(self, market: dict) -> dict:
         public = self.fake._public(market, detail=True)
         return {"id": public["market_id"], "conditionId": public["condition_id"],
                 "question": public["question"], "slug": public["slug"],

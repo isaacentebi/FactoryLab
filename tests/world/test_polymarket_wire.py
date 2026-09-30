@@ -334,12 +334,31 @@ def test_a_conforming_market_parses():
     assert wire.market(MARKET)["tick_size"] == "0.01"
 
 
+@pytest.mark.parametrize("prices,paid", [
+    ('["1", "0"]', Decimal(1)), ('["0", "1"]', Decimal(0)), ('["0.5", "0.5"]', Decimal("0.5")),
+    ('["1", "1"]', None), ('["0", "0"]', None), ('["0.4", "0.6"]', None),
+    ('["0.5", "0.4"]', None),
+])
+def test_a_resolved_market_pays_only_a_redemption_vector(prices, paid):
+    """concepts/resolution: a resolved binary market pays 1 and 0, or 0.5 each on a
+    50-50 answer; any other vector is no payout yet."""
+    from factorylab.world.polymarket import payout
+
+    resolved = wire.market({**MARKET, "closed": True, "umaResolutionStatus": "resolved",
+                            "outcomePrices": prices})
+    assert payout(resolved, TOKEN) == paid
+
+
 @pytest.mark.parametrize("answer", [
     None, _without(MARKET, "negRisk"), {**MARKET, "negRisk": "false"},
     {**MARKET, "orderPriceMinTickSize": "0.02"}, {**MARKET, "orderMinSize": "0"},
     {**MARKET, "outcomePrices": '["1.4", "0.6"]'}, {**MARKET, "outcomes": '["A","B","C"]'},
     {**MARKET, "clobTokenIds": '["x", "y"]'}, {**MARKET, "outcomes": "not json"},
     {**MARKET, "id": True}, {**MARKET, "umaResolutionStatus": 1},
+    # Sol P1 (round 9): each outcome token named once.
+    {**MARKET, "clobTokenIds": f'["{TOKEN}", "{TOKEN}"]'},
+    {**MARKET, "closed": True, "umaResolutionStatus": "resolved",
+     "clobTokenIds": f'["{TOKEN}", "{TOKEN}"]', "outcomePrices": '["1", "0"]'},
 ])
 def test_a_market_that_does_not_conform_is_malformed(answer):
     with pytest.raises(wire.Malformed):
