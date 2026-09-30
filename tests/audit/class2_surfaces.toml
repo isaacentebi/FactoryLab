@@ -744,6 +744,7 @@ sources = [
   "factorylab/world/polymarket_wire.py::ack",
   "factorylab/world/polymarket_wire.py::address",
   "factorylab/world/polymarket_wire.py::balance",
+  "factorylab/world/polymarket_wire.py::book",
   "factorylab/world/polymarket_wire.py::boolean",
   "factorylab/world/polymarket_wire.py::cursor",
   "factorylab/world/polymarket_wire.py::field",

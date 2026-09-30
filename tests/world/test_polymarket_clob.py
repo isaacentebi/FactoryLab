@@ -333,27 +333,41 @@ def test_the_account_is_the_custodian_s_word():
 
 
 def test_a_trade_listed_late_is_read_and_nothing_is_booked_twice():
+    """A valid second leg of the order, matched earlier but listed only now inside the
+    overlap, is recognised pending (its time holds the read back), then booked once when
+    CONFIRMED, never twice (Sol P2, round 10: the test passed on malformed evidence)."""
     venue, server = live_venue()
-    token, intent = _intent(venue, server, "c-1")
+    token, intent = _intent(venue, server, "c-1")  # 10 at 0.40
     venue.intent_of = {"c-1": intent}.get
     _place(venue, token)
-    server.match()
     orders = _orders(intent, token)
-    server.trades[0]["match_time"] = "5000"
+
+    def leg(trade_id, status, at, size):
+        return {"id": trade_id, "status": status, "match_time": at,
+                "taker_order_id": "0x" + "cd" * 32, "side": "SELL", "size": size,
+                "price": "0.40", "maker_orders": [
+                    {"order_id": intent["order_hash"], "asset_id": token,
+                     "matched_amount": size, "price": "0.40", "side": "BUY"}]}
+
+    server.trades = [leg("t-first", "CONFIRMED", "5000", "6")]
     first = venue.poll(now_ns=1, cursor={}, orders=orders)
-    assert len(first["events"]) == 1
-    # A second leg of the order, matched earlier but listed only now, inside the overlap.
-    server.extra_fills = [{"id": "t-late", "status": "MATCHED", "match_time": "4800",
-                           "taker_order_id": "0x" + "cd" * 32,
-                           "side": "SELL", "size": "1", "price": "0.4",
-                           "maker_orders": [{"order_id": intent["order_hash"],
-                                             "matched_amount": "0", "price": "0.45",
-                                             "side": "BUY"}]}]
+    assert [e["size"] for e in first["events"]] == ["6"]
+    late = leg("t-late", "MATCHED", "4800", "4")
+    server.trades.append(late)
     second = venue.poll(now_ns=2, cursor=first["cursor"], orders=orders)
-    assert second["events"] == [] and second["cursor"]["after"] == 5000 - clob.TRADE_OVERLAP_S
+    assert second["events"] == [] and second["cursor"]["after"] <= 4799
+    assert second["cursor"]["nonfinal"] == {
+        f"t-late:{intent['order_hash']}:0": [intent["order_hash"], "4"]}
+    late["status"] = "CONFIRMED"
+    third = venue.poll(now_ns=3, cursor=second["cursor"], orders=orders)
+    assert [e["size"] for e in third["events"]] == ["4"]
+    assert third["cursor"]["nonfinal"] == {}
+    cursor = third["cursor"]
     for poll in range(3):
-        again = venue.poll(now_ns=3 + poll, cursor=second["cursor"], orders=orders)
-        assert again["events"] == []  # the first fill is never booked again
+        again = venue.poll(now_ns=4 + poll, cursor=cursor, orders=orders)
+        assert again["events"] == []  # nothing is booked again
+        cursor = again["cursor"]
+    assert cursor["booked"][intent["order_hash"]] == "10"
 
 
 def test_more_trade_pages_than_one_poll_reads_are_read_over_several_polls():
@@ -686,3 +700,27 @@ def test_a_slot_that_expires_while_the_request_is_prepared_is_renewed_at_the_sen
         clob.l2_headers = real
     assert withheld["status"] == "rejected" and withheld["withheld"] is True
     assert len([c for c in server.calls if c == ("POST", "/order")]) == posts
+
+
+def test_every_request_s_slot_is_fresh_when_it_is_sent():
+    """Sol P2 (round 10) on #177: a read whose headers took 11 s to prepare was sent on a
+    slot already out of the window, so three requests went in a two-request window. A
+    slot is taken when the request is prepared, immediately before the write."""
+    clock = {"now": 1_790_000_000_000_000_000}
+    venue, server = live_venue(budget=2, wall=lambda: clock["now"])
+    venue._credentials()
+    venue.budget.stamps.clear()
+    real = clob.l2_headers
+
+    def slow(*args, **kwargs):
+        clock["now"] += 11 * 10**9
+        return real(*args, **kwargs)
+
+    clob.l2_headers = slow
+    try:
+        venue._l2("GET", "/data/orders", query={"next_cursor": clob.FIRST_CURSOR})
+    finally:
+        clob.l2_headers = real
+    venue._l2("GET", "/data/orders", query={"next_cursor": clob.FIRST_CURSOR})
+    with pytest.raises(clob.BudgetSpent):
+        venue._l2("GET", "/data/orders", query={"next_cursor": clob.FIRST_CURSOR})

@@ -1598,3 +1598,68 @@ def test_a_sole_pending_placement_is_read_and_scanned():
     polymarket.tick(rt)
     assert len([c for c in server.calls if c == ("GET", "/data/trades")]) > reads
     assert rt.polymarket.contradicted
+
+
+# --- Sol's round-10 review of #177 ----------------------------------------------------------
+
+
+def test_a_token_id_aliased_by_a_leading_zero_is_never_settled_against():
+    """#1: ``[YES, "0" + YES]`` with payouts ``[1, 0]`` names one on-chain token twice.
+    Only canonical decimal token ids pass the door, so the market is malformed."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 1)})  # NO wins
+    rt, server = live_world(fake=fake)
+    maker_fill(rt, server, collateral_decision(rt), price="0.30")
+    polymarket.tick(rt)
+    yes = token(server)
+    server.market_row = lambda row: {**row, "clobTokenIds": json.dumps([yes, "0" + yes]),
+                                     "outcomePrices": json.dumps(["1", "0"])
+                                     } if row["closed"] else row
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert not items(rt, "polymarket.resolution")
+
+
+def test_a_terminal_underreport_never_erases_an_observed_pending_leg():
+    """#2: a valid MATCHED ten-share maker leg at $0.40 is observed; the order is then
+    read back CANCELED with nothing matched. The nonfinal leg stays liability until its
+    own trade is CONFIRMED or FAILED: the order is not confirmed, exposure counts it, and
+    the wind-down is not flat."""
+    rt, server = live_world(max_open_micro=5_000_000)
+    handle = collateral_decision(rt)
+    order_id = buy(rt, server, handle, price="0.40")["order_id"]
+    server.trades.append({"id": "t-m", "status": "MATCHED", "match_time": signed_s(rt, order_id),
+                          "taker_order_id": OTHER, "side": "SELL", "size": "10",
+                          "price": "0.40", "maker_orders": [
+                              {"order_id": order_id, "asset_id": token(server),
+                               "matched_amount": "10", "price": "0.40", "side": "BUY"}]})
+    polymarket.tick(rt)
+    cancel = rt._run_tool("seed-decider", handle, {
+        "tool": "polymarket.cancel", "args": {"order_id": order_id}}, slot="tool:1")[0]
+    assert (cancel["status"], cancel["filled_size"]) == ("cancelled", "0")
+    for _ in range(2):
+        polymarket.tick(rt)
+    assert polymarket.local_commitments(rt.polymarket)[0] == Decimal(4)
+    (order,) = rt.consequences.table.orders
+    assert order.confirmed is None
+    again = buy(rt, server, collateral_decision(rt), slot="tool:2", market="fake-2",
+                price="0.40")
+    assert "open exposure" in again["error"]
+    assert polymarket.wind_down(rt)["exposure_state"] != "flat"
+
+
+def test_a_book_for_another_token_is_never_this_token_s_mark():
+    """#3: a valid NO book answered for our YES request is not YES's mark: the book is
+    malformed, no mark is recorded and the token's book stream does not advance."""
+    rt, server = live_world()
+    maker_fill(rt, server, collateral_decision(rt), price="0.40")
+    polymarket.tick(rt)
+    yes, no = token(server), token(server, side=1)
+    coin = polymarket.coin_of(yes)
+    through = rt.polymarket.through.get(coin)
+    server.book_of = lambda asked: no if asked == yes else asked
+    rt.clock.now_ns += 10**9
+    polymarket.mark(rt)
+    assert coin not in rt.consequences.mids
+    assert rt.polymarket.through.get(coin) == through

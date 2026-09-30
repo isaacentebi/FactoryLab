@@ -8,6 +8,7 @@ raises. Each row below is a shape Sol sent, or a null, a wrong type, an upper-ca
 hash, an out-of-range price, an extra or missing field, or a fee under another name.
 """
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -365,12 +366,41 @@ def test_a_market_that_does_not_conform_is_malformed(answer):
         wire.market(answer)
 
 
+BOOK = {"asset_id": TOKEN, "bids": [{"price": "0.39", "size": "5"}],
+        "asks": [{"price": "0.41", "size": "5"}]}
+
+
+def test_a_conforming_book_is_its_token_s():
+    assert wire.book(BOOK, 1, TOKEN)["midpoint"] == "0.40"
+
+
 @pytest.mark.parametrize("answer", [
-    None, {"bids": []}, {"bids": [None], "asks": []},
-    {"bids": [{"price": "1.2", "size": "5"}], "asks": []},
-    {"bids": [{"price": "0.4", "size": "0"}], "asks": []},
-    {"bids": [], "asks": [{"price": 0.5, "size": "5"}]},
+    None, {"asset_id": TOKEN, "bids": []}, {**BOOK, "bids": [None]},
+    {**BOOK, "bids": [{"price": "1.2", "size": "5"}]},
+    {**BOOK, "bids": [{"price": "0.4", "size": "0"}]},
+    {**BOOK, "asks": [{"price": 0.5, "size": "5"}]},
+    # Sol P1 (round 10): the book must be the token asked for, canonically.
+    _without(BOOK, "asset_id"), {**BOOK, "asset_id": "100000000000000000001"},
+    {**BOOK, "asset_id": "0" + TOKEN}, {**BOOK, "asset_id": int(TOKEN)},
 ])
 def test_a_book_that_does_not_conform_is_malformed(answer):
     with pytest.raises(wire.Malformed):
-        wire.book(answer, 1)
+        wire.book(answer, 1, TOKEN)
+
+
+@pytest.mark.parametrize("alias", [
+    "0" + TOKEN, "00", " " + TOKEN, TOKEN + " ", "+" + TOKEN, "-1", "0x64", "1e20",
+    "１００", "١٢٣", TOKEN + "\n", "", "1_000", "1.0",
+])
+def test_only_a_canonical_decimal_token_id_passes(alias):
+    """Sol P1 (round 10) on #177: an on-chain token has one spelling at the door: ASCII
+    digits, no sign, space, separator or leading zero."""
+    with pytest.raises(wire.Malformed):
+        wire.token_id(alias)
+    with pytest.raises(wire.Malformed):
+        wire.market({**MARKET, "clobTokenIds": json.dumps([TOKEN, alias])})
+
+
+@pytest.mark.parametrize("canonical", ["0", "7", TOKEN])
+def test_a_canonical_token_id_passes(canonical):
+    assert wire.token_id(canonical) == canonical

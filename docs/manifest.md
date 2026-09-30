@@ -2651,8 +2651,9 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   touches the books), everything lower-cased once, prices strictly inside (0, 1), sizes positive, statuses documented, a leg of
   this world's its signed order but for its size (its token, a BUY at exactly its
   limit, never more than its signed size, booked or not; architect's rule on Sol's
-  round-8 review), a market naming each outcome token once, no row that is not an
-  object),
+  round-8 review), a token id canonical decimal (ASCII digits, no leading zero, one
+  spelling a token), a market naming each outcome token once, a book the token asked
+  for, no row that is not an object),
   and one that does not conform is malformed whole: a read is unread (its cursor does
   not move), an acknowledgement uncertain. No venue answer is trusted where it would
   give principal room (the cap counts every signed placement but a documented refusal), a quantity the venue
@@ -2686,7 +2687,7 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   admission (`reserve_order_slot`), before its intent and signature: a placement the
   budget cannot send is refused there, signs nothing and commits nothing. The slot is
   checked again at the transport, after the request is prepared and immediately before
-  it is written: renewed if it slid out of
+  it is written (every request's slot is taken there, once it is prepared): renewed if it slid out of
   the window, and if none is left the signed order is withheld, never sent, no
   cancellation target, and still counted against the cap. `drain_events`, which the
   live venue answers with nothing, is not called on it.
@@ -2694,7 +2695,10 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   once, when its trade is CONFIRMED; a FAILED trade never. The poll's cursor is carried
   in and out of the journaled call and checkpointed. A leg that would take what is
   booked of its order past its signed size is malformed: the read stalls, ledgered
-  (`polymarket.read_malformed`), and nothing of it is booked. A fill the consequence
+  (`polymarket.read_malformed`), and nothing of it is booked. A leg matched and not yet
+  final (MATCHED, MINED, RETRYING) is kept in the cursor (`nonfinal`) until its own
+  trade is CONFIRMED or FAILED: until then it is liability, unsettled in a wind-down,
+  and its order is not confirmed, whatever the order's status says. A fill the consequence
   book cannot hold is quarantined (`polymarket.fill_quarantined`,
   `consequence.quarantined`): its money is booked to the pot and owned by no decision,
   and at the resolution its profit stays unattributed: a decision owns only what its

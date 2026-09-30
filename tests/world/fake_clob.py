@@ -73,6 +73,7 @@ class FakeClob:
         self.post_error = None  # raised after a POST /order executed (a lying refusal)
         self.trades_rows = None  # rewrites the rows of each /data/trades page
         self.market_row = None  # rewrites each Gamma market row
+        self.book_of = None  # token -> the token whose book /book answers with
 
     # ---- the transport
 
@@ -91,7 +92,8 @@ class FakeClob:
         if path.startswith("/auth/"):
             return self._auth(headers)
         if path == "/book":
-            return self._book(query["token_id"])
+            asked = query["token_id"]
+            return self._book(self.book_of(asked) if self.book_of else asked)
         self._check_l2(method, path, headers, body or "")
         if path == "/order" and method == "POST":
             answer = self._post(json.loads(body))

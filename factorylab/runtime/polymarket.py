@@ -1224,6 +1224,16 @@ def _cancelled(surface: PolymarketSurface) -> dict[str, Decimal | None]:
     return cancelled
 
 
+def _nonfinal(surface: PolymarketSurface) -> dict[str, Decimal]:
+    """Each order's legs the venue matched and has not yet CONFIRMED or FAILED, from the
+    poll's cursor: liability until each leg's own trade is final, whatever the order's
+    status says (Sol P1, round 10, on #177)."""
+    found: dict[str, Decimal] = {}
+    for order_id, size in (surface.cursor.get("nonfinal") or {}).values():
+        found[str(order_id)] = found.get(str(order_id), Decimal(0)) + Decimal(str(size))
+    return found
+
+
 def _stated(value: Any) -> Decimal | None:
     """A quantity as the venue stated it, or None where it stated none, or one that is
     not a finite non-negative decimal: unknown, never 0 (Sol P1, round 5, on #177)."""
@@ -1264,7 +1274,7 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
     poll's terminal read-back, which requires every matched quantity booked (Codex P1 on
     #177: a cancelled buy's notional stayed reserved forever).
     """
-    cancelled = _cancelled(surface)
+    cancelled, nonfinal = _cancelled(surface), _nonfinal(surface)
     finished = set(surface.cursor.get("terminal", ()))
     reserved = Decimal(0)
     for intent in surface.intents.values():
@@ -1286,6 +1296,8 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
             # unstated matched quantity is unknown and reserves the whole order.
             quantity = _matched(surface, intent, cancelled) - Decimal(str(
                 surface.cursor.get("failed", {}).get(str(order_id), "0")))
+        # A matched leg not yet final stays reserved, whatever a read-back says.
+        quantity = max(quantity, booked + nonfinal.get(str(order_id), Decimal(0)))
         remaining = max(Decimal(0), quantity - booked)
         reserved += remaining * Decimal(str(args["price"]))
     resolved = surface.cursor.get("resolved", {})
@@ -1714,7 +1726,7 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
     order whose fills are all booked and whose token has resolved reads nothing more."""
     orders = {}
     resolved = surface.cursor.get("resolved", {})
-    cancelled = _cancelled(surface)
+    cancelled, nonfinal = _cancelled(surface), _nonfinal(surface)
     known = dict(surface.order_ids)
     for client_id in _undiscovered(surface):
         # A released placement's fills are read too: a confirmed trade is the venue's
@@ -1737,6 +1749,7 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
         # unanswered, it matched more than is booked (Codex P2 on #177), or what it
         # matched is unknown.
         live = (status in ("resting", "uncertain") or matched is None
+                or order_id in nonfinal
                 or matched > Decimal(surface.filled.get(order_id, "0")) + Decimal(str(
                     surface.cursor.get("failed", {}).get(order_id, "0"))))
         orders[order_id] = {"token_id": token, "side": str(args["side"]), "open": live,
@@ -1790,7 +1803,7 @@ def confirm_terminal(rt: Any) -> None:
             # failed (Sol P2, round 5): a leg still settling may yet fail.
             failed = Decimal(str(surface.cursor.get("failed", {}).get(order.order_id, "0")))
             booked = Decimal(surface.filled.get(order.order_id, "0"))
-            if matched - failed > booked:
+            if matched - failed > booked or order.order_id in _nonfinal(surface):
                 continue
             rt.consequences.confirm_terminal(order.order_id, answer["status"],
                                              str(booked), rt.n)
@@ -1838,6 +1851,8 @@ def _release_terminal(rt: Any, surface: PolymarketSurface, order: Any,
         # Proven over, but what it matched is unknown: nothing is released, and its
         # own status is read back again (``confirm_terminal``).
         return False
+    if order.order_id in _nonfinal(surface):
+        return True  # proven over, but a matched leg is not yet final: nothing released
     if matched - failed <= booked:
         rt.consequences.cancel(order.order_id, rt.n)
         rt.consequences.confirm_terminal(order.order_id, str(intent["result"].get(
@@ -2205,7 +2220,7 @@ def _unsettled(surface: PolymarketSurface) -> tuple[list[dict], list[str]]:
     """What the world may hold that no read shows yet: each of its orders that matched
     more than is booked from a CONFIRMED trade (Sol P1 on #177: matched quantity is in
     neither the open orders nor the positions), and each placement still unanswered."""
-    cancelled = _cancelled(surface)
+    cancelled, nonfinal = _cancelled(surface), _nonfinal(surface)
     failed = surface.cursor.get("failed", {})
     matched_rows, unanswered = [], []
     for _client_id, intent in sorted(surface.intents.items()):
@@ -2224,6 +2239,8 @@ def _unsettled(surface: PolymarketSurface) -> tuple[list[dict], list[str]]:
             matched = Decimal(str(intent["args"]["size"]))  # unknown: all of it
         booked = Decimal(surface.filled.get(order_id, "0")) + Decimal(
             str(failed.get(order_id, "0")))
+        # A matched leg not yet final is unsettled, whatever a read-back says.
+        matched = max(matched, booked + nonfinal.get(order_id, Decimal(0)))
         if matched > booked:
             matched_rows.append({"order_id": order_id, "size": str(matched),
                                  "booked": str(booked)})

@@ -512,14 +512,17 @@ class LivePolymarket(PolymarketReader):
             signer = self.signer()
             now = int(self.wall()) // 1_000_000_000
             answer = None
+            # Each request's slot is taken once it is prepared, immediately before the
+            # write (Sol P2, round 10), never before its headers are signed.
             try:
+                headers = l1_headers(signer, now)
                 self.budget.take()
-                answer = self.send("GET", f"{self.clob_url}/auth/derive-api-key",
-                                   l1_headers(signer, now), None)
+                answer = self.send("GET", f"{self.clob_url}/auth/derive-api-key", headers,
+                                   None)
             except ClobHttpError:
+                headers = l1_headers(signer, now)
                 self.budget.take()
-                answer = self.send("POST", f"{self.clob_url}/auth/api-key",
-                                   l1_headers(signer, now), None)
+                answer = self.send("POST", f"{self.clob_url}/auth/api-key", headers, None)
             if not isinstance(answer, dict) or not all(
                     isinstance(answer.get(k), str) for k in ("apiKey", "secret", "passphrase")):
                 raise PolymarketUnavailable("credentials answer has no key")
@@ -539,18 +542,20 @@ class LivePolymarket(PolymarketReader):
 
     def _l2(self, method: str, path: str, *, query: dict | None = None,
             body: Any = None, slot: int | None = None) -> Any:
-        """One authenticated CLOB request inside the pot's budget. ``slot`` is the stamp of
-        a slot taken already: it is checked at the transport, after the request is
-        prepared and immediately before it is written (Sol P2, round 9), and renewed if it
-        has left the window; with none left, ``Withheld`` is raised and nothing is sent."""
+        """One authenticated CLOB request inside the pot's budget, its slot fresh when it
+        is written (Sol P2, rounds 9 and 10): a request's slot is taken once it is
+        prepared, immediately before the write (``BudgetSpent`` when none is left, and
+        nothing is sent). ``slot`` is the stamp of a slot taken already (a placement's,
+        at admission): it is checked there and renewed if it has left the window; with
+        none left, ``Withheld`` is raised and nothing is sent."""
         creds = self._credentials()
         text = "" if body is None else json.dumps(body, separators=(",", ":"))
-        if slot is None:
-            self.budget.take()
         now = int(self.wall()) // 1_000_000_000
         url = f"{self.clob_url}{path}" + (f"?{parse.urlencode(query)}" if query else "")
         headers = l2_headers(creds, self.signer().address, now, method, path, text)
-        if slot is not None and slot <= int(self.wall()) - BUDGET_WINDOW_NS:
+        if slot is None:
+            self.budget.take()
+        elif slot <= int(self.wall()) - BUDGET_WINDOW_NS:
             try:
                 self.budget.take()
             except BudgetSpent:
@@ -585,7 +590,7 @@ class LivePolymarket(PolymarketReader):
     def mark_book(self, token_id: str) -> dict[str, Any]:
         """A held token's book at depth 1, read for its mark inside the pot's budget."""
         return wire.book(self._public(
-            f"{self.clob_url}/book?{parse.urlencode({'token_id': token_id})}"), 1)
+            f"{self.clob_url}/book?{parse.urlencode({'token_id': token_id})}"), 1, token_id)
 
     # ---- orders
 
@@ -921,7 +926,12 @@ class LivePolymarket(PolymarketReader):
                 key = f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}"
                 if key in state["seen"]:
                     continue
+                # A leg not yet final is liability until its own trade is CONFIRMED or
+                # FAILED, whatever the order's status says (Sol P1, round 10: a terminal
+                # read-back underreporting it erased it).
+                nonfinal = state.setdefault("nonfinal", {})
                 if trade.status == TRADE_FAILED:
+                    nonfinal.pop(key, None)
                     # A failed leg never settles; its quantity is kept, so the order's
                     # matched size, once terminal, is released by it (Sol P2 on #177).
                     state["seen"][key] = trade.at
@@ -930,6 +940,7 @@ class LivePolymarket(PolymarketReader):
                     continue
                 if trade.status != TRADE_FINAL:
                     pending.append(trade.at)
+                    nonfinal[key] = [leg.order_id, str(leg.size)]
                     continue
                 # What is booked of an order never passes its signed size (architect's
                 # rule on Sol's round-8 review): a leg that would is malformed, the read
@@ -939,6 +950,7 @@ class LivePolymarket(PolymarketReader):
                     (f["size"] for f in found if f["order_id"] == leg.order_id), Decimal(0))
                 if booked_now + leg.size > signed[leg.order_id].size:
                     raise wire.Malformed("a leg takes its order past its signed size")
+                nonfinal.pop(key, None)
                 state["seen"][key] = trade.at
                 found.append({"instant": trade.instant, "at": trade.at, "key": key,
                               "order_id": leg.order_id, "size": leg.size,
@@ -1051,7 +1063,8 @@ class LivePolymarket(PolymarketReader):
                 continue
             complete = _dec(answer["filled_size"]) <= _dec(
                 state.get("booked", {}).get(order_id, "0")) + _dec(
-                state.get("failed", {}).get(order_id, "0"))
+                state.get("failed", {}).get(order_id, "0")) and not any(
+                leg[0] == order_id for leg in state.get("nonfinal", {}).values())
             if answer["status"] == "cancelled" and order_id not in state.setdefault(
                     "cancel_told", []):
                 state["cancel_told"].append(order_id)

@@ -55,7 +55,9 @@ ACK_STATUS = frozenset({"live", "matched", "delayed", "unmatched"})
 
 _HASH = re.compile(r"0x[0-9a-fA-F]{64}")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
-_TOKEN = re.compile(r"[0-9]{1,100}")
+#: A canonical decimal token id: ASCII digits, no sign, no space, no leading zero (Sol P1,
+#: round 10: "0" + YES named YES a second time), so one on-chain token has one spelling.
+_TOKEN = re.compile(r"0|[1-9][0-9]{0,99}")
 _INTEGER = re.compile(r"[0-9]{1,30}")
 _ID = r"(?P<id>0x[0-9a-fA-F]{64})"
 
@@ -104,7 +106,8 @@ def address(value: Any, what: str = "address") -> str:
 
 
 def token_id(value: Any, what: str = "token id") -> str:
-    """An outcome token id: a decimal integer, as a string."""
+    """An outcome token id: a canonical decimal integer, as a string (``_TOKEN``), so
+    comparing ids as strings is comparing the tokens."""
     if not isinstance(value, str) or not _TOKEN.fullmatch(value):
         raise Malformed(f"{what} is not a token id")
     return value
@@ -541,12 +544,15 @@ def _listed(value: Any, what: str) -> list:
     return rows(value, what)
 
 
-def book(answer: Any, depth: int) -> dict[str, Any]:
-    """A CLOB ``/book`` summary for a held token's mark: every level a price inside
-    (0, 1) and a positive size, then best first on both sides (``parse_book``)."""
+def book(answer: Any, depth: int, token: str) -> dict[str, Any]:
+    """A CLOB ``/book`` summary for ``token``'s mark: its ``asset_id`` that token (Sol P1,
+    round 10: another token's valid book became this one's mark), every level a price
+    inside (0, 1) and a positive size, then best first on both sides (``parse_book``)."""
     from factorylab.world.polymarket import parse_book
 
     row = obj(answer, "book")
+    if token_id(field(row, "asset_id", "book"), "book asset_id") != token:
+        raise Malformed("book is another token's")
     for side in ("bids", "asks"):
         for level_raw in rows(field(row, side, "book"), side):
             level = obj(level_raw, "book level")
