@@ -385,6 +385,47 @@ def owner(row: dict, key: str, funder: str | None, what: str) -> None:
         same(address(field(row, key, what), what), funder.lower(), what)
 
 
+# --- first sight binds, forever -----------------------------------------------------------
+
+
+def bind(store: dict, kind: str, key: str, facts: Any, *, floor: bool = False) -> str | None:
+    """First sight binds, forever (the owner's rule after Sol's round-13 review of #177):
+    the facts first observed for ``(kind, key)`` are recorded in ``store`` (durable: the
+    poll's checkpointed cursor), and every later observation is checked against them.
+    Returns None when it agrees, else why it disagrees, which the caller treats as a
+    contradiction that halts buying; the binding stands. ``facts`` are JSON values. With
+    ``floor`` they are a quantity that may only rise: the most ever observed is kept,
+    and a report below it disagrees."""
+    bound = store.setdefault(kind, {})
+    if key not in bound:
+        bound[key] = facts
+        return None
+    if floor:
+        if Decimal(str(facts)) < Decimal(str(bound[key])):
+            return f"a {kind} is reported below what was first observed"
+        bound[key] = str(max(Decimal(str(facts)), Decimal(str(bound[key]))))
+        return None
+    if bound[key] != facts:
+        return f"a {kind} disagrees with what was first observed"
+    return None
+
+
+def bind_market(store: dict, market: dict[str, Any]) -> str | None:
+    """Bind a parsed market (``market_detail``'s shape) at first sight: the market to its
+    outcome tokens in order, and each token to its market, outcome index and outcome
+    label (as a digest: the label is third-party text, never stored). Returns why a
+    later reply disagrees, or None."""
+    import hashlib
+
+    tokens = [str(o["token_id"]) for o in market["outcomes"]]
+    reason = bind(store, "market", str(market["market_id"]), tokens)
+    for index, outcome in enumerate(market["outcomes"]):
+        label = hashlib.sha256(str(outcome.get("outcome")).encode()).hexdigest()[:16]
+        reason = reason or bind(store, "token", str(outcome["token_id"]), [
+            str(market["market_id"]), index, label])
+    return reason
+
+
 def cursor(value: Any) -> str:
     if not isinstance(value, str) or not value:
         raise Malformed("next_cursor is not a cursor")
@@ -772,6 +813,7 @@ def market(answer: Any, expect: str | None = None) -> dict[str, Any]:
     detail = market_detail(row)
     if detail is None:
         raise Malformed("market has no tradable shape")
+    _read_tokens(detail)
     return detail
 
 
@@ -817,13 +859,23 @@ def book(answer: Any, depth: int, token: str) -> dict[str, Any]:
 
 
 def read_search(answer: Any, limit: int) -> list[dict[str, Any]]:
-    """Gamma's ``/public-search``: the markets it names, as ``parse_search``."""
-    return parse_search(answer, limit)
+    """Gamma's ``/public-search``: the markets it names, as ``parse_search``, each market
+    once and each checked as every market is (``_read_tokens``; Sol P2, round 13)."""
+    found = parse_search(answer, limit)
+    unique((d["market_id"] for d in found), "a market")
+    for detail in found:
+        _read_tokens(detail)
+    return found
 
 
 def _read_tokens(detail: dict[str, Any]) -> list[str]:
+    """The checks every parsed market passes, public or money path: each outcome token
+    canonical and once, each stated outcome price inside [0, 1]."""
     tokens = [token_id(o["token_id"], "clobTokenId") for o in detail["outcomes"]]
     unique(tokens, "an outcome token")
+    for outcome in detail["outcomes"]:
+        if outcome.get("price") is not None and not 0 <= Decimal(outcome["price"]) <= 1:
+            raise Malformed("outcomePrice is outside [0, 1]")
     return tokens
 
 
@@ -849,13 +901,6 @@ def read_market_of_token(answer: Any, token: str) -> dict[str, Any] | None:
     if len(naming) > 1:
         raise Malformed("a token is named by two markets")
     return naming[0] if naming else None
-
-
-def read_book(answer: Any, depth: int, token: str) -> dict[str, Any]:
-    """The CLOB's ``/book`` for ``token``: its ``asset_id`` that token."""
-    row = obj(answer, "book")
-    same(token_id(field(row, "asset_id", "book"), "book asset_id"), token, "book")
-    return parse_book(row, depth)
 
 
 def read_midpoint(answer: Any) -> str | None:

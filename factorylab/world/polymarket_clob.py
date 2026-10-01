@@ -874,7 +874,7 @@ class LivePolymarket(PolymarketReader):
         # the orders it settles, and trades are read while any of them may still fill.
         own = dict(own or {})
         for step in (lambda trial: self._fills(trial, orders, contradictions, own),
-                     lambda trial: self._resolutions(trial, orders, now_ns)):
+                     lambda trial: self._resolutions(trial, orders, now_ns, contradictions)):
             # Each step works on a copy and commits only whole: a read that failed half
             # way leaves the cursor where it was, and what it would have reported is
             # reported by a later poll, once.
@@ -916,7 +916,12 @@ class LivePolymarket(PolymarketReader):
         # several polls: what was read is booked (the seen set keeps each leg once), the
         # page to resume at is kept in the cursor and ``after`` does not move until the
         # listing has been read to its end, so no row is skipped (Codex P1 on #177).
-        signed = {h: _signed(o) for h, o in orders.items()}
+        # A trade's legs of this world's are those of every order it may have signed, not
+        # only those it settles now: what a trade is bound to never grows as an order
+        # becomes known (first sight binds); only the settled ones are booked.
+        signed = {**{str(h).lower(): _signed(o) for h, o in own.items()
+                     if o.get("token_id") is not None},
+                  **{h: _signed(o) for h, o in orders.items()}}
         trades, page_cursor, ended = [], state.get("page", FIRST_CURSOR), False
         # Each trade once across the whole listing, carried with the page to resume at
         # until the listing is read to its end (Sol P1, round 12: a trade seen on one
@@ -935,44 +940,49 @@ class LivePolymarket(PolymarketReader):
                 ended = True
                 break
         found, pending = [], []
-        # Every trade this world ever booked, durable, with the legs it booked: a trade
-        # is never booked again, and a later row of it naming another leg of this
-        # world's contradicts the venue's own record (Sol P1, round 12).
-        booked_trades = state.setdefault("trades", {})
+        # First sight binds, forever (``wire.bind``): a trade, at its first sighting in
+        # any status, to its legs of this world's (hash, token, side, price), and each
+        # leg to the most it was ever seen to match. A later reply that disagrees, a
+        # trade naming other legs (Sol P1, rounds 12 and 13) or a leg below its floor,
+        # CONFIRMED included, contradicts the venue: buying halts, and nothing of that
+        # trade is booked.
+        bound = state.setdefault("bound", {})
+        nonfinal = state.setdefault("nonfinal", {})
         for trade in trades:
-            keys = {f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}" for leg in trade.legs}
-            if trade.trade_id in booked_trades and not keys <= set(
-                    booked_trades[trade.trade_id]):
-                contradictions[f"{trade.trade_id}:rebooked"] = (
-                    "the venue reports a trade already booked with another leg")
+            legs = sorted([leg.order_id, signed[leg.order_id].token_id, "BUY",
+                           format(leg.price.normalize(), "f"), int(leg.taker)]
+                          for leg in trade.legs)
+            reason = wire.bind(bound, "trade", trade.trade_id, legs)
+            for leg in trade.legs:
+                key = f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}"
+                reason = reason or wire.bind(bound, "leg", key, str(leg.size), floor=True)
+            if reason:
+                contradictions[f"{trade.trade_id}:bound"] = reason
                 continue
             for leg in trade.legs:
                 key = f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}"
                 if key in state["seen"]:
                     continue
-                # A leg not yet final is liability until its own trade is CONFIRMED or
-                # FAILED, whatever the order's status says (Sol P1, round 10: a terminal
-                # read-back underreporting it erased it).
-                nonfinal = state.setdefault("nonfinal", {})
+                if leg.order_id not in orders:
+                    # An order not yet settled here: its matched leg is liability,
+                    # booked once the order is (it is not marked seen).
+                    if trade.status != TRADE_FAILED:
+                        nonfinal[key] = [leg.order_id, str(bound["leg"][key])]
+                    continue
                 if trade.status == TRADE_FAILED:
-                    nonfinal.pop(key, None)
                     # A failed leg never settles; its quantity is kept, so the order's
                     # matched size, once terminal, is released by it (Sol P2 on #177).
+                    nonfinal.pop(key, None)
                     state["seen"][key] = trade.at
                     failed = state.setdefault("failed", {})
                     failed[leg.order_id] = str(_dec(failed.get(leg.order_id, "0")) + leg.size)
                     continue
                 if trade.status != TRADE_FINAL:
+                    # A leg not yet final is liability, at the most it was ever seen to
+                    # match, until its own trade is CONFIRMED or FAILED, whatever the
+                    # order's status says (Sol P1, rounds 10 to 12).
                     pending.append(trade.at)
-                    # What a leg is observed to have matched never shrinks: the most
-                    # ever observed is kept until its trade is CONFIRMED or FAILED, and a
-                    # smaller report contradicts the venue (Sol P1, round 12).
-                    before = nonfinal.get(key)
-                    if before is not None and _dec(before[1]) > leg.size:
-                        contradictions[f"{key}:shrunk"] = (
-                            "the venue reports a matched leg smaller than it did before")
-                    else:
-                        nonfinal[key] = [leg.order_id, str(leg.size)]
+                    nonfinal[key] = [leg.order_id, str(bound["leg"][key])]
                     continue
                 # What is booked of an order never passes its signed size (architect's
                 # rule on Sol's round-8 review): a leg that would is malformed, the read
@@ -984,8 +994,6 @@ class LivePolymarket(PolymarketReader):
                     raise wire.Malformed("a leg takes its order past its signed size")
                 nonfinal.pop(key, None)
                 state["seen"][key] = trade.at
-                booked_trades[trade.trade_id] = sorted(
-                    set(booked_trades.get(trade.trade_id, ())) | {key})
                 found.append({"instant": trade.instant, "at": trade.at, "key": key,
                               "order_id": leg.order_id, "size": leg.size,
                               "price": leg.price})
@@ -1038,7 +1046,7 @@ class LivePolymarket(PolymarketReader):
                 "realized_usd": "0", "ts_ns": at * 1_000_000_000}
 
     def _resolutions(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
-                     now_ns: int) -> list[dict]:
+                     now_ns: int, contradictions: dict[str, str]) -> list[dict]:
         markets = {o["token_id"]: o.get("market_id") for o in orders.values()}
         # What the pot holds or may still come to hold now: a token with an order that
         # rests, is unanswered or has matched more than is booked, never one whose
@@ -1067,6 +1075,13 @@ class LivePolymarket(PolymarketReader):
             token = candidates[state["turn"] % len(candidates)]
             state["turn"] += 1
             market = self.write_market(str(markets[token]))
+            # The market is the one first seen: its tokens in order, each at its first
+            # index and label (Sol P1, round 13: reversed token ids paid a winning YES
+            # as NO). A disagreeing reply halts buying and pays nothing.
+            reason = wire.bind_market(state.setdefault("bound", {}), market)
+            if reason:
+                contradictions[f"{token}:market"] = reason
+                return events
             paid = payout(market, token)
             if paid is not None:
                 state["resolved"][token] = str(paid)

@@ -293,7 +293,8 @@ class PolymarketReader:
 
     def order_book(self, token_id: str, depth: int) -> dict[str, Any]:
         """The CLOB's book summary for one outcome token, best first on both sides."""
-        return wire.read_book(self._clob("/book", token_id=token_id), depth, token_id)
+        # The book a seat reads is checked as the pot's own is (Sol P2, round 13).
+        return wire.book(self._clob("/book", token_id=token_id), depth, token_id)
 
     def midpoint(self, token_id: str) -> str | None:
         """The CLOB's midpoint for one outcome token, as a decimal string."""

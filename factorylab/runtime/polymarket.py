@@ -544,6 +544,8 @@ def _event_facts(rt: Any, predicate_id: str, token_id: str,
     if not snapshot["answered"]:
         return unavailable("market")
     market = snapshot["market"]
+    if market is not None and not bind_market(rt, surface, token_id, market):
+        return unavailable("market")
     facts: dict[str, Any] = {"listed": market is not None, "closed": None, "payout": None,
                              "midpoint": None}
     if market is not None:
@@ -882,7 +884,7 @@ def open_claim(rt: Any, seat: str, token_id: str, due_tick: int) -> str | None:
         _charge_slot(rt, seat, lookup, _sends(rt))
     if listed is None:
         return NOT_LISTED_REFUSAL
-    if not bind_market(rt, surface, token_id, str(listed["market_id"])):
+    if not bind_market(rt, surface, token_id, listed):
         return "polymarket read unavailable"
     return _open(rt, reader, kind)
 
@@ -948,24 +950,31 @@ def _read_refusal(rt: Any, seat: str, requests: int) -> str | None:
     return None
 
 
-def bind_market(rt: Any, surface: PolymarketSurface, token_id: str, market_id: str) -> bool:
-    """Bind a token to its market, once: a token's market, once established at an order
-    or a claim, is never rewritten (Sol P1, round 12: a forecast lookup rebound a held
-    token to a foreign resolved market, which then settled the bet). A later lookup
-    naming another market contradicts the venue: it is ledgered as drift, buying stops
-    for the world's life, and the binding stands. Returns whether the lookup agrees."""
-    known = surface.token_markets.get(token_id)
-    if known is None:
-        surface.token_markets[token_id] = market_id
-        return True
-    if known == market_id:
-        return True
+def bind_market(rt: Any, surface: PolymarketSurface, token_id: str, market: dict) -> bool:
+    """First sight binds, forever (``polymarket_wire.bind``): a market reply binds the
+    market to its outcome tokens in order and each token to its market, index and label,
+    at an order, a claim or a settlement read. A later reply that disagrees (Sol P1,
+    rounds 12 and 13: another market, or the token at another index) contradicts the
+    venue: buying stops for the world's life and the binding stands. Returns whether
+    the reply agrees."""
+    from factorylab.world import polymarket_wire as wire
+
+    reason = wire.bind_market(surface.cursor.setdefault("bound", {}), market)
+    if reason:
+        _contradict(rt, surface, reason, token_id=token_id,
+                    market_id=str(market.get("market_id")))
+        return False
+    surface.token_markets.setdefault(token_id, str(market["market_id"]))
+    return True
+
+
+def _contradict(rt: Any, surface: PolymarketSurface, reason: str, **facts: Any) -> None:
+    """Halt buying for the world's life on a reply that contradicts what the world bound
+    or the venue's published physics: ledgered once, as drift."""
     if not surface.contradicted:
         surface.contradicted = True
-        rt.ledger.append({"kind": "polymarket.drift", "token_id": token_id,
-                          "reason": "a lookup names another market for a bound token",
-                          "bound": known, "named": market_id, "ts": rt.clock.now_ns})
-    return False
+        rt.ledger.append({"kind": "polymarket.drift", "reason": reason, **facts,
+                          "ts": rt.clock.now_ns})
 
 
 def _write_market(rt: Any, surface: PolymarketSurface, token_id: str) -> dict | None:
@@ -980,11 +989,12 @@ def _write_market(rt: Any, surface: PolymarketSurface, token_id: str) -> dict | 
     if market_id is None:
         listed = (surface.venue.write_market_of_token(token_id) if live
                   else surface.venue.market_of_token(token_id))
-        if listed is not None and not bind_market(rt, surface, token_id,
-                                                  str(listed["market_id"])):
-            return None
-        return listed
-    return surface.venue.write_market(market_id) if live else surface.venue.market(market_id)
+    else:
+        listed = (surface.venue.write_market(market_id) if live
+                  else surface.venue.market(market_id))
+    if listed is not None and not bind_market(rt, surface, token_id, listed):
+        return None
+    return listed
 
 
 def _tick_key(rt: Any) -> tuple | None:
@@ -1601,11 +1611,15 @@ def _signed(surface: PolymarketSurface, order_id: str) -> Any:
 
 def _signed_hashes(surface: PolymarketSurface) -> dict[str, dict[str, Any]]:
     """Every order hash this world may have signed, from its durable intents alone:
-    acknowledged, uncertain, pending or released (Sol P1, round 8, on #177), with its
-    signed timestamp (ms) and whether it is not yet proven over (``open``): trades are
-    read while any may still fill, from the earliest such signing time (round 9)."""
+    acknowledged, uncertain, pending or released (Sol P1, round 8, on #177), with what it
+    signed (token, size, price), its signed timestamp (ms) and whether it is not yet
+    proven over (``open``): trades are read while any may still fill, from the earliest
+    such signing time (round 9), and a trade's legs are those of any of them (round 13).
+    """
     nonfinal = _nonfinal(surface)
     return {str(intent["order_hash"]): {
+                "token_id": str(intent["args"]["token_id"]),
+                "size": str(intent["args"]["size"]), "price": str(intent["args"]["price"]),
                 "timestamp": str((intent.get("order_identity") or {}).get("order", {}).get(
                     "timestamp", "0")),
                 "open": (not _terminal(surface, intent)

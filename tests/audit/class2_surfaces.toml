@@ -739,6 +739,7 @@ sources = [
   "factorylab/world/polymarket_clob.py::order_amounts",
   "factorylab/world/polymarket_wire.py::_leg",
   "factorylab/world/polymarket_wire.py::_listed",
+  "factorylab/world/polymarket_wire.py::_read_tokens",
   "factorylab/world/polymarket_wire.py::_seconds",
   "factorylab/world/polymarket_wire.py::ack",
   "factorylab/world/polymarket_wire.py::address",

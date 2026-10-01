@@ -2804,13 +2804,20 @@ uncertain.
 | `/data/trades`, raw (contradiction scan) | this world's hashes, any case | adds only, never raises |
 | seat and settlement reads (`/public-search`, `/markets`, `/book`, `/midpoint`) | the market id or token asked; a token named by one market | market id; outcome token |
 
-Rules across replies, each kept in the checkpointed cursor or surface and broken only as
-a contradiction that halts buying: a leg's observed matched quantity is monotone (the
-most ever observed is kept until its trade is CONFIRMED or FAILED; a smaller report
-contradicts); a trade booked is remembered durably and never booked again (a later row
-of it naming another leg of this world's contradicts); a token's market, once bound at
-an order or a claim, is immutable (a lookup naming another contradicts,
-`bind_market`). No venue reply is read outside the door: a test audits that every raw
+**First sight binds, forever.** Across replies one rule holds, through one helper
+(`polymarket_wire.bind`, its store `bound` in the checkpointed poll cursor): the facts
+first observed for a key are recorded, and every later reply is checked against them.
+A reply that disagrees contradicts the venue: it is ledgered as drift, buying stops for
+the world's life, the binding stands, and nothing of that reply is booked or paid.
+
+| binding | key | facts bound | when bound |
+|---|---|---|---|
+| trade | trade id | this world's legs in it: order hash, token, side, price | first sight of the trade, in any status |
+| leg | trade id, order hash, role | the most it was ever seen to match (a floor: a later report below it, CONFIRMED included, disagrees) | every sight; the floor only rises |
+| token | token id | its market, its outcome index, its outcome label (as a digest) | the first market reply naming it: an order's market read, a claim's lookup, a settlement read |
+| market | market id | its outcome tokens, in order | the first market reply |
+
+No venue reply is read outside the door: a test audits that every raw
 reply in the reader and the order venue is handed only to a `wire` function.
 
 

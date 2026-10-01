@@ -357,7 +357,8 @@ def test_a_placement_whose_answer_and_lookups_all_failed_is_still_read_until_ter
     for _ in range(UNCERTAIN_ORDER_POLLS + 1):
         polymarket.tick(rt)
     client_id = f"{handle}:tool:0"
-    assert rt.polymarket.intents[client_id]["unresolved"]
+    # Its leg is read as this world's from the first poll (its durable hash), so the
+    # confirmed trade binds it, released or not (Sol P1, round 13).
     polymarket.tick(rt)
     polymarket.tick(rt)
     intent = rt.polymarket.intents[client_id]
@@ -1858,8 +1859,112 @@ def test_a_token_s_market_once_bound_is_never_rebound(answer):
     except Exception:  # noqa: BLE001 - the door refuses two markets naming one token
         pass
     if listed is not None:
-        assert not polymarket.bind_market(rt, rt.polymarket, yes, str(listed["market_id"]))
+        assert not polymarket.bind_market(rt, rt.polymarket, yes, listed)
         assert rt.polymarket.contradicted
     else:
         assert answer == "two markets"
     assert rt.polymarket.token_markets[yes] == "fake-1"
+
+
+# --- Sol's round-13 review of #177: first sight binds, forever ------------------------------
+
+
+def test_a_confirmation_below_the_observed_floor_is_never_booked():
+    """#1: MATCHED 10, a terminal read of 0, then the same trade CONFIRMED 1. The leg's
+    floor is 10: the confirmation below it contradicts the venue, buying halts, nothing
+    of it is booked, and the ten stay liability."""
+    rt, server = live_world()
+    handle = collateral_decision(rt)
+    order_id = buy(rt, server, handle, price="0.40")["order_id"]
+    row = {"id": "t-m", "status": "MATCHED", "match_time": signed_s(rt, order_id),
+           "taker_order_id": OTHER, "side": "SELL", "size": "10", "price": "0.40",
+           "maker_orders": [{"order_id": order_id, "asset_id": token(server),
+                             "matched_amount": "10", "price": "0.40", "side": "BUY"}]}
+    server.trades.append(row)
+    polymarket.tick(rt)
+    rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
+                                          "args": {"order_id": order_id}}, slot="tool:1")
+    polymarket.tick(rt)
+    row.update(status="CONFIRMED", size="1")
+    row["maker_orders"][0]["matched_amount"] = "1"
+    polymarket.tick(rt)
+    assert rt.polymarket.contradicted and order_id not in rt.polymarket.filled
+    assert polymarket.local_commitments(rt.polymarket)[0] == Decimal(4)
+
+
+def test_a_trade_first_seen_on_one_order_never_books_another():
+    """#2: t1 is first seen MATCHED against A; it is later CONFIRMED against B. The trade
+    was bound to A's leg at first sight: buying halts and B books nothing."""
+    rt, server = live_world()
+    a = buy(rt, server, collateral_decision(rt), price="0.40")["order_id"]
+    b = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+            price="0.30")["order_id"]
+
+    def t1(status, order_id, market, price):
+        return {"id": "t1", "status": status, "match_time": signed_s(rt, a),
+                "taker_order_id": OTHER, "side": "SELL", "size": "10", "price": price,
+                "maker_orders": [{"order_id": order_id, "asset_id": token(server, market),
+                                  "matched_amount": "10", "price": price, "side": "BUY"}]}
+
+    server.trades = [t1("MATCHED", a, "fake-1", "0.40")]
+    polymarket.tick(rt)
+    server.trades = [t1("CONFIRMED", b, "fake-2", "0.30")]
+    polymarket.tick(rt)
+    assert rt.polymarket.contradicted and b not in rt.polymarket.filled
+
+
+def test_a_market_that_moves_a_held_token_to_the_other_outcome_never_pays_it():
+    """#3: YES is bound at index 0 of fake-1; the closed reply reverses only the token
+    ids, keeping ["Yes", "No"] and [1, 0]. The token's bound place disagrees: buying
+    halts and no payout is booked."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 0)})  # YES wins
+    rt, server = live_world(fake=fake)
+    maker_fill(rt, server, collateral_decision(rt), price="0.40")
+    polymarket.tick(rt)
+    server.market_row = lambda row: {**row, "clobTokenIds": json.dumps(list(reversed(
+        json.loads(row["clobTokenIds"]))))} if row["closed"] else row
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert rt.polymarket.contradicted and not items(rt, "polymarket.resolution")
+
+
+@pytest.mark.parametrize("kind", ["trade", "leg", "token", "market"])
+def test_a_disagreement_with_any_bound_fact_halts_buying(kind):
+    """The owner's rule: first sight binds, forever. One disagreement in each kind of
+    bound fact (a trade's legs, a leg's floor, a token's place, a market's tokens) halts
+    buying through the contradiction path."""
+    rt, server = live_world()
+    order_id = buy(rt, server, collateral_decision(rt), price="0.40")["order_id"]
+    leg = {"order_id": order_id, "asset_id": token(server), "matched_amount": "10",
+           "price": "0.40", "side": "BUY"}
+    row = {"id": "t-k", "status": "MATCHED", "match_time": signed_s(rt, order_id),
+           "taker_order_id": OTHER, "side": "SELL", "size": "10", "price": "0.40",
+           "maker_orders": [leg]}
+    server.trades.append(row)
+    polymarket.tick(rt)
+    assert not rt.polymarket.contradicted
+    market = rt.polymarket.venue.target.write_market("fake-1")
+    if kind == "trade":
+        other = buy(rt, server, collateral_decision(rt), slot="tool:2", market="fake-3",
+                    price="0.10")["order_id"]
+        row["maker_orders"].append({"order_id": other, "asset_id": token(server, "fake-3"),
+                                    "matched_amount": "10", "price": "0.10",
+                                    "side": "BUY"})  # the trade now names two legs
+        polymarket.tick(rt)
+    elif kind == "leg":
+        leg["matched_amount"] = "4"
+        polymarket.tick(rt)
+    elif kind == "token":
+        moved = {**market, "outcomes": [dict(o) for o in market["outcomes"]]}
+        moved["outcomes"][0]["outcome"] = "No"
+        polymarket.bind_market(rt, rt.polymarket, token(server), moved)
+    else:
+        moved = {**market, "outcomes": [dict(o) for o in market["outcomes"]]}
+        moved["outcomes"][1]["token_id"] = "7"
+        polymarket.bind_market(rt, rt.polymarket, token(server), moved)
+    assert rt.polymarket.contradicted
+    refused = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+                  price="0.20")
+    assert refused["error"] == polymarket.MAKER_ONLY_REFUSAL

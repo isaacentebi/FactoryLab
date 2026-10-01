@@ -541,3 +541,52 @@ def test_the_audit_sees_a_raw_read():
                          "        return raw[0]\n")
         assert _raw_reads(probe) == ["market:4 (raw)"]
         ast.parse(probe.read_text())
+
+
+# --- the public reads share the door's checks (Sol P2, round 13) ---------------------------
+
+SEARCH_MARKET = {**MARKET}
+
+
+def _search(*markets):
+    return {"events": [{"markets": list(markets)}]}
+
+
+@pytest.mark.parametrize("parse", [
+    lambda: wire.read_search(_search(SEARCH_MARKET, SEARCH_MARKET), 10),
+    lambda: wire.read_search(_search({**SEARCH_MARKET, "clobTokenIds": f'["{TOKEN}", '
+                                                                          f'"{TOKEN}"]'}), 10),
+    lambda: wire.read_search(_search({**SEARCH_MARKET, "outcomePrices": '["1.4", "0.6"]'}),
+                             10),
+    lambda: wire.read_search(_search({**SEARCH_MARKET, "clobTokenIds": f'["0{TOKEN}", '
+                                                                          '"7"]'}), 10),
+    lambda: wire.read_market({**MARKET, "clobTokenIds": f'["{TOKEN}", "{TOKEN}"]'}, "123"),
+    lambda: wire.read_market({**MARKET, "outcomePrices": '["-0.1", "0.6"]'}, "123"),
+    lambda: wire.read_market_of_token([MARKET, MARKET], TOKEN),
+    lambda: wire.book({**BOOK, "bids": [{"price": "1.2", "size": "5"},
+                                        {"price": "1.2", "size": "5"}],
+                       "asks": [{"price": "0.2", "size": "5"}]}, 1, TOKEN),
+])
+def test_a_public_read_is_checked_as_the_money_path_is(parse):
+    """Sol P2 (round 13): a seat's search, market and book replies pass the same checks
+    as the pot's own: each market and outcome token once, canonical, prices in range,
+    each book level once and inside (0, 1)."""
+    with pytest.raises(wire.Malformed):
+        parse()
+
+
+def test_a_conforming_public_search_parses():
+    assert [m["market_id"] for m in wire.read_search(_search(MARKET), 10)] == ["123"]
+
+
+@pytest.mark.parametrize("kind,first,later,floor", [
+    ("trade", [["0xa", TOKEN, "BUY", "0.4", 0]], [["0xb", TOKEN, "BUY", "0.4", 0]], False),
+    ("leg", "10", "4", True), ("token", ["123", 0, "y"], ["123", 1, "y"], False),
+    ("market", [TOKEN, "7"], ["7", TOKEN], False),
+])
+def test_first_sight_binds_forever(kind, first, later, floor):
+    store = {}
+    assert wire.bind(store, kind, "k", first, floor=floor) is None
+    assert wire.bind(store, kind, "k", first, floor=floor) is None
+    assert wire.bind(store, kind, "k", later, floor=floor) is not None
+    assert store[kind]["k"] == first  # the binding stands
