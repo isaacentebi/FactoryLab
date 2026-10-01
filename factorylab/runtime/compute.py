@@ -1602,7 +1602,8 @@ class ComputeMixin:
         # The vault surface ([venue] vault_tools): money moving between perps
         # collateral and a vault is a consequence exactly as an order is.
         "venue.vault_create", "venue.vault_deposit", "venue.vault_withdraw",
-        # Polymarket event markets (runtime/polymarket.py), on the simulated venue.
+        # Polymarket event markets (runtime/polymarket.py): the simulated venue, or
+        # signed orders on the live CLOB (world/polymarket_clob.py).
         "polymarket.place_limit", "polymarket.cancel",
     })
 

@@ -467,12 +467,14 @@ class RecoveryJournal:
                                           provider_message=item.get("provider_message"))
                 return result
             if name in ("exchange.place", "exchange.close", "exchange.cancel",
-                        "exchange.vault_create", "exchange.vault_transfer"):
+                        "exchange.vault_create", "exchange.vault_transfer",
+                        "polymarket.place", "polymarket.cancel"):
                 from factorylab.world.exchange import OrderResult
 
                 # Complete the interrupted journal call with uncertainty, then let
                 # the normal intent owner query the venue using its persisted identity.
-                # A vault write is resolved from its own venue ledger row, never resent.
+                # A vault write is resolved from its own venue ledger row, never resent;
+                # a Polymarket order from its order hash, ledgered with its intent.
                 result = (OrderResult(None, "uncertain", Decimal(0), None)
                           if name in ("exchange.place", "exchange.close")
                           else {"status": "uncertain"})
@@ -591,7 +593,13 @@ def _read_only(name: str) -> bool:
         return True
     if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
             "search_markets", "market", "market_of_token", "midpoint", "order_book",
-            "requests_sent", "drain_sends", "wall_ns"):
+            "requests_sent", "drain_sends", "wall_ns",
+            # The live order venue's reads (world/polymarket_clob.py): an order's
+            # identity (a pure function of its fields), a fill poll that carries its
+            # own cursor, and a held token's mark.
+            "order_identity", "poll", "mark_book", "write_market", "write_market_of_token",
+            # A submission slot taken at admission: local, re-taken by a resume.
+            "reserve_order_slot"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).

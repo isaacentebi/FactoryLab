@@ -17,9 +17,7 @@ import pytest
 from factorylab.world.polymarket import (
     TICK_SIZES,
     FakePolymarket,
-    LiveOrderAdapter,
     PolymarketReader,
-    PolymarketRefused,
     PolymarketUnavailable,
     http_get_json,
     parse_book,
@@ -266,26 +264,32 @@ def test_fake_client_ids_are_idempotent_and_never_trade_twice():
     fake = venue()
     token = yes(fake)
     first = fake.place(client_id="d:tool:0", token_id=token, is_buy=True,
-                       size=Decimal(10), price=Decimal("0.45"))
+                       size=Decimal(10), price=Decimal("0.40"))
     again = fake.place(client_id="d:tool:0", token_id=token, is_buy=True,
-                       size=Decimal(10), price=Decimal("0.45"))
-    assert first == again and first["status"] == "filled"
-    assert fake.account()["positions"][0]["size"] == "10"
+                       size=Decimal(10), price=Decimal("0.40"))
+    assert first == again and first["status"] == "resting"
+    assert len(fake.account()["open_orders"]) == 1
     assert fake.lookup("d:tool:0") == first
     assert fake.lookup("never-sent")["status"] == "rejected"
 
 
-def test_fake_crossing_order_takes_the_ask_and_pays_the_taker_fee():
+def test_fake_rejects_a_crossing_order_before_it_executes_as_the_live_venue_does():
+    """Every order is post-only on every venue kind (architect's decision on #177): a
+    buy at or above the best ask is rejected with the venue's own reason, and nothing
+    trades, moves or rests; one below it rests."""
     fake = venue()
-    token = yes(fake, "fake-2")  # mid 0.70, fee rate 0.05
-    result = fake.place(client_id="c", token_id=token, is_buy=True, size=Decimal(10),
-                        price=Decimal("0.80"))
-    assert result["avg_px"] == "0.71"
-    fee = Decimal(10) * Decimal("0.05") * Decimal("0.71") * Decimal("0.29")
-    [fill] = fake.drain_events()
-    assert Decimal(fill["fee_usd"]) == fee.quantize(Decimal("0.00001"))
-    assert Decimal(fake.account()["usdc"]) == Decimal(100) - Decimal("7.1") - Decimal(
-        fill["fee_usd"])
+    token = yes(fake, "fake-2")  # mid 0.70: the ask is 0.71
+    for price in ("0.80", "0.71"):
+        result = fake.place(client_id=f"c{price}", token_id=token, is_buy=True,
+                            size=Decimal(10), price=Decimal(price))
+        assert result["status"] == "rejected" and result["filled_size"] == "0"
+        assert result["error"] == "invalid post-only order: order crosses book"
+    assert fake.drain_events() == []
+    account = fake.account()
+    assert (account["usdc"], account["positions"], account["open_orders"]) == ("100", [], [])
+    assert fake.place(client_id="rest", token_id=token, is_buy=True, size=Decimal(10),
+                      price=Decimal("0.70"))["status"] == "resting"
+    assert all(not m["fees"]["enabled"] for m in fake.search_markets("simulated", 10))
 
 
 def test_fake_resting_orders_hold_collateral_and_fill_as_maker_without_fee():
@@ -303,7 +307,7 @@ def test_fake_resting_orders_hold_collateral_and_fill_as_maker_without_fee():
     assert fills and fills[0]["fee_usd"] == "0" and fills[0]["px"] == "0.60"
 
 
-def test_fake_refuses_off_tick_prices_small_orders_and_selling_what_it_lacks():
+def test_fake_refuses_off_tick_prices_small_orders_and_any_sale():
     fake = venue()
     token = yes(fake)
     for price, size, is_buy in ((Decimal("0.455"), Decimal(10), True),
@@ -314,21 +318,28 @@ def test_fake_refuses_off_tick_prices_small_orders_and_selling_what_it_lacks():
         assert answer["status"] == "rejected"
 
 
-def test_fake_resolution_cancels_resting_orders_and_redeems_the_pot():
+def test_fake_resolution_cancels_resting_orders_and_keeps_the_tokens_resolved():
     fake = venue(resolutions={"fake-1": (5, 1)})
     yes_token, no_token = (o["token_id"] for o in fake.market("fake-1")["outcomes"])
+    fake._markets["fake-1"]["mid"] = Decimal("0.41")  # "a" rests one tick under the ask
     fake.place(client_id="a", token_id=yes_token, is_buy=True, size=Decimal(10),
-               price=Decimal("0.50"))
+               price=Decimal("0.41"))
     fake.place(client_id="b", token_id=no_token, is_buy=True, size=Decimal(5),
                price=Decimal("0.10"))  # rests below the book
-    fake.drain_events()
+    # The market walks down: whatever its next step, its ask meets "a", a maker fill.
+    fake._markets["fake-1"]["mid"] = Decimal("0.39")
+    assert [e["kind"] for e in fake.advance(1)] == ["fill"]
     events = fake.advance(5)
     kinds = [e["kind"] for e in events]
     assert "cancelled" in kinds
     [resolution] = [e for e in events if e["kind"] == "resolution"]
     assert resolution["token_id"] == yes_token and resolution["payout"] == "0"
     assert Decimal(resolution["realized_usd"]) == Decimal("-4.1")
-    assert fake.account()["positions"] == [] and fake.account()["open_orders"] == []
+    # The resolved tokens stay in custody at their payout; nothing is redeemed.
+    account = fake.account()
+    assert account["open_orders"] == [] and Decimal(account["usdc"]) == Decimal("95.9")
+    assert [(p["token_id"], p["size"], p["payout"]) for p in account["positions"]] == [
+        (yes_token, "10", "0")]
     assert fake.market("fake-1")["closed"] is True
     late = fake.place(client_id="late", token_id=yes_token, is_buy=True, size=Decimal(10),
                       price=Decimal("0.50"))
@@ -341,14 +352,6 @@ def test_fake_is_deterministic_for_one_seed():
         return [fake.advance(n * 10**9) for n in range(1, 30)], fake.account()
 
     assert run() == run()
-
-
-def test_live_order_adapter_refuses_every_write():
-    adapter = LiveOrderAdapter()
-    for call in (lambda: adapter.place(token_id="1"), lambda: adapter.cancel(order_id="1"),
-                 lambda: adapter.lookup("x")):
-        with pytest.raises(PolymarketRefused):
-            call()
 
 
 def test_a_request_is_stamped_before_it_is_sent_and_counts_in_flight_or_failed():
@@ -367,3 +370,20 @@ def test_a_request_is_stamped_before_it_is_sent_and_counts_in_flight_or_failed()
     assert seen == [[1_000]]
     assert reader.requests_sent() == 1 and reader.drain_sends() == [1_000]
     assert reader.drain_sends() == []
+
+
+def test_fake_and_live_refuse_the_same_amounts_with_the_same_reason():
+    """Sol P2 (round 5) on #177: one amount rule on both venues. A size past two
+    decimals is refused by the simulated venue exactly as the live one refuses it."""
+    from factorylab.world.polymarket_clob import PolymarketRefused, order_amounts
+
+    fake = venue()
+    token = yes(fake)
+    for size, price in ((Decimal("10.001"), Decimal("0.30")),
+                        (Decimal("10"), Decimal("0.305")),
+                        (Decimal("0"), Decimal("0.30"))):
+        with pytest.raises(PolymarketRefused) as live:
+            order_amounts(size, price, fake.tick)
+        answer = fake.place(client_id=f"{size}@{price}", token_id=token, is_buy=True,
+                            size=size, price=price)
+        assert (answer["status"], answer["error"]) == ("rejected", str(live.value))

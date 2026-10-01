@@ -154,7 +154,7 @@ five reward shapes: judged, forecast, conformity, exposure, counter.
 | Composition through contracts, foundation families | `factorylab/runtime/composition.py`, `families.py` |
 | Custody, checkpoints, resume, release identity, the kill witness, wind-down | `factorylab/runtime/custody.py`, `sidecar.py`, `resume.py`, `release.py`, `witness.py`, `winddown.py` |
 | The manifest, the operator's CLI, the public wake | `factorylab/runtime/worlds.py`, `cli.py`, `wake.py` |
-| The world: Hyperliquid and a deterministic fake, Polymarket, recorded tapes, vaults | `factorylab/world/exchange.py`, `polymarket.py`, `tape.py`, `vaults.py` |
+| The world: Hyperliquid and a deterministic fake, Polymarket (reads, a simulated venue, signed CLOB orders), recorded tapes, vaults | `factorylab/world/exchange.py`, `polymarket.py`, `polymarket_clob.py`, `tape.py`, `vaults.py` |
 | Compute rails: OpenRouter, Venice over x402, public x402 sellers; metering | `factorylab/world/openrouter.py`, `venice.py`, `market.py`, `x402.py`, `metering.py` |
 | Treasury: USDC over CCTP between venue and reserve | `factorylab/world/treasury.py`, `treasury_rails.py`, `cctp.py`, `evm.py` |
 
@@ -185,7 +185,10 @@ Per-seat entitlements divide the one wallet and never create money.
 learning score, its entitlement and the assets held at a venue or a provider are
 three quantities that never stand in for one another. A venue loss settles on the
 venue account, not on the compute wallet. Treasury transfers are ledgered before
-they are sent, and an uncertain outcome is quarantined until it resolves.
+they are sent, and an uncertain outcome is quarantined until it resolves. The
+Polymarket pot is a custody of its own: every order's intent and hash are durable before
+it is signed, a fill is booked once when its trade is confirmed and never past its order,
+and no buy is taken on principal above the manifest's cap.
 
 **The sealed diary.** Every state change is a ledger item first: encrypted,
 SHA-256 hash-chained, fsynced, append-only, behind an exclusive writer lock. The

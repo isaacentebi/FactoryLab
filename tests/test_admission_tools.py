@@ -214,3 +214,33 @@ def test_venue_read_weight_boundary(facts):
     assert ComputeMixin._venue_read_refusal(rt, "seat", "venue.mids", {}) is None
     rt._venue_read_used = lambda _: 1
     assert ComputeMixin._venue_read_refusal(rt, "seat", "venue.mids", {})
+
+
+def test_polymarket_principal_and_order_budget_are_enforced_at_their_published_bounds():
+    """The pot's principal cap and its request budget, as world.read publishes them."""
+    from dataclasses import replace
+
+    from factorylab.cortex.admission_tools import tool_admission_schematics
+    from factorylab.runtime.polymarket import principal_at_risk
+    from factorylab.runtime.worlds import PolymarketSpec
+    from factorylab.world.polymarket_clob import BudgetSpent, RequestBudget
+
+    manifest = replace(load_manifest("scripted"), polymarket=PolymarketSpec(
+        enabled=True, principal_micro=40_000_000, order_requests_per_10s=7))
+    facts = tool_admission_schematics(manifest)["polymarket_orders"]
+    assert facts["principal_micro"] == 40_000_000
+    resting = {"operation": "polymarket.place_limit", "order_hash": "0x1",
+               "args": {"side": "buy", "size": "10", "price": "0.30"},
+               "result": {"status": "resting"}}
+    surface = SimpleNamespace(intents={"c": resting}, cursor={}, filled={})
+    # The world's own lifetime outlay: its size at its limit (a post-only order pays no
+    # fee on any venue kind); nothing gives it back.
+    assert principal_at_risk(surface) == Decimal(3)
+    budget = RequestBudget(facts["order_requests_per_10s"], wall=lambda: 10**18)
+    for _ in range(facts["order_requests_per_10s"]):
+        budget.take()
+    with pytest.raises(BudgetSpent):
+        budget.take()
+    later = RequestBudget(1, wall=iter((0, 10_000_000_000)).__next__)
+    later.take()
+    later.take()  # a request 10 s later is outside the window

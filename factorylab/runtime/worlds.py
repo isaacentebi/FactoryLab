@@ -288,12 +288,14 @@ class PolymarketSpec:
     ``enabled = false`` registers no tool and opens no custody pot, whatever else
     the disabled block names. ``venue`` names what the
     tools reach: ``fake`` is the seeded simulated venue for reads and writes;
-    ``live`` is the public read API only, and no write tool is registered, because
-    live order signing on Polygon is not built (``world/polymarket.py``,
-    ``LiveOrderAdapter``). The caps are limits the kernel refuses beyond, fixed
-    for the world's life: one order's notional, the pot's open exposure (resting
-    buys plus the cost of tokens held), and orders a window. ``collateral_micro``
-    is the simulated pot's opening USDC; a live pot is whatever its wallet holds.
+    ``live`` is the public read API, and with ``orders = true`` also signed orders
+    on Polymarket's CLOB (``world/polymarket_clob.py``), real money on Polygon, so
+    admitted only in the world named ``funded`` under its ratified charter. The
+    caps are limits the kernel refuses beyond, fixed for the world's life: one
+    order's notional, the pot's open exposure (resting buys plus the cost of tokens
+    held), orders a window, and the pot's principal (``principal_micro``: what the
+    pot may hold beyond what it has itself settled). ``collateral_micro`` is the
+    simulated pot's opening USDC; a live pot is whatever its wallet holds.
     """
 
     enabled: bool = False
@@ -309,6 +311,17 @@ class PolymarketSpec:
     # (world/polymarket.py), never a price.
     read_requests_per_10s: int = 200
     kernel_reserve_per_10s: int = 100
+    # Live orders (``venue = "live"``, ``orders = true``): the wallet that holds the
+    # pot and signs as its maker (``funder``), how Polymarket verifies that signature
+    # (``signature_type``), the most principal the pot may hold (``principal_micro``;
+    # None: no cap declared, refused for live orders), and the requests the pot's own
+    # trading side (orders, cancels, lookups, fills, account, marks) may send per
+    # sliding 10 s of wall time. Limits, never prices (essay II.II.b).
+    orders: bool = False
+    principal_micro: int | None = None
+    funder: str | None = None
+    signature_type: int = 0
+    order_requests_per_10s: int = 60
 
     def __post_init__(self):
         from factorylab.world.polymarket import PUBLISHED_REQUESTS_PER_10S
@@ -331,12 +344,46 @@ class PolymarketSpec:
             if type(value) is not int or value < 0:
                 raise ValueError(f"polymarket.{name} must be a non-negative integer")
         if self.venue == "live" and self.collateral_micro:
-            # A live venue is read-only: writes, positions and the marks that read a
-            # held token's book exist only on the simulated venue, which sends
-            # Polymarket nothing, so the kernel's request bound covers no live mark.
-            # Live trading must bring its own bound (runtime/polymarket.py, open_limit).
-            raise ValueError("polymarket_live_writes_not_built: polymarket.collateral_usd "
-                             "seeds only the simulated venue; a live venue is read-only")
+            # A live pot is whatever its wallet holds: no manifest seeds it.
+            raise ValueError("polymarket.collateral_usd seeds only the simulated venue; a "
+                             "live pot is what its wallet holds")
+        if type(self.orders) is not bool:
+            raise ValueError("polymarket.orders must be true or false")
+        if self.orders and self.venue != "live":
+            raise ValueError("polymarket.orders names live orders; the simulated venue "
+                             "always takes writes")
+        principal = self.principal_micro
+        if principal is not None and (type(principal) is not int or principal <= 0):
+            raise ValueError("polymarket.principal_usd must be positive exact USD")
+        from factorylab.world.polymarket_clob import (
+            PUBLISHED_ORDER_REQUESTS_PER_10S,
+            SIGNATURE_TYPES,
+        )
+
+        if (type(self.signature_type) is not int
+                or self.signature_type not in SIGNATURE_TYPES):
+            raise ValueError("polymarket.signature_type must be one of "
+                             f"{sorted(SIGNATURE_TYPES)}")
+        budget = self.order_requests_per_10s
+        if type(budget) is not int or not 1 <= budget <= PUBLISHED_ORDER_REQUESTS_PER_10S:
+            raise ValueError("polymarket.order_requests_per_10s must be an integer in "
+                             f"[1, {PUBLISHED_ORDER_REQUESTS_PER_10S}]")
+        if self.funder is not None and (
+                not isinstance(self.funder, str) or len(self.funder) != 42
+                or not self.funder.startswith("0x")
+                or any(c not in "0123456789abcdef" for c in self.funder[2:])
+                or int(self.funder, 16) == 0):
+            raise ValueError("polymarket.funder must be a nonzero lower-case 0x address")
+        if self.orders and (principal is None or self.funder is None):
+            # Real money: the pot's wallet and its principal cap are declared at genesis.
+            raise ValueError("polymarket live orders require polymarket.funder and "
+                             "polymarket.principal_usd")
+        if self.orders and budget + self.read_requests_per_10s > PUBLISHED_REQUESTS_PER_10S:
+            # The pot's own market reads land on Gamma /markets beside the public reads:
+            # together they stay within its published 300 per sliding 10 s.
+            raise ValueError("polymarket.read_requests_per_10s + order_requests_per_10s "
+                             f"must be at most {PUBLISHED_REQUESTS_PER_10S}, Gamma "
+                             "/markets' published limit per 10 s")
 
 
 @dataclass(frozen=True)
@@ -1584,6 +1631,13 @@ class WorldManifest:
             raise ValueError("mainnet is only allowed in the world named 'funded'")
         if self.exchange.mainnet and self.exchange.kind == "hyperliquid":
             self._validate_funded_admission()
+        if self.polymarket.enabled and self.polymarket.orders:
+            # Polymarket has one network, Polygon mainnet: a live order is real money,
+            # admitted under the same gate as a mainnet venue.
+            if self.name != "funded":
+                raise ValueError("polymarket live orders are only allowed in the world "
+                                 "named 'funded'")
+            self._validate_funded_admission()
         if self.exchange.shocks and self.exchange.kind != "fake":
             raise ValueError("price shocks exist only on the fake venue")
         self._validate_tape()
@@ -2253,7 +2307,8 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
         return PolymarketSpec()
     keys = {"enabled", "venue", "collateral_usd", "max_order_usd",
             "read_requests_per_10s", "kernel_reserve_per_10s",
-            "max_open_usd", "max_orders_per_window", "seed"}
+            "max_open_usd", "max_orders_per_window", "seed", "orders", "principal_usd",
+            "funder", "signature_type", "order_requests_per_10s"}
     for old, new in (("read_requests_per_minute", "read_requests_per_10s"),
                      ("kernel_reserve_per_minute", "kernel_reserve_per_10s")):
         if isinstance(raw, dict) and old in raw:
@@ -2285,6 +2340,14 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
                                          default.read_requests_per_10s),
         kernel_reserve_per_10s=raw.get("kernel_reserve_per_10s",
                                           default.kernel_reserve_per_10s),
+        orders=raw.get("orders", default.orders),
+        principal_micro=(None if raw.get("principal_usd") is None
+                         else usd("principal_usd", 0)),
+        funder=(raw["funder"].lower() if isinstance(raw.get("funder"), str)
+                else raw.get("funder")),
+        signature_type=raw.get("signature_type", default.signature_type),
+        order_requests_per_10s=raw.get("order_requests_per_10s",
+                                       default.order_requests_per_10s),
     )
 
 

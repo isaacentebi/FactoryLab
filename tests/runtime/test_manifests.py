@@ -226,15 +226,18 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     timing.world_repricing; wave 16, D2), and again when a fake venue could replay a
     recorded tape ([exchange.tape], absent by default), and again when each model came
     to state its training cutoff (models.training_cutoff, unknown by default; the
-    look-ahead guard of a tape world); each time it is a new v0."""
+    look-ahead guard of a tape world), and again when Polymarket gained live orders
+    ([polymarket] orders, principal_usd, funder, signature_type, order_requests_per_10s);
+    each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert '"tape":null' in scripted.canonical_json()
     assert '"training_cutoff":null' in scripted.canonical_json()
+    assert '"orders":false,"principal_micro":null' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "c5e9be550f27b1a4aecd8399e288d7a1c39c5d5f051200a5fdcea9f4ca0d1480"
+        "f13cdf2062157eadb70f32e0f05190d64a3791c799d9ca15e23cacbc7a3a48f6"
     )
 
     implicit = manifest_from_dict(_base())

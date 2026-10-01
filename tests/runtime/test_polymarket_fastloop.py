@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from factorylab.world import polymarket as world_polymarket
 from scripts import fastloop
 
 WORLD = Path(__file__).parent / "fixtures" / "polymarket-fastloop.toml"
@@ -28,14 +29,38 @@ class EventMarketPolicy(fastloop.PolicyProvider):
             turn = self.decisions + 1
             if turn % 4 == 1:
                 self.decisions += 1
+                # At the opening mid, under its ask: the post-only venue rests it, and
+                # ``ScriptedMarket`` fills it as a maker.
                 return {"action": "order", "tool_calls": [{
                     "tool": "polymarket.place_limit",
-                    "args": {"token_id": YES, "side": "buy", "size": "10", "price": "0.45"}}]}
+                    "args": {"token_id": YES, "side": "buy", "size": "10", "price": "0.40"}}]}
             if turn % 4 == 2:
                 self.decisions += 1
                 return {"action": "investigate", "tool_calls": [
                     {"tool": "polymarket.search", "args": {"query": "simulated", "limit": 3}}]}
         return super()._decide(inputs)
+
+
+class ScriptedMarket(world_polymarket.FakePolymarket):
+    """The seeded venue with its first market scripted, whatever the run's timing (Sol P2,
+    round 5, on #177: a random walk left every resting buy unfilled): it stands still
+    until a buy rests on it, then walks one tick down so its ask meets the lowest resting
+    buy, which fills there as a maker; later buys at that price would cross and are
+    rejected. It resolves YES 900 s after the venue's first step."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.step_ticks = 0
+
+    def advance(self, now_ns):
+        if self._started_ns is None:
+            self.resolutions = {**self.resolutions, "fake-1": (now_ns + 900 * 10**9, 0)}
+        market = self._markets["fake-1"]
+        resting = [o["price"] for o in self._orders.values()
+                   if self._tokens[o["token_id"]] == ("fake-1", 0)]
+        if resting and not market["closed"]:
+            market["mid"] = min(market["mid"], min(resting) - self.tick)
+        return super().advance(now_ns)
 
 
 EDITION6 = Path(__file__).parents[2] / "worlds" / "edition6-testnet-rehearsal.toml"
@@ -119,10 +144,15 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     every holder, and a learning signal. 95 ticks is the fewest that reach the seeded
     market's resolution (900 s) and the refusal after it closes."""
     monkeypatch.setattr(fastloop, "PolicyProvider", EventMarketPolicy)
+    monkeypatch.setattr(world_polymarket, "FakePolymarket", ScriptedMarket)
     card = fastloop.run("scripted", 95, WORLD, tmp_path, cap_usd="2", seed=1)
     assert card["status"] == "completed", card.get("error")
     events = json.loads(Path(card["out"], "events.json").read_text())
     kinds = [e.get("kind") for e in events]
+    # A resting buy filled as a maker, a later one would have crossed and was rejected.
+    acknowledged = [e["result"]["status"] for e in events
+                    if e.get("kind") == "polymarket.acknowledged"]
+    assert "resting" in acknowledged and "rejected" in acknowledged
     assert kinds.count("polymarket.intent") >= 1
     assert "polymarket.fill" in kinds and "polymarket.read" in kinds
     assert "polymarket.resolution" in kinds and "consequence.resolution" in kinds
@@ -134,15 +164,17 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     # No decision traded on the text it read in the same wake.
     assert not any(e.get("kind") == "polymarket.intent" and e.get("handle") in {
         r.get("handle") for r in events if r.get("kind") == "polymarket.read"} for e in events)
-    # Each decision that held the token is told what the resolution realised for it.
-    assert {r["receipt"]["handle"] for r in receipts} == {
-        e["handle"] for e in events if e.get("kind") == "polymarket.intent"}
+    # Each decision that held the token is told what the resolution realised for it (the
+    # venue is post-only: an order that would cross is rejected and one that rests may
+    # never fill, so only a filled order's decision holds the token).
+    owner = {e["order_id"]: e["handle"] for e in events if e.get("kind") == "consequence.order"}
+    held = {owner[e["order_id"]] for e in events if e.get("kind") == "polymarket.fill"}
+    assert held and {r["receipt"]["handle"] for r in receipts} == held
     # Each holder is credited what the resolution realised for it, exactly: the payout
-    # on every share its orders bought, less what it paid for them and their fees, in
-    # integer micro-USD, as its claim on the pot.
+    # on every share its orders bought, less what it paid for them, in integer
+    # micro-USD, as its claim on the pot.
     from decimal import Decimal
 
-    owner = {e["order_id"]: e["handle"] for e in events if e.get("kind") == "consequence.order"}
     (resolution,) = [e for e in events if e.get("kind") == "polymarket.resolution"]
     payout = Decimal(resolution["payout"])
     fills = [e for e in events if e.get("kind") == "polymarket.fill"]
@@ -150,7 +182,8 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     expected = {}
     for fill in fills:
         handle = owner[fill["order_id"]]
-        usd = (payout - Decimal(fill["px"])) * Decimal(fill["size"]) - Decimal(fill["fee_usd"])
+        assert fill["fee_usd"] == "0"  # a maker pays no fee
+        usd = (payout - Decimal(fill["px"])) * Decimal(fill["size"])
         expected[handle] = expected.get(handle, 0) + int(usd * 1_000_000)
     credited = {}
     for claim in (e for e in events if e.get("kind") == "polymarket.claim"

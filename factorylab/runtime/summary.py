@@ -241,6 +241,13 @@ class SummaryMixin:
             },
             "stats": {**vars(self.stats), **self.consequences.counts()},
         }
+        if getattr(getattr(self, "polymarket", None), "writes", False):
+            from factorylab.runtime.polymarket import custody_books
+
+            # The polymarket pot's P&L, classified apart from the venue's: what its
+            # fills and resolutions settled, what the seats' claims hold of it, and
+            # what no return owns.
+            summary["polymarket_custody"] = custody_books(self)
         if self.live:
             summary["process_io_metrics"] = {
                 "exchange": self.exchange.call_metrics,

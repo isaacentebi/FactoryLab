@@ -319,6 +319,20 @@ ADDED_FIELDS: dict[str, str] = {
     "exchange.tape": "9fa7fb4, wave 1: a tape from a diary",
     "models.*.training_cutoff": "28f4874, wave 4: the look-ahead guard",
 }
+#: The launched-manifest fields the kernel added after a world of any era may have
+#: launched, each with the change that added it: absent from a launch, the kernel's
+#: default stands in, which is the physics that world ran under (the field did not
+#: exist, and its default adds nothing to what that world could do). Present, it is
+#: read exactly like any other field.
+LATER_FIELDS: dict[str, str] = {
+    # Polymarket orders: a world launched before them had no live orders, which is
+    # what their defaults state (orders false, no principal cap, no funder).
+    "polymarket.orders": "polymarket orders: live orders on the CLOB",
+    "polymarket.principal_micro": "polymarket orders: the pot's principal cap",
+    "polymarket.funder": "polymarket orders: the pot's wallet",
+    "polymarket.signature_type": "polymarket orders: how the pot's wallet signs",
+    "polymarket.order_requests_per_10s": "polymarket orders: the pot's request budget",
+}
 
 
 def is_legacy_world(manifest: Mapping | None) -> bool:
@@ -342,9 +356,10 @@ def kernel_problem(launched: Mapping) -> str | None:
 
     A diary launched before wave 16 states fields wave 16 retired (``RETIRED_FIELDS``);
     they are removed, and nothing else is, and it may lack the fields ``ADDED_FIELDS``
-    names. Its price law also predates the SF-0 load
-    relation wave 16 added (Q-G1: edition 6 launched kp = 0.5 and eta = 0.5, which
-    press a unit violation onto the cap in one window), and that relation is exactly
+    names; a launch of any era may lack the fields ``LATER_FIELDS`` names. Its price
+    law also predates the SF-0 load relation wave 16 added (Q-G1: edition 6 launched
+    kp = 0.5 and eta = 0.5, which press a unit violation onto the cap in one window),
+    and that relation is exactly
     what the gauntlet's SF-0 criterion reads from the diary and reports: refusing the
     diary for it at binding would hide that reading. So, for validation alone, the
     relation's two inputs are set where it holds (kp 0, the kernel's own
@@ -377,7 +392,7 @@ def kernel_problem(launched: Mapping) -> str | None:
         # missing one would take its default. The kernel's own canonical form of what
         # was rebuilt must therefore be exactly what was launched (Codex on e74c48d).
         shape = _shape_problem(json.loads(rebuilt.canonical_json()), candidate, "",
-                               ADDED_FIELDS if legacy else {})
+                               {**(ADDED_FIELDS if legacy else {}), **LATER_FIELDS})
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
         return str(exc) or type(exc).__name__
     return shape

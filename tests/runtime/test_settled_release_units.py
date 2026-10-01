@@ -92,11 +92,11 @@ def _close_the_window(rt):
 
 def test_a_polymarket_decision_is_released_once_resolved_confirmed_and_claimed():
     from tests.helpers import collateral_decision
-    from tests.runtime.test_polymarket_surface import advance, buy, still_fake, world
+    from tests.runtime.test_polymarket_surface import advance, maker_buy, still_fake, world
 
     rt = world(fake=still_fake(resolutions={"fake-1": (10**12, 0)}))
     handle = collateral_decision(rt)
-    assert buy(rt, handle)["status"] == "filled"
+    maker_buy(rt, handle)
     rt.consequences.finish(handle, 0)
     rt.clock.now_ns = 10**12
     advance(rt, rt._horizon_ns() // 10**9 + 1)  # the horizon on the venue clock (D2)

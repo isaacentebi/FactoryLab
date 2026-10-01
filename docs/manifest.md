@@ -2412,8 +2412,13 @@ venue's writes. The keys, all fixed for the world's life:
 | key | default | meaning |
 |---|---|---|
 | `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
-| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs only; no write tool and no pot are registered, because live order signing on Polygon is not built |
-| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (`polymarket_live_writes_not_built`: a live venue is read-only until the live-trading wave, which must bring its own request bound) |
+| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes, with the live venue's order physics: every order is post-only, so a buy at or above the best ask is rejected before it executes (`invalid post-only order: order crosses book`), a resting buy fills at its own price once the walking ask meets it, and no fill is charged a fee (its listing states no fee schedule). A resolution pays nothing into spendable USDC: the tokens stay in the pot, resolved and worth their payout, as on the live venue, until a redemption neither venue makes by itself. The tools and the `world.read` order section render the same on both venues apart from the venue's name and `live_orders`. `live`: the public Gamma and CLOB read APIs, and with `orders = true` signed orders on the CLOB (`world/polymarket_clob.py`, `LivePolymarket`; "Live orders" below) |
+| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (a live pot is what its wallet holds); it may exceed `principal_usd`, which bounds signed commitments, never what the pot holds |
+| `orders` | `false` | live orders: registers the pot, its two reads and its two writes on the live venue. Refused with `venue = "fake"` (which always takes writes); requires `funder` and `principal_usd`; admitted only in the world named `funded`, under the same gate as a mainnet venue (`exchange.client_namespace`, the ratified charter and roster digests, `charter.launch`), because Polymarket's one network, Polygon, is real money |
+| `principal_usd` | absent | the cap on the world's lifetime signed commitments: `size x limit price` of every placement the world ever signed, forever (`principal_at_risk`). Nothing gives room back: no cancel, terminal read-back, matched size, failed leg, quarantine, resolution, payout or redemption, and no venue response field enters it. The exceptions are orders that never existed: one the venue refused outright with a documented 4xx refusal (`polymarket_wire.refusal`; the simulated venue's rejection is the same evidence), and one refused locally before it was signed, because the request budget could not send it. A timeout, a 5xx or any other answer counts in full, and the order stays uncertain and a cancellation target. A buy that would take the commitment past the cap is refused before any intent ("the polymarket pot holds more principal than [polymarket] principal_usd"); a cancellation never is. No wallet balance and no listing enters it, so nobody's deposit, withdrawal or omission makes room. Positive exact USD |
+| `funder` | absent | the pot's wallet (lower-case 0x address), the orders' maker and the Data API's `user` |
+| `signature_type` | `0` | how the exchange verifies the pot's signature: 0 EOA (the key's own address must be `funder`), 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (a Deposit Wallet) |
+| `order_requests_per_10s` | `60` | the pot's own requests (orders, cancels, lookups, fills, its account, held tokens' marks and a write's market read) per sliding 10 s of wall time, each counted before it is sent; one past it is not sent. A resumed pot counts its whole allowance as sent at the resume, since the process that died may have sent it in its last 10 s. At most 200 (`/balance-allowance`'s published limit, the tightest endpoint these reach besides Gamma `/markets`), and with `orders`, `read_requests_per_10s + order_requests_per_10s` is at most 300, Gamma `/markets`' |
 | `max_order_usd` | `"10"` | the most one order's notional (`price x size`) may be |
 | `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
 | `max_orders_per_window` | `20` | orders placed per reserve window |
@@ -2466,12 +2471,13 @@ answered from the tick (below): a share is a quota on reads asked, so a seat can
 tell a tick's answer from a sent read. The seats therefore send at most
 `read_requests_per_10s - kernel_reserve_per_10s` in any sliding 10 s.
 
-**What reaches Polymarket.** Only a live-read world sends requests, and it holds no
-positions: writes, positions and the marks of the pot's lots exist only on the
-simulated venue (`venue = "fake"`, and a live world's offline `simulate_reads`), which
-sends Polymarket nothing. A live world with writes is refused at load
-(`polymarket_live_writes_not_built`) until the live-trading wave brings its own bound.
-So the kernel's requests to Polymarket are its settlement reads alone. **One live
+**What reaches Polymarket.** A live world's public reads are the seats' and the kernel's
+settlement reads, bounded below. A live world with `orders = true` also sends the pot's
+own requests, counted apart by its own budget, `order_requests_per_10s` in any sliding
+10 s of wall time, each before it is sent and never stamped as a public read (below,
+"Live orders"). The simulated venue (`venue = "fake"`, and a live world's offline
+`simulate_reads`) sends Polymarket nothing. So the kernel's public requests are its
+settlement reads alone. **One live
 Polymarket world runs a host**: a world whose Polymarket reads go to the network is
 admitted before its first event at genesis and before a resume replays anything
 (`runtime/polymarket.py`, `arm`). It must have a ledger (every request and its wall
@@ -2542,17 +2548,20 @@ carry text third parties wrote (questions, rules, slugs, resolution sources), so
 outside text exactly as a `connector.fetch` body is: prose of at least
 `MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
 artifact and outcome tools only, so market text cannot reach a write in the same wake. With
-the simulated venue, `polymarket.positions {}` reads the pot (free), and
-`polymarket.place_limit {token_id, side, size, price}` and `polymarket.cancel {order_id}`
-write (free). The writes are consequence writes: only a producing decision with an open
+the simulated venue, or live orders, `polymarket.positions {}` reads the pot and
+`polymarket.open_orders {}` its resting orders (free; on the live venue both answer from
+the pot's one account read a tick and a Polymarket write), and
+`polymarket.place_limit {token_id, side, size, price}` (`side` is `buy`: the venue takes
+BUY orders only, and a position is held until its market resolves) and
+`polymarket.cancel {order_id}` write (free). The writes are consequence writes: only a producing decision with an open
 consequence account may make them, each has a client id (`<handle>:<slot>`) and a durable
 `polymarket.intent` before submission, a repeat reconciles and never resubmits, an
 unanswered intent is polled at most `UNCERTAIN_ORDER_POLLS` times and then released as
 unknown, and a batch that writes is weighed whole with the venue's writes.
 
 Custody: collateral is the `polymarket` pot, its own account in `custody_view` and in
-`world.pots` (valued at USDC plus tokens at cost, so a buy does not move the total; tokens
-listed by count and cost). An order is weighed against that pot alone, with the market's own
+`world.pots` (valued at USDC plus tokens at cost, so a buy does not move the total, and a
+resolved token not yet redeemed at its payout; tokens listed by count and cost). An order is weighed against that pot alone, with the market's own
 tick and minimum size, and never against the Hyperliquid accounts or the reserve. What the pot
 settles is ledgered as `venue.settled` with `custody = "polymarket"` and summed on the pot's
 own books, never in `BudgetBook.book_venue`; what a decision's event positions realise is its
@@ -2597,6 +2606,245 @@ The reads are the kernel's measurement and cost no seat anything. `scripts/fastl
 and `scripts/edition4_rehearsal.py` when it is handed a simulated clock, answer a
 live-read world's reads from the simulated venue (`simulate_reads`), which then moves and
 resolves on the world's clock; such a run takes no IP lock.
+
+### Live orders
+
+`venue = "live"` with `orders = true` trades the pot on Polymarket's CLOB
+(`world/polymarket_clob.py`, `LivePolymarket`), with the same tools, intents, custody and
+settlement as the simulated venue, and the same `FakePolymarket` contract (`place`,
+`cancel`, `lookup`, `account`), which `tests/world/fake_clob.py` serves over the
+published HTTP protocol in the tests. The protocol, each fact read 2026-09-29
+(Polymarket moved to CLOB V2 on 2026-04-28,
+https://docs.polymarket.com/changelog/predictions):
+
+| fact | what the code does | source |
+|---|---|---|
+| Order struct `Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)`, EIP-712 domain `{name: "Polymarket CTF Exchange", version: "2", chainId: 137, verifyingContract}`; V2 removed `taker`, `expiration`, `nonce`, `feeRateBps` | `order_hash`, checked against the exchange's own `hashOrder` by an `eth_call` on Polygon (`tests/world/test_polymarket_clob.py`) | https://docs.polymarket.com/v2-migration, https://docs.polymarket.com/trading/place-orders, https://github.com/Polymarket/ctf-exchange-v2 (`Structs.sol`, `Hashing.sol`) |
+| CTF Exchange `0xE111180000d2663C0091e4f400237545B87B996B`, Neg Risk CTF Exchange `0xe2222d279d744050d28e00520010520000310F59` (a neg-risk market's orders), Conditional Tokens `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`, CtfCollateralAdapter `0xAdA100Db00Ca00073811820692005400218FcE1f`, NegRiskCtfCollateralAdapter `0xadA2005600Dec949baf300f4C6120000bDB6eAab`, CollateralOnramp `0x93070a847efEf7F70739046A929D47a521F5B8ee` | `exchange_for`, constants | https://docs.polymarket.com/resources/contracts |
+| Collateral is pUSD (`0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`, 6 decimals), backed 1:1 by USDC; USDC.e becomes pUSD by `CollateralOnramp.wrap` | the pot is the funder's pUSD (`/balance-allowance`) | https://docs.polymarket.com/concepts/pusd |
+| Signature types 0 EOA, 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (Deposit Wallet, the default since 2026-05-04; an EOA trades only if allowlisted); type 3 signs an ERC-7739 `TypedDataSign` wrapper | `order_signature` | https://docs.polymarket.com/trading/wallets-auth, https://github.com/Polymarket/py-clob-client-v2 |
+| Amounts: 6 decimals for collateral and tokens; BUY maker = price x size USD, taker = size; SELL the reverse; per-tick decimals (`ROUNDING`) | `order_amounts` builds BUYs only and refuses what it would have to round, by `amount_refusal` (`world/polymarket.py`), the one amount rule the simulated venue's `place` applies too; `place` refuses, before signing, any call, intent or struct that is not a BUY | https://docs.polymarket.com/trading/place-orders |
+| L1: `ClobAuth(address address,string timestamp,uint256 nonce,string message)` under `{ClobAuthDomain, 1, 137}`; `GET /auth/derive-api-key`, else `POST /auth/api-key`. L2: HMAC-SHA256 of `timestamp + METHOD + path + body` (no query), base64url secret, padded urlsafe output | `l1_headers`, `l2_headers` | https://docs.polymarket.com/getting-started/api |
+| Allowances: pUSD `approve` and CTF `setApprovalForAll` for both exchanges; CTF `setApprovalForAll` for the collateral adapter to redeem | the operator's, before launch (below) | https://docs.polymarket.com/trading/wallets-auth, https://docs.polymarket.com/trading/positions/manage |
+| Ticks 0.1, 0.01, 0.005, 0.0025, 0.001, 0.0001; off-tick price and size below `orderMinSize` rejected, never rounded | refused before any intent | https://docs.polymarket.com/market-data/market-details, https://docs.polymarket.com/resources/error-codes |
+| Fee `shares x rate x (p (1 - p))^exponent`, set at match time; "Makers are never charged fees. Only takers pay fees." | none is booked: every order is post-only, a maker; a trade that reports this world's order as a taker, or a fee on it, contradicts the published venue, is ledgered as `polymarket.drift` with its reason and stops buying for the world's life ("a polymarket trade contradicted the maker-only venue") | https://docs.polymarket.com/trading/fees |
+| Post-only: "If a post-only order would match immediately (cross the spread), it's rejected instead of executed. This guarantees you're always the maker, never the taker"; the CLOB answers `invalid post-only order: order crosses book`; `postOnly` is supported for GTC and GTD | every order is GTC with `postOnly: true` | https://docs.polymarket.com/concepts/order-lifecycle, https://docs.polymarket.com/resources/error-codes, https://docs.polymarket.com/api-spec/clob-openapi.yaml |
+| GTC, GTD, FOK, FAK; `POST /order` answers `live`, `matched`, `delayed` or `unmatched`; `DELETE /order {orderID}` answers `{canceled, not_canceled}`; no client order id, the hash is the identity, a repost is `Duplicated` | every order is GTC and post-only; `matched` and `delayed` are read back by hash | https://docs.polymarket.com/trading/place-orders, https://docs.polymarket.com/trading/manage-orders |
+| `GET /data/order/{hash}` (LIVE, MATCHED, CANCELED, CANCELED_MARKET_RESOLVED, INVALID; `size_matched`), `GET /data/orders`, `GET /data/trades` (MATCHED, MINED, CONFIRMED, RETRYING, FAILED), Data API `/positions` | `lookup`, `account`, `poll` | https://docs.polymarket.com/concepts/order-lifecycle, https://docs.polymarket.com/api-spec/clob-openapi.yaml |
+| Resolution by UMA's optimistic oracle (2 h challenge, days if disputed); redemption `redeemPositions(pUSD, 0x0, conditionId, [1, 2])` on the collateral adapter, an on-chain transaction paid in POL | resolution read from Gamma; redemption is the operator's (below) | https://docs.polymarket.com/concepts/resolution, https://docs.polymarket.com/trading/positions/manage |
+| Rate limits: `POST /order` 5,000 per 10 s; `/data/orders`, `/data/trades` 500; `/balance-allowance` 200; Gamma `/markets` 300 | `order_requests_per_10s` | https://docs.polymarket.com/api-reference/rate-limits |
+
+The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
+
+* **Intent first.** A write is weighed (the pot, the caps, the principal, the market's
+  tick and minimum) before anything is ledgered. Its order is then built
+  (`order_identity`: the salt is `sha256(namespace:launch_nonce:client_id)`, so no
+  launch or intent shares one) and the `polymarket.intent` carries the order's fields
+  and its hash before the network call. `LivePolymarket.place` signs and sends only the
+  order a durable intent names, rebuilt to that hash (`intent_of`); anything else is
+  refused and nothing is sent. A kill's cancellations are intents too.
+* **Threat model.** The venue may be buggy, malformed, lagging or contradictory; the
+  operator is honest. So every answer the pot reads passes one door
+  (`world/polymarket_wire.py`): it is parsed against its documented shape (required
+  fields of exact types, this world's own order ids the hashes it signed (`0x` and 64
+  hex digits, in any case; another party's id is any non-empty string, which never
+  touches the books), everything lower-cased once, prices strictly inside (0, 1), sizes positive, statuses documented, a leg of
+  this world's its signed order but for its size (its token, a BUY at exactly its
+  limit, never more than its signed size, booked or not; architect's rule on Sol's
+  round-8 review), a token id canonical decimal (ASCII digits, no leading zero, one
+  spelling a token), a market naming each outcome token once, a book the token asked
+  for, no row that is not an object),
+  and one that does not conform is malformed whole: a read is unread (its cursor does
+  not move), an acknowledgement uncertain. No venue answer is trusted where it would
+  give principal room (the cap counts every signed placement but a documented refusal), a quantity the venue
+  does not state is unknown and never 0, and a trade row of this world's that reports
+  it as a taker or states a fee on it halts buying: the rows are scanned before any is
+  parsed, and the halt is kept apart from the poll's cursor, so a malformed row read
+  beside it cannot erase it. The scan reads for every order hash in the durable intents,
+  uncertain ones included, and trades are read while any of them may still fill, from
+  its signing time, whether or not it is yet in the settlement set; the scan matches this world's hashes in any case and
+  reads any key whose name contains "fee" as a charge unless it is null or a
+  decimal equal to zero (`"0"`, `0.0`, `"0.00"`; the documented `fee_rate_bps` is a
+  string); an unreadable value is a charge. A read the door finds malformed stalls,
+  conservatively, and is ledgered `polymarket.read_malformed` with its reason, once a
+  reason per `MALFORMED_LEDGER_TICKS` (60) ticks. Rows are scanned as the fill read returns them; a fee disclosed later on a
+  trade no longer read is caught by what it does to the pot: a fee actually charged
+  lowers the balance, the reconciliation drifts and buying stops. Money the books do
+  not explain halts buying whichever way it moved. A deposit that exactly masks a hidden fee is out of scope.
+* **Uncertain, never resent.** A placement's answer is `resting` only for a clean
+  acknowledgement (`success: true`, no error, this hash, `status: live`) and
+  `rejected` only for a documented refusal (`polymarket_wire.REFUSALS`, from
+  resources/error-codes: a 4xx whose body is exactly `{"error": text}`, the text one of
+  the documented refusals naming no other order, never a duplicate). Anything else, a
+  5xx, a timeout, a lost answer, `success: false`, `Duplicated`, `matched` or
+  `delayed`, is uncertain, and resolved by `GET /data/order/{hash}`, polled at most
+  `UNCERTAIN_ORDER_POLLS` times; an order the CLOB does not know is uncertain, never
+  rejected. A process death between `polymarket.place` (or `polymarket.cancel`) and its
+  answer resumes with the call uncertain (`RecoveryJournal.call`), never resent. Every
+  other call the live venue journals is a read a resume re-runs (`order_identity`,
+  `poll`, `lookup`, `account`, `mark_book`, `write_market`, `write_market_of_token`,
+  `reserve_order_slot` and the public reads). A placement's submission slot is taken at
+  admission (`reserve_order_slot`), before its intent and signature: a placement the
+  budget cannot send is refused there, signs nothing and commits nothing. The slot is
+  checked again at the transport, after the request is prepared and immediately before
+  it is written (every request's slot is taken there, once it is prepared): renewed if it slid out of
+  the window, and if none is left the signed order is withheld, never sent, no
+  cancellation target, and still counted against the cap. `drain_events`, which the
+  live venue answers with nothing, is not called on it.
+* **Fills.** Read from `/data/trades` for this world's orders only, each fill booked
+  once, when its trade is CONFIRMED; a FAILED trade never. The poll's cursor is carried
+  in and out of the journaled call and checkpointed. A leg that would take what is
+  booked of its order past its signed size is malformed: the read stalls, ledgered
+  (`polymarket.read_malformed`), and nothing of it is booked. A leg matched and not yet
+  final (MATCHED, MINED, RETRYING) is kept in the cursor (`nonfinal`) until its own
+  trade is CONFIRMED or FAILED: until then it is liability, unsettled in a wind-down,
+  and its order is not confirmed, whatever the order's status says. A fill the consequence
+  book cannot hold is quarantined (`polymarket.fill_quarantined`,
+  `consequence.quarantined`): its money is booked to the pot and owned by no decision,
+  and at the resolution its profit stays unattributed: a decision owns only what its
+  own lots realised.
+  An order's account is released only once `GET /data/order` confirms it terminal with
+  no more filled than was booked (wave 17b). A placement released unresolved (its
+  answer and every scheduled lookup failed) is still looked up by its hash, two a tick
+  in turn, until the venue answers, and its fills are read meanwhile: a confirmed trade
+  binds it to its decision, whose late money it is. A cancel released unresolved is
+  settled the same way, from its order's own status read by hash: cancelled, the
+  order's unfilled liability and reservation are released. A listing of trades longer than
+  one poll's page bound is read over several polls from the page it stopped at; a
+  world's read starts at the signed timestamp of its earliest order that may still fill
+  or has matched unbooked (by terminal evidence, booked fills and failed legs), less the
+  overlap, never at the wallet's history; an order over with nothing outstanding never
+  pulls the read back.
+* **Caps on the world's own records.** The venue's listings (balance, open orders,
+  positions) are separate reads that lag each other, so a live buy's exposure and
+  collateral also count every buy placement not yet booked from a CONFIRMED trade (its
+  price on what it may still fill or has matched) and the booked
+  inventory at cost; the positions listing is read page by page to an empty page (or the
+  pot is unavailable); and no buy is taken while the last reconciliation found money,
+  gone or arrived, that the books do not explain (`polymarket.drift` either way; no
+  allowance is made, so a real rounding mismatch shows as drift too). The reconciliation is
+  against the custodian's own listing, never the larger of it and the world's book: a
+  cost basis booked too high shows as drift, and a listing that lags holds new risk
+  until it catches up.
+* **Failed legs.** A leg whose trade FAILED is never booked; its quantity is kept, and
+  once the order is terminal (filled or cancelled) its matched size less its failed
+  legs is what stays reserved or counts as unsettled; once that is booked, the order's
+  unfilled liability is released in the consequence book and it is confirmed at what
+  was booked, so its account can close, and no fill is invented; the same holds for an
+  order cancelled in part with no failed leg. An order with unfilled liability whose
+  placement's answer does not say it is over is read back, two a tick in turn, until
+  the venue does. Every confirmation
+  (a cancelled order's included) confirms what matched less its failed legs. An acknowledged
+  cancel's read-back overrides a placement answer that never came.
+* **Opening first.** No live order is taken ("the polymarket pot's opening is not yet
+  read") and no fill is booked (`polymarket.poll_deferred`) before the pot's opening,
+  the baseline its reconciliation is measured from, has been read. A cancelled or
+  otherwise terminal buy reserves only what it matched and is not yet booked; a
+  rejected placement is no order of the world's and is never looked up or read.
+* **Resolution reads what is open now.** A held token's market is read one a poll, in
+  turn over the tokens the pot holds or may still come to hold: those with an order that
+  rests, is unanswered, or matched more than is booked; a token whose orders are all
+  filled and booked or cancelled leaves the rotation.
+* **Quarantine, never a raise.** A fill the consequence book cannot hold is quarantined
+  (`polymarket.fill_quarantined`), its money the pot's and no decision's, and never
+  raises out of the tick.
+* **Only the world's own, all of it.** The live wallet may hold orders and tokens that
+  another signer placed or the funder brought: a kill cancels only the orders this world
+  owns and every one of them, which are its durable placements not proven over (filled,
+  cancelled, rejected or read terminal), taken from its intents and never from a
+  listing, each cancelled by its hash, each on its own, so one failed read or cancel
+  never stops the next; the residual is bounded below by the world's own confirmed book
+  (an unresolved token cannot leave the pot but by resolution) and its resolved,
+  unredeemed custody (what it held when paid, kept until redemption evidence, which
+  this venue does not yet read), so a listing's omission never proves flat; matched but unconfirmed quantity is reported as `unsettled`
+  exposure (`wind_down_pending`), and an order, a cancel or a read the venue has not
+  answered reports `unknown`, never `flat`; its report counts only the world's orders and tokens, and
+  `polymarket.open_orders` lists only the world's orders.
+* **BUY orders only.** Version 1 of the venue takes BUY orders only
+  (`polymarket.place_limit`'s `side` is `buy`; anything else is refused before any
+  intent, "the polymarket venue takes BUY orders only"): a position is held until its
+  market resolves. A sale's cost basis would rest on an execution order the venue
+  reveals only piecemeal (across polls, pages, MATCHED and CONFIRMED, and ties within a
+  second); with buys only, what the pot holds of a token and its average cost are the
+  same whatever order its fills are read in. The opposite view is a buy of the other
+  outcome's token.
+* **Custody.** `claimed + unattributed == booked` on the pot's own books
+  (`polymarket_custody` in the summary). Every debit names a real counterparty: a buy
+  pays its price to the matched side (a token at cost, not a P&L; a post-only maker
+  pays no fee), and a resolution pays each held token its payout. Gas is spent only by a
+  redemption, which this wave leaves to the operator.
+* **Settlement.** A held position is marked at its book's midpoint each tick (inside
+  the pot's budget) and scored at the consequence backstop on that mark, the market's
+  anticipatory settlement (essay II.IV.b); the resolution, days later, closes its lots
+  at the payout and books late money without rescoring (II.III.b). A resolved token not
+  yet redeemed is valued at its payout.
+
+Every venue reply the pot reads passes the door (`world/polymarket_wire.py`) with
+three checks: IDENTITY (it is about what was asked, compared canonically), UNIQUENESS
+(each key once across the complete reply, pagination included; `wire.unique`), and
+TERMINAL MONOTONICITY (no later reply, of any status, reduces an observed liability or
+erases observed evidence: a matched leg is liability until its own trade is CONFIRMED
+or FAILED, a seen leg is never booked again, booked never falls, the lifetime
+commitment never falls). A violation is malformed: a read is unread, an acknowledgement
+uncertain.
+
+| reply | identity key | uniqueness key |
+|---|---|---|
+| `POST /order` acknowledgement | `orderID` is the signed hash | one order |
+| `POST /order` refusal (4xx) | a hash in the error text is the signed hash | one order |
+| `DELETE /order` answer | the cancelled hash is in `canceled` or `not_canceled` | each hash once in each list |
+| `GET /data/order/{hash}` | `id` is the hash asked; token, side, price, size as signed | one order |
+| `GET /data/orders` (paged) | `maker_address` is the funder (required: bound to no hash) | order id, all pages |
+| `GET /data/trades` (paged) | this world's leg: token, BUY, exact limit, size within signed; a stated `maker_address` is the funder (optional: the leg is bound to its signed hash) | trade id across the whole listing, carried with its page cursor; maker order id within a trade |
+| Data API `/positions` (paged) | `proxyWallet` is the funder (required: bound to no hash) | token, all pages |
+| `GET /balance-allowance` | asked by asset type; the pot's own key | one balance |
+| Gamma `/markets/{id}` | `id` is the market asked | outcome token within the market |
+| Gamma `/markets?clob_token_ids` | a market names the token | market id; the token in one market |
+| `GET /book` | `asset_id` is the token asked | price level a side |
+| `/data/trades`, raw (contradiction scan) | this world's hashes, any case | adds only, never raises |
+| seat and settlement reads (`/public-search`, `/markets`, `/book`, `/midpoint`) | the market id or token asked; a token named by one market | market id; outcome token |
+
+**First sight binds, forever.** Across replies one rule holds, through one helper
+(`polymarket_wire.bind`, its store `bound` in the checkpointed poll cursor): the facts
+first observed for a key are recorded, and every later reply is checked against them.
+A reply that disagrees contradicts the venue: it is ledgered as drift, buying stops for
+the world's life, the binding stands, and nothing of that reply is booked or paid. The
+pot's reconciliation also counts tokens, not only value at cost: each unresolved token
+the custodian lists must be what the pot opened with (bound at its opening) plus what
+its books hold, or the pot drifts and buying waits.
+
+| binding | key | facts bound | when bound |
+|---|---|---|---|
+| trade | trade id | this world's legs in it: order hash, token, side, price (a later row with none of them, or others, disagrees) | first sight of the trade, in any status |
+| leg | trade id, order hash, role | the most it was ever seen to match (a floor: a later report below it, CONFIRMED included, disagrees) | every sight; the floor only rises |
+| settled | trade id, order hash, role | its first terminal status (CONFIRMED or FAILED) and quantity, exactly | its first terminal sight |
+| order | order hash | the most any order read, cancel answer or placement answer said it matched (a floor; the matched quantity used is never below it, nor below its legs' floors) | every such answer; the floor only rises |
+| token | token id | its market, its outcome index, its outcome label (as a digest) | the first market reply naming it: an order's market read, a claim's lookup, a settlement read |
+| market | market id | its outcome tokens, in order | the first market reply |
+
+No venue reply is read outside the door: a test audits that every raw
+reply in the reader and the order venue is handed only to a `wire` function.
+
+
+What the owner provides before a live world: a Polygon wallet (a Deposit Wallet,
+`signature_type = 3`, or an allowlisted EOA, `0`) as `funder`, its signing key in
+`polymarket.key` (mode 0400 or 0600, read into `POLYMARKET_PRIVATE_KEY`); pUSD in it
+at most `principal_usd`; POL for the approvals and redemptions; the approvals above,
+and `GET /balance-allowance/update` once; the jurisdiction check
+(https://docs.polymarket.com/api-reference/geoblock). The first live smoke is one GTC
+buy of the market's minimum size at a price that does not cross, its lookup by hash,
+and its cancel.
+
+**Blocking step of the first live smoke: the units.** Before any live world trades, a
+smoke order must fill (as a maker), and its `GET /data/trades` row is read by hand to
+confirm the units of `size`, `matched_amount` and `price`: the parser
+(`world/polymarket_wire.py`) reads sizes as whole outcome tokens and prices as pUSD a
+token. The documented example states `size: '100000000'` on a 0.5-price trade, which
+may be six-decimal base units. Until it is confirmed, no live world runs. Meanwhile a
+leg of this world's larger than its signed size is malformed, so a base-unit report
+stalls the read visibly (`polymarket.read_malformed`) and is never booked a million
+times over. If the units are base units, the door gets one explicit conversion, and
+nothing downstream changes.
 
 ## New kinds of work: reward shapes and predicates
 

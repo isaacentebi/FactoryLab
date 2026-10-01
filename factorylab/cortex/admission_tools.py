@@ -321,7 +321,53 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
             "max_order_micro": manifest.polymarket.max_order_micro,
             "max_open_micro": manifest.polymarket.max_open_micro,
             "max_orders_per_window": manifest.polymarket.max_orders_per_window,
+            "principal_micro": manifest.polymarket.principal_micro,
+            "live_orders": manifest.polymarket.venue == "live" and manifest.polymarket.orders,
+            "order_requests_per_10s": manifest.polymarket.order_requests_per_10s,
             "rules": {
+                "principal": "When principal_micro is set, a buy is refused when the world's "
+                "lifetime signed commitment plus the buy would exceed principal_micro. The "
+                "commitment is size times limit price of every placement the world ever "
+                "signed, forever: no cancel, read-back, matched size, failed leg, "
+                "quarantine, resolution, payout or redemption gives room back, so once the "
+                "cap is used, buying stops for the world's life. Only an order that never "
+                "existed does not count: one the venue refused with a documented 4xx "
+                "refusal of its submission, whose body is exactly one documented error "
+                "naming no other order and no duplicate, or the simulated venue's "
+                "rejection, and one refused locally before it was signed; a timeout, a 5xx "
+                "or any other answer counts in full. No wallet balance or listing enters "
+                "it. Cancellations are not refused by it.",
+                "maker": "Every order, on every venue kind, is a GTC post-only limit order: "
+                "it rests as a maker, and the venue rejects one that would cross before it "
+                "executes. A maker is charged no fee, so no fee is booked; a trade that "
+                "reports this world's order as a taker, or a fee on it, at any settlement "
+                "status and on any sighting, contradicts that, read from the raw trade rows before "
+                "any is parsed: it is recorded as drift, and buying stops for the world's "
+                "life. A leg of this world's order is that signed order but for its size: its "
+                "token, a BUY at exactly its limit; what is booked of an order never passes "
+                "its signed size. A leg that is not is malformed: the read stalls, "
+                "ledgered, and nothing of it is booked. At a resolution a decision owns only "
+                "what its own lots realised; the rest stays in the pot, owned by no "
+                "decision.",
+                "live": "With live_orders, an order is signed by the pot's wallet and sent to "
+                "Polymarket's CLOB; the pot's collateral is pUSD, Polymarket's USDC-backed "
+                "token. Its identity is its EIP-712 order hash, recorded with the intent "
+                "before it is sent, and a lost answer is looked up by that hash and never "
+                "sent again. A fill is booked once, when Polymarket reports its trade "
+                "CONFIRMED. No order is taken before the pot's opening (its reconciliation "
+                "baseline) is read, and no fill is booked before it. A cancelled or otherwise"
+                " terminal order holds only what it matched and is not yet booked. A buy's "
+                "exposure and collateral also count, from the world's own records, every buy "
+                "not yet booked from a confirmed trade and its booked inventory at cost; the "
+                "positions listing is read to its end or the pot is unavailable; no buy is "
+                "taken while the pot's last reconciliation found money, gone or arrived, that "
+                "its books do not explain. The pot's own requests (orders, cancels, lookups, "
+                "fills, account, marks and a write's market read) are at most "
+                "order_requests_per_10s"
+                " in any sliding 10 s of wall time; one past it is not sent and reads as "
+                "unavailable. A placement's submission slot is taken before its intent and"
+                " signature: a placement the budget cannot send is refused there, signs "
+                "nothing and commits nothing.",
                 "arguments": "Schema, string length and token pattern checks precede dispatch. "
                 "Size and price are finite decimals, not booleans; size is positive "
                 "and price is strictly between zero and one.",
@@ -331,11 +377,12 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "meet its minimum token size. The custody pot is readable.",
                 "notional": "Ceiling-rounded micro-USD notional fits max_order_micro. A buy's "
                 "held tokens at cost plus resting buys plus batch commitments and new "
-                "notional fits max_open_micro; new notional plus possible taker fee "
-                "and batch commitments fits this pot's available USDC. A sell fits "
-                "this pot's available tokens, never another custodian's assets.",
-                "batch": "Duplicate placements are refused. Earlier buys reserve notional "
-                "and possible taker fees, and earlier orders count toward the window "
+                "notional fits max_open_micro; new notional plus batch commitments "
+                "fits this pot's available USDC. Orders are BUY "
+                "orders only; a sell is refused before any intent, and a position is held "
+                "until its market resolves.",
+                "batch": "Duplicate placements are refused. Earlier buys reserve notional, "
+                "and earlier orders count toward the window "
                 "cap. Existing intents are retries; client identities cannot change "
                 "operation or arguments.",
             },
