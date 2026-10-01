@@ -1281,16 +1281,39 @@ def _stated(value: Any) -> Decimal | None:
 def _matched(surface: PolymarketSurface, intent: dict,
              cancelled: dict[str, Decimal | None] | None = None) -> Decimal | None:
     """What a placement matched by the venue's word: an acknowledged cancel's read-back,
-    else its own answer's; None where neither states it, or the statement exceeds the
-    order's size: unknown, which counts as the whole order wherever it may have
-    executed."""
+    else its own answer's, never below the most any order read, cancel answer or trade
+    leg ever showed it to have matched (its bound floor; Sol P1, round 14: a cancel
+    underreport erased an order read's MATCHED 10); None where no answer states it, or
+    the statement exceeds the order's size: unknown, which counts as the whole order
+    wherever it may have executed."""
     order_id = str(intent.get("order_hash") or intent["result"].get("order_id"))
     matched = (_cancelled(surface) if cancelled is None else cancelled).get(order_id)
     if matched is None:
         matched = _stated(intent["result"].get("filled_size"))
+    if matched is not None:
+        bound = surface.cursor.get("bound") or {}
+        legs = sum((Decimal(str(size)) for key, size in (bound.get("leg") or {}).items()
+                    if key.rsplit(":", 2)[1] == order_id.lower()), Decimal(0))
+        matched = max(matched, Decimal(str((bound.get("order") or {}).get(
+            order_id.lower(), "0"))), legs)
     if matched is not None and matched > Decimal(str(intent["args"]["size"])):
         return None
     return matched
+
+
+def observe_matched(rt: Any, surface: PolymarketSurface, order_id: Any, matched: Any) -> None:
+    """Bind what an order read, a cancel answer or a placement answer says an order has
+    matched as its floor (first sight binds; the floor only rises): a later lower report
+    contradicts the venue and halts buying (Sol P1, round 14)."""
+    from factorylab.world import polymarket_wire as wire
+
+    stated = _stated(matched)
+    if stated is None or not order_id:
+        return
+    reason = wire.bind(surface.cursor.setdefault("bound", {}), "order",
+                       str(order_id).lower(), str(stated), floor=True)
+    if reason:
+        _contradict(rt, surface, reason, order_id=str(order_id))
 
 
 def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
@@ -1502,6 +1525,9 @@ def _record(rt: Any, surface: PolymarketSurface, client_id: str,
     surface.intents[client_id] = {**intent, "result": dict(result), "polls": polls}
     if uncertain:
         return dict(result)
+    observe_matched(rt, surface, intent["args"]["order_id"]
+                    if intent["operation"] == "polymarket.cancel"
+                    else result.get("order_id"), result.get("filled_size"))
     if intent["operation"] == "polymarket.cancel":
         if result["status"] == "cancelled":
             rt.consequences.cancel(intent["args"]["order_id"], rt.n)
@@ -1743,6 +1769,7 @@ def _settle_cancels(rt: Any, surface: PolymarketSurface) -> None:
         status = answer.get("status")
         if status not in ("cancelled", "filled", "resting"):
             continue
+        observe_matched(rt, surface, order_id, answer.get("filled_size"))
         placement_id = surface.order_ids[order_id]
         placement = surface.intents[placement_id]
         if status == "cancelled":
@@ -1835,6 +1862,7 @@ def confirm_terminal(rt: Any) -> None:
         except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
             continue
         matched = _stated(answer.get("filled_size"))
+        observe_matched(rt, surface, order.order_id, matched)
         if answer.get("status") in ("filled", "cancelled", "rejected") and matched is not None:
             intent = surface.intents[client_id]
             if answer["status"] in ("filled", "cancelled"):
@@ -1866,6 +1894,7 @@ def confirm_terminal(rt: Any) -> None:
         except Exception:  # noqa: BLE001 - an unanswered read proves nothing
             continue
         matched = _stated(answer.get("filled_size"))
+        observe_matched(rt, surface, order.order_id, matched)
         if answer.get("status") in ("filled", "cancelled") and matched is not None:
             intent = surface.intents[client_id]
             surface.intents[client_id] = {**intent, "result": {
@@ -1966,21 +1995,40 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     # #177: taking the larger hid a cost basis booked too high, and its profit). A
     # listing that lags shows as drift until it catches up, which holds new risk.
     held = held_at_cost(account)
+    listed = {str(p["token_id"]): Decimal(str(p["size"])) for p in account["positions"]}
+    store = surface.cursor.setdefault("bound", {})
     if surface.opening is None:
         surface.opening = held - surface.settled
         rt.ledger.append({"kind": "polymarket.opening", "usdc": str(surface.opening),
                           "ts": rt.clock.now_ns})
+        if surface.live:
+            # The tokens the pot opened with, bound at first sight.
+            store.setdefault("opening", {})["tokens"] = {t: str(v) for t, v in listed.items()}
     drift = held - (surface.opening + surface.settled)
     result = {"opening": str(surface.opening), "settled": str(surface.settled),
               "held_at_cost": str(held), "drift": str(drift)}
-    if abs(drift) > Decimal("0.000001"):
+    # Value at cost can balance while tokens are missing (Sol P1, round 14: a lost fill
+    # left cash spent and tokens unbooked, at the same total). Each unresolved token the
+    # custodian lists is what the pot opened with plus what its books hold.
+    opened = (store.get("opening") or {}).get("tokens") if surface.live else None
+    if opened is not None:
+        resolved = surface.cursor.get("resolved", {})
+        book = {t: Decimal(str(size)) for t, (size, _avg) in
+                surface.cursor.get("book", {}).items()}
+        tokens = (set(listed) | set(book) | set(opened)) - set(resolved)
+        missing = sorted(t for t in tokens if listed.get(t, Decimal(0)) != Decimal(
+            str(opened.get(t, "0"))) + book.get(t, Decimal(0)))
+        if missing:
+            result["tokens"] = missing[:20]
+    unexplained = abs(drift) > Decimal("0.000001") or "tokens" in result
+    if unexplained:
         rt.ledger.append({"kind": "polymarket.drift", **result, "ts": rt.clock.now_ns})
     # Astra P1 on #177: money the books do not explain, gone or arrived, leaves the
     # pot's reconciliation unknown, and new exposure waits on it (architect's decision
     # on Sol's round-7 review: unexplained money in either direction means the books
     # are wrong). No allowance is made (Sol P1: a blanket one hid real losses); a drift
     # is never booked as a fee (Codex P1).
-    surface.drifting = abs(drift) > Decimal("0.000001")
+    surface.drifting = unexplained
     return result
 
 

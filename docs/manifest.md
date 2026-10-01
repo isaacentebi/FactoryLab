@@ -2808,12 +2808,17 @@ uncertain.
 (`polymarket_wire.bind`, its store `bound` in the checkpointed poll cursor): the facts
 first observed for a key are recorded, and every later reply is checked against them.
 A reply that disagrees contradicts the venue: it is ledgered as drift, buying stops for
-the world's life, the binding stands, and nothing of that reply is booked or paid.
+the world's life, the binding stands, and nothing of that reply is booked or paid. The
+pot's reconciliation also counts tokens, not only value at cost: each unresolved token
+the custodian lists must be what the pot opened with (bound at its opening) plus what
+its books hold, or the pot drifts and buying waits.
 
 | binding | key | facts bound | when bound |
 |---|---|---|---|
-| trade | trade id | this world's legs in it: order hash, token, side, price | first sight of the trade, in any status |
+| trade | trade id | this world's legs in it: order hash, token, side, price (a later row with none of them, or others, disagrees) | first sight of the trade, in any status |
 | leg | trade id, order hash, role | the most it was ever seen to match (a floor: a later report below it, CONFIRMED included, disagrees) | every sight; the floor only rises |
+| settled | trade id, order hash, role | its first terminal status (CONFIRMED or FAILED) and quantity, exactly | its first terminal sight |
+| order | order hash | the most any order read, cancel answer or placement answer said it matched (a floor; the matched quantity used is never below it, nor below its legs' floors) | every such answer; the floor only rises |
 | token | token id | its market, its outcome index, its outcome label (as a digest) | the first market reply naming it: an order's market read, a claim's lookup, a settlement read |
 | market | market id | its outcome tokens, in order | the first market reply |
 

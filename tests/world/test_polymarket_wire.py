@@ -174,7 +174,7 @@ def test_a_foreign_leg_is_not_bound_to_this_world_s_signed_order():
     trades, _ = wire.trades_page(_page({**TRADE, "maker_orders": [
         {**LEG, "order_id": OTHER, "asset_id": "7", "side": "SELL", "price": "0.9"}]}),
         SIGNED)
-    assert trades == []
+    assert [t.legs for t in trades] == [()]
 
 
 def test_a_trades_page_keeps_only_this_world_s_legs_normalised():
@@ -187,6 +187,7 @@ def test_a_trades_page_keeps_only_this_world_s_legs_normalised():
     assert cursor == "LTE="
     assert [(t.trade_id, t.status, [(leg.order_id, leg.size) for leg in t.legs])
             for t in trades] == [("t-1", "CONFIRMED", [(OURS, Decimal(5))]),
+                                 ("t-2", "CONFIRMED", []),
                                  ("t-3", "FAILED", [(OURS, Decimal(5))])]
 
 
@@ -227,7 +228,8 @@ def test_another_party_s_id_is_any_string_and_never_this_world_s():
         {**TRADE, "taker_order_id": "0xo", "maker_orders": [
             {**LEG, "order_id": "not-a-hash"}, {**LEG, "order_id": OURS.upper()[2:]}]}),
         SIGNED)
-    assert trades == []  # "AB..." without its 0x is not a hash this world signed
+    # "AB..." without its 0x is not a hash this world signed
+    assert [t.legs for t in trades] == [()]
 
 
 def _documented(**leg):
@@ -590,3 +592,15 @@ def test_first_sight_binds_forever(kind, first, later, floor):
     assert wire.bind(store, kind, "k", first, floor=floor) is None
     assert wire.bind(store, kind, "k", later, floor=floor) is not None
     assert store[kind]["k"] == first  # the binding stands
+
+
+def test_a_search_is_checked_whole_before_it_is_cut():
+    """Sol P2 (round 14): a duplicate past the limit is still a duplicate."""
+    with pytest.raises(wire.Malformed):
+        wire.read_search(_search(MARKET, MARKET), 1)
+
+
+@pytest.mark.parametrize("mid", ["2", "-0.1", "1.0001"])
+def test_a_midpoint_outside_the_unit_interval_is_malformed(mid):
+    with pytest.raises(wire.Malformed):
+        wire.read_midpoint({"mid": mid})

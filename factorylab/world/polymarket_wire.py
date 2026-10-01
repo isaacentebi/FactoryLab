@@ -698,8 +698,9 @@ def trades_page(answer: Any, ours: dict[str, Signed], *, seen: set | None = None
                 asset = token_id(field(maker, "asset_id", "maker leg"), "maker asset_id")
                 legs.append(_leg(maker_id, asset, maker_side, matched, maker_price,
                                  own[maker_id], taker=False))
-        if legs:
-            trades.append(Trade(trade_id, status, at, instant, tuple(legs)))
+        # Every trade is returned, with this world's legs or none: a trade once bound to
+        # this world's legs is compared even when it comes back without them.
+        trades.append(Trade(trade_id, status, at, instant, tuple(legs)))
     return trades, cursor(field(page, "next_cursor", "trades page"))
 
 
@@ -861,11 +862,13 @@ def book(answer: Any, depth: int, token: str) -> dict[str, Any]:
 def read_search(answer: Any, limit: int) -> list[dict[str, Any]]:
     """Gamma's ``/public-search``: the markets it names, as ``parse_search``, each market
     once and each checked as every market is (``_read_tokens``; Sol P2, round 13)."""
-    found = parse_search(answer, limit)
+    # Every market the reply names is checked, before any is cut by ``limit`` (Sol P2,
+    # round 14).
+    found = parse_search(answer, 10**9)
     unique((d["market_id"] for d in found), "a market")
     for detail in found:
         _read_tokens(detail)
-    return found
+    return found[:limit]
 
 
 def _read_tokens(detail: dict[str, Any]) -> list[str]:
@@ -906,6 +909,8 @@ def read_market_of_token(answer: Any, token: str) -> dict[str, Any] | None:
 def read_midpoint(answer: Any) -> str | None:
     """The CLOB's ``/midpoint``: its ``mid`` as a decimal string, or None."""
     mid = _decimal(answer.get("mid")) if isinstance(answer, dict) else None
+    if mid is not None and not 0 <= mid <= 1:
+        raise Malformed("midpoint is outside [0, 1]")
     return None if mid is None else str(mid)
 
 

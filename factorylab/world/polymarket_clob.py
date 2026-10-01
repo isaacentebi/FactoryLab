@@ -949,13 +949,23 @@ class LivePolymarket(PolymarketReader):
         bound = state.setdefault("bound", {})
         nonfinal = state.setdefault("nonfinal", {})
         for trade in trades:
+            if not trade.legs and trade.trade_id not in bound.get("trade", {}):
+                continue  # another party's trade, never one of this world's
             legs = sorted([leg.order_id, signed[leg.order_id].token_id, "BUY",
                            format(leg.price.normalize(), "f"), int(leg.taker)]
                           for leg in trade.legs)
+            # A trade bound to this world's legs that comes back with none of them, or
+            # other ones, disagrees (Sol P2, round 14).
             reason = wire.bind(bound, "trade", trade.trade_id, legs)
             for leg in trade.legs:
                 key = f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}"
                 reason = reason or wire.bind(bound, "leg", key, str(leg.size), floor=True)
+                if trade.status in (TRADE_FINAL, TRADE_FAILED):
+                    # A leg's settlement, its first terminal status and quantity, is
+                    # bound exactly (Sol P1, round 14: FAILED then CONFIRMED lost a fill,
+                    # and a confirmed quantity rose unbooked).
+                    reason = reason or wire.bind(bound, "settled", key, [
+                        trade.status, format(leg.size.normalize(), "f")])
             if reason:
                 contradictions[f"{trade.trade_id}:bound"] = reason
                 continue
@@ -1110,6 +1120,13 @@ class LivePolymarket(PolymarketReader):
         for order_id in [waiting[(start + k) % len(waiting)]
                          for k in range(min(2, len(waiting)))]:
             answer = self.lookup("", order_id=order_id, signed=_signed(orders[order_id]))
+            if answer.get("filled_size") is not None:
+                # What an order read says it matched is a floor (Sol P1, round 14).
+                reason = wire.bind(state.setdefault("bound", {}), "order", order_id.lower(),
+                                   str(answer["filled_size"]), floor=True)
+                if reason:
+                    contradictions[f"{order_id}:order"] = reason
+                    continue
             if answer["status"] not in ("cancelled", "filled", "rejected"):
                 continue
             complete = _dec(answer["filled_size"]) <= _dec(
