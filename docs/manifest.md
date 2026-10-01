@@ -2794,14 +2794,25 @@ uncertain.
 | `POST /order` refusal (4xx) | a hash in the error text is the signed hash | one order |
 | `DELETE /order` answer | the cancelled hash is in `canceled` or `not_canceled` | each hash once in each list |
 | `GET /data/order/{hash}` | `id` is the hash asked; token, side, price, size as signed | one order |
-| `GET /data/orders` (paged) | a stated `maker_address` is the funder | order id, all pages |
-| `GET /data/trades` (paged) | this world's leg: token, BUY, exact limit, size within signed; a stated `maker_address` is the funder | trade id, all pages; maker order id within a trade |
-| Data API `/positions` (paged) | a stated `proxyWallet` is the funder | token, all pages |
+| `GET /data/orders` (paged) | `maker_address` is the funder (required: bound to no hash) | order id, all pages |
+| `GET /data/trades` (paged) | this world's leg: token, BUY, exact limit, size within signed; a stated `maker_address` is the funder (optional: the leg is bound to its signed hash) | trade id across the whole listing, carried with its page cursor; maker order id within a trade |
+| Data API `/positions` (paged) | `proxyWallet` is the funder (required: bound to no hash) | token, all pages |
 | `GET /balance-allowance` | asked by asset type; the pot's own key | one balance |
 | Gamma `/markets/{id}` | `id` is the market asked | outcome token within the market |
 | Gamma `/markets?clob_token_ids` | a market names the token | market id; the token in one market |
 | `GET /book` | `asset_id` is the token asked | price level a side |
 | `/data/trades`, raw (contradiction scan) | this world's hashes, any case | adds only, never raises |
+| seat and settlement reads (`/public-search`, `/markets`, `/book`, `/midpoint`) | the market id or token asked; a token named by one market | market id; outcome token |
+
+Rules across replies, each kept in the checkpointed cursor or surface and broken only as
+a contradiction that halts buying: a leg's observed matched quantity is monotone (the
+most ever observed is kept until its trade is CONFIRMED or FAILED; a smaller report
+contradicts); a trade booked is remembered durably and never booked again (a later row
+of it naming another leg of this world's contradicts); a token's market, once bound at
+an order or a claim, is immutable (a lookup naming another contradicts,
+`bind_market`). No venue reply is read outside the door: a test audits that every raw
+reply in the reader and the order venue is handed only to a `wire` function.
+
 
 What the owner provides before a live world: a Polygon wallet (a Deposit Wallet,
 `signature_type = 3`, or an allowlisted EOA, `0`) as `funder`, its signing key in

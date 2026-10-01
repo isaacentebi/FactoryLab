@@ -882,7 +882,8 @@ def open_claim(rt: Any, seat: str, token_id: str, due_tick: int) -> str | None:
         _charge_slot(rt, seat, lookup, _sends(rt))
     if listed is None:
         return NOT_LISTED_REFUSAL
-    surface.token_markets[token_id] = str(listed["market_id"])
+    if not bind_market(rt, surface, token_id, str(listed["market_id"])):
+        return "polymarket read unavailable"
     return _open(rt, reader, kind)
 
 
@@ -947,6 +948,26 @@ def _read_refusal(rt: Any, seat: str, requests: int) -> str | None:
     return None
 
 
+def bind_market(rt: Any, surface: PolymarketSurface, token_id: str, market_id: str) -> bool:
+    """Bind a token to its market, once: a token's market, once established at an order
+    or a claim, is never rewritten (Sol P1, round 12: a forecast lookup rebound a held
+    token to a foreign resolved market, which then settled the bet). A later lookup
+    naming another market contradicts the venue: it is ledgered as drift, buying stops
+    for the world's life, and the binding stands. Returns whether the lookup agrees."""
+    known = surface.token_markets.get(token_id)
+    if known is None:
+        surface.token_markets[token_id] = market_id
+        return True
+    if known == market_id:
+        return True
+    if not surface.contradicted:
+        surface.contradicted = True
+        rt.ledger.append({"kind": "polymarket.drift", "token_id": token_id,
+                          "reason": "a lookup names another market for a bound token",
+                          "bound": known, "named": market_id, "ts": rt.clock.now_ns})
+    return False
+
+
 def _write_market(rt: Any, surface: PolymarketSurface, token_id: str) -> dict | None:
     """The market listing ``token_id`` for a write's checks, through the journal and the
     world's lookup of the token (one GET by market id once it is known; a token no
@@ -959,8 +980,9 @@ def _write_market(rt: Any, surface: PolymarketSurface, token_id: str) -> dict | 
     if market_id is None:
         listed = (surface.venue.write_market_of_token(token_id) if live
                   else surface.venue.market_of_token(token_id))
-        if listed is not None:
-            surface.token_markets[token_id] = str(listed["market_id"])
+        if listed is not None and not bind_market(rt, surface, token_id,
+                                                  str(listed["market_id"])):
+            return None
         return listed
     return surface.venue.write_market(market_id) if live else surface.venue.market(market_id)
 

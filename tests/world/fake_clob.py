@@ -76,6 +76,7 @@ class FakeClob:
         self.book_of = None  # token -> the token whose book /book answers with
         self.positions_rows = None  # rewrites the whole /positions listing before paging
         self.orders_rows = None  # rewrites the /data/orders listing
+        self.funder: str | None = None  # the pot's wallet: the maker of the orders it lists
 
     # ---- the transport
 
@@ -275,7 +276,7 @@ class FakeClob:
             # The CLOB's refusal (resources/error-codes): an HTTP 400 {"error": text}.
             raise clob.ClobHttpError(400, {"error": result["error"]})
         # A trade of an order is matched no earlier than the order was signed.
-        self.orders[digest] = {"pm": result["order_id"],
+        self.orders[digest] = {"pm": result["order_id"], "maker": order["maker"],
                                "signed_s": int(order["timestamp"]) // 1000}
         self.pm_to_hash[result["order_id"]] = digest
         self._trades(self.fake._events[before:])
@@ -299,6 +300,7 @@ class FakeClob:
         status = ("MATCHED" if order["remaining"] == 0 else
                   "CANCELED" if order.get("cancelled") else "LIVE")
         return {"id": digest, "status": status, "asset_id": order["token_id"],
+                "maker_address": known.get("maker") or self.funder,
                 "side": "BUY" if order["is_buy"] else "SELL", "price": str(order["price"]),
                 "original_size": str(order["size"]), "size_matched": str(order["filled"])}
 
@@ -415,7 +417,8 @@ class FakeClob:
             if position["size"] <= 0 or token in self.hidden_positions:
                 continue
             market_id, side = self.fake._tokens[token]
-            rows.append({"asset": token, "size": str(position["size"]),
+            rows.append({"asset": token, "proxyWallet": query.get("user"),
+                         "size": str(position["size"]),
                          "avgPrice": str(position["avg_px"]), "outcomeIndex": side,
                          "outcome": self.fake._markets[market_id]["outcomes"][side],
                          "conditionId": self.fake._markets[market_id]["condition_id"]})
@@ -439,6 +442,7 @@ def live_venue(fake: FakePolymarket | None = None, *, signer=None, budget: int =
     funder = funder or signer.address
     clob_args.setdefault("owners", {funder: signer.address})
     server = FakeClob(fake, **clob_args)
+    server.funder = funder
     clock = wall or _Wall()
     venue = clob.LivePolymarket(funder=funder, signature_type=signature_type, budget=budget,
                                 signer=signer, send=server, identity=lambda: ("ns", "nonce"),

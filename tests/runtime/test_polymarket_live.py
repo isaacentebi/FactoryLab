@@ -51,6 +51,7 @@ def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None
     assert rt.polymarket.live and rt.polymarket.writes
     installed = rt.polymarket.venue.target
     server = FakeClob(fake if fake is not None else still_fake(), confirm=confirm)
+    server.funder = signer.address
     venue = clob.LivePolymarket(funder=signer.address, signature_type=0, budget=budget,
                                 signer=signer, send=server, identity=installed.identity,
                                 wall=wall or _Wall(), nonce=lambda: 7,
@@ -1738,3 +1739,127 @@ def test_a_position_listed_twice_is_never_counted_twice(paged):
         rt.polymarket.venue.target.account()
     polymarket.tick(rt)
     assert rt.polymarket.opening is None
+
+
+# --- Sol's round-12 review of #177: rules across replies -----------------------------------
+
+
+def test_an_observed_matched_leg_never_shrinks():
+    """#1: MATCHED 10, the order read CANCELED with 0, then the same trade's leg MATCHED
+    1. The most ever observed (10) stays liability, and the smaller report contradicts
+    the venue: buying stops."""
+    rt, server = live_world(max_open_micro=5_000_000)
+    handle = collateral_decision(rt)
+    order_id = buy(rt, server, handle, price="0.40")["order_id"]
+    leg = {"order_id": order_id, "asset_id": token(server), "matched_amount": "10",
+           "price": "0.40", "side": "BUY"}
+    server.trades.append({"id": "t-m", "status": "MATCHED", "match_time": signed_s(rt, order_id),
+                          "taker_order_id": OTHER, "side": "SELL", "size": "10",
+                          "price": "0.40", "maker_orders": [leg]})
+    polymarket.tick(rt)
+    rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
+                                          "args": {"order_id": order_id}}, slot="tool:1")
+    polymarket.tick(rt)
+    leg["matched_amount"] = "1"
+    polymarket.tick(rt)
+    assert polymarket._nonfinal(rt.polymarket) == {order_id: Decimal(10)}
+    assert polymarket.local_commitments(rt.polymarket)[0] == Decimal(4)
+    assert rt.polymarket.contradicted
+    refused = buy(rt, server, collateral_decision(rt), slot="tool:2", market="fake-2",
+                  price="0.40")
+    assert refused["error"] == polymarket.MAKER_ONLY_REFUSAL
+
+
+def _unrelated(n, at):
+    return {"id": f"u-{n}", "status": "CONFIRMED", "match_time": at,
+            "taker_order_id": OTHER, "side": "SELL", "size": "1", "price": "0.5",
+            "maker_orders": [{"order_id": f"0x{n:064x}", "asset_id": "7",
+                              "matched_amount": "1", "price": "0.5", "side": "BUY"}]}
+
+
+def test_a_trade_is_listed_once_across_a_paged_read_and_booked_once_ever():
+    """#2: one-row pages list t1 with A's leg, four unrelated trades, then t1 again with
+    B's leg. The read that resumes on a later poll still knows t1: the listing is
+    malformed, a visible stall, and B is never booked."""
+    rt, server = live_world()
+    a = buy(rt, server, collateral_decision(rt), price="0.40")["order_id"]
+    b = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+            price="0.30")["order_id"]
+
+    def t1(order_id, market, price):
+        return {"id": "t1", "status": "CONFIRMED", "match_time": signed_s(rt, a),
+                "taker_order_id": OTHER, "side": "SELL", "size": "10", "price": price,
+                "maker_orders": [{"order_id": order_id, "asset_id": token(server, market),
+                                  "matched_amount": "10", "price": price, "side": "BUY"}]}
+
+    server.trades = [t1(a, "fake-1", "0.40"), *[_unrelated(n, signed_s(rt, a)) for n in range(4)],
+                     t1(b, "fake-2", "0.30")]
+    server.page_size = 1
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert rt.polymarket.filled.get(a) == "10" and b not in rt.polymarket.filled
+    assert any("listed twice" in i["reason"] for i in items(rt, "polymarket.read_malformed"))
+
+
+def test_a_trade_once_booked_is_never_booked_again():
+    """#2 (b): t1 books A's leg in a complete listing; a later listing names t1 with B's
+    leg. A booked trade is remembered durably: B is never booked, and buying stops."""
+    rt, server = live_world()
+    a = buy(rt, server, collateral_decision(rt), price="0.40")["order_id"]
+    b = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+            price="0.30")["order_id"]
+
+    def t1(order_id, market, price):
+        return {"id": "t1", "status": "CONFIRMED", "match_time": signed_s(rt, a),
+                "taker_order_id": OTHER, "side": "SELL", "size": "10", "price": price,
+                "maker_orders": [{"order_id": order_id, "asset_id": token(server, market),
+                                  "matched_amount": "10", "price": price, "side": "BUY"}]}
+
+    server.trades = [t1(a, "fake-1", "0.40")]
+    polymarket.tick(rt)
+    assert rt.polymarket.filled.get(a) == "10"
+    server.trades = [t1(b, "fake-2", "0.30")]
+    polymarket.tick(rt)
+    assert b not in rt.polymarket.filled and rt.polymarket.contradicted
+
+
+def test_a_position_that_names_no_owner_is_never_this_pot_s():
+    """#3: $50 and no positions; a row with no ``proxyWallet`` reports ten tokens. A
+    position is bound to no hash this world signed, so its owner is required: the
+    listing is malformed and no opening is adopted."""
+    rt, server = live_world(opened=False)
+    server.fake._cash = Decimal(50)
+    foreign = {"asset": token(server), "size": "10", "avgPrice": "0.4", "outcomeIndex": 0,
+               "outcome": "Yes"}
+    server.positions_rows = lambda rows: [*rows, foreign]
+    polymarket.tick(rt)
+    assert rt.polymarket.opening is None
+
+
+@pytest.mark.parametrize("answer", ["two markets", "another market"])
+def test_a_token_s_market_once_bound_is_never_rebound(answer):
+    """#4: YES is bound to fake-1 by its order. A claim's lookup answers two markets
+    naming YES (resolved fake-2 first), or only fake-2: the first is malformed at the
+    door, the second contradicts the binding. Either way YES stays fake-1's."""
+    rt, server = live_world()
+    maker_fill(rt, server, collateral_decision(rt), price="0.40")
+    polymarket.tick(rt)
+    yes = token(server)
+    assert rt.polymarket.token_markets[yes] == "fake-1"
+    one, two = (server._raw_market(server.fake._markets[m]) for m in ("fake-1", "fake-2"))
+    foreign = {**two, "clobTokenIds": one["clobTokenIds"], "closed": True,
+               "umaResolutionStatus": "resolved", "outcomePrices": json.dumps(["1", "0"])}
+    rows = [foreign, one] if answer == "two markets" else [foreign]
+    real = server._gamma
+    server._gamma = lambda path, query: rows if path == "/markets" else real(path, query)
+    listed = None
+    try:
+        listed = rt.polymarket.venue.market_of_token(yes)
+    except Exception:  # noqa: BLE001 - the door refuses two markets naming one token
+        pass
+    if listed is not None:
+        assert not polymarket.bind_market(rt, rt.polymarket, yes, str(listed["market_id"]))
+        assert rt.polymarket.contradicted
+    else:
+        assert answer == "two markets"
+    assert rt.polymarket.token_markets[yes] == "fake-1"

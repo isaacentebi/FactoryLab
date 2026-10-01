@@ -523,10 +523,10 @@ class LivePolymarket(PolymarketReader):
                 headers = l1_headers(signer, now)
                 self.budget.take()
                 answer = self.send("POST", f"{self.clob_url}/auth/api-key", headers, None)
-            if not isinstance(answer, dict) or not all(
-                    isinstance(answer.get(k), str) for k in ("apiKey", "secret", "passphrase")):
-                raise PolymarketUnavailable("credentials answer has no key")
-            self._creds = Credentials(answer["apiKey"], answer["secret"], answer["passphrase"])
+            try:
+                self._creds = Credentials(*wire.credentials(answer))
+            except wire.Malformed:
+                raise PolymarketUnavailable("credentials answer has no key") from None
         return self._creds
 
     def reserve_order_slot(self) -> None:
@@ -918,7 +918,10 @@ class LivePolymarket(PolymarketReader):
         # listing has been read to its end, so no row is skipped (Codex P1 on #177).
         signed = {h: _signed(o) for h, o in orders.items()}
         trades, page_cursor, ended = [], state.get("page", FIRST_CURSOR), False
-        listed: set[str] = set()  # each trade once across this read's pages
+        # Each trade once across the whole listing, carried with the page to resume at
+        # until the listing is read to its end (Sol P1, round 12: a trade seen on one
+        # poll's pages came back on the next poll's with another leg).
+        listed: set[str] = set(state.get("listed", [])) if "page" in state else set()
         for _ in range(MAX_TRADE_PAGES):
             page = self._l2("GET", "/data/trades", query={
                 "maker_address": self.funder, "after": str(state["after"]),
@@ -932,7 +935,17 @@ class LivePolymarket(PolymarketReader):
                 ended = True
                 break
         found, pending = [], []
+        # Every trade this world ever booked, durable, with the legs it booked: a trade
+        # is never booked again, and a later row of it naming another leg of this
+        # world's contradicts the venue's own record (Sol P1, round 12).
+        booked_trades = state.setdefault("trades", {})
         for trade in trades:
+            keys = {f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}" for leg in trade.legs}
+            if trade.trade_id in booked_trades and not keys <= set(
+                    booked_trades[trade.trade_id]):
+                contradictions[f"{trade.trade_id}:rebooked"] = (
+                    "the venue reports a trade already booked with another leg")
+                continue
             for leg in trade.legs:
                 key = f"{trade.trade_id}:{leg.order_id}:{int(leg.taker)}"
                 if key in state["seen"]:
@@ -951,7 +964,15 @@ class LivePolymarket(PolymarketReader):
                     continue
                 if trade.status != TRADE_FINAL:
                     pending.append(trade.at)
-                    nonfinal[key] = [leg.order_id, str(leg.size)]
+                    # What a leg is observed to have matched never shrinks: the most
+                    # ever observed is kept until its trade is CONFIRMED or FAILED, and a
+                    # smaller report contradicts the venue (Sol P1, round 12).
+                    before = nonfinal.get(key)
+                    if before is not None and _dec(before[1]) > leg.size:
+                        contradictions[f"{key}:shrunk"] = (
+                            "the venue reports a matched leg smaller than it did before")
+                    else:
+                        nonfinal[key] = [leg.order_id, str(leg.size)]
                     continue
                 # What is booked of an order never passes its signed size (architect's
                 # rule on Sol's round-8 review): a leg that would is malformed, the read
@@ -963,6 +984,8 @@ class LivePolymarket(PolymarketReader):
                     raise wire.Malformed("a leg takes its order past its signed size")
                 nonfinal.pop(key, None)
                 state["seen"][key] = trade.at
+                booked_trades[trade.trade_id] = sorted(
+                    set(booked_trades.get(trade.trade_id, ())) | {key})
                 found.append({"instant": trade.instant, "at": trade.at, "key": key,
                               "order_id": leg.order_id, "size": leg.size,
                               "price": leg.price})
@@ -976,11 +999,13 @@ class LivePolymarket(PolymarketReader):
             events.append(event)
         if not ended:
             state["page"] = page_cursor
+            state["listed"] = sorted(listed)
             state.setdefault("pending", [])
             state["pending"] = sorted(set(state["pending"]) | set(pending))
             return events
         pending = sorted(set(pending) | set(state.pop("pending", [])))
         state.pop("page", None)
+        state.pop("listed", None)
         # The next read starts before the oldest trade not yet final (it is read again
         # until it is), else an overlap before the newest trade seen, so a trade the
         # venue lists late is still read. The seen set keeps every leg this world ever

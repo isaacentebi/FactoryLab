@@ -451,8 +451,93 @@ def test_every_reply_is_about_what_was_asked_and_names_each_key_once(parse):
         parse()
 
 
-def test_a_reply_that_states_this_pot_or_nothing_passes():
+def test_a_reply_bound_to_no_hash_must_name_this_pot():
+    """Sol P1 (round 12): a position or an open order is this pot's only by its owner
+    field, which is required; a trade leg is bound to its signed hash, so its stated
+    maker is checked only when stated."""
     assert wire.positions_page([{**POSITION, "proxyWallet": FUNDER.upper().replace(
         "0X", "0x")}], FUNDER)[0].token_id == TOKEN
-    assert wire.positions_page([POSITION], FUNDER)[0].token_id == TOKEN
+    for missing in ([POSITION], [{**POSITION, "proxyWallet": None}]):
+        with pytest.raises(wire.Malformed):
+            wire.positions_page(missing, FUNDER)
+    with pytest.raises(wire.Malformed):
+        wire.orders_page({"data": [GOOD_ORDER], "next_cursor": "LTE="}, FUNDER)
+    assert wire.trades_page(_page(TRADE), SIGNED, funder=FUNDER)[0][0].trade_id == "t-1"
     assert wire.market({**MARKET, "id": 123}, expect="123")["market_id"] == "123"
+
+
+# --- the one door, audited: no venue reply is read anywhere else -------------------------
+
+#: The transports: what they return is a venue's raw reply.
+FETCHERS = {"_gamma", "_clob", "_public", "_l2", "send", "get"}
+#: The functions that are themselves transports (they return the raw reply, unread).
+TRANSPORTS = {"_gamma", "_clob", "_public", "_l2", "http_send", "http_get_json"}
+
+
+def _raw_reads(path):
+    """Every place in ``path`` a raw venue reply is used other than by being handed to a
+    ``wire`` function: a fetch call that is not a ``wire.*`` argument, or a name bound
+    to one and used any other way."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(path).read_text())
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def fetch(node):
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in FETCHERS and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self")
+
+    def into_wire(node):
+        parent = parents.get(node)
+        return (isinstance(parent, ast.Call) and node in parent.args
+                and isinstance(parent.func, ast.Attribute)
+                and isinstance(parent.func.value, ast.Name) and parent.func.value.id == "wire")
+
+    # The simulated venue answers with its own records, never a venue's reply.
+    simulated = {node for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef)
+                 and cls.name == "FakePolymarket" for node in ast.walk(cls)}
+    found = []
+    for function in ast.walk(tree):
+        if (not isinstance(function, ast.FunctionDef) or function.name in TRANSPORTS
+                or function in simulated):
+            continue
+        bound = set()
+        for node in ast.walk(function):
+            if fetch(node):
+                parent = parents[node]
+                if isinstance(parent, ast.Assign) and all(
+                        isinstance(t, ast.Name) for t in parent.targets):
+                    bound |= {t.id for t in parent.targets}
+                elif not into_wire(node):
+                    found.append(f"{function.name}:{node.lineno}")
+        for node in ast.walk(function):
+            if (isinstance(node, ast.Name) and node.id in bound
+                    and isinstance(node.ctx, ast.Load) and not into_wire(node)):
+                found.append(f"{function.name}:{node.lineno} ({node.id})")
+    return found
+
+
+@pytest.mark.parametrize("path", ["factorylab/world/polymarket.py",
+                                  "factorylab/world/polymarket_clob.py"])
+def test_no_venue_reply_is_read_outside_the_door(path):
+    """Architect's decision on Sol's round-12 review of #177: every venue reply goes
+    through ``polymarket_wire`` (a lookup that bypassed it took the first of two
+    markets). A raw reply bound or fetched anywhere else is used only as a ``wire.*``
+    argument."""
+    assert _raw_reads(path) == []
+
+
+def test_the_audit_sees_a_raw_read():
+    import ast
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as scratch:
+        probe = Path(scratch, "probe.py")
+        probe.write_text("class R:\n    def market(self, m):\n"
+                         "        raw = self._gamma('/markets')\n"
+                         "        return raw[0]\n")
+        assert _raw_reads(probe) == ["market:4 (raw)"]
+        ast.parse(probe.read_text())

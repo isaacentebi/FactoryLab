@@ -53,9 +53,23 @@ import json
 import random
 import time
 from dataclasses import dataclass, field
-from decimal import ROUND_DOWN, Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal
 from typing import Any
 from urllib import error, parse, request
+
+from factorylab.world import polymarket_wire as wire
+from factorylab.world.polymarket_wire import (  # noqa: F401 - the readers' public names
+    MAX_DESCRIPTION_CHARS,
+    MAX_QUESTION_CHARS,
+    MAX_SOURCE_CHARS,
+    PolymarketRefused,
+    PolymarketUnavailable,
+    _decimal,
+    market_detail,
+    parse_book,
+    parse_market,
+    parse_search,
+)
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
 CLOB_URL = "https://clob.polymarket.com"
@@ -67,145 +81,11 @@ HTTP_TIMEOUT_S = 10
 #: markets is about 150 KB; a book is a few KB.
 MAX_BODY_BYTES = 2 * 1024 * 1024
 
-#: What one market's free text may weigh once parsed. The description is the
-#: market's resolution rules, written by Polymarket's market creators: outside text.
-MAX_QUESTION_CHARS = 300
-MAX_DESCRIPTION_CHARS = 2000
-MAX_SOURCE_CHARS = 300
 
 #: The tick sizes the CLOB publishes (market-details). A market states its own in
 #: ``orderPriceMinTickSize`` and the book's ``tick_size``; that is what is enforced.
 TICK_SIZES = tuple(Decimal(t) for t in ("0.1", "0.01", "0.005", "0.0025", "0.001", "0.0001"))
 
-
-class PolymarketUnavailable(RuntimeError):
-    """A read that did not answer. The message is a local reason, never a remote body."""
-
-
-class PolymarketRefused(ValueError):
-    """A request the venue will not accept, stated locally."""
-
-
-# --- parsing: the public responses, reduced to what a contract publishes -------------
-
-def _text(value: Any, limit: int) -> str | None:
-    """A bounded string or nothing; outside text never arrives unbounded."""
-    if not isinstance(value, str):
-        return None
-    text = value.strip()[:limit]
-    return text or None
-
-
-def _decimal(value: Any) -> Decimal | None:
-    """A finite decimal from a string or number field, or None. Never a float."""
-    if isinstance(value, bool) or value is None:
-        return None
-    try:
-        number = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return None
-    return number if number.is_finite() else None
-
-
-def _json_list(value: Any) -> list:
-    """Gamma encodes ``outcomes``, ``outcomePrices`` and ``clobTokenIds`` as JSON text."""
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except ValueError:
-            return []
-        return parsed if isinstance(parsed, list) else []
-    return []
-
-
-def parse_market(raw: Any) -> dict[str, Any] | None:
-    """One Gamma market as the tools publish it, or None when it is not a tradable shape.
-
-    Guarantees every number is a decimal string (never a float), every free-text
-    field is bounded, and ``outcomes`` pairs each outcome name with its CLOB token
-    id and its last Gamma price in the order Gamma lists them. A market whose
-    outcome names and token ids do not pair up is dropped rather than published
-    half-formed.
-    """
-    if not isinstance(raw, dict):
-        return None
-    market_id = raw.get("id")
-    names = _json_list(raw.get("outcomes"))
-    tokens = _json_list(raw.get("clobTokenIds"))
-    prices = _json_list(raw.get("outcomePrices"))
-    if market_id is None or not names or len(names) != len(tokens):
-        return None
-    outcomes = []
-    for index, (name, token) in enumerate(zip(names, tokens, strict=True)):
-        price = _decimal(prices[index]) if index < len(prices) else None
-        outcomes.append({"outcome": _text(name, 80) or f"outcome {index}",
-                         "outcome_index": index, "token_id": str(token),
-                         "price": None if price is None else str(price)})
-
-    def number(key: str) -> str | None:
-        value = _decimal(raw.get(key))
-        return None if value is None else str(value)
-
-    # Since 2026-03-31 a market's fee is its ``feeSchedule`` where ``feesEnabled``
-    # (market-details, "trading fees"); ``makerBaseFee``/``takerBaseFee`` are legacy.
-    schedule = raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {}
-    rate = _decimal(schedule.get("rate")) if raw.get("feesEnabled") is True else Decimal(0)
-    exponent = _decimal(schedule.get("exponent"))
-
-    return {
-        "market_id": str(market_id),
-        "condition_id": _text(raw.get("conditionId"), 80),
-        "slug": _text(raw.get("slug"), 200),
-        "question": _text(raw.get("question"), MAX_QUESTION_CHARS),
-        "end_date": _text(raw.get("endDate") or raw.get("endDateIso"), 40),
-        "resolution_source": _text(raw.get("resolutionSource"), MAX_SOURCE_CHARS),
-        "outcomes": outcomes,
-        "active": raw.get("active") is True,
-        "closed": raw.get("closed") is True,
-        "accepting_orders": raw.get("acceptingOrders") is True,
-        "order_book": raw.get("enableOrderBook") is True,
-        "tick_size": number("orderPriceMinTickSize"),
-        "min_order_size": number("orderMinSize"),
-        "neg_risk": raw.get("negRisk") is True,
-        "fees": {"enabled": raw.get("feesEnabled") is True,
-                 "rate": None if rate is None else str(rate),
-                 "exponent": None if exponent is None else str(exponent),
-                 "taker_only": schedule.get("takerOnly") is not False},
-        "uma_resolution_status": _text(raw.get("umaResolutionStatus"), 40),
-        "best_bid": number("bestBid"),
-        "best_ask": number("bestAsk"),
-        "last_trade_price": number("lastTradePrice"),
-        "volume_usd": number("volumeNum") or number("volume"),
-        "liquidity_usd": number("liquidityNum") or number("liquidity"),
-    }
-
-
-def market_detail(raw: Any) -> dict[str, Any] | None:
-    """A parsed market plus its bounded description (the market's resolution rules)."""
-    market = parse_market(raw)
-    if market is None:
-        return None
-    market["description"] = _text(raw.get("description"), MAX_DESCRIPTION_CHARS)
-    return market
-
-
-def parse_search(raw: Any, limit: int) -> list[dict[str, Any]]:
-    """The markets a public-search answer names, flattened out of their events.
-
-    Guarantees at most ``limit`` markets, each parsed by ``parse_market``, in the
-    order the API ranked their events; closed markets are kept (a resolved market
-    is a fact worth finding) and marked ``closed``.
-    """
-    events = raw.get("events") if isinstance(raw, dict) else None
-    found: list[dict[str, Any]] = []
-    for event in events if isinstance(events, list) else []:
-        for item in (event.get("markets") or []) if isinstance(event, dict) else []:
-            market = parse_market(item)
-            if market is not None and len(found) < limit:
-                found.append(market)
-    return found
 
 
 #: What a resolved binary market's outcome prices can be: one winner, or a 50-50 answer.
@@ -231,48 +111,6 @@ def payout(market: dict[str, Any], token_id: str) -> Decimal | None:
         return None
     return next((p for o, p in zip(market["outcomes"], prices, strict=True)
                  if o.get("token_id") == token_id), None)
-
-
-def _levels(rows: Any, *, best_first_descending: bool, depth: int) -> list[dict[str, str]]:
-    levels = []
-    for row in rows if isinstance(rows, list) else []:
-        price = _decimal(row.get("price")) if isinstance(row, dict) else None
-        size = _decimal(row.get("size")) if isinstance(row, dict) else None
-        if price is None or size is None or size <= 0:
-            continue
-        levels.append((price, size))
-    levels.sort(key=lambda level: level[0], reverse=best_first_descending)
-    return [{"price": str(p), "size": str(s)} for p, s in levels[:depth]]
-
-
-def parse_book(raw: Any, depth: int) -> dict[str, Any]:
-    """A CLOB book summary with both sides best first, whatever order the API sent.
-
-    The CLOB lists bids ascending and asks descending, so the best of each is
-    last; sorting here means a reader never depends on that. Guarantees at most
-    ``depth`` levels a side, every price and size a decimal string, and the
-    midpoint of the best bid and ask when both exist.
-    """
-    if not isinstance(raw, dict):
-        raise PolymarketUnavailable("book response is not an object")
-    bids = _levels(raw.get("bids"), best_first_descending=True, depth=depth)
-    asks = _levels(raw.get("asks"), best_first_descending=False, depth=depth)
-    mid = None
-    if bids and asks:
-        mid = str((Decimal(bids[0]["price"]) + Decimal(asks[0]["price"])) / 2)
-    tick = _decimal(raw.get("tick_size"))
-    minimum = _decimal(raw.get("min_order_size"))
-    return {
-        "token_id": str(raw.get("asset_id") or ""),
-        "condition_id": _text(raw.get("market"), 80),
-        "bids": bids, "asks": asks, "midpoint": mid,
-        "tick_size": None if tick is None else str(tick),
-        "min_order_size": None if minimum is None else str(minimum),
-        "neg_risk": raw.get("neg_risk") is True,
-        "last_trade_price": (None if _decimal(raw.get("last_trade_price")) is None
-                             else str(_decimal(raw.get("last_trade_price")))),
-        "timestamp_ms": _text(str(raw.get("timestamp") or ""), 20),
-    }
 
 
 # --- the public read client -------------------------------------------------------------
@@ -426,15 +264,13 @@ class PolymarketReader:
         """Markets matching ``query`` through Gamma's public search, best ranked first."""
         raw = self._gamma("/public-search", q=query, limit_per_type=limit,
                           search_profiles="false", search_tags="false")
-        return parse_search(raw, limit)
+        return wire.read_search(raw, limit)
 
     def market(self, market_id: str) -> dict[str, Any]:
         """One market's contract and rules text, by Gamma market id, as the origin holds
         it at the read (never the shared cache's copy: ``CACHE_KEY``)."""
-        detail = market_detail(self._gamma(f"/markets/{parse.quote(market_id, safe='')}"))
-        if detail is None:
-            raise PolymarketUnavailable("market response has no tradable shape")
-        return detail
+        return wire.read_market(
+            self._gamma(f"/markets/{parse.quote(market_id, safe='')}"), market_id)
 
     def market_of_token(self, token_id: str) -> dict[str, Any] | None:
         """The market listing ``token_id`` among its outcomes, closed or open, or None.
@@ -449,22 +285,19 @@ class PolymarketReader:
         cache (``CACHE_KEY``), which served a just-resolved market as still open.
         """
         for closed in ("true", None, "true"):
-            raw = self._gamma("/markets", clob_token_ids=token_id, closed=closed)
-            for row in raw if isinstance(raw, list) else []:
-                detail = market_detail(row)
-                if detail and any(o["token_id"] == token_id for o in detail["outcomes"]):
-                    return detail
+            found = wire.read_market_of_token(
+                self._gamma("/markets", clob_token_ids=token_id, closed=closed), token_id)
+            if found is not None:
+                return found
         return None
 
     def order_book(self, token_id: str, depth: int) -> dict[str, Any]:
         """The CLOB's book summary for one outcome token, best first on both sides."""
-        return parse_book(self._clob("/book", token_id=token_id), depth)
+        return wire.read_book(self._clob("/book", token_id=token_id), depth, token_id)
 
     def midpoint(self, token_id: str) -> str | None:
         """The CLOB's midpoint for one outcome token, as a decimal string."""
-        raw = self._clob("/midpoint", token_id=token_id)
-        mid = _decimal(raw.get("mid")) if isinstance(raw, dict) else None
-        return None if mid is None else str(mid)
+        return wire.read_midpoint(self._clob("/midpoint", token_id=token_id))
 
 
 #: ROUNDING_CONFIG of the official clients: decimals of price, size and USD amount per tick.

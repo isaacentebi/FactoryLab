@@ -62,6 +62,192 @@ _INTEGER = re.compile(r"[0-9]{1,30}")
 _ID = r"(?P<id>0x[0-9a-fA-F]{64})"
 
 
+#: What one market's free text may weigh once parsed. The description is the
+#: market's resolution rules, written by Polymarket's market creators: outside text.
+MAX_QUESTION_CHARS = 300
+MAX_DESCRIPTION_CHARS = 2000
+MAX_SOURCE_CHARS = 300
+
+
+class PolymarketUnavailable(RuntimeError):
+    """A read that did not answer. The message is a local reason, never a remote body."""
+
+
+class PolymarketRefused(ValueError):
+    """A request the venue will not accept, stated locally."""
+
+
+
+# --- parsing: the public responses, reduced to what a contract publishes -------------
+
+def _text(value: Any, limit: int) -> str | None:
+    """A bounded string or nothing; outside text never arrives unbounded."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()[:limit]
+    return text or None
+
+
+def _decimal(value: Any) -> Decimal | None:
+    """A finite decimal from a string or number field, or None. Never a float."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _json_list(value: Any) -> list:
+    """Gamma encodes ``outcomes``, ``outcomePrices`` and ``clobTokenIds`` as JSON text."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def parse_market(raw: Any) -> dict[str, Any] | None:
+    """One Gamma market as the tools publish it, or None when it is not a tradable shape.
+
+    Guarantees every number is a decimal string (never a float), every free-text
+    field is bounded, and ``outcomes`` pairs each outcome name with its CLOB token
+    id and its last Gamma price in the order Gamma lists them. A market whose
+    outcome names and token ids do not pair up is dropped rather than published
+    half-formed.
+    """
+    if not isinstance(raw, dict):
+        return None
+    market_id = raw.get("id")
+    names = _json_list(raw.get("outcomes"))
+    tokens = _json_list(raw.get("clobTokenIds"))
+    prices = _json_list(raw.get("outcomePrices"))
+    if market_id is None or not names or len(names) != len(tokens):
+        return None
+    outcomes = []
+    for index, (name, token) in enumerate(zip(names, tokens, strict=True)):
+        price = _decimal(prices[index]) if index < len(prices) else None
+        outcomes.append({"outcome": _text(name, 80) or f"outcome {index}",
+                         "outcome_index": index, "token_id": str(token),
+                         "price": None if price is None else str(price)})
+
+    def number(key: str) -> str | None:
+        value = _decimal(raw.get(key))
+        return None if value is None else str(value)
+
+    # Since 2026-03-31 a market's fee is its ``feeSchedule`` where ``feesEnabled``
+    # (market-details, "trading fees"); ``makerBaseFee``/``takerBaseFee`` are legacy.
+    schedule = raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {}
+    rate = _decimal(schedule.get("rate")) if raw.get("feesEnabled") is True else Decimal(0)
+    exponent = _decimal(schedule.get("exponent"))
+
+    return {
+        "market_id": str(market_id),
+        "condition_id": _text(raw.get("conditionId"), 80),
+        "slug": _text(raw.get("slug"), 200),
+        "question": _text(raw.get("question"), MAX_QUESTION_CHARS),
+        "end_date": _text(raw.get("endDate") or raw.get("endDateIso"), 40),
+        "resolution_source": _text(raw.get("resolutionSource"), MAX_SOURCE_CHARS),
+        "outcomes": outcomes,
+        "active": raw.get("active") is True,
+        "closed": raw.get("closed") is True,
+        "accepting_orders": raw.get("acceptingOrders") is True,
+        "order_book": raw.get("enableOrderBook") is True,
+        "tick_size": number("orderPriceMinTickSize"),
+        "min_order_size": number("orderMinSize"),
+        "neg_risk": raw.get("negRisk") is True,
+        "fees": {"enabled": raw.get("feesEnabled") is True,
+                 "rate": None if rate is None else str(rate),
+                 "exponent": None if exponent is None else str(exponent),
+                 "taker_only": schedule.get("takerOnly") is not False},
+        "uma_resolution_status": _text(raw.get("umaResolutionStatus"), 40),
+        "best_bid": number("bestBid"),
+        "best_ask": number("bestAsk"),
+        "last_trade_price": number("lastTradePrice"),
+        "volume_usd": number("volumeNum") or number("volume"),
+        "liquidity_usd": number("liquidityNum") or number("liquidity"),
+    }
+
+
+def market_detail(raw: Any) -> dict[str, Any] | None:
+    """A parsed market plus its bounded description (the market's resolution rules)."""
+    market = parse_market(raw)
+    if market is None:
+        return None
+    market["description"] = _text(raw.get("description"), MAX_DESCRIPTION_CHARS)
+    return market
+
+
+def parse_search(raw: Any, limit: int) -> list[dict[str, Any]]:
+    """The markets a public-search answer names, flattened out of their events.
+
+    Guarantees at most ``limit`` markets, each parsed by ``parse_market``, in the
+    order the API ranked their events; closed markets are kept (a resolved market
+    is a fact worth finding) and marked ``closed``.
+    """
+    events = raw.get("events") if isinstance(raw, dict) else None
+    found: list[dict[str, Any]] = []
+    for event in events if isinstance(events, list) else []:
+        for item in (event.get("markets") or []) if isinstance(event, dict) else []:
+            market = parse_market(item)
+            if market is not None and len(found) < limit:
+                found.append(market)
+    return found
+
+
+
+def _levels(rows: Any, *, best_first_descending: bool, depth: int) -> list[dict[str, str]]:
+    levels = []
+    for row in rows if isinstance(rows, list) else []:
+        price = _decimal(row.get("price")) if isinstance(row, dict) else None
+        size = _decimal(row.get("size")) if isinstance(row, dict) else None
+        if price is None or size is None or size <= 0:
+            continue
+        levels.append((price, size))
+    levels.sort(key=lambda level: level[0], reverse=best_first_descending)
+    return [{"price": str(p), "size": str(s)} for p, s in levels[:depth]]
+
+
+def parse_book(raw: Any, depth: int) -> dict[str, Any]:
+    """A CLOB book summary with both sides best first, whatever order the API sent.
+
+    The CLOB lists bids ascending and asks descending, so the best of each is
+    last; sorting here means a reader never depends on that. Guarantees at most
+    ``depth`` levels a side, every price and size a decimal string, and the
+    midpoint of the best bid and ask when both exist.
+    """
+    if not isinstance(raw, dict):
+        raise PolymarketUnavailable("book response is not an object")
+    bids = _levels(raw.get("bids"), best_first_descending=True, depth=depth)
+    asks = _levels(raw.get("asks"), best_first_descending=False, depth=depth)
+    mid = None
+    if bids and asks:
+        mid = str((Decimal(bids[0]["price"]) + Decimal(asks[0]["price"])) / 2)
+    tick = _decimal(raw.get("tick_size"))
+    minimum = _decimal(raw.get("min_order_size"))
+    return {
+        "token_id": str(raw.get("asset_id") or ""),
+        "condition_id": _text(raw.get("market"), 80),
+        "bids": bids, "asks": asks, "midpoint": mid,
+        "tick_size": None if tick is None else str(tick),
+        "min_order_size": None if minimum is None else str(minimum),
+        "neg_risk": raw.get("neg_risk") is True,
+        "last_trade_price": (None if _decimal(raw.get("last_trade_price")) is None
+                             else str(_decimal(raw.get("last_trade_price")))),
+        "timestamp_ms": _text(str(raw.get("timestamp") or ""), 20),
+    }
+
+
+
+
+# --- the door ---------------------------------------------------------------------------
+
+
 class Malformed(ValueError):
     """A venue answer that does not conform to its documented shape. Its text names the
     field, never the venue's own words."""
@@ -186,9 +372,17 @@ def same(found: Any, asked: Any, what: str) -> None:
 
 def stated_owner(row: dict, key: str, funder: str | None, what: str) -> None:
     """An owner field the reply states names this pot's funder (IDENTITY); one it does
-    not state is not required."""
+    not state is not required. For a leg bound to a hash this world signed."""
     if funder is not None and row.get(key) is not None:
         same(address(row[key], what), funder.lower(), what)
+
+
+def owner(row: dict, key: str, funder: str | None, what: str) -> None:
+    """The owner field names this pot's funder, required (IDENTITY, Sol P1, round 12): a
+    reply bound to no hash this world signed (a position, an open order) is this pot's
+    only by its owner field."""
+    if funder is not None:
+        same(address(field(row, key, what), what), funder.lower(), what)
 
 
 def cursor(value: Any) -> str:
@@ -363,13 +557,13 @@ def order(answer: Any, *, expect: str | None = None, signed: Signed | None = Non
 
 
 def orders_page(answer: Any, funder: str | None = None) -> tuple[list[Order], str]:
-    """A ``GET /data/orders`` page: its orders, each this pot's (its stated
-    ``maker_address`` the funder), and its ``next_cursor``. Uniqueness across the
-    complete listing is the caller's, over every page (``unique``)."""
+    """A ``GET /data/orders`` page: its orders, each this pot's (its ``maker_address``,
+    required, the funder: an open order is bound to no hash), and its ``next_cursor``.
+    Uniqueness across the complete listing is the caller's, over every page."""
     page = obj(answer, "orders page")
     listed = []
     for raw in rows(field(page, "data", "orders page"), "data"):
-        stated_owner(obj(raw, "order"), "maker_address", funder, "order maker")
+        owner(obj(raw, "order"), "maker_address", funder, "order maker")
         listed.append(order(raw))
     unique((o.order_id for o in listed), "an order")
     return listed, cursor(field(page, "next_cursor", "orders page"))
@@ -511,13 +705,13 @@ class Position:
 
 
 def positions_page(answer: Any, funder: str | None = None) -> list[Position]:
-    """A Data API ``/positions`` page (a list), each row this pot's (its stated
-    ``proxyWallet`` the funder). Uniqueness of tokens across the complete listing is
-    the caller's, over every page (``unique``)."""
+    """A Data API ``/positions`` page (a list), each row this pot's (its ``proxyWallet``,
+    required, the funder: a position is bound to no hash). Uniqueness of tokens across
+    the complete listing is the caller's, over every page."""
     found = []
     for raw in rows(answer, "positions page"):
         row = obj(raw, "position")
-        stated_owner(row, "proxyWallet", funder, "position wallet")
+        owner(row, "proxyWallet", funder, "position wallet")
         index = field(row, "outcomeIndex", "position")
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             raise Malformed("outcomeIndex is not an index")
@@ -542,8 +736,6 @@ def market(answer: Any, expect: str | None = None) -> dict[str, Any]:
     reads checked, then parsed as the tools publish it (``market_detail``). ``expect``
     is the market id asked for: the row must be that market (Sol P1, round 11: a
     foreign resolved row naming our token supplied its payout)."""
-    from factorylab.world.polymarket import market_detail
-
     row = obj(answer, "market")
     market_id = field(row, "id", "market")
     if isinstance(market_id, bool) or not isinstance(market_id, (str, int)) or market_id == "":
@@ -605,8 +797,6 @@ def book(answer: Any, depth: int, token: str) -> dict[str, Any]:
     """A CLOB ``/book`` summary for ``token``'s mark: its ``asset_id`` that token (Sol P1,
     round 10: another token's valid book became this one's mark), every level a price
     inside (0, 1) and a positive size, then best first on both sides (``parse_book``)."""
-    from factorylab.world.polymarket import parse_book
-
     row = obj(answer, "book")
     if token_id(field(row, "asset_id", "book"), "book asset_id") != token:
         raise Malformed("book is another token's")
@@ -617,6 +807,68 @@ def book(answer: Any, depth: int, token: str) -> dict[str, Any]:
         for level in levels:
             positive(field(level, "size", "book level"), "book size")
     return parse_book(row, depth)
+
+
+# --- the public reads, for seats and the kernel's settlement ------------------------------
+#
+# A seat's read and an event claim's settlement read are bound to what was asked as
+# the order path's are (IDENTITY, UNIQUENESS), and otherwise parsed leniently as the
+# tools publish them: a field a market does not state is absent from it, not fatal.
+
+
+def read_search(answer: Any, limit: int) -> list[dict[str, Any]]:
+    """Gamma's ``/public-search``: the markets it names, as ``parse_search``."""
+    return parse_search(answer, limit)
+
+
+def _read_tokens(detail: dict[str, Any]) -> list[str]:
+    tokens = [token_id(o["token_id"], "clobTokenId") for o in detail["outcomes"]]
+    unique(tokens, "an outcome token")
+    return tokens
+
+
+def read_market(answer: Any, market_id: str) -> dict[str, Any]:
+    """Gamma's ``/markets/{id}``: the market asked for (its ``id``), each outcome token
+    once and canonical."""
+    row = obj(answer, "market")
+    same(str(field(row, "id", "market")), str(market_id), "market")
+    detail = market_detail(row)
+    if detail is None:
+        raise Malformed("market has no tradable shape")
+    _read_tokens(detail)
+    return detail
+
+
+def read_market_of_token(answer: Any, token: str) -> dict[str, Any] | None:
+    """A Gamma ``/markets?clob_token_ids`` listing: the one market naming ``token``, or
+    None. Each market once; two markets naming the token is malformed (Sol P1, round
+    12: the first of two was taken, and a foreign resolved market settled our bet)."""
+    details = [d for d in (market_detail(row) for row in rows(answer, "markets")) if d]
+    unique((d["market_id"] for d in details), "a market")
+    naming = [d for d in details if token in _read_tokens(d)]
+    if len(naming) > 1:
+        raise Malformed("a token is named by two markets")
+    return naming[0] if naming else None
+
+
+def read_book(answer: Any, depth: int, token: str) -> dict[str, Any]:
+    """The CLOB's ``/book`` for ``token``: its ``asset_id`` that token."""
+    row = obj(answer, "book")
+    same(token_id(field(row, "asset_id", "book"), "book asset_id"), token, "book")
+    return parse_book(row, depth)
+
+
+def read_midpoint(answer: Any) -> str | None:
+    """The CLOB's ``/midpoint``: its ``mid`` as a decimal string, or None."""
+    mid = _decimal(answer.get("mid")) if isinstance(answer, dict) else None
+    return None if mid is None else str(mid)
+
+
+def credentials(answer: Any) -> tuple[str, str, str]:
+    """``/auth/derive-api-key`` or ``/auth/api-key``: (apiKey, secret, passphrase)."""
+    row = obj(answer, "credentials answer")
+    return tuple(text(field(row, k, "credentials answer"), k)  # type: ignore[return-value]
+                 for k in ("apiKey", "secret", "passphrase"))
 
 
 # --- the contradiction scan: the one raw reader -------------------------------------------
