@@ -2779,6 +2779,30 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   at the payout and books late money without rescoring (II.III.b). A resolved token not
   yet redeemed is valued at its payout.
 
+Every venue reply the pot reads passes the door (`world/polymarket_wire.py`) with
+three checks: IDENTITY (it is about what was asked, compared canonically), UNIQUENESS
+(each key once across the complete reply, pagination included; `wire.unique`), and
+TERMINAL MONOTONICITY (no later reply, of any status, reduces an observed liability or
+erases observed evidence: a matched leg is liability until its own trade is CONFIRMED
+or FAILED, a seen leg is never booked again, booked never falls, the lifetime
+commitment never falls). A violation is malformed: a read is unread, an acknowledgement
+uncertain.
+
+| reply | identity key | uniqueness key |
+|---|---|---|
+| `POST /order` acknowledgement | `orderID` is the signed hash | one order |
+| `POST /order` refusal (4xx) | a hash in the error text is the signed hash | one order |
+| `DELETE /order` answer | the cancelled hash is in `canceled` or `not_canceled` | each hash once in each list |
+| `GET /data/order/{hash}` | `id` is the hash asked; token, side, price, size as signed | one order |
+| `GET /data/orders` (paged) | a stated `maker_address` is the funder | order id, all pages |
+| `GET /data/trades` (paged) | this world's leg: token, BUY, exact limit, size within signed; a stated `maker_address` is the funder | trade id, all pages; maker order id within a trade |
+| Data API `/positions` (paged) | a stated `proxyWallet` is the funder | token, all pages |
+| `GET /balance-allowance` | asked by asset type; the pot's own key | one balance |
+| Gamma `/markets/{id}` | `id` is the market asked | outcome token within the market |
+| Gamma `/markets?clob_token_ids` | a market names the token | market id; the token in one market |
+| `GET /book` | `asset_id` is the token asked | price level a side |
+| `/data/trades`, raw (contradiction scan) | this world's hashes, any case | adds only, never raises |
+
 What the owner provides before a live world: a Polygon wallet (a Deposit Wallet,
 `signature_type = 3`, or an allowlisted EOA, `0`) as `funder`, its signing key in
 `polymarket.key` (mode 0400 or 0600, read into `POLYMARKET_PRIVATE_KEY`); pUSD in it

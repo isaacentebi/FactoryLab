@@ -1282,9 +1282,10 @@ def local_commitments(surface: PolymarketSurface) -> tuple[Decimal, Decimal]:
         if intent["operation"] != "polymarket.place_limit" or args.get("side") != "buy":
             continue
         result = intent["result"]
-        if result.get("status") == "rejected" or intent.get("terminal"):
-            continue
         order_id = intent.get("order_hash") or result.get("order_id")
+        if ((result.get("status") == "rejected" or intent.get("terminal"))
+                and str(order_id) not in nonfinal):
+            continue  # over by the venue's word, with no leg of it still settling
         booked = Decimal(surface.filled.get(str(order_id), "0"))
         quantity = Decimal(str(args["size"]))
         terminal = (result.get("status") in ("filled", "cancelled")
@@ -1581,10 +1582,12 @@ def _signed_hashes(surface: PolymarketSurface) -> dict[str, dict[str, Any]]:
     acknowledged, uncertain, pending or released (Sol P1, round 8, on #177), with its
     signed timestamp (ms) and whether it is not yet proven over (``open``): trades are
     read while any may still fill, from the earliest such signing time (round 9)."""
+    nonfinal = _nonfinal(surface)
     return {str(intent["order_hash"]): {
                 "timestamp": str((intent.get("order_identity") or {}).get("order", {}).get(
                     "timestamp", "0")),
-                "open": not _terminal(surface, intent)}
+                "open": (not _terminal(surface, intent)
+                         or str(intent["order_hash"]) in nonfinal)}
             for intent in surface.intents.values()
             if intent["operation"] == "polymarket.place_limit" and intent.get("order_hash")}
 
@@ -1732,9 +1735,15 @@ def _live_orders(surface: PolymarketSurface) -> dict[str, dict[str, str]]:
         # A released placement's fills are read too: a confirmed trade is the venue's
         # word that its order exists (``_settle_fill`` binds it then).
         known[surface.intents[client_id]["order_hash"]] = client_id
+    for client_id, intent in surface.intents.items():
+        # A placement with a leg still settling is read until that leg's own trade is
+        # CONFIRMED or FAILED, whatever any order status said (Sol P1, round 11: an
+        # INVALID read-back stopped the read, and the confirmed leg was never booked).
+        if intent.get("order_hash") in nonfinal:
+            known.setdefault(intent["order_hash"], client_id)
     for order_id, client_id in known.items():
         intent = surface.intents[client_id]
-        if intent["result"].get("status") == "rejected":
+        if intent["result"].get("status") == "rejected" and order_id not in nonfinal:
             continue  # never an order the venue holds (Codex P2 on #177)
         args, identity = intent["args"], intent.get("order_identity") or {}
         token = str(args["token_id"])
@@ -1970,11 +1979,14 @@ def _settle_fill(rt: Any, event: dict) -> None:
     order_id = str(event["order_id"])
     surface = rt.polymarket
     if order_id not in surface.order_ids:
-        found = next((cid for cid in _undiscovered(surface)
-                      if surface.intents[cid]["order_hash"] == order_id), None)
+        found = next((cid for cid, intent in sorted(surface.intents.items())
+                      if intent["operation"] == "polymarket.place_limit"
+                      and intent.get("order_hash") == order_id), None)
         if found is not None:
-            # A confirmed trade of a released placement: the venue accepted the order.
-            # It is bound to its decision before its fill is booked.
+            # A confirmed trade of a released placement: the venue accepted the order,
+            # whatever a read-back said (Sol P1, round 11: one read INVALID). It is
+            # bound to its decision before its fill is booked.
+            surface.intents[found] = {**surface.intents[found], "terminal": False}
             _record(rt, surface, found, {"order_id": order_id, "status": "resting",
                                          "filled_size": "0", "avg_px": None, "error": None,
                                          "evidence": "confirmed trade"})
@@ -2207,11 +2219,12 @@ def _own_hashes(surface: PolymarketSurface) -> set[str]:
     """Every order hash this world may own: those the venue acknowledged, and those of
     its placements only their durable intents know, uncertain or released unresolved
     (Sol P1 on #177), but never a rejected one."""
-    own = set(surface.order_ids)
+    own, nonfinal = set(surface.order_ids), _nonfinal(surface)
     for intent in surface.intents.values():
         if (intent["operation"] == "polymarket.place_limit" and intent.get("order_hash")
-                and intent["result"].get("status") != "rejected"
-                and not intent.get("terminal")):
+                and (intent["result"].get("status") != "rejected"
+                     and not intent.get("terminal")
+                     or str(intent["order_hash"]) in nonfinal)):
             own.add(str(intent["order_hash"]))
     return own
 
@@ -2227,7 +2240,8 @@ def _unsettled(surface: PolymarketSurface) -> tuple[list[dict], list[str]]:
         if intent["operation"] != "polymarket.place_limit" or not intent.get("order_hash"):
             continue
         order_id, result = str(intent["order_hash"]), intent["result"]
-        if result.get("status") == "rejected" or intent.get("terminal"):
+        if ((result.get("status") == "rejected" or intent.get("terminal"))
+                and order_id not in nonfinal):
             continue
         # An acknowledged cancel's read-back is the venue's word on the order, and it
         # overrides a placement answer that never came (Sol P2 on #177).

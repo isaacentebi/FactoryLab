@@ -74,6 +74,8 @@ class FakeClob:
         self.trades_rows = None  # rewrites the rows of each /data/trades page
         self.market_row = None  # rewrites each Gamma market row
         self.book_of = None  # token -> the token whose book /book answers with
+        self.positions_rows = None  # rewrites the whole /positions listing before paging
+        self.orders_rows = None  # rewrites the /data/orders listing
 
     # ---- the transport
 
@@ -119,8 +121,9 @@ class FakeClob:
             return answer if self.order_answer is None else self.order_answer(answer)
         if path == "/data/orders":
             rewrite = self.order_answer or (lambda answer: answer)
-            return {"data": [rewrite(self._order(h)) for h, o in self.orders.items()
-                             if o["pm"] in self.fake._orders and not self.orders_lag],
+            listed = [rewrite(self._order(h)) for h, o in self.orders.items()
+                      if o["pm"] in self.fake._orders and not self.orders_lag]
+            return {"data": self.orders_rows(listed) if self.orders_rows else listed,
                     "next_cursor": clob.END_CURSOR}
         if path == "/data/trades" and "id" in query:
             return {"data": [t for t in self.trades if t["id"] == query["id"]],
@@ -418,6 +421,8 @@ class FakeClob:
                          "conditionId": self.fake._markets[market_id]["condition_id"]})
         if self.position_row is not None:
             rows = [self.position_row(row) for row in rows]
+        if self.positions_rows is not None:
+            rows = self.positions_rows(rows)
         offset, limit = int(query.get("offset", "0")), int(query.get("limit", "500"))
         if self.positions_page is not None:
             limit = min(limit, self.positions_page)  # a server may cap a page

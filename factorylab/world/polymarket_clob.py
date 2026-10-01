@@ -574,7 +574,7 @@ class LivePolymarket(PolymarketReader):
         fresh = {self.CACHE_KEY: self.nonce()}
         return wire.market(self._public(
             f"{self.gamma_url}/markets/{parse.quote(market_id, safe='')}?"
-            f"{parse.urlencode(fresh)}"))
+            f"{parse.urlencode(fresh)}"), expect=market_id)
 
     def write_market_of_token(self, token_id: str) -> dict[str, Any] | None:
         """The market listing ``token_id``, looked up as ``market_of_token`` does."""
@@ -582,9 +582,13 @@ class LivePolymarket(PolymarketReader):
             query = {k: v for k, v in (("clob_token_ids", token_id), ("closed", closed),
                                        (self.CACHE_KEY, self.nonce())) if v is not None}
             raw = self._public(f"{self.gamma_url}/markets?{parse.urlencode(query)}")
-            for detail in wire.markets(raw):
-                if any(o["token_id"] == token_id for o in detail["outcomes"]):
-                    return detail
+            # The token's market is the one market of the listing that names it.
+            naming = [detail for detail in wire.markets(raw)
+                      if any(o["token_id"] == token_id for o in detail["outcomes"])]
+            if len(naming) > 1:
+                raise wire.Malformed("a token is named by two markets")
+            if naming:
+                return naming[0]
         return None
 
     def mark_book(self, token_id: str) -> dict[str, Any]:
@@ -807,8 +811,11 @@ class LivePolymarket(PolymarketReader):
             batch = wire.positions_page(self._public(
                 f"{self.data_url}/positions?" + parse.urlencode(
                     {"user": self.funder, "sizeThreshold": "0",
-                     "limit": str(POSITIONS_PAGE), "offset": str(len(rows))})))
+                     "limit": str(POSITIONS_PAGE), "offset": str(len(rows))})), self.funder)
             if not batch:
+                # Each token once across the complete listing (Sol P1, round 11: a
+                # position listed twice was counted twice, and the opening adopted it).
+                wire.unique((p.token_id for p in rows), "a position")
                 return rows
             rows.extend(batch)
         raise PolymarketUnavailable("positions did not fit the page bound")
@@ -817,9 +824,11 @@ class LivePolymarket(PolymarketReader):
         orders, cursor = [], FIRST_CURSOR
         for _ in range(MAX_TRADE_PAGES):
             page, cursor = wire.orders_page(self._l2("GET", "/data/orders",
-                                                     query={"next_cursor": cursor}))
+                                                     query={"next_cursor": cursor}),
+                                            self.funder)
             orders.extend(page)
             if cursor == END_CURSOR:
+                wire.unique((o.order_id for o in orders), "an order")
                 return orders
         raise PolymarketUnavailable("open orders did not fit the page bound")
 
@@ -909,13 +918,15 @@ class LivePolymarket(PolymarketReader):
         # listing has been read to its end, so no row is skipped (Codex P1 on #177).
         signed = {h: _signed(o) for h, o in orders.items()}
         trades, page_cursor, ended = [], state.get("page", FIRST_CURSOR), False
+        listed: set[str] = set()  # each trade once across this read's pages
         for _ in range(MAX_TRADE_PAGES):
             page = self._l2("GET", "/data/trades", query={
                 "maker_address": self.funder, "after": str(state["after"]),
                 "next_cursor": page_cursor})
             # The raw page is scanned before it is parsed (``wire.scan_contradictions``).
             contradictions.update(wire.scan_contradictions(page, scanned))
-            batch, page_cursor = wire.trades_page(page, signed)
+            batch, page_cursor = wire.trades_page(page, signed, seen=listed,
+                                                  funder=self.funder)
             trades.extend(batch)
             if page_cursor == END_CURSOR:
                 ended = True

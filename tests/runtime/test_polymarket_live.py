@@ -1663,3 +1663,78 @@ def test_a_book_for_another_token_is_never_this_token_s_mark():
     polymarket.mark(rt)
     assert coin not in rt.consequences.mids
     assert rt.polymarket.through.get(coin) == through
+
+
+# --- Sol's round-11 review of #177 ----------------------------------------------------------
+
+
+def test_an_invalid_read_back_never_erases_an_observed_pending_leg():
+    """#1: a released placement's MATCHED leg is observed; its order then reads back
+    INVALID with nothing matched. Any terminal status keeps the leg's liability and its
+    polling until that leg's own trade is CONFIRMED or FAILED, which is then booked."""
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt, server = live_world(max_open_micro=5_000_000)
+    handle = collateral_decision(rt)
+    server.lose_answer = True
+    server.fail_lookups = 10**6
+    buy(rt, server, handle, price="0.40")
+    for _ in range(UNCERTAIN_ORDER_POLLS + 1):
+        polymarket.tick(rt)
+    (intent,) = rt.polymarket.intents.values()
+    assert intent.get("unresolved")
+    order_id = intent["order_hash"]
+    row = {"id": "t-m", "status": "MATCHED", "match_time": signed_s_of(intent),
+           "taker_order_id": OTHER, "side": "SELL", "size": "10", "price": "0.40",
+           "maker_orders": [{"order_id": order_id, "asset_id": token(server),
+                             "matched_amount": "10", "price": "0.40", "side": "BUY"}]}
+    server.trades.append(row)
+    polymarket.tick(rt)
+    assert polymarket._nonfinal(rt.polymarket) == {order_id: Decimal(10)}
+    server.fail_lookups = 0
+    server.order_answer = lambda answer: {**answer, "status": "INVALID", "size_matched": "0"}
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert polymarket.local_commitments(rt.polymarket)[0] == Decimal(4)
+    again = buy(rt, server, collateral_decision(rt), slot="tool:1", market="fake-2",
+                price="0.40")
+    assert "open exposure" in again["error"]
+    row["status"] = "CONFIRMED"
+    polymarket.tick(rt)
+    assert rt.polymarket.filled.get(order_id) == "10"
+    assert polymarket._nonfinal(rt.polymarket) == {}
+
+
+def test_a_market_row_for_another_market_never_supplies_a_payout():
+    """#2: the market asked for resolved NO; the lookup answers a conforming resolved row
+    of another market that names our token with payouts [1, 0]. A market reply must be
+    the market asked for: nothing is settled against it."""
+    fake = still_fake(resolutions={"fake-1": (10**15, 1)})  # NO wins
+    rt, server = live_world(fake=fake)
+    maker_fill(rt, server, collateral_decision(rt), price="0.40")
+    polymarket.tick(rt)
+    server.market_row = lambda row: {**row, "id": "foreign-market",
+                                     "outcomePrices": json.dumps(["1", "0"])
+                                     } if row["closed"] else row
+    rt.clock.now_ns = 10**15
+    server.advance(10**15)
+    for _ in range(3):
+        polymarket.tick(rt)
+    assert not items(rt, "polymarket.resolution")
+
+
+@pytest.mark.parametrize("paged", [False, True])
+def test_a_position_listed_twice_is_never_counted_twice(paged):
+    """#3: $96 and ten tokens at $0.40, the position listed twice (in one page, or across
+    two): the listing is malformed, so no custody is published and no opening adopted."""
+    rt, server = live_world(opened=False)
+    yes = token(server)
+    server.fake._cash = Decimal(96)
+    server.fake._positions[yes] = {"size": Decimal(10), "avg_px": Decimal("0.40")}
+    server.positions_rows = lambda rows: rows + rows
+    if paged:
+        server.positions_page = 1
+    with pytest.raises(ValueError, match="listed twice"):
+        rt.polymarket.venue.target.account()
+    polymarket.tick(rt)
+    assert rt.polymarket.opening is None

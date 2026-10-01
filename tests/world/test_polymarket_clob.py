@@ -12,6 +12,7 @@ import pytest
 from eth_account import Account
 
 from factorylab.world import polymarket_clob as clob
+from factorylab.world import polymarket_wire as wire
 from factorylab.world.polymarket import PolymarketRefused, PolymarketUnavailable
 from tests.world.fake_clob import FakeClob, live_venue, make_signer
 
@@ -724,3 +725,30 @@ def test_every_request_s_slot_is_fresh_when_it_is_sent():
     venue._l2("GET", "/data/orders", query={"next_cursor": clob.FIRST_CURSOR})
     with pytest.raises(clob.BudgetSpent):
         venue._l2("GET", "/data/orders", query={"next_cursor": clob.FIRST_CURSOR})
+
+
+def test_each_key_once_across_a_complete_paged_reply():
+    """The sweep after Sol's round-11 review of #177: an open order, a trade and a
+    position each appear once across a reply's pages; a token is named by one market of
+    a lookup. Anything else is malformed, never counted twice."""
+    venue, server = live_venue()
+    token, intent = _intent(venue, server, "c-1", price="0.30")
+    venue.intent_of = {"c-1": intent}.get
+    _place(venue, token, price="0.30")
+    server.orders_rows = lambda rows: rows + rows
+    with pytest.raises(wire.Malformed, match="an order is listed twice"):
+        venue.account()
+    server.orders_rows = None
+    row = {"id": "t-1", "status": "CONFIRMED", "match_time": "100",
+           "taker_order_id": "0x" + "cd" * 32, "side": "SELL", "size": "5", "price": "0.30",
+           "maker_orders": [{"order_id": intent["order_hash"], "asset_id": token,
+                             "matched_amount": "5", "price": "0.30", "side": "BUY"}]}
+    server.trades, server.page_size = [row, dict(row)], 1
+    answer = venue.poll(now_ns=1, cursor={}, orders=_orders(intent, token))
+    assert answer["events"] == [] and answer["malformed"] == ["a trade is listed twice"]
+    twice = [server._raw_market(m) for m in server.fake._markets.values()][:2]
+    twice[1] = {**twice[1], "clobTokenIds": twice[0]["clobTokenIds"]}
+    real = server._gamma
+    server._gamma = lambda path, query: twice if path == "/markets" else real(path, query)
+    with pytest.raises(wire.Malformed, match="named by two markets"):
+        venue.write_market_of_token(token)

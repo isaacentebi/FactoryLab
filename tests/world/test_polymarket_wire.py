@@ -404,3 +404,55 @@ def test_only_a_canonical_decimal_token_id_passes(alias):
 @pytest.mark.parametrize("canonical", ["0", "7", TOKEN])
 def test_a_canonical_token_id_passes(canonical):
     assert wire.token_id(canonical) == canonical
+
+
+# --- the sweep after Sol's round-11 review: identity and uniqueness, reply by reply -------
+
+FUNDER = "0x" + "12" * 20
+FOREIGN = "0x" + "34" * 20
+
+
+@pytest.mark.parametrize("parse", [
+    # cancel answer: each order once in each list, compared canonically
+    lambda: wire.cancel_answer({"canceled": [OURS, OURS.upper().replace("0X", "0x")],
+                                "not_canceled": {}}, OURS),
+    lambda: wire.cancel_answer({"canceled": [], "not_canceled": {
+        OURS: "x", OURS.upper().replace("0X", "0x"): "y"}}, OURS),
+    # open orders: each order once; the listing this pot's
+    lambda: wire.orders_page({"data": [GOOD_ORDER, GOOD_ORDER], "next_cursor": "LTE="}),
+    lambda: wire.orders_page({"data": [{**GOOD_ORDER, "maker_address": FOREIGN}],
+                              "next_cursor": "LTE="}, FUNDER),
+    # trades: each trade once (in a page, and across pages), each maker order once in a
+    # trade, this world's leg this pot's
+    lambda: wire.trades_page(_page(TRADE, TRADE), SIGNED),
+    lambda: wire.trades_page(_page(TRADE), SIGNED, seen={"t-1"}),
+    lambda: wire.trades_page(_page({**TRADE, "maker_orders": [LEG, LEG]}), SIGNED),
+    lambda: wire.trades_page(_page({**TRADE, "maker_orders": [
+        LEG, {**LEG, "order_id": OURS.upper().replace("0X", "0x")}]}), SIGNED),
+    lambda: wire.trades_page(_page({**TRADE, "maker_orders": [
+        {**LEG, "maker_address": FOREIGN}]}), SIGNED, funder=FUNDER),
+    # positions: each token once; the listing this pot's
+    lambda: wire.positions_page([POSITION, POSITION]),
+    lambda: wire.positions_page([{**POSITION, "proxyWallet": FOREIGN}], FUNDER),
+    # a market by id: the market asked for; each outcome token once
+    lambda: wire.market({**MARKET, "id": "foreign-market"}, expect="123"),
+    lambda: wire.market({**MARKET, "clobTokenIds": f'["{TOKEN}", "{TOKEN}"]'}),
+    # a market listing: each market once
+    lambda: wire.markets([MARKET, MARKET]),
+    # a book: the token asked for; each price level once a side
+    lambda: wire.book({**BOOK, "asset_id": "100000000000000000001"}, 1, TOKEN),
+    lambda: wire.book({**BOOK, "bids": [{"price": "0.39", "size": "5"},
+                                        {"price": "0.390", "size": "5"}]}, 1, TOKEN),
+    # an order read back: the order asked for, as signed
+    lambda: wire.order({**GOOD_ORDER, "id": OTHER}, expect=OURS, signed=SIGNED[OURS]),
+])
+def test_every_reply_is_about_what_was_asked_and_names_each_key_once(parse):
+    with pytest.raises(wire.Malformed):
+        parse()
+
+
+def test_a_reply_that_states_this_pot_or_nothing_passes():
+    assert wire.positions_page([{**POSITION, "proxyWallet": FUNDER.upper().replace(
+        "0X", "0x")}], FUNDER)[0].token_id == TOKEN
+    assert wire.positions_page([POSITION], FUNDER)[0].token_id == TOKEN
+    assert wire.market({**MARKET, "id": 123}, expect="123")["market_id"] == "123"

@@ -167,6 +167,30 @@ def rows(value: Any, what: str) -> list:
     return value
 
 
+def unique(keys: Any, what: str) -> None:
+    """Each key once across a complete reply, pagination included (UNIQUENESS, the sweep
+    after Sol's round-11 review of #177: a position listed twice was counted twice)."""
+    seen: set = set()
+    for key in keys:
+        if key in seen:
+            raise Malformed(f"{what} is listed twice")
+        seen.add(key)
+
+
+def same(found: Any, asked: Any, what: str) -> None:
+    """The reply is about what was asked for, compared canonically (IDENTITY: a foreign
+    market row once supplied the payout of the market asked for)."""
+    if found != asked:
+        raise Malformed(f"{what} is not the one asked for")
+
+
+def stated_owner(row: dict, key: str, funder: str | None, what: str) -> None:
+    """An owner field the reply states names this pot's funder (IDENTITY); one it does
+    not state is not required."""
+    if funder is not None and row.get(key) is not None:
+        same(address(row[key], what), funder.lower(), what)
+
+
 def cursor(value: Any) -> str:
     if not isinstance(value, str) or not value:
         raise Malformed("next_cursor is not a cursor")
@@ -260,10 +284,14 @@ def cancel_answer(answer: Any, order_id: str) -> tuple[str, str | None]:
     ``("cancelled", None)``, ``("not_canceled", why)`` or ``("unknown", None)`` when it
     names both or neither; raises ``Malformed`` otherwise."""
     row = obj(answer, "cancel answer")
-    cancelled = {other_id(h, "canceled") for h in rows(
-        field(row, "canceled", "cancel answer"), "canceled")}
-    refused = obj(field(row, "not_canceled", "cancel answer"), "not_canceled")
-    refused = {other_id(h, "not_canceled"): v for h, v in refused.items()}
+    listed = [other_id(h, "canceled") for h in rows(
+        field(row, "canceled", "cancel answer"), "canceled")]
+    refused_raw = obj(field(row, "not_canceled", "cancel answer"), "not_canceled")
+    named = [other_id(h, "not_canceled") for h in refused_raw]
+    unique(listed, "a cancelled order")
+    unique(named, "a refused cancel")
+    cancelled = set(listed)
+    refused = dict(zip(named, refused_raw.values(), strict=True))
     ours = order_id.lower()
     if (ours in cancelled) == (ours in refused):
         return "unknown", None
@@ -334,10 +362,16 @@ def order(answer: Any, *, expect: str | None = None, signed: Signed | None = Non
     return record
 
 
-def orders_page(answer: Any) -> tuple[list[Order], str]:
-    """A ``GET /data/orders`` page: its orders and its ``next_cursor``."""
+def orders_page(answer: Any, funder: str | None = None) -> tuple[list[Order], str]:
+    """A ``GET /data/orders`` page: its orders, each this pot's (its stated
+    ``maker_address`` the funder), and its ``next_cursor``. Uniqueness across the
+    complete listing is the caller's, over every page (``unique``)."""
     page = obj(answer, "orders page")
-    listed = [order(row) for row in rows(field(page, "data", "orders page"), "data")]
+    listed = []
+    for raw in rows(field(page, "data", "orders page"), "data"):
+        stated_owner(obj(raw, "order"), "maker_address", funder, "order maker")
+        listed.append(order(raw))
+    unique((o.order_id for o in listed), "an order")
     return listed, cursor(field(page, "next_cursor", "orders page"))
 
 
@@ -366,7 +400,8 @@ class Trade:
     legs: tuple[Leg, ...]
 
 
-def trades_page(answer: Any, ours: dict[str, Signed]) -> tuple[list[Trade], str]:
+def trades_page(answer: Any, ours: dict[str, Signed], *, seen: set | None = None,
+                funder: str | None = None) -> tuple[list[Trade], str]:
     """A ``GET /data/trades`` page: the trades with a leg of one of ``ours`` (hash ->
     what this world signed), and its ``next_cursor``. Every row and every maker leg is
     parsed, whoever's it is; another party's order id is any non-empty string, and a
@@ -379,7 +414,11 @@ def trades_page(answer: Any, ours: dict[str, Signed]) -> tuple[list[Trade], str]
     never booked (Sol: a leg reported under another token's hash, or below its limit,
     invented money; a size in base units, 10^6 times the shares, is malformed too).
     The cumulative bound, what is booked plus a new leg, is kept where legs are booked
-    (``LivePolymarket._fills``)."""
+    (``LivePolymarket._fills``). Each trade id appears once across a read's complete
+    listing (``seen`` carries the ids of its earlier pages), each order once among a
+    trade's maker legs, and a leg of this world's states this pot as its maker when it
+    states one."""
+    seen = set() if seen is None else seen
     page = obj(answer, "trades page")
     own = {h.lower(): signed for h, signed in ours.items()}
     trades = []
@@ -388,6 +427,9 @@ def trades_page(answer: Any, ours: dict[str, Signed]) -> tuple[list[Trade], str]
         trade_id = text(field(row, "id", "trade"), "trade id")
         if not trade_id:
             raise Malformed("trade id is empty")
+        if trade_id in seen:
+            raise Malformed("a trade is listed twice")
+        seen.add(trade_id)
         status = text(field(row, "status", "trade"), "trade status").removeprefix(
             "TRADE_STATUS_")
         if status not in TRADE_STATUS:
@@ -405,8 +447,11 @@ def trades_page(answer: Any, ours: dict[str, Signed]) -> tuple[list[Trade], str]
         if taker in own:
             asset = token_id(field(row, "asset_id", "trade"), "trade asset_id")
             legs.append(_leg(taker, asset, side, size, paid, own[taker], taker=True))
-        for maker_raw in rows(field(row, "maker_orders", "trade"), "maker_orders"):
-            maker = obj(maker_raw, "maker leg")
+        makers = [obj(m, "maker leg") for m in rows(field(row, "maker_orders", "trade"),
+                                                      "maker_orders")]
+        unique((other_id(field(m, "order_id", "maker leg"), "maker order_id")
+                for m in makers), "a maker order in a trade")
+        for maker in makers:
             maker_id = other_id(field(maker, "order_id", "maker leg"), "maker order_id")
             maker_side = text(field(maker, "side", "maker leg"), "maker side")
             if maker_side not in ("BUY", "SELL"):
@@ -414,6 +459,7 @@ def trades_page(answer: Any, ours: dict[str, Signed]) -> tuple[list[Trade], str]
             matched = positive(field(maker, "matched_amount", "maker leg"), "matched_amount")
             maker_price = price(field(maker, "price", "maker leg"), "maker price")
             if maker_id in own:
+                stated_owner(maker, "maker_address", funder, "maker address")
                 asset = token_id(field(maker, "asset_id", "maker leg"), "maker asset_id")
                 legs.append(_leg(maker_id, asset, maker_side, matched, maker_price,
                                  own[maker_id], taker=False))
@@ -464,11 +510,14 @@ class Position:
     outcome_name: str | None
 
 
-def positions_page(answer: Any) -> list[Position]:
-    """A Data API ``/positions`` page (a list)."""
+def positions_page(answer: Any, funder: str | None = None) -> list[Position]:
+    """A Data API ``/positions`` page (a list), each row this pot's (its stated
+    ``proxyWallet`` the funder). Uniqueness of tokens across the complete listing is
+    the caller's, over every page (``unique``)."""
     found = []
     for raw in rows(answer, "positions page"):
         row = obj(raw, "position")
+        stated_owner(row, "proxyWallet", funder, "position wallet")
         index = field(row, "outcomeIndex", "position")
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             raise Malformed("outcomeIndex is not an index")
@@ -481,21 +530,26 @@ def positions_page(answer: Any) -> list[Position]:
         found.append(Position(token_id(field(row, "asset", "position"), "asset"),
                               non_negative(field(row, "size", "position"), "size"),
                               avg, index, name))
+    unique((p.token_id for p in found), "a position")
     return found
 
 
 # --- the market and its book --------------------------------------------------------------
 
 
-def market(answer: Any) -> dict[str, Any]:
+def market(answer: Any, expect: str | None = None) -> dict[str, Any]:
     """A Gamma market the pot writes on or settles against: the fields the order path
-    reads checked, then parsed as the tools publish it (``market_detail``)."""
+    reads checked, then parsed as the tools publish it (``market_detail``). ``expect``
+    is the market id asked for: the row must be that market (Sol P1, round 11: a
+    foreign resolved row naming our token supplied its payout)."""
     from factorylab.world.polymarket import market_detail
 
     row = obj(answer, "market")
     market_id = field(row, "id", "market")
     if isinstance(market_id, bool) or not isinstance(market_id, (str, int)) or market_id == "":
         raise Malformed("market id is not an id")
+    if expect is not None:
+        same(str(market_id), str(expect), "market")
     names = _listed(field(row, "outcomes", "market"), "outcomes")
     tokens = _listed(field(row, "clobTokenIds", "market"), "clobTokenIds")
     prices = _listed(field(row, "outcomePrices", "market"), "outcomePrices")
@@ -530,8 +584,11 @@ def market(answer: Any) -> dict[str, Any]:
 
 
 def markets(answer: Any) -> list[dict[str, Any]]:
-    """A Gamma ``/markets`` listing: every market in it, each parsed by ``market``."""
-    return [market(row) for row in rows(answer, "markets")]
+    """A Gamma ``/markets`` listing: every market in it, each parsed by ``market``, each
+    market once."""
+    found = [market(row) for row in rows(answer, "markets")]
+    unique((m["market_id"] for m in found), "a market")
+    return found
 
 
 def _listed(value: Any, what: str) -> list:
@@ -554,9 +611,10 @@ def book(answer: Any, depth: int, token: str) -> dict[str, Any]:
     if token_id(field(row, "asset_id", "book"), "book asset_id") != token:
         raise Malformed("book is another token's")
     for side in ("bids", "asks"):
-        for level_raw in rows(field(row, side, "book"), side):
-            level = obj(level_raw, "book level")
-            price(field(level, "price", "book level"), "book price")
+        levels = [obj(level, "book level") for level in rows(field(row, side, "book"), side)]
+        unique((price(field(level, "price", "book level"), "book price")
+                for level in levels), f"a {side[:-1]} price level")
+        for level in levels:
             positive(field(level, "size", "book level"), "book size")
     return parse_book(row, depth)
 
