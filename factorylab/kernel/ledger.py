@@ -1017,17 +1017,38 @@ class Ledger:
             # before it, or of its reason when no decision names its handle. An
             # uncertain bill is committed at its ceiling; its settlement returns the
             # over-charge, so spend is the commit less that refund, never the ceiling.
+            # A bill's capability is fixed when it is reserved; what is held is the
+            # decisions not yet settled (``choices``) and the bills not yet resolved
+            # (``bills``), never every decision (essay II.II.b, "memory").
             choices: dict[str, str] = {}
+            bills: dict[str, str] = {}
+            uncertain: set[str] = set()
             amounts: Counter = Counter()
             for item in self._iter_items():
                 kind = item.get("kind")
                 if kind == "decision.open":
                     choices[item["handle"]] = item["propensity"]["chosen"]
-                elif (kind in ("wallet.commit", "wallet.settle_uncertain")
-                      and item["ts"] >= since and (until is None or item["ts"] < until)):
-                    capability = choices.get(item["handle"], item["reason"])
-                    sign = -1 if kind == "wallet.settle_uncertain" else 1
-                    amounts[capability] += sign * item["amount"]
+                elif kind == "decision.settle":
+                    # A settled outcome is final: its decision reserves nothing more.
+                    choices.pop((item.get("return") or {}).get("handle"), None)
+                elif kind == "wallet.reserve":
+                    bills[item["reservation_id"]] = choices.get(item["handle"], item["reason"])
+                elif kind == "metering.uncertain":
+                    uncertain.add(item["reservation_id"])
+                elif kind == "wallet.release":
+                    bills.pop(item.get("reservation_id"), None)
+                elif kind in ("wallet.commit", "wallet.settle_uncertain"):
+                    rid = item.get("reservation_id")
+                    capability = (bills.get(rid) if rid in bills
+                                  else choices.get(item["handle"], item["reason"]))
+                    # A provisional commit stays held until its settlement; any other
+                    # resolution is the bill's last.
+                    if kind == "wallet.settle_uncertain" or rid not in uncertain:
+                        bills.pop(rid, None)
+                        uncertain.discard(rid)
+                    if item["ts"] >= since and (until is None or item["ts"] < until):
+                        sign = -1 if kind == "wallet.settle_uncertain" else 1
+                        amounts[capability] += sign * item["amount"]
             return {"spend": dict(sorted(amounts.items()))}
         if view == "invocations_by_assembly":
             counts = Counter(
