@@ -1,6 +1,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -246,3 +247,43 @@ def test_a_lone_surrogate_is_replaced_once_and_every_text_then_encodes():
     for whole in ("plain", "café \U0001f600"):
         assert utf8_text(whole) == whole
     assert canonical({"rationale": cut}) == canonical({"rationale": fixed})
+
+
+def test_completed_disk_history_does_not_accumulate_in_memory(tmp_path, clock,
+                                                               propensity_factory):
+    """Two cohorts of decisions opened, billed, settled and released leave the disk
+    ledger's resident index, its handle ordinals and its persisted head the same size
+    (essay II.II.b, "memory"): history is the diary's, read from it when asked, and the
+    aggregates it answers are unchanged."""
+    from factorylab.kernel.ledger import canonical
+    from factorylab.kernel.queue import DecisionQueue
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path, manifest={"world": "bounded"}, clock_ns=clock,
+                    key_path=str(path) + ".key")
+    wallet = Wallet(1_000_000, ledger, clock_ns=clock)
+    queue = DecisionQueue(ledger, clock_ns=clock)
+    sizes = []
+    for _cohort in range(2):
+        for _ in range(16):
+            handle = queue.open(actor="learner", event_id="tick", channel="outcome",
+                                propensity=propensity_factory(), deadline_ns=clock.now + 10,
+                                parent_handle=None, cost_ceiling=1)
+            wallet.commit(wallet.reserve(1, handle, "model:m"), 1)
+            clock.now += 1
+            queue.settle(handle, channel="outcome", score=0.5, status="settled",
+                         definition_version="v1", sampling_ref=None)
+            queue.release_delivered("learner", queue.delivered_count("learner"))
+            queue.release(handle, author=None)
+        ledger.append({"kind": "snapshot"})
+        sizes.append((len(canonical(ledger._Ledger__index)),
+                      len(ledger._Ledger__decision_ids),
+                      len(Path(str(path) + ".head").read_bytes())))
+    # Counters gain digits, never entries: a few bytes, not a record per decision.
+    assert sizes[1][0] - sizes[0][0] < 16 and sizes[1][1] == sizes[0][1] == 0
+    assert sizes[1][2] - sizes[0][2] < 128
+    assert len(ledger.aggregate("wallet_series")["series"]) == 1 + 32
+    assert ledger.aggregate("wallet_series")["series"][-1]["balance"] == 1_000_000 - 32
+    chosen = propensity_factory().chosen
+    assert ledger.aggregate("spend_by_capability") == {"spend": {chosen: 32}}
+    assert ledger.aggregate("action_frequencies") == {"counts": {chosen: 32}}
