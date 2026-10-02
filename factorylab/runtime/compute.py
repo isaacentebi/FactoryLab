@@ -3056,7 +3056,7 @@ class ComputeMixin:
         total = sum(executed.values())
         executed = {a: p / total for a, p in executed.items()}
         try:
-            learner.distribution_for(handle, support)
+            learner.distribution_for(handle, support, ordinal=self.n)
             learner.record_executed(handle, executed)
         except (KeyError, ValueError, RuntimeError, TypeError) as exc:
             self.ledger.append({"kind": "propensity.unlearned", "handle": handle,

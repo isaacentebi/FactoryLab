@@ -14,9 +14,12 @@ Other learners retain only the returned distribution: Hedge already consumes
 a full loss vector, and EXP3 uses the feedback's logged propensity. Custom
 learners must likewise accept feedback without a pending-round dependency.
 Handles cannot be reopened, even after settlement. Failed updates retain their
-snapshot for retry; successful updates discard it. A spent-handle tombstone is
-kept in state(), including after the last outstanding snapshot is consumed, so
-process recovery cannot reopen a spent handle.
+snapshot for retry; successful updates discard it. Every round is opened at an
+ordinal the caller issues in nondecreasing order (the runtime's event number, which
+never rewinds); state() keeps the highest ordinal issued and the handles opened at
+it, so process recovery cannot reopen a spent handle, and what is kept is bounded by
+the outstanding rounds and one ordinal's handles, never by the rounds ever opened
+(essay II.II.b, "memory").
 """
 
 from collections.abc import Sequence
@@ -42,7 +45,10 @@ class SnapshotLearner:
         self.inner = inner
         self.id = inner.id if id is None else id
         self._snapshots: dict[str, dict[str, float] | BlumMansourSnapshot] = {}
-        self._used_handles: set[str] = set()
+        # The issuance high-water mark and the handles opened at it: any handle opened
+        # before is spent or outstanding, and an ordinal below the mark is refused.
+        self._issued: int | None = None
+        self._at_issued: set[str] = set()
         # The rewards this learner's rounds actually observed, for neutral censoring.
         self.observed = ObservedRewards()
 
@@ -50,18 +56,31 @@ class SnapshotLearner:
         """Delegate the plain protocol query without creating a handle snapshot."""
         return self.inner.distribution(feasible)
 
-    def distribution_for(self, handle: str, feasible: Sequence[str]) -> dict[str, float]:
-        """Return the current policy and freeze its round under a previously unused handle."""
+    def distribution_for(self, handle: str, feasible: Sequence[str], *,
+                         ordinal: int) -> dict[str, float]:
+        """Return the current policy and freeze its round under a previously unused handle.
+
+        Guarantees no handle is ever opened twice, provided the caller never names a
+        handle again at a later ``ordinal``: an ordinal below the highest issued, or a
+        handle already opened at that ordinal or still outstanding, raises KeyError and
+        changes nothing.
+        """
         if not isinstance(handle, str):
             raise TypeError("handle must be a string")
-        if handle in self._used_handles:
+        if not isinstance(ordinal, int) or isinstance(ordinal, bool):
+            raise TypeError("ordinal must be an integer")
+        if (handle in self._snapshots or (self._issued is not None and (
+                ordinal < self._issued or (ordinal == self._issued
+                                           and handle in self._at_issued)))):
             raise KeyError(handle)
         distribution = self.inner.distribution(feasible)
         snapshot = (
             self.inner.snapshot() if isinstance(self.inner, BlumMansour) else distribution.copy()
         )
         self._snapshots[handle] = snapshot
-        self._used_handles.add(handle)
+        if ordinal != self._issued:
+            self._issued, self._at_issued = ordinal, set()
+        self._at_issued.add(handle)
         return distribution
 
     def update_for(self, handle: str, feedback: Feedback) -> None:
@@ -119,7 +138,7 @@ class SnapshotLearner:
         raise TypeError("SnapshotLearner requires update_for(handle, feedback)")
 
     def state(self) -> dict:
-        """Include exact inner state, frozen rounds, identity and all spent-handle tombstones."""
+        """Include exact inner state, frozen rounds, identity and the issuance mark."""
         snapshots = {
             handle: {"support": saved.support, "p": saved.p, "rows": saved.rows,
                      "executed": saved.executed}
@@ -132,7 +151,8 @@ class SnapshotLearner:
             id=self.id,
             inner=self.inner.state(),
             snapshots=snapshots,
-            used_handles=sorted(self._used_handles),
+            issued=self._issued,
+            at_issued=sorted(self._at_issued),
             observed=self.observed.state(),
         )
 
@@ -143,12 +163,19 @@ class SnapshotLearner:
             raise ValueError("learner algorithm mismatch")
         inner = restore_learner(state["inner"])
         learner = cls(inner, id=state["id"])
-        used = state["used_handles"]
-        if any(not isinstance(h, str) for h in used) or len(set(used)) != len(used):
+        # A state from before the issuance mark listed every spent handle instead; its
+        # handles named event numbers the runtime never issues again, so it restores
+        # with no mark and the next round sets one.
+        issued = state.get("issued")
+        at_issued = state.get("at_issued", [])
+        if issued is not None and (not isinstance(issued, int) or isinstance(issued, bool)):
+            raise ValueError("invalid issuance mark")
+        if (any(not isinstance(h, str) for h in at_issued)
+                or len(set(at_issued)) != len(at_issued) or (issued is None and at_issued)):
             raise ValueError("invalid saved handles")
-        if not set(state["snapshots"]) <= set(used):
-            raise ValueError("snapshot without a handle tombstone")
-        learner._used_handles = set(used)
+        if "used_handles" not in state and state["snapshots"] and issued is None:
+            raise ValueError("snapshot without an issuance mark")
+        learner._issued, learner._at_issued = issued, set(at_issued)
         learner.observed = ObservedRewards(state.get("observed"))
         for handle, saved in state["snapshots"].items():
             if isinstance(inner, BlumMansour):

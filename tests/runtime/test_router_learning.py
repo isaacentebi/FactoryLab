@@ -354,7 +354,7 @@ def test_the_judge_tier_is_mean_based_in_the_edition6_worlds(name):
 
 
 def _live_draw(rt, state, ev_id="p"):
-    state.learner.current_key = ev_id
+    state.learner.current_key, state.learner.current_ordinal = ev_id, rt.n
     sample = state.router.route(state.kind, lambda _: (True, ""), rt.rng,
                                 mix=rt._mix_with_standing)
     handle = rt.queue.open(actor=state.learner.id, event_id=ev_id,

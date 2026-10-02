@@ -134,6 +134,7 @@ class CompositionMixin:
         if isinstance(state.learner, _KeyedLearner):
             snapshot = f"{state.learner.id}:{self.n}:{parent_handle}:{self.stats.decisions}"
             state.learner.current_key = snapshot
+            state.learner.current_ordinal = self.n
 
         def feasible(action_id: str) -> tuple[bool, str]:
             if action_id in offered:

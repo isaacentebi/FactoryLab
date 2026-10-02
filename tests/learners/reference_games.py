@@ -134,7 +134,7 @@ def simulate_delayed(
     rng = Random(seed)
     history = []
     for index, losses in enumerate(losses_by_round):
-        probs = learner.distribution_for(str(index), game.actions)
+        probs = learner.distribution_for(str(index), game.actions, ordinal=index)
         _probabilities(probs, game.actions)
         chosen = rng.choices(game.actions, weights=[probs[a] for a in game.actions], k=1)[0]
         history.append(Round(losses, probs, chosen))
