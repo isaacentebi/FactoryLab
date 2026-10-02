@@ -423,7 +423,11 @@ class BootstrapMixin:
                              reported_cost_multiple=manifest.treasury.reported_cost_multiple,
                              locked_micro=endowment.locked_micro, release_schedule=releases)
         self.bus = Bus(self.ledger)
-        self.termination = Termination(ledger=self.ledger, bus=self.bus, clock_ns=self.clock)
+        # This world's own kill witness, injected (never a process-global hook): its
+        # kill is recorded outside the diary with its own wind-down note.
+        self.kill_witness = witness.KillWitness()
+        self.termination = Termination(ledger=self.ledger, bus=self.bus, clock_ns=self.clock,
+                                       witness=self.kill_witness)
         self.registry = Registry(self.ledger)
         self.queue = DecisionQueue(self.ledger, clock_ns=self.clock)
         self.reserve = NoveltyReserve(

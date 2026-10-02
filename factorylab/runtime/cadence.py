@@ -170,7 +170,10 @@ class GovernanceCadence:
         oldest = max((self._current_event - opened for opened in self._outstanding.values()),
                      default=0)
         settling = max(self._settling, default=0)
-        unsettled = (self._current_event - self._unsettled["opened"]) if self._unsettled else 0
+        # A censored version no longer holds the loop (the bounded wait); its recorded
+        # lower bound, and its genuine settling time when it comes, still do.
+        unsettled = (self._current_event - self._unsettled["opened"]
+                     if self._unsettled and not self._unsettled.get("censored") else 0)
         capital = self.capital_period_events() or 0
         return max(self.consequence_period_events(), oldest, settling, unsettled, capital)
 
@@ -204,12 +207,17 @@ class GovernanceCadence:
         The live versioning measures it for every version, whatever opened it (a
         charter activation, a change of the world's terms, a change of behaviour);
         ``settled`` False is a lower bound, the age at which the version was
-        superseded or censored. A version already censored is not recorded again.
+        superseded or censored. A censored version's further lower bounds are not
+        recorded again, but its genuine settlement is: the measured period is the time
+        the world took, not the time governance was willing to wait (owner's ruling on
+        s09 #2; essay II.IV.c).
         """
         if type(ticks) is not int or ticks < 0:
             raise ValueError("a settling time is a nonnegative number of ticks")
-        if version == self._censored:
+        if version == self._censored and not settled:
             return
+        if settled and self._unsettled and self._unsettled["version"] == version:
+            self._unsettled = None
         self._ledger.append({"kind": "governance.settling", "version": version,
                              "cause": cause, "settled_event": self._current_event,
                              "settling_ticks": ticks, "settled": settled})
@@ -220,18 +228,23 @@ class GovernanceCadence:
 
         A version still unsettled after ``min_ratio`` consequence periods is recorded
         with its age as a lower bound and no longer held, so one revision the world
-        never settles cannot stop the governance loop for the life of the world; the
-        bound still slows it.
+        never settles cannot stop the governance loop for the life of the world
+        (essay II.IV.b: the control apparatus is not slower than its environment); the
+        bound still slows it. A censored version stays tracked as unsettled, marked
+        ``censored``, so a boundary opened meanwhile records that it acted on an
+        unsettled distribution, and its genuine settlement is still recorded.
         """
-        if settled or opened is None or version == self._censored:
+        if settled or opened is None:
             self._unsettled = None
             return
-        self._unsettled = {"version": version, "opened": opened}
+        self._unsettled = {"version": version, "opened": opened,
+                           **({"censored": True} if version == self._censored else {})}
         age = self._current_event - opened
-        if age >= self._min_ratio * self.consequence_period_events():
+        if (version != self._censored
+                and age >= self._min_ratio * self.consequence_period_events()):
             self.record_settling(version=version, cause="censored", ticks=age, settled=False)
             self._censored = version
-            self._unsettled = None
+            self._unsettled["censored"] = True
 
     def viability(self, *, run_ticks: int | None, world_ticks: int | None) -> dict:
         """Whether a governance tier fits between sampling noise and lagging the world.
@@ -289,6 +302,9 @@ class GovernanceCadence:
             "slowest_period_ns": self.slowest_period_ns(tick_interval_ns),
             "slowest_period_events": self.slowest_period_events(),
             "outstanding_forecasts": len(self._outstanding),
+            # The version this boundary acts on while its distribution is unsettled
+            # (held or censored), or None when it has settled (owner's ruling, s09 #2).
+            "unsettled_version": self._unsettled["version"] if self._unsettled else None,
         })
         self._last_activation_ns = now_ns
         self._last_activation_event = self._current_event

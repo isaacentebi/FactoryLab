@@ -342,8 +342,7 @@ def draft(manifest, provider, world: dict, rng: random.Random,
         "lambda": {"type": "number", "minimum": 0}},
         "required": [*CARD_FIELDS, "reason"]}
     text = _prompt(
-        "Propose metric cards for the charter. The norms are fixed; the cards are the "
-        "population's to write. Give one sentence of reason per card.",
+        "Propose metric cards for the charter, with one sentence of reason per card.",
         {"norms": norms_raw(norms), "measurable_today": measurement_catalogue(),
          "world": survey_world(world)},
         {"type": "object", "properties": {"cards": {"type": "array", "items": card_schema}},
@@ -351,7 +350,13 @@ def draft(manifest, provider, world: dict, rng: random.Random,
     proposals: list[Proposal] = []
     for spec in manifest.assemblies:
         parsed = complete(provider, spec, "propose", text, calls)
-        for raw in (parsed or {}).get("cards") or []:
+        cards = (parsed or {}).get("cards")
+        if not isinstance(cards, list):
+            # An unusable reply, recorded as one: this seat offered no card.
+            if parsed is not None:
+                calls[-1].error = "malformed reply: cards is not a list"
+            continue
+        for raw in cards:
             if not isinstance(raw, dict):
                 continue
             card, price, problem = card_from(raw, norms)
@@ -362,8 +367,7 @@ def draft(manifest, provider, world: dict, rng: random.Random,
                       size=manifest.committee.seats))
     if voted:
         ballot = _prompt(
-            "Vote yes or no on each proposed metric card, with a reason for each vote. A "
-            f"card passes with {len(seats) // 2 + 1} yes votes of {len(seats)}.",
+            "Vote yes or no on each proposed metric card, with a reason for each vote.",
             {"proposals": [{"proposal": p.key, **_card_row(p.card), **(
                 {"lambda": p.price} if p.price is not None else {})} for p in voted],
              "norms": norms_raw(norms), "world": survey_world(world)},
@@ -376,8 +380,15 @@ def draft(manifest, provider, world: dict, rng: random.Random,
         for seat in seats:
             parsed = complete(provider, specs[seat.assembly_id], "vote", ballot, calls,
                               VOTE_MAX_TOKENS)
-            votes = {v.get("proposal"): v.get("vote") for v in (parsed or {}).get("votes") or []
-                     if isinstance(v, dict)}
+            raw_votes = (parsed or {}).get("votes")
+            if not isinstance(raw_votes, list):
+                if parsed is not None:
+                    calls[-1].error = "malformed reply: votes is not a list"
+                raw_votes = []  # a malformed ballot is an abstention on every card
+            # Only a vote naming a proposal by its string key, with a reason, counts.
+            votes = {v["proposal"]: v.get("vote") for v in raw_votes
+                     if isinstance(v, dict) and isinstance(v.get("proposal"), str)
+                     and isinstance(v.get("reason"), str) and v["reason"].strip()}
             for p in voted:
                 vote = votes.get(p.key)
                 p.ballots[seat.alias] = vote if isinstance(vote, bool) else None
@@ -469,8 +480,7 @@ def adopt(manifest, provider, charter_table: dict, world: dict, rng: random.Rand
                       size=manifest.committee.seats))
     specs = {a.id: a for a in manifest.assemblies}
     text = _prompt(
-        "Vote on adopting this charter whole as edition 1. The vote is adopt or reject; "
-        "it does not edit or select cards. Give one short reason.",
+        "Vote on adopting this charter whole as edition 1, with one short reason.",
         {"charter": charter_table, "world": survey_world(world),
          **({"lambda_dollars": report} if report else {})},
         {"type": "object", "properties": {"adopt": {"type": "boolean"},

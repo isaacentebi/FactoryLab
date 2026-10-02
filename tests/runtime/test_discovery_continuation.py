@@ -30,7 +30,13 @@ def runtime():
     )
 
 
-def request(rt):
+#: An answer contract a continuation can bound: ``cap_continuation`` publishes a
+#: closing round's limits in an object schema, and that schema is all a seat is told.
+ANSWER = {"type": "object", "properties": {"action": {"type": "string"},
+                                           "rationale": {"type": "string"}}}
+
+
+def request(rt, schema=None):
     seat = "seed-decider"
     handle = rt.queue.open(
         actor=seat,
@@ -48,7 +54,7 @@ def request(rt):
     return replace(
         rt._request(handle, "Choose what to do.",
                     {"kind": "Tick", "payload": {}, "world": rt._world_block()},
-                    {}, 10**15, CH_VERDICT),
+                    {} if schema is None else schema, 10**15, CH_VERDICT),
         cost_ceiling=1_000_000,
     )
 
@@ -105,14 +111,14 @@ def test_compact_discovery_invocation_receipt_and_next_decision(monkeypatch):
     # returns every held-back schema publishes its own argument names.
     assert '"tool":"catalogue.search"' in packed(prompts[0])
     assert '"substring":"flash"' in packed(prompts[0])
-    # What was retrieved is the schema the validator reads, and the seat is told it
-    # may still act on it inside this decision.
+    # What was retrieved is the schema the validator reads; the continuation carries
+    # no instruction about what to do with it (its limits are its schema).
     assert '"id":"calc"' in packed(prompts[1])
     assert '"op"' in prompts[1]
-    assert "call tools again to use what you retrieved" in prompts[1]
+    assert '"continuation"' not in prompts[1]
     # The receipt of the invocation, not a claim about it, informs the final answer.
     assert '"notional_usd":"6.000000"' in packed(prompts[2])
-    assert "continuation has been consumed" in prompts[2]
+    assert '"continuation"' not in prompts[2]
 
     calls = rows(rt, "tool.call")
     assert [(row["tool"], row["handle"], row["outcome"]) for row in calls] == [
@@ -249,14 +255,15 @@ def test_reading_on_reaches_an_addressed_outcome_and_still_acts(monkeypatch):
 
 
 def obedient(rt, monkeypatch, lookups, prompts):
-    """A seat that keeps reading while it is invited to and answers when told to stop."""
+    """A seat that keeps reading while its schema admits tool calls, and answers when the
+    published schema admits none (``cap_continuation``)."""
 
     def complete(model_request):
         prompt = "\n".join(str(message.get("content", ""))
                            for message in model_request.messages)
         prompts.append(prompt)
         index = len(prompts) - 1
-        done = "continuation has been consumed" in prompt or index >= len(lookups)
+        done = "at most 0 tool_calls" in prompt or index >= len(lookups)
         return response(model_request.model_id,
                         {"action": "hold", "rationale": "I read what I could afford."}
                         if done else {"tool_calls": [lookups[index]]})
@@ -278,7 +285,7 @@ LOOKUPS = [
 def test_a_round_is_not_bought_unless_the_final_answer_is_still_covered(monkeypatch, multiple):
     rt = lists_nothing(runtime())
     inbox(rt)
-    base = request(rt)
+    base = request(rt, ANSWER)
     reserve = rt._call_reserve(rt.assemblies["seed-decider"], base)
     assert reserve is not None and reserve > 0
     req = replace(base, cost_ceiling=multiple * reserve)
@@ -308,7 +315,7 @@ def test_a_larger_ceiling_reads_further_and_a_small_one_still_answers(monkeypatc
     for multiple in (2, 6, 40):
         rt = lists_nothing(runtime())
         inbox(rt)
-        base = request(rt)
+        base = request(rt, ANSWER)
         reserve = rt._call_reserve(rt.assemblies["seed-decider"], base)
         req = replace(base, cost_ceiling=multiple * reserve)
         prompts: list[str] = []

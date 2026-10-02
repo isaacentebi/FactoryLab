@@ -388,10 +388,81 @@ def declared_record(
     return record, reason
 
 
-def as_public(record: PropensityRecord) -> dict[str, Any]:
-    """Render a propensity as it travels: a distribution and the action taken."""
-    return {
-        "over": dict(zip(record.action_ids, record.probs, strict=True)),
-        "chosen": record.chosen,
-        "source": record.source,
-    }
+#: The vault operations a ``vault:<operation>`` label names (``effect_label``).
+VAULT_OPERATIONS = frozenset({"create", "deposit", "withdraw"})
+#: The prefix of an opaque alias for an identifier outside the published vocabulary.
+ALIAS = "other"
+_BANDS = frozenset({name for _, name in SIZE_BANDS} | {SIZE_BAND_MAX})
+#: The published domain of a judged label's operand: a score in [0, 1] at one decimal,
+#: spelled as ``action_label`` spells it ("0.0" … "1.0"). Enumerated, so membership is
+#: the whole check: no text, no non-finite and no out-of-range number is in it.
+_ONE_DECIMAL = frozenset(f"{tenth / 10:.1f}" for tenth in range(11))
+
+
+def _published_part(part: str, markets: frozenset[str]) -> bool:
+    if part in (*ACTION_CLASSES, DECLINED, MALFORMED):
+        return True
+    head, _, rest = part.partition(":")
+    if head in ("verdict", "conformity"):
+        return rest in _ONE_DECIMAL
+    if head in ("buy", "sell"):
+        coin, _, band = rest.rpartition(":")
+        return band in _BANDS and coin in markets
+    if head in ("close", "cancel", "leverage"):
+        return rest in markets
+    if head == "transfer":
+        from factorylab.world.treasury import TRANSFER_DIRECTIONS
+
+        return rest in TRANSFER_DIRECTIONS
+    if head == "vault":
+        return rest in VAULT_OPERATIONS
+    if head == "polymarket":
+        side, _, band = rest.partition(":")
+        return rest == "cancel" or (side in ("buy", "sell") and band in _BANDS)
+    return False
+
+
+def published_label(label: str, markets: frozenset[str]) -> bool:
+    """Whether ``label`` is an action identifier of the published vocabulary.
+
+    Guarantees True only for a label ``action_vocabulary`` publishes whose every
+    operand lies in its public domain: a coin in ``markets`` (upper case, as labels
+    spell it), a transfer direction, a vault operation, a size band, a one-decimal
+    verdict. Free text cannot pass as an operand, so nothing an author wrote survives.
+    """
+    return all(_published_part(part, markets) for part in label.split("+"))
+
+
+def neutral_projection(over: Mapping[str, float], chosen: str | None,
+                       markets: frozenset[str]) -> tuple[dict[str, float], str | None]:
+    """A declared distribution as it may travel to another seat: author-neutral.
+
+    Chapter II §I.b: the request is "neutral with respect to its author"; AGENTS rule 5.
+    Guarantees the same masses in the same order; every identifier either a
+    ``published_label`` or an opaque alias ``other:<n>``, numbered in declaration
+    order and fresh for this projection; and ``chosen`` mapped by the same map. The
+    original identifiers stay on the sealed record, for attribution and learning.
+    """
+    names: dict[str, str] = {}
+    aliases = 0
+    for action in over:
+        if published_label(action, markets):
+            names[action] = action
+        else:
+            aliases += 1
+            names[action] = f"{ALIAS}:{aliases}"
+    if chosen is not None and chosen not in names:
+        chosen = chosen if published_label(chosen, markets) else None
+    return ({names[a]: p for a, p in over.items()},
+            None if chosen is None else names.get(chosen, chosen))
+
+
+def as_public(record: PropensityRecord, markets: frozenset[str]) -> dict[str, Any]:
+    """Render a propensity as it travels: a distribution and the action taken.
+
+    Guarantees the identifiers are ``neutral_projection``'s, so no text the deciding
+    seat wrote reaches the seat that reads it.
+    """
+    over, chosen = neutral_projection(
+        dict(zip(record.action_ids, record.probs, strict=True)), record.chosen, markets)
+    return {"over": over, "chosen": chosen, "source": record.source}

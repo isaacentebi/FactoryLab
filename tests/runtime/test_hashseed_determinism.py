@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PROBE = """
 import hashlib, json, sys
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.resume import runtime_state
+from factorylab.runtime.resume import durable_state, runtime_state
 from factorylab.runtime.worlds import load_manifest
 
 
@@ -35,7 +35,7 @@ rt.run()
 items = [{k: v for k, v in i.items() if k not in ("hash", "prev_hash")}
          for i in rt.ledger._recovery_items()]
 print(digest(items),
-      digest(runtime_state(rt)))
+      digest(durable_state(runtime_state(rt))))
 """
 
 
@@ -56,7 +56,7 @@ def test_one_seed_writes_one_diary_and_one_checkpoint_under_any_hash_seed():
 CRASH = """
 import hashlib, json, sys
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.resume import runtime_state
+from factorylab.runtime.resume import durable_state, runtime_state
 from factorylab.runtime.worlds import load_manifest
 
 
@@ -81,12 +81,12 @@ try:
     rt.run()
 except ProcessDeath:
     pass
-print(digest(runtime_state(rt)))
+print(digest(durable_state(runtime_state(rt))))
 """
 
 RESUME = """
 import hashlib, json, sys
-from factorylab.runtime.resume import resume_runtime, runtime_state
+from factorylab.runtime.resume import durable_state, resume_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
 
 
@@ -95,7 +95,7 @@ def digest(value):
 
 restored = resume_runtime(load_manifest("scripted"), sys.argv[1])
 restored.stats.resumes = 0  # the one field a resume adds
-state = digest(runtime_state(restored))
+state = digest(durable_state(runtime_state(restored)))
 restored.stats.resumes = 1
 summary = restored.run()
 summary["stats"]["resumes"] = 0

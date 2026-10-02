@@ -406,7 +406,7 @@ class VenueMixin:
         count, and releases the seal. It runs in a ``finally``: no venue, no
         diary and no witness can prevent it.
         """
-        from factorylab.runtime import winddown, witness
+        from factorylab.runtime import winddown
 
         if self.termination.final:
             return getattr(self, "wind_down_report", dead_report())
@@ -427,9 +427,9 @@ class VenueMixin:
             if owed:
                 # The window between the mark and the seal is the only time a dead
                 # world touches a venue. It is witnessed at both ends.
-                witness.note_wind_down(wind_down=True, orders=0,
-                                       exposure_state=winddown.UNKNOWN)
-                witness.record_production_kill(self.ledger, reason)
+                self.kill_witness.note_wind_down(wind_down=True, orders=0,
+                                                 exposure_state=winddown.UNKNOWN)
+                self.kill_witness.production_kill(self.ledger, reason)
             exchange = getattr(self, "exchange", None)
             if owed and exchange is not None:
                 report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro,
@@ -458,7 +458,7 @@ class VenueMixin:
             settle_wind_down(self)  # the wind-down's P&L, to its owners, before the seal
             censor_terminal(self)  # the last step before the seal
             try:
-                witness.note_wind_down(
+                self.kill_witness.note_wind_down(
                     wind_down=owed, orders=report.get("orders", 0),
                     exposure_state=report["exposure_state"],
                     operations=report.get("operations", report.get("orders", 0)),

@@ -7,19 +7,18 @@ valid, its key opens it, its release digest matches, and nothing in it knows
 that a later terminal state occurred (cold audit F1, "backup restoration").
 This module is the record that copy cannot carry.
 
-``record_kill`` runs inside ``Termination.kill`` for every kill path (the
-operator's ``factorylab kill``, the world's own death by budget or balance, and
+A world's ``KillWitness`` runs inside its ``Termination.kill`` for every kill path
+(the operator's ``factorylab kill``, the world's own death by budget or balance, and
 the end-of-budget kill) and does three things, none of which may raise into the
-kill: it remembers the killed identity for the life of this process, it appends
-one JSON line to the local witness file, and, when ``FACTORYLAB_WITNESS_URL``
-is set, POSTs the same line. ``killed`` is what resume asks before it restores
-anything: the process record, the local file, and (when the URL is set) the
-remote receiver. With a receiver configured, the receiver's verdict is part of
-the evidence: a receiver that cannot be reached, or answers without a verdict,
-makes ``killed`` raise ``WitnessUnavailable`` and resume refuses rather than
-proceeding on the local file alone (second reading, P1-01). Without a receiver
-the local file decides; that is the weaker guarantee and ``deploy/README.md``
-says so.
+kill: it marks the world's ``Lineage`` killed (its checkpoints carry it), it appends
+one JSON line to the local witness file, and, when ``FACTORYLAB_WITNESS_URL`` is
+set, POSTs the same line. ``killed`` is what resume asks before it restores
+anything: the checkpoint's lineage, the local file, and (when the URL is set) the
+remote receiver. With a receiver configured, the receiver's verdict is part of the
+evidence: a receiver that cannot be reached, or answers without a verdict, makes
+``killed`` raise ``WitnessUnavailable`` and resume refuses rather than proceeding on
+the local file alone (second reading, P1-01). Without a receiver the local file
+decides; that is the weaker guarantee and ``deploy/README.md`` says so.
 
 The local file lives in a ``.witness`` directory that is a *sibling of the
 diary's directory*, named from the ledger path: ``runs/funded.jsonl`` is
@@ -53,8 +52,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from factorylab.kernel import termination as _termination
-
 WITNESS_DIR = ".witness"
 URL_ENV = "FACTORYLAB_WITNESS_URL"
 POST_TIMEOUT = 10.0  # seconds; the kill line is sent once
@@ -84,9 +81,32 @@ class WitnessUnavailable(RuntimeError):
     revived while the one record that could name its death is out of reach.
     """
 
-#: Identities killed in this process: ``(launch_nonce, diary_id)``. A checkpoint
-#: restored into a fresh runtime in the same process cannot revive one of these.
-_killed_here: set[tuple[str, str | None]] = set()
+class Lineage:
+    """The death of one world's lineage: the world, every checkpoint it writes and every
+    runtime restored from one of those checkpoints share this one record.
+
+    Guarantees ``killed`` is true once any runtime of the lineage is killed, so no
+    checkpoint of it revives the world in memory, where a memory-only world has no file
+    to be witnessed in. The record is owned by the lineage and carried on its
+    checkpoints (``Checkpoint.lineage``), never held by the process (no global mutable
+    state; s05 #2). A deterministic twin of the world is another lineage.
+
+    Every copy of a lineage is the lineage itself (``copy``, ``deepcopy``), so every
+    copy of a checkpoint shares the one live record, and it does not serialise: a
+    reloaded copy would be a fresh record that never saw the kill.
+    """
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def __copy__(self) -> Lineage:
+        return self
+
+    def __deepcopy__(self, memo: dict) -> Lineage:
+        return self
+
+    def __reduce__(self):
+        raise TypeError("a lineage is live state and is never serialised")
 
 
 def witness_path(ledger_path: str | os.PathLike[str]) -> Path:
@@ -204,28 +224,52 @@ def _post(url: str, line: dict, *, timeout: float) -> dict | None:
     return parsed if isinstance(parsed, dict) else {}
 
 
-#: What the kill about to happen owed the venue (edition 3, C5, R3-C): whether the
-#: manifest precommitted a wind-down, how many orders it sent, how many operations the
-#: executor accounted for, what the account said afterwards and how many records the
-#: diary refused while it ran. Set by the kill path (``runtime/venue.py``,
-#: ``runtime/cli.py``) and read once by ``record_kill``. A kill that never set it is
-#: witnessed as ``wind_down: false`` with no orders and an unknown exposure state,
-#: which is the truth about every world before the contract existed.
-_pending_wind_down: dict[str, Any] = {"wind_down": False, "orders": 0, "operations": 0,
-                                      "exposure_state": "unknown", "ledger_failures": 0}
+def _no_wind_down() -> dict[str, Any]:
+    """What a kill that never noted a wind-down is witnessed as: none, nothing sent."""
+    return {"wind_down": False, "orders": 0, "operations": 0,
+            "exposure_state": "unknown", "ledger_failures": 0}
 
 
-def note_wind_down(*, wind_down: bool, orders: int, exposure_state: str = "unknown",
-                   operations: int | None = None, ledger_failures: int = 0) -> None:
-    """Record what the next kill line should say about the venue. Never raises."""
-    _pending_wind_down["wind_down"] = bool(wind_down)
-    _pending_wind_down["orders"] = int(orders) if type(orders) is int else 0
-    _pending_wind_down["operations"] = (_pending_wind_down["orders"]
-                                        if type(operations) is not int else operations)
-    _pending_wind_down["exposure_state"] = (exposure_state
-                                            if exposure_state in EXPOSURE_STATES else "unknown")
-    _pending_wind_down["ledger_failures"] = (int(ledger_failures)
-                                             if type(ledger_failures) is int else 0)
+class KillWitness:
+    """One world's kill witness: the hook its ``Termination`` calls, and its own note.
+
+    ``note`` is what the kill about to happen owed the venue (edition 3, C5, R3-C):
+    whether the manifest precommitted a wind-down, how many orders it sent, how many
+    operations the executor accounted for, what the account said afterwards and how
+    many records the diary refused while it ran. Set by that world's kill path
+    (``runtime/venue.py``, ``runtime/cli.py``) and read once by its kill. Guarantees
+    one world's note never reaches another world's kill line (no global mutable
+    state; s05 #2). A kill that never set it is witnessed as ``wind_down: false``
+    with no orders and an unknown exposure state.
+    """
+
+    def __init__(self, lineage: Lineage | None = None) -> None:
+        self.note = _no_wind_down()
+        #: The lineage this world belongs to; a restore adopts its checkpoint's.
+        self.lineage = lineage if lineage is not None else Lineage()
+
+    def note_wind_down(self, *, wind_down: bool, orders: int,
+                       exposure_state: str = "unknown", operations: int | None = None,
+                       ledger_failures: int = 0) -> None:
+        """Record what this world's next kill line should say about the venue. Never raises."""
+        orders = int(orders) if type(orders) is int else 0
+        self.note = {
+            "wind_down": bool(wind_down), "orders": orders,
+            "operations": orders if type(operations) is not int else operations,
+            "exposure_state": exposure_state if exposure_state in EXPOSURE_STATES
+            else "unknown",
+            "ledger_failures": int(ledger_failures) if type(ledger_failures) is int else 0}
+
+    def __call__(self, ledger, reason: str) -> dict | None:
+        """``record_kill`` with this world's note, which the kill consumes."""
+        self.lineage.killed = True
+        note, self.note = self.note, _no_wind_down()  # one note belongs to one kill
+        return _write(ledger, reason, stage=KILL, note=note)
+
+    def production_kill(self, ledger, reason: str) -> dict | None:
+        """``record_production_kill`` with this world's note, which stays for the kill."""
+        self.lineage.killed = True
+        return _write(ledger, reason, stage=PRODUCTION, note=self.note)
 
 
 def kill_line(*, world: str | None, launch_nonce: str | None, release_digest: str | None,
@@ -262,33 +306,32 @@ def kill_line(*, world: str | None, launch_nonce: str | None, release_digest: st
     return line
 
 
-def _write(ledger, reason: str, *, stage: str, clear: bool) -> dict | None:
-    """Write one kill line for ``ledger``: process memory, both local files, the receiver.
+def _write(ledger, reason: str, *, stage: str, note: dict[str, Any] | None = None
+           ) -> dict | None:
+    """Write one kill line for ``ledger``: both local files and the receiver.
 
     ``stage`` is ``production_kill`` for the line written before the wind-down
     executor runs and ``kill`` for the one written with the terminal event. Both
     say the world is dead; only the second can know what the venue was left
-    holding. Never raises.
+    holding. ``note`` is the world's wind-down note (``KillWitness``); without one,
+    no wind-down. Never raises.
     """
+    note = note if note is not None else _no_wind_down()
     try:
         identity = ledger.identity()
         nonce, diary = identity.get("launch_nonce"), ledger.diary_id
-        if nonce is not None:
-            _killed_here.add((nonce, diary))
         path = ledger.path
         if path is None:
             return None
         line = kill_line(world=identity.get("world"), launch_nonce=nonce,
                          release_digest=identity.get("release_digest"),
                          ledger_head=ledger.byte_hash(), diary=diary, reason=reason,
-                         wind_down=_pending_wind_down["wind_down"],
-                         wind_down_orders=_pending_wind_down["orders"],
-                         exposure_state=_pending_wind_down["exposure_state"],
-                         operations=_pending_wind_down["operations"],
-                         ledger_failures=_pending_wind_down["ledger_failures"])
+                         wind_down=note["wind_down"],
+                         wind_down_orders=note["orders"],
+                         exposure_state=note["exposure_state"],
+                         operations=note["operations"],
+                         ledger_failures=note["ledger_failures"])
         line["stage"] = stage
-        if clear:
-            note_wind_down(wind_down=False, orders=0)  # one note belongs to one kill
         # Append first: the local files are the record; the receiver holds a copy.
         # The identity-keyed file is the one a renamed diary still resolves to.
         _append(witness_path(path), line)
@@ -305,15 +348,16 @@ def _write(ledger, reason: str, *, stage: str, clear: bool) -> dict | None:
 
 
 def record_kill(ledger, reason: str) -> dict | None:
-    """Witness a kill for ``ledger`` in the process, the local files and the receiver.
+    """Witness a kill for ``ledger`` in the local files and the receiver.
 
-    Called by ``Termination.kill`` after the terminal event is in the diary. Never
+    Called by ``Termination.kill`` (as a world's ``KillWitness``, or bound directly by
+    a caller with no wind-down to note) after the terminal event is in the diary. Never
     raises: the kill is already final on the object and in the ledger, and a
     witness that cannot be written is logged, not fatal. Returns the line that
     was written, or None when nothing could be (no identity, or a memory-only
     ledger, which has no place outside itself to be witnessed).
     """
-    return _write(ledger, reason, stage=KILL, clear=True)
+    return _write(ledger, reason, stage=KILL)
 
 
 def record_production_kill(ledger, reason: str) -> dict | None:
@@ -326,12 +370,16 @@ def record_production_kill(ledger, reason: str) -> dict | None:
     recorded as killed, no copy of that diary resumes, and the next kill
     reconciles the wind-down by operation id and seals it.
     """
-    return _write(ledger, reason, stage=PRODUCTION, clear=False)
+    return _write(ledger, reason, stage=PRODUCTION)
 
 
 def killed(*, world: str | None, launch_nonce: str | None, diary: str | None,
-           ledger_path: str | os.PathLike[str] | None, remote: bool = True) -> str | None:
-    """Where, if anywhere, this identity is recorded as killed: process, local or remote.
+           ledger_path: str | os.PathLike[str] | None, remote: bool = True,
+           lineage: Lineage | None = None) -> str | None:
+    """Where, if anywhere, this identity is recorded as killed: lineage, local or remote.
+
+    ``lineage`` is the record a checkpoint carries (``Checkpoint.lineage``); a
+    checkpoint read back from a diary carries none, and the files answer for it.
 
     ``None`` is not proof of life: it says only that no record was found where
     this process could look. With ``remote`` and a receiver configured, the
@@ -342,9 +390,8 @@ def killed(*, world: str | None, launch_nonce: str | None, diary: str | None,
     """
     if launch_nonce is None:
         return None
-    if any(nonce == launch_nonce and (d is None or diary is None or d == diary)
-           for nonce, d in _killed_here):
-        return "process"
+    if lineage is not None and lineage.killed:
+        return "lineage"
     if ledger_path is not None:
         # The identity-keyed file first: it is the one that survives a renamed
         # diary. The file named from the diary's stem is read as well, so every
@@ -375,8 +422,3 @@ def killed(*, world: str | None, launch_nonce: str | None, diary: str | None,
     log.warning("witness: the receiver gave no verdict")
     raise WitnessUnavailable("the witness receiver gave no verdict")
 
-
-# Installed when the runtime package loads (``factorylab/runtime/__init__.py``), so
-# every kill path that runs under the runtime, the CLI's included, is witnessed.
-# The kernel names no upper layer; it calls whatever is bound here.
-_termination.bind_witness(record_kill)

@@ -25,36 +25,6 @@
    "status": "untriaged"
   },
   {
-   "id": "b523aabe92ae",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "5944fef182a7",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "210bb110602c",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "baa51cb01209",
    "world": "compute-continuity-roster",
    "surface": "rendered",
@@ -82,36 +52,6 @@
    "path": "compute-continuity-roster/request/judge/request/#prose",
    "quote": "give verdict 0-1 on the return against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "7507843c99da",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "eb927ef299eb",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "9b7a687b8bf6",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -175,16 +115,6 @@
    "status": "untriaged"
   },
   {
-   "id": "290cf912ea61",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
    "id": "cca1bc58b068",
    "world": "compute-continuity-roster",
    "surface": "rendered",
@@ -202,36 +132,6 @@
    "path": "compute-continuity-roster/request/produce/base_capabilities/#prose",
    "quote": "read input shapes and readiness with world.read {\\\"section\\\":\\\"work\\\"}\",       \"kind\":",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "72a9ca157fc1",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "db948a2f2eeb",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/produce/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "5bdd7b737228",
-   "world": "compute-continuity-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -375,26 +275,6 @@
    "status": "untriaged"
   },
   {
-   "id": "0e5e43bbb456",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "752766b5e4d1",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "05edc4b3347c",
    "world": "compute-continuity-roster",
    "surface": "static",
@@ -485,36 +365,6 @@
    "status": "untriaged"
   },
   {
-   "id": "88e05a88e7d2",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "1f7fc0249508",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "74e79782a239",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "4a06f6dd95e6",
    "world": "compute-continuity-roster",
    "surface": "static",
@@ -532,36 +382,6 @@
    "path": "compute-continuity-roster/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "d4ad5c1013fc",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "3b18bef501b4",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "c449de43ca20",
-   "world": "compute-continuity-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "compute-continuity-roster/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -705,36 +525,6 @@
    "status": "untriaged"
   },
   {
-   "id": "cdc7cd0c46b1",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "d73b9b5cd034",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "243a92c19da0",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "43aaababb42a",
    "world": "edition6-capital-loop",
    "surface": "rendered",
@@ -752,36 +542,6 @@
    "path": "edition6-capital-loop/request/counter/request/#prose",
    "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "8e0728c59dc1",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "dc1f820d9b60",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "35e4d9b434fe",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -815,36 +575,6 @@
    "status": "untriaged"
   },
   {
-   "id": "c73afa9fe773",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "1be772985ef5",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "5e6a9d26bdf2",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "0443074db468",
    "world": "edition6-capital-loop",
    "surface": "rendered",
@@ -865,26 +595,6 @@
    "status": "untriaged"
   },
   {
-   "id": "6fbf1bb4adc4",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "991fbdaf1d64",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "d21c0054b030",
    "world": "edition6-capital-loop",
    "surface": "rendered",
@@ -901,16 +611,6 @@
    "rule": "IMP",
    "path": "edition6-capital-loop/request/produce/base_capabilities/proposals[].description",
    "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "cc79d75a1661",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/produce/base_capabilities/returns",
-   "quote": "retrieve it with catalogue.search.",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -952,16 +652,6 @@
    "path": "edition6-capital-loop/request/produce/base_capabilities/tools[].description",
    "quote": "read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline).",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "a94ea88679fc",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -1012,26 +702,6 @@
    "path": "edition6-capital-loop/institutions/a_return_may_include/about_handle",
    "quote": "omit it to judge the delivered return.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "472289fc12b1",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "873724429f59",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
    "status": "untriaged"
   },
   {
@@ -1125,36 +795,6 @@
    "status": "untriaged"
   },
   {
-   "id": "cdc7cd0c46b1",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "d73b9b5cd034",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "243a92c19da0",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "43aaababb42a",
    "world": "edition6-capital-loop",
    "surface": "static",
@@ -1175,36 +815,6 @@
    "status": "untriaged"
   },
   {
-   "id": "21722907f832",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "7540541bd95c",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "77bb9173c7cf",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "aa721df83657",
    "world": "edition6-capital-loop",
    "surface": "static",
@@ -1222,36 +832,6 @@
    "path": "edition6-capital-loop/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "3bfdbf5db077",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "d417c515795e",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "4025e5cb75b0",
-   "world": "edition6-capital-loop",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -1395,36 +975,6 @@
    "status": "untriaged"
   },
   {
-   "id": "16c8aaa8a0ab",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "4cc0b2f27972",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "18129d061a7d",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "e852297d8ff8",
    "world": "edition6-testnet-rehearsal",
    "surface": "rendered",
@@ -1442,36 +992,6 @@
    "path": "edition6-testnet-rehearsal/request/counter/request/#prose",
    "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "f941dc159fec",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "59d948863d71",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "3e45b92ec38e",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -1505,36 +1025,6 @@
    "status": "untriaged"
   },
   {
-   "id": "4735b8e08890",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "1c67a618d02f",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "7f078fcb5253",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "2552101d3c93",
    "world": "edition6-testnet-rehearsal",
    "surface": "rendered",
@@ -1555,26 +1045,6 @@
    "status": "untriaged"
   },
   {
-   "id": "36d7525f8c7f",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "2ddf37411498",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "44c147896c8d",
    "world": "edition6-testnet-rehearsal",
    "surface": "rendered",
@@ -1591,16 +1061,6 @@
    "rule": "IMP",
    "path": "edition6-testnet-rehearsal/request/produce/base_capabilities/proposals[].description",
    "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "770c1e0fa152",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/produce/base_capabilities/returns",
-   "quote": "retrieve it with catalogue.search.",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -1642,16 +1102,6 @@
    "path": "edition6-testnet-rehearsal/request/produce/base_capabilities/tools[].description",
    "quote": "read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline).",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "1d84011b7ac5",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -1702,26 +1152,6 @@
    "path": "edition6-testnet-rehearsal/institutions/a_return_may_include/about_handle",
    "quote": "omit it to judge the delivered return.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "20cb5409b333",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "6f5dfc7536fc",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
    "status": "untriaged"
   },
   {
@@ -1815,36 +1245,6 @@
    "status": "untriaged"
   },
   {
-   "id": "16c8aaa8a0ab",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "4cc0b2f27972",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "18129d061a7d",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "e852297d8ff8",
    "world": "edition6-testnet-rehearsal",
    "surface": "static",
@@ -1865,36 +1265,6 @@
    "status": "untriaged"
   },
   {
-   "id": "c0f8331b56d5",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "c7e26261dcb1",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "b9e34bf74ac0",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "053184b515d1",
    "world": "edition6-testnet-rehearsal",
    "surface": "static",
@@ -1912,36 +1282,6 @@
    "path": "edition6-testnet-rehearsal/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "182ba448e4fe",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "959c8d481414",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "9c818367a1b5",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -2085,36 +1425,6 @@
    "status": "untriaged"
   },
   {
-   "id": "7570b6d7ca59",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "bf88b0ad839f",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "2dbe431b8754",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "d1e715aa7751",
    "world": "edition7-breadth-testnet",
    "surface": "rendered",
@@ -2132,36 +1442,6 @@
    "path": "edition7-breadth-testnet/request/counter/request/#prose",
    "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "4286b78717b1",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "99ab63072202",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "549a4047e5fe",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -2195,36 +1475,6 @@
    "status": "untriaged"
   },
   {
-   "id": "7a86535b39e0",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "edd9ec161871",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "510a8278301e",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "4699bb8d3c46",
    "world": "edition7-breadth-testnet",
    "surface": "rendered",
@@ -2245,26 +1495,6 @@
    "status": "untriaged"
   },
   {
-   "id": "626e8a259747",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "99bfa0673bb4",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "17e15da44b21",
    "world": "edition7-breadth-testnet",
    "surface": "rendered",
@@ -2281,16 +1511,6 @@
    "rule": "IMP",
    "path": "edition7-breadth-testnet/request/produce/base_capabilities/proposals[].description",
    "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "a72d9dad3fbb",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/produce/base_capabilities/returns",
-   "quote": "retrieve it with catalogue.search.",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -2332,16 +1552,6 @@
    "path": "edition7-breadth-testnet/request/produce/base_capabilities/tools[].description",
    "quote": "read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline).",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "c10cfafb2302",
-   "world": "edition7-breadth-testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -2392,26 +1602,6 @@
    "path": "edition7-breadth-testnet/institutions/a_return_may_include/about_handle",
    "quote": "omit it to judge the delivered return.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "f0d09a6ef11f",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "f01314deb37c",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
    "status": "untriaged"
   },
   {
@@ -2505,36 +1695,6 @@
    "status": "untriaged"
   },
   {
-   "id": "7570b6d7ca59",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "bf88b0ad839f",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "2dbe431b8754",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "d1e715aa7751",
    "world": "edition7-breadth-testnet",
    "surface": "static",
@@ -2555,36 +1715,6 @@
    "status": "untriaged"
   },
   {
-   "id": "8c890ea0bea8",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "baf4a2584e24",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "ad6ee27bbc20",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "8d0893fa5e0a",
    "world": "edition7-breadth-testnet",
    "surface": "static",
@@ -2602,36 +1732,6 @@
    "path": "edition7-breadth-testnet/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "3c09e8745410",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "0c515bdf03dc",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "54513df10156",
-   "world": "edition7-breadth-testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition7-breadth-testnet/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -3645,11 +2745,11 @@
    "status": "untriaged"
   },
   {
-   "id": "9d472a2df1fe",
+   "id": "e02a7d0e01d4",
    "world": "kernel",
    "surface": "static",
    "rule": "IMP",
-   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._proposal_index/7eac696a",
+   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._proposal_index/370fae9e",
    "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
    "design_ref": null,
    "status": "untriaged"
@@ -3662,16 +2762,6 @@
    "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._proposal_index/bad2ad7e",
    "quote": "give one assembly a learner over an action set it declares",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "f46ed19a7981",
-   "world": "kernel",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "kernel/seat_text/payload/factorylab:runtime:compute::ComputeMixin._invoke/a1e7566e",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -3885,36 +2975,6 @@
    "status": "untriaged"
   },
   {
-   "id": "36b6caf41441",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "a4410f816607",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "07d5f9357b89",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "b43c2ed1e90c",
    "world": "scripted",
    "surface": "rendered",
@@ -3942,36 +3002,6 @@
    "path": "scripted/request/judge/request/#prose",
    "quote": "give verdict 0-1 on the return against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "9293b9011d57",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "529eb8f4dbd3",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "10f6213700fc",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -4035,16 +3065,6 @@
    "status": "untriaged"
   },
   {
-   "id": "7e71aa765349",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
    "id": "bae03e614fa1",
    "world": "scripted",
    "surface": "rendered",
@@ -4062,36 +3082,6 @@
    "path": "scripted/request/produce/base_capabilities/#prose",
    "quote": "read input shapes and readiness with world.read {\\\"section\\\":\\\"work\\\"}\",       \"kind\":",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "0ac3d45da4cf",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "1b14a167ab8b",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/produce/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "0f8d349e8aec",
-   "world": "scripted",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -4225,26 +3215,6 @@
    "status": "untriaged"
   },
   {
-   "id": "d56dd98a8e58",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "50532fc7e37e",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "f3bf03faceff",
    "world": "scripted",
    "surface": "static",
@@ -4335,36 +3305,6 @@
    "status": "untriaged"
   },
   {
-   "id": "6e4839edd635",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "c99cf8bd7aa5",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "f090a0254d4a",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "2396b41f383f",
    "world": "scripted",
    "surface": "static",
@@ -4382,36 +3322,6 @@
    "path": "scripted/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "f8dc6b1ba469",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "0f7917800bd2",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "133d94fbe960",
-   "world": "scripted",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -4545,36 +3455,6 @@
    "status": "untriaged"
   },
   {
-   "id": "a35c0ed980c1",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "05bd0dbcbcfb",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "3ff8aca4d8c0",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "2307374b9e12",
    "world": "scripted-crash",
    "surface": "rendered",
@@ -4602,36 +3482,6 @@
    "path": "scripted-crash/request/judge/request/#prose",
    "quote": "give verdict 0-1 on the return against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "de825910383f",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "1afa0519a45a",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "b5d768484d09",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -4695,16 +3545,6 @@
    "status": "untriaged"
   },
   {
-   "id": "3971e6374e3b",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
    "id": "83e8ed9162e5",
    "world": "scripted-crash",
    "surface": "rendered",
@@ -4722,36 +3562,6 @@
    "path": "scripted-crash/request/produce/base_capabilities/#prose",
    "quote": "read input shapes and readiness with world.read {\\\"section\\\":\\\"work\\\"}\",       \"kind\":",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "ed2f047f72c4",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "d40f8708c3ae",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/produce/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "18cc91bc234d",
-   "world": "scripted-crash",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "scripted-crash/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -4885,26 +3695,6 @@
    "status": "untriaged"
   },
   {
-   "id": "0f4f0573b290",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "618cbc1a14d5",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "061921a179eb",
    "world": "scripted-crash",
    "surface": "static",
@@ -4995,36 +3785,6 @@
    "status": "untriaged"
   },
   {
-   "id": "42d25672757c",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "5178e622ecd3",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "a1c44ff946fd",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "d4c9f1830296",
    "world": "scripted-crash",
    "surface": "static",
@@ -5042,36 +3802,6 @@
    "path": "scripted-crash/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "d95667330e42",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "219653083df3",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "24b970bbe0f4",
-   "world": "scripted-crash",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "scripted-crash/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -5205,36 +3935,6 @@
    "status": "untriaged"
   },
   {
-   "id": "bc01778ff895",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "3f61c62749ef",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "f5e0ea7e6151",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "2356f491311a",
    "world": "testnet",
    "surface": "rendered",
@@ -5262,36 +3962,6 @@
    "path": "testnet/request/judge/request/#prose",
    "quote": "give verdict 0-1 on the return against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "7c5926c97f54",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "8f8fada94a8b",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "5fb7507f6098",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -5355,16 +4025,6 @@
    "status": "untriaged"
   },
   {
-   "id": "bf8bb8df471f",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
    "id": "570b0753d94a",
    "world": "testnet",
    "surface": "rendered",
@@ -5382,36 +4042,6 @@
    "path": "testnet/request/produce/base_capabilities/#prose",
    "quote": "read input shapes and readiness with world.read {\\\"section\\\":\\\"work\\\"}\",       \"kind\":",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "17d1ececb178",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "061856018a57",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/produce/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "c37df69bca45",
-   "world": "testnet",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -5555,26 +4185,6 @@
    "status": "untriaged"
   },
   {
-   "id": "453b0137d88f",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "f464e5241c33",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "ad7fd12f41fd",
    "world": "testnet",
    "surface": "static",
@@ -5665,36 +4275,6 @@
    "status": "untriaged"
   },
   {
-   "id": "cb06c83aa2b9",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "c8235cb62ce5",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "ead8a7fb0734",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "c2f336c542a1",
    "world": "testnet",
    "surface": "static",
@@ -5712,36 +4292,6 @@
    "path": "testnet/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "6c82326f36d4",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "3c76543c6545",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "36005193129d",
-   "world": "testnet",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -5875,36 +4425,6 @@
    "status": "untriaged"
   },
   {
-   "id": "58b25960b559",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "3062f5d3456d",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "a0318fccbe8f",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "1cee7adee960",
    "world": "testnet-10m-roster",
    "surface": "rendered",
@@ -5932,36 +4452,6 @@
    "path": "testnet-10m-roster/request/judge/request/#prose",
    "quote": "give verdict 0-1 on the return against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "4689cba90657",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "80b7a8386b1c",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "aa228840916c",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -6025,16 +4515,6 @@
    "status": "untriaged"
   },
   {
-   "id": "02431d459195",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
    "id": "fc5508efde46",
    "world": "testnet-10m-roster",
    "surface": "rendered",
@@ -6052,36 +4532,6 @@
    "path": "testnet-10m-roster/request/produce/base_capabilities/#prose",
    "quote": "read input shapes and readiness with world.read {\\\"section\\\":\\\"work\\\"}\",       \"kind\":",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "cf68691de68f",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "e1918875a41c",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/produce/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "f911aba02bed",
-   "world": "testnet-10m-roster",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
    "status": "untriaged"
   },
   {
@@ -6225,26 +4675,6 @@
    "status": "untriaged"
   },
   {
-   "id": "bfb378c71efa",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "2c51325d8c5d",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "b3c7e6dc078a",
    "world": "testnet-10m-roster",
    "surface": "static",
@@ -6335,36 +4765,6 @@
    "status": "untriaged"
   },
   {
-   "id": "50c7bf8f7f5d",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "ae82ec5eefe9",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "1bfaac632494",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "c12a8636238f",
    "world": "testnet-10m-roster",
    "surface": "static",
@@ -6382,36 +4782,6 @@
    "path": "testnet-10m-roster/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "909e651f2d45",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "791cdaf1f1eb",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "4c30b7a10283",
-   "world": "testnet-10m-roster",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "testnet-10m-roster/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {

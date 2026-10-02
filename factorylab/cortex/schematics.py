@@ -111,9 +111,8 @@ CATALOGUE_TOOL = "catalogue.search"
 #: each. The schemas are a ``catalogue.search`` away.
 CAPABILITY_HEADER = (
     "BASE CAPABILITIES\nOne line and one price for each capability this world "
-    "publishes. Retrieve a full argument schema or proposal shape with "
-    "catalogue.search before using an unfamiliar one; do not invent a capability "
-    "that is not listed here.\n"
+    "publishes. catalogue.search returns full argument schemas and proposal "
+    "shapes.\n"
 )
 
 #: The head of the institutional world (R4-B), the third and last thing in the
@@ -840,7 +839,7 @@ class SchematicsMixin:
         ),
         "tool": "register jailed code as a priced tool anyone may call",
         "program": "register a seat whose jailed code answers instead of a model",
-        "predicate": "register a forecast predicate over a closed window's public facts; "
+        "predicate": "register a holdout predicate over a closed window's public facts; "
                      'read input shapes and readiness with world.read {"section":"work"}',
         "observation": "register a measurement over a closed window's public facts",
         "learner": "give one assembly a learner over an action set it declares",
@@ -924,9 +923,9 @@ class SchematicsMixin:
             "proposals": [{"kind": kind, "description": line}
                           for kind, line in sorted(self._proposal_index().items())],
             "returns": 'Request tools with {"tool_calls":[{"tool":"<id>","args":{}}]}. '
-                       'After reading results, answer according to the outcome schema below. '
+                       'Answers are validated against the outcome schema below. '
                        'Optional register entries need the complete kind-specific shape, '
-                       'not just a kind. Retrieve it with catalogue.search. '
+                       'not just a kind. catalogue.search returns those shapes. '
                        'Optional working_state replaces your private memory; on a paid '
                        'continuation return it is committed before the continuation. ack_through '
                        'acknowledges outcomes through an exact outcome_id.',
@@ -2150,7 +2149,7 @@ class SchematicsMixin:
             "items": {
                 "type": "object",
                 "properties": {
-                    "predicate": {"enum": [p.id for p in self.predicates.all()]},
+                    "predicate": {"enum": [p.id for p in self.predicates.forecastable()]},
                     "params": {
                         "type": "object",
                         "properties": {"horizon_events": {"type": "integer", "minimum": 1}},
@@ -2443,7 +2442,7 @@ class SchematicsMixin:
                 "on the 0.5-centred scale (verdict, composed, evaluation, exposure or "
                 "ballot scores); a caller whose request chain includes the builder's "
                 "lineage does not count. A tool registered by any other decision "
-                "credits its builder's inbox only"
+                "credits no decision"
             ),
             "antagonist_routing": (
                 "router probability mass on contracts declaring Exposure is renormalised to "

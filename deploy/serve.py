@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -100,6 +99,27 @@ def build_seller(services, pay_to: str, facilitator: str, spool_path,
                   facilitator=facilitator, live=live)
 
 
+def serve_and_refresh(server, refresh, interval_s: float, *, clock=time.monotonic) -> None:
+    """Serve requests and re-read the catalogue on this one thread, forever.
+
+    Guarantees the refresh runs on the serving thread (no background thread: AGENTS
+    engineering rules), at the first request boundary at or after each deadline
+    ``interval_s`` apart: the server waits for a request no longer than the time left
+    to the next refresh. A refresh that raises leaves the previous catalogue standing.
+    Returns only by an exception from the server (``KeyboardInterrupt`` included).
+    """
+    next_refresh = clock() + interval_s
+    while True:
+        server.timeout = max(0.0, next_refresh - clock())
+        server.handle_request()
+        if clock() >= next_refresh:
+            try:
+                refresh()
+            except Exception:  # noqa: BLE001 - the previous catalogue stands
+                pass
+            next_refresh = clock() + interval_s
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ledger", required=True, help="the living world's ledger")
@@ -133,17 +153,10 @@ def main(argv: list[str] | None = None) -> int:
     seller = build_seller(services, pay_to, facilitator, args.spool, live=liveness)
     server = serve(seller, host=args.bind, port=args.port)
 
-    def refresh() -> None:
-        while True:
-            time.sleep(max(1.0, args.refresh))
-            try:
-                seller.refresh(load_catalogue(ledger_path, liveness)[0])
-            except Exception:
-                pass  # the previous catalogue stands until the ledger reads again
-
-    threading.Thread(target=refresh, daemon=True).start()
     try:
-        server.serve_forever()
+        serve_and_refresh(
+            server, lambda: seller.refresh(load_catalogue(ledger_path, liveness)[0]),
+            max(1.0, args.refresh))
     except KeyboardInterrupt:
         pass
     finally:

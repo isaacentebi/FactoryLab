@@ -162,20 +162,25 @@ def test_a_seat_with_a_learner_is_shown_one_draw_never_the_distribution():
     assert "your_action_policy" not in runtime.provider.producer_inputs[0]  # no learner yet
 
 
-def test_following_the_draw_records_the_learners_probability():
-    """A seat that took its learner's recommendation is recorded at the learner's p."""
-    runtime, handle, event = _decide_with_learner("hold")
+def test_matching_recommendation_preserves_deterministic_behavior():
+    """s06 #3. Chapter II §I.b: the propensity is "an agent's own accounting of the
+    statistical field it drew from". A seat that always holds and says so is recorded
+    at 1.0, even when the learner's draw it was shown happens to be hold too:
+    coincidental agreement is not evidence of which distribution produced the action."""
+    runtime = _learner_runtime({"hold": 1.0})
+    seed, _event = _consequence_produce(runtime)
+    _register_learner(runtime, seed, ("hold", "buy:BTC"), learner="exp3")
+    runtime.rng = PinnedDraw(runtime.rng.getstate(), ("hold", "buy:BTC"), "hold")
+    handle, event = _consequence_produce(runtime)
+    assert runtime.provider.producer_inputs[-1]["your_action_policy"]["recommended"] == "hold"
     declared = _declared(runtime, handle)
-    policy = dict(zip(declared.action_ids, declared.probs, strict=True))
-    assert declared.chosen == "hold" and set(policy) == {"hold", "buy:BTC"}
-    assert policy["hold"] != pytest.approx(0.6)  # the seat's own 0.6 is not what stands
+    assert dict(zip(declared.action_ids, declared.probs, strict=True)) == {"hold": 1.0}
     _consequence_judge(runtime, event, "eval-a")
     runtime._deliver_returns()
-    assert handle not in runtime.assembly_rounds
-    learned, learner = _learned(runtime, handle)
-    assert learner and learner[0]["p"] == pytest.approx(policy["hold"])
+    learned, recommended = _learned(runtime, handle)
+    assert not recommended
     assert learned and learned[0]["action"] == "hold"
-    assert learned[0]["propensity"] == pytest.approx(policy["hold"])
+    assert learned[0]["propensity"] == pytest.approx(1.0)
 
 
 def test_the_reward_that_settles_a_decision_reaches_the_assemblys_own_learner():
@@ -191,22 +196,3 @@ def test_the_reward_that_settles_a_decision_reaches_the_assemblys_own_learner():
     assert not recommended
     assert learned and learned[0]["action"] == "hold"
     assert learned[0]["propensity"] == pytest.approx(0.6)
-
-
-def test_a_draw_from_a_policy_that_has_since_moved_is_not_recorded_as_the_learners():
-    """The learner's p stands only while it is the p the seat was shown."""
-    from types import SimpleNamespace
-
-    runtime = _learner_runtime(None)
-    seed, _event = _consequence_produce(runtime)
-    _register_learner(runtime, seed, ("hold", "buy:BTC"), learner="exp3")
-    stale = SimpleNamespace(handle=seed, inputs={
-        "your_action_policy": {"recommended": "hold", "p": 0.123456}})
-    assert runtime._followed_recommendation("seed-decider", stale, ("hold",), "h") is None
-    shown = runtime._action_policy("seed-decider")
-    fresh = SimpleNamespace(handle=seed, inputs={"your_action_policy": shown})
-    record = runtime._followed_recommendation("seed-decider", fresh, (shown["recommended"],),
-                                              "h")
-    assert record is not None and record.chosen == shown["recommended"]
-    other = "buy:BTC" if shown["recommended"] == "hold" else "hold"
-    assert runtime._followed_recommendation("seed-decider", fresh, (other,), "h") is None

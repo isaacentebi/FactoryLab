@@ -28,8 +28,6 @@ from factorylab.world.exchange import Order
 def _fresh_witness(monkeypatch):
     """No receiver, no inherited kill note: each test witnesses only its own kill."""
     monkeypatch.delenv(witness.URL_ENV, raising=False)
-    monkeypatch.setattr(witness, "_killed_here", set())
-    witness.note_wind_down(wind_down=False, orders=0)
 
 
 # --- the manifest -------------------------------------------------------------------------

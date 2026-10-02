@@ -572,7 +572,7 @@ class FeedbackMixin:
         if not isinstance(raw, list):
             return []
         opened = []
-        known = {p.id: p for p in self.predicates.all()}
+        known = {p.id: p for p in self.predicates.forecastable()}
         for item in raw[: self.ev.max_forecasts_per_verdict]:
             if not isinstance(item, dict):
                 continue
@@ -618,19 +618,11 @@ class FeedbackMixin:
                     now_event=self.n,
                     horizon=horizon,
                 )
-                definition = known[pid]
-                forecast_type = PredicateForecast if definition.code is not None else Forecast
-                population = {}
-                if definition.code is not None:
-                    from factorylab.runtime.observations import window_cursor
-
-                    # Seal how much of the open window had already happened, so the
-                    # claim is resolved over what follows it and not over its past.
-                    population = {"predicate": definition,
-                                  "window_cursor": window_cursor(self.window)}
-                self.book.seal(forecast_type(
+                # Only world-measured predicates are admitted (``forecastable``), so
+                # every consequence forecast is an ordinary one.
+                self.book.seal(Forecast(
                     fh, evaluator_id, about, pid, params, q, self.n, self.n + horizon, "",
-                    self.ticks_consumed + horizon, **population))
+                    self.ticks_consumed + horizon))
             except (ValueError, KeyError):
                 continue
             self.stats.forecasts_sealed += 1

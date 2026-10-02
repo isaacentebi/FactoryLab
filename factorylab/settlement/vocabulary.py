@@ -289,6 +289,15 @@ class PredicateBook:
         return [*SEED_VOCABULARY, *self._world,
                 *(self.get(name) for name in sorted(self.registered))]
 
+    def forecastable(self) -> list[Predicate]:
+        """The predicates a consequence forecast may name: the world measures each one.
+
+        Guarantees no population predicate: its code may read another model's reading,
+        and a consequence forecast is graded by realized consequence alone (essay
+        II.III.b; AGENTS rule 6). Population predicates stay in ``all`` for holdouts.
+        """
+        return [p for p in self.all() if p.code is None]
+
     def catalogue(self) -> list[dict]:
         """Public metadata retains versioned parameter schemas without private handles."""
         return [{
@@ -425,18 +434,18 @@ class Observer:
     def observe(
         self, predicate_id: str, params: dict, facts: WindowFacts, *, version: int | None = None,
     ) -> int | None:
-        """Unknown claims are refused; unavailable population facts or execution remain unscored."""
+        """Unknown claims are refused; population predicates and unavailable facts stay unscored."""
         _require_id(predicate_id)
         predicate = self.predicates.get(predicate_id, version)
         _validate_params(predicate_id, params, predicate=predicate)
         if not isinstance(facts, WindowFacts):
             raise ValueError("WindowFacts required")
         if predicate is not None and predicate.code is not None:
-            if version is None:
-                raise ValueError("population forecasts must bind a predicate version")
-            value, _error = self.predicates.resolve(
-                predicate_id, params, _plain(facts.public_window), version=version)
-            return None if value is None else int(value)
+            # A population predicate can read another model's reading (a meta verdict,
+            # a judge's score), so it is never realized consequence (essay II.III.b;
+            # AGENTS rule 6): a forecast sealed on one stays unscored. It still
+            # resolves for the charter's holdouts (``PredicateBook.resolve``).
+            return None
         if version not in (None, 1):
             raise ValueError("unknown seed predicate version")
         if predicate_id in EVENT_PREDICATE_IDS:

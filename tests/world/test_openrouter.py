@@ -1,5 +1,6 @@
 import traceback
 from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from fractions import Fraction
 from io import BytesIO
 from urllib import error, request
@@ -30,7 +31,7 @@ def completion():
             "prompt_tokens": 25,
             "completion_tokens": 10,
             "total_tokens": 35,
-            "cost": 0.0000123,
+            "cost": Decimal("0.0000123"),
             "completion_tokens_details": {"reasoning_tokens": 5},
         },
     }
@@ -83,14 +84,16 @@ def test_complete_payload_usage_and_cost_rounding(completion, req):
     assert type(response.cost_micro) is int
 
 
-@pytest.mark.parametrize("cost, expected", [(0, 0), (0.000012, 12), (0.0000001, 1)])
+@pytest.mark.parametrize("cost, expected", [(0, 0), (Decimal("0.000012"), 12),
+                                            (Decimal("0.0000001"), 1)])
 def test_reported_cost_boundaries(completion, req, cost, expected):
     completion["usage"]["cost"] = cost
     response = OpenRouterProvider(transport=FakeTransport([completion])).complete(req)
     assert response.cost_micro == expected
 
 
-@pytest.mark.parametrize("cost", [-0.000001, float("nan"), float("inf")])
+@pytest.mark.parametrize("cost", [Decimal("-0.000001"), Decimal("NaN"), Decimal("Infinity"),
+                                  0.0000123])
 def test_invalid_reported_cost_books_uncertainty_without_a_live_hold(completion, req, cost):
     completion["usage"]["cost"] = cost
     wallet = TinyWallet(1000)
@@ -138,7 +141,8 @@ def test_catalogue_does_not_infer_completion_limit_from_context(catalogue):
 
 
 @pytest.mark.parametrize("remaining, expected", [
-    (74.5, 74_500_000), (0.0000129, 12), (0.0000009, 0), (0, 0), (None, None),
+    (Decimal("74.5"), 74_500_000), (Decimal("0.0000129"), 12), (Decimal("0.0000009"), 0),
+    (0, 0), (None, None),
 ])
 def test_balance_rounds_down(remaining, expected):
     # https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key
@@ -266,7 +270,7 @@ class TinyWallet:
         self.log.append(("release", reservation))
 
 
-@pytest.mark.parametrize("cost, expected", [(0, 0), (0.005, 5000)])
+@pytest.mark.parametrize("cost, expected", [(0, 0), (Decimal("0.005"), 5000)])
 def test_reported_zero_and_overrun_preserve_accounting(completion, req, cost, expected):
     completion["usage"]["cost"] = cost
     completion["model"] = "unregistered/serving-model"
