@@ -7,7 +7,23 @@ umask 077
 : "${RCLONE_CONFIG:?Set RCLONE_CONFIG in ops.env}"
 root=/srv/factorylab
 stage=$(mktemp -d)
+# Local staging never outlives the run: removed on every exit, and the unit's PrivateTmp
+# is discarded by systemd even when a timeout kills this shell before the trap runs.
 trap 'rm -rf -- "$stage"' EXIT
+# The backup never takes the space the world's own writes need (Chapter II §II.b: a
+# limit enforced, not announced). Staging holds a plaintext copy of runs/ and its
+# ciphertext at once, so twice runs/ must fit and still leave the larger of 2 GiB and a
+# tenth of the filesystem free; otherwise nothing is staged and the unit fails (alerted).
+# du still totals when the world unlinks a file under it mid-walk; it then exits 1.
+runs_kb=$(du -sk "$root/runs" 2> /dev/null | awk '{print $1}') || true
+total_kb="" avail_kb=""
+read -r total_kb avail_kb < <(df -Pk "$stage" | awk 'NR == 2 {print $2, $4}') || true
+if [[ ! $runs_kb =~ ^[0-9]+$ || ! $total_kb =~ ^[0-9]+$ || ! $avail_kb =~ ^[0-9]+$ ]] ||
+        (( avail_kb < 2 * runs_kb + (total_kb / 10 > 2097152 ? total_kb / 10 : 2097152) ));
+then
+    echo "backup not taken: not enough free space to stage it beside the world" >&2
+    exit 1
+fi
 mkdir "$stage/runs"
 # The release that is running beside this ledger: its digest and the three
 # inputs that make it. A restored ledger resumes only under this digest, so
@@ -185,6 +201,8 @@ members=(runs repo openrouter.key hyperliquid.key reserve.key)
 [[ -d "$stage/witness" ]] && members+=(witness)
 tar -C "$stage" -cf - "${members[@]}" |
     age --encrypt --recipient "$AGE_RECIPIENT" --output "$stage/backup.tar.age"
+# The plaintext copy has done its work: only the ciphertext waits out the upload.
+(cd "$stage" && rm -rf -- "${members[@]}")
 name="factorylab-$(date -u +%Y%m%dT%H%M%SZ).tar.age"
 rclone copyto "$stage/backup.tar.age" "${BACKUP_REMOTE%/}/$name" \
     --config "$RCLONE_CONFIG" --retries 5 --low-level-retries 10 --quiet

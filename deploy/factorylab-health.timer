@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly Factory Lab health verdict
+
+[Timer]
+# Half an hour after the wake's hourly publish, so the verdict reads a finished one.
+OnBootSec=10min
+OnCalendar=*-*-* *:30:00
+Persistent=true
+Unit=factorylab-health.service
+
+[Install]
+WantedBy=timers.target

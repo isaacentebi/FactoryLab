@@ -1,0 +1,13 @@
+[Unit]
+Description=Six-hourly Factory Lab heartbeat to the owner
+
+[Timer]
+# Silence is detectable: a receiver that hears nothing for seven hours has lost the
+# host or the alert path. The heartbeat carries the last hourly verdict, or unknown.
+OnBootSec=15min
+OnCalendar=*-*-* 00/6:45:00
+Persistent=true
+Unit=factorylab-alert@heartbeat.service
+
+[Install]
+WantedBy=timers.target

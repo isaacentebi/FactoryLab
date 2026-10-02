@@ -186,7 +186,7 @@ def test_untrusted_snapshot_never_emits_aggregates(tmp_path, damage, scripted_ru
     ("exited", "1", "resume", "failed_resume"),
     ("killed", "KILL", "resume", "failed_resume"),
     ("exited", "0", "resume", None),
-    ("exited", "1", "run", None),
+    ("exited", "1", "run", "failed_run"),
 ])
 @pytest.mark.parametrize("reason", [None, "manifest_mismatch", "not a reason code"])
 def test_alert_posts_only_allowed_json_line(tmp_path, code, status, mode, event, reason):
@@ -281,6 +281,12 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
                       'shutil.copyfile(sys.argv[2], os.environ["CAPTURE"])\n')
     age.chmod(0o700)
     rclone.chmod(0o700)
+    # Room to stage beside the world, whatever this host's own disk holds (the space
+    # guard itself is tests/runtime/test_unattended_ops.py's).
+    df = bin_path / "df"
+    df.write_text("#!/bin/bash\nprintf 'Filesystem 1024-blocks Used Available Capacity "
+                  "Mounted on\\n/dev/vda1 80000000 1 60000000 1%% /\\n'\n")
+    df.chmod(0o700)
     script = (DEPLOY / "backup.sh").read_text().replace("/srv/factorylab", str(root))
     capture = tmp_path / "captured.tar"
     proc = subprocess.run(["bash", "-c", script], capture_output=True, env={

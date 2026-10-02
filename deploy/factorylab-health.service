@@ -1,0 +1,29 @@
+[Unit]
+Description=Factory Lab health verdict and dormancy witness
+# Exit 10 (unhealthy), 11 (unknown) and 12 (terminated) are verdicts the script has
+# already sent through deploy/alert.sh; any other failure (a crash, a timeout, a failed
+# dormancy witness) is the check itself failing, and reaches the owner from here.
+OnFailure=factorylab-alert@health_failed.service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=factory
+Group=factory
+WorkingDirectory=/srv/factorylab
+EnvironmentFile=/srv/factorylab/ops.env
+ExecStart=/srv/factorylab/repo/.venv/bin/python /srv/factorylab/repo/deploy/witness_liveness.py --wake /srv/factorylab/www/wake.json --state /srv/factorylab/runs/funded.liveness --health /srv/factorylab/runs/funded.health
+SuccessExitStatus=10 11 12
+UMask=0077
+TimeoutStartSec=10min
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# runs/ holds the liveness state and the health record the heartbeat reads; .witness/
+# is where the dormant lines are appended.
+ReadWritePaths=/srv/factorylab/runs /srv/factorylab/.witness

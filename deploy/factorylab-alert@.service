@@ -1,0 +1,23 @@
+[Unit]
+Description=Factory Lab alert: %i
+# The one path a failure takes to the owner (deploy/alert.sh). OnFailure= of the backup,
+# wake and health units starts the instance named for the event; the heartbeat timer
+# starts factorylab-alert@heartbeat; `systemctl start factorylab-alert@test.service`
+# rehearses the whole path end to end and fails unless the receiver accepted it.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=factory
+Group=factory
+EnvironmentFile=/srv/factorylab/ops.env
+ExecStart=/bin/bash /srv/factorylab/repo/deploy/alert.sh --event %i
+TimeoutStartSec=5min
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
