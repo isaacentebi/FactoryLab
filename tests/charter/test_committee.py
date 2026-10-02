@@ -53,7 +53,7 @@ def seated(book: CharterBook, size: int = 5, **changes) -> StandingCommittee:
     """Propose one motion and seat the next boundary's committee, whose agenda it is."""
     amendment = candidate(**changes)
     book.propose(amendment)
-    boundary = len(book.sittings()) + book.deferrals() + 1
+    boundary = book.boundaries() + 1
     committee = book.seat(boundary, eligible(size), random.Random(7), quorum=1)
     assert committee.agenda == (amendment.id,)
     return committee
@@ -240,18 +240,18 @@ def test_activation_waits_for_boundary_and_preserves_all_editions(book, ledger):
     edition3 = book.activate_due(200)
     assert edition3.edition == 3
     assert edition3.cards == (edition2.cards[0], second_card, added)
-    assert book.editions() == (original, edition2, edition3)
     assert book.current() is edition3
     assert book.pending() == []
     assert book.activate_due(300) is None
-    assert book.editions() == (original, edition2, edition3)
+    assert book.current() is edition3
     assert original.render() == original_render
-    assert all(edition.norms == original.norms for edition in book.editions())
-    for number, edition in enumerate(book.editions(), 1):
+    assert all(edition.norms == original.norms for edition in (original, edition2, edition3))
+    for number, edition in enumerate((original, edition2, edition3), 1):
         assert edition.render().startswith(f"CHARTER (edition {number})")
         with pytest.raises(FrozenInstanceError):
             edition.edition = 99
-    with pytest.raises(ValueError, match="already activated"):
+    # Decided at an earlier boundary, the motion is gone: a late ballot is refused.
+    with pytest.raises(ValueError, match="not issued by this charter book"):
         book.vote(first, motion(first), "seat-5", True, "too late")
     activations = [item for item in evidence(ledger) if item["kind"] == "charter.activate"]
     assert [(item["amendment_id"], item["edition"], item["ts"]) for item in activations] == [
@@ -326,7 +326,7 @@ def test_rejected_ledger_writes_cannot_change_book_state(book, ledger, monkeypat
     monkeypatch.setattr(ledger, "append", reject)
     with pytest.raises(RuntimeError, match="ledger unavailable"):
         book.seat(1, eligible(), random.Random(0))
-    assert book.sittings() == () and book.agenda() == [candidate()]
+    assert book.sittings() == 0 and book.agenda() == [candidate()]
     monkeypatch.setattr(ledger, "append", append)
     committee = book.seat(1, eligible(), random.Random(0))
     assert committee.round == 1
@@ -372,7 +372,7 @@ def test_below_quorum_no_rump_is_seated_and_the_motion_waits(book, ledger):
     """C2: with fewer eligible assemblies than quorum the boundary is deferred and ledgered."""
     book.propose(candidate())
     assert book.seat(1, eligible(2), random.Random(0), quorum=3) is None
-    assert book.sittings() == () and book.deferrals() == 1
+    assert book.sittings() == 0 and book.deferrals() == 1
     assert [am.id for am in book.agenda()] == ["better-cost"]
     committee = book.seat(2, eligible(3), random.Random(0), quorum=3)
     assert committee.agenda == ("better-cost",)
@@ -466,3 +466,42 @@ def test_standing_committee_is_frozen_and_validated():
         StandingCommittee(1, 1, (seats[0], Seat("seat-1", "c", "meta")))
     with pytest.raises(ValueError, match="boundary"):
         StandingCommittee(-1, 1, seats)
+
+
+def test_completed_charter_history_does_not_accumulate(ledger):
+    """s08: the charter may revise for the world's whole life (essay II.IV.a), so the
+    book holds the edition in force and the motions still open, never its history
+    (II.II.b, "memory"). Two cohorts of empty, deferred and decided boundaries leave it
+    the same size; the counts, the edition and the diary carry on."""
+    book = CharterBook(ledger, seed_charter())
+    sizes, ts = [], 0
+    for cohort in range(2):
+        for n in range(20):
+            ts += 1
+            book.seat(book.boundaries() + 1, eligible(), random.Random(n), quorum=1)
+            book.seat(book.boundaries() + 1, eligible(0), random.Random(n), quorum=1)
+            card = replace(seed_charter().cards[0], acceptable_region=f"below {1000 + ts}")
+            book.propose(candidate(id=f"m-{cohort}-{n}", edition_base=book.current().edition,
+                                   replace=(card,)))
+            committee = book.seat(book.boundaries() + 1, eligible(), random.Random(n), quorum=1)
+            for seat in committee.seats:
+                book.vote(committee, motion(committee), seat.alias, n % 2 == 0, "reason")
+            while book.activate_due(ts) is not None:
+                pass
+        sizes.append({name: len(value) for name, value in vars(book).items()
+                      if isinstance(value, (dict, list, set)) and not name.endswith("activated")})
+    assert sizes[0] == sizes[1]
+    assert sum(sizes[1].values()) == 2  # the edition in force and its activation
+    # A decided motion keeps its id, and only its id: no id is ever proposed twice.
+    with pytest.raises(ValueError, match="already proposed"):
+        book.propose(candidate(id="m-0-1", edition_base=book.current().edition))
+    assert (book.sittings(), book.deferrals(), book.current().edition) == (80, 40, 21)
+    assert book.activated_amendment(21).id == "m-1-18"
+    with pytest.raises(ValueError, match="already has a committee"):
+        book.seat(book.boundaries(), eligible(), random.Random(0))
+    # Boundaries are held in order: a number past the next one is refused too, so no
+    # boundary can be held twice however the caller numbers them.
+    with pytest.raises(ValueError, match="next governance boundary"):
+        book.seat(book.boundaries() + 2, eligible(), random.Random(0))
+    activations = [i for i in evidence(ledger) if i["kind"] == "charter.activate"]
+    assert [i["edition"] for i in activations] == list(range(2, 22))

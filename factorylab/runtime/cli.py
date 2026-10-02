@@ -771,7 +771,13 @@ def _cmd_wake(args: argparse.Namespace) -> int:
     """Publish only the sealed wake; failed verification replaces stale data with unavailable."""
     from factorylab.runtime.wake import UNAVAILABLE, write_wake
 
-    data = write_wake(args.ledger, args.out, returns=args.returns)
+    try:
+        data = write_wake(args.ledger, args.out, returns=args.returns)
+    except OSError:
+        # Another publisher holds the wake, or a public name is not the wake's to
+        # replace: nothing was published and the previous generation is still served.
+        refuse("wake", Reason.WAKE_UNAVAILABLE)
+        return 1
     if data["wallet_series"] == UNAVAILABLE:
         refuse("wake", Reason.WAKE_UNAVAILABLE)
         return 1

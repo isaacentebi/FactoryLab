@@ -22,10 +22,12 @@ weights and propensities, private memories, prompts and per-decision scores.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import html
 import json
 import os
+import shutil
 import stat
 import tempfile
 import time
@@ -38,7 +40,7 @@ from pathlib import Path
 from cryptography.fernet import InvalidToken
 
 from factorylab.cortex.request import public_return
-from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, canonical
+from factorylab.kernel.ledger import WALLET_SERIES_KINDS, Ledger, LedgerIntegrityError, canonical
 from factorylab.runtime.worlds import WORLDS_DIR, load_manifest
 
 VIEWS = (
@@ -62,6 +64,10 @@ MAX_ROWS = 200
 #: The page carries the latest returns; every older row lives in its window's page file.
 RETURNS_ROWS = 500
 RETURNS_PAGE = "returns-{window}.json"
+#: Where the wake keeps its generations, beside the public names that point into them.
+GENERATIONS = ".wake"
+#: The most balance points ``wallet_series`` publishes; the diary keeps every one.
+SERIES_POINTS = 2_000
 ROLES = ("producer", "evaluator", "meta", "antagonist", "adversary")
 RAILS = ("openrouter", "venice", "x402")
 INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
@@ -260,13 +266,6 @@ class _Observatory:
         # so the compact catalogue's claim about size is checkable on the page.
         self.section_bytes: Counter = Counter()
         self.section_prompts = 0
-        # Every return in ledger order, its row reachable by handle so the tool calls
-        # that preceded it and the verdicts that follow it attach to the same row.
-        self.returns: list[dict] = []
-        self.returns_by_handle: dict[str, dict] = {}
-        self.tool_calls_by_handle: dict[str, list[dict]] = {}
-        self.verdicts_by_handle: dict[str, list[dict]] = {}
-        self.meta_verdicts_by_handle: dict[str, list[dict]] = {}
 
     def feed(self, item: dict) -> None:
         """Read one authenticated item; unknown and sealed kinds are simply not read."""
@@ -301,18 +300,6 @@ class _Observatory:
         elif kind == "ForecastSettled" and isinstance(payload, dict):
             self.open_forecasts.pop(str(payload.get("handle")), None)
             self._delivered("forecast", "settled")
-        elif kind == "Verdict" and isinstance(payload, dict):
-            self._verdict(self.verdicts_by_handle, "verdicts", payload.get("about_handle"), {
-                "ts_ns": event.get("ts_ns"), "by": payload.get("evaluator_handle"),
-                "verdict": payload.get("verdict"), "payoff": payload.get("payoff"),
-                "rationale": payload.get("rationale"),
-            })
-        elif kind == "MetaVerdict" and isinstance(payload, dict):
-            self._verdict(self.meta_verdicts_by_handle, "meta_verdicts", payload.get("about"), {
-                "ts_ns": event.get("ts_ns"), "by": payload.get("by"),
-                "judge": payload.get("evaluator_handle"), "tier": payload.get("tier"),
-                "score": payload.get("score"), "rationale": payload.get("rationale"),
-            })
         if kind != "Registered" or not isinstance(payload, dict):
             return
         self.registered = [*self.registered, {
@@ -524,18 +511,6 @@ class _Observatory:
         self.invocations.setdefault(_day(item.get("ts", 0)), Counter())[
             role if role in ROLES else "other"
         ] += 1
-        handle = str(item.get("handle"))
-        row = {
-            "window": self.current_window, "ts_ns": item.get("ts"), "handle": handle,
-            "seat": item.get("assembly_id"), "role": role, "model": item.get("served_by"),
-            "status": item.get("status"), "stop_reason": item.get("stop_reason"),
-            "cost_micro": item.get("cost"), "outputs": _outputs(item.get("outputs")),
-            "tool_calls": self.tool_calls_by_handle.pop(handle, []),
-            "verdicts": self.verdicts_by_handle.pop(handle, []),
-            "meta_verdicts": self.meta_verdicts_by_handle.pop(handle, []),
-        }
-        self.returns.append(row)
-        self.returns_by_handle[handle] = row
         sections = item.get("sections")
         if isinstance(sections, dict):
             self.section_prompts += 1
@@ -561,52 +536,6 @@ class _Observatory:
                           "total_bytes": self.section_bytes[name]}
                          for name in sorted(self.section_bytes)] if prompts else [],
         }
-
-    # --- every return, linked to what was said about it -------------------------
-
-    def _verdict(self, pending: dict[str, list[dict]], field: str, about, verdict: dict) -> None:
-        row = self.returns_by_handle.get(str(about))
-        if row is not None:
-            row[field].append(verdict)
-        else:
-            pending.setdefault(str(about), []).append(verdict)
-
-    def _on_tool_call(self, item: dict) -> None:
-        # Ledgered while the return is still being composed, before its invocation
-        # row exists: the args as logged (bodies already stripped), the outcome the
-        # tool reported, and what the call cost.
-        handle = str(item.get("handle"))
-        call = {"ts_ns": item.get("ts"), "tool": item.get("tool"), "args": item.get("args"),
-                "outcome": item.get("outcome"), "ok": item.get("ok"),
-                "cost_micro": item.get("cost")}
-        row = self.returns_by_handle.get(handle)
-        if row is not None:
-            row["tool_calls"].append(call)
-        else:
-            self.tool_calls_by_handle.setdefault(handle, []).append(call)
-
-    def _returns(self, limit: int) -> dict:
-        """The latest rows for the page, and where every older row is published."""
-        per_window = Counter(row["window"] for row in self.returns)
-        windows = sorted(per_window)
-        return {
-            "limit": limit, "total": len(self.returns),
-            "rows": self.returns[-limit:] if limit > 0 else [],
-            "pages": {
-                "file": RETURNS_PAGE,
-                "first_window": windows[0] if windows else None,
-                "last_window": windows[-1] if windows else None,
-                "windows": [{"window": window, "rows": per_window[window]}
-                            for window in windows[-MAX_ROWS:]],
-            },
-        }
-
-    def pages(self) -> dict[int, list[dict]]:
-        """Every return grouped by the price window it landed in."""
-        grouped: dict[int, list[dict]] = {}
-        for row in self.returns:
-            grouped.setdefault(row["window"], []).append(row)
-        return grouped
 
     def _transfer(self, item: dict, status: str, direction, amount) -> None:
         self.transfers = [*self.transfers, {
@@ -753,8 +682,7 @@ class _Observatory:
                 "exposure": self.exposure,
                 "retired_credits_to_commons": self.retired_credits}
 
-    def result(self, manifest, *, now_ns: int | None = None,
-               returns: int = RETURNS_ROWS) -> dict:
+    def result(self, manifest, *, now_ns: int | None = None) -> dict:
         """Return the widened sections.
 
         Before the first window closes there is no published world block yet, so
@@ -818,7 +746,162 @@ class _Observatory:
             "liveness": self._liveness(),
             "entitlements": _fold_entitlements(latest.get("entitlements")),
             "prompt_sections": self._prompt_sections(),
-            "returns": self._returns(returns),
+        }
+
+
+class _Returns:
+    """Every return, joined to its tool calls and the verdicts about it, read newest first.
+
+    A verdict can land many windows after the return it judges, even after that
+    decision settled, so a fold in ledger order cannot know when a row is final and
+    would hold every row the world ever wrote. Read newest first, every item about a
+    return comes before the return itself, and the decision's opening comes after it:
+    nothing about that handle is left to read. A window's page is written once every
+    row in it has passed its opening, and is then dropped, so what is held is the
+    returns still being joined, never the diary (essay II.II.b, "memory"; AGENTS
+    rule 12: the control apparatus is not slower than its environment).
+
+    Guarantees the rows of the forward fold this replaced: a row's window is the
+    price window open when it was written, and an item about a handle joins the
+    latest row of that handle written before it, or its first row when it precedes
+    them all, in ledger order. ``emit(window, rows)`` receives each window's rows in
+    ledger order, once.
+    """
+
+    def __init__(self, limit: int, emit) -> None:
+        self.limit = limit
+        self.emit = emit
+        self.total = 0
+        self.latest: list[dict] = []          # the newest ``limit`` rows, newest first
+        self.unplaced: list[dict] = []        # rows since the last window close read
+        self.held: dict[int, list[dict]] = {}  # window -> rows not yet written, newest first
+        self.unfinished: dict[int, int] = {}  # window -> rows whose opening is unread
+        self.rows_of: dict[str, list[dict]] = {}  # handle -> its rows read so far
+        self.later: dict[str, dict[str, list]] = {}  # handle -> items after its rows
+        self.open_rows: set[int] = set()      # ids of rows whose opening is unread
+        self.per_window: dict[int, int] = {}  # the newest MAX_ROWS windows with rows
+        self.first_window: int | None = None
+        self.last_window: int | None = None
+
+    def _later(self, handle, field: str, entry: dict) -> None:
+        self.later.setdefault(str(handle), {"tool_calls": [], "verdicts": [],
+                                            "meta_verdicts": []})[field].append(entry)
+
+    def feed(self, item: dict) -> None:
+        """Read one authenticated item, newer than none of those already read."""
+        kind = item.get("kind")
+        if kind == "invocation":
+            self._row(item)
+        elif kind == "tool.call":
+            # Ledgered while the return is still being composed, before its invocation
+            # row exists: the args as logged (bodies already stripped), the outcome
+            # the tool reported, and what the call cost.
+            self._later(item.get("handle"), "tool_calls", {
+                "ts_ns": item.get("ts"), "tool": item.get("tool"), "args": item.get("args"),
+                "outcome": item.get("outcome"), "ok": item.get("ok"),
+                "cost_micro": item.get("cost")})
+        elif kind == "event":
+            event = item.get("event", {})
+            payload = event.get("payload", {})
+            if not isinstance(payload, dict):
+                return
+            if event.get("kind") == "Verdict":
+                self._later(payload.get("about_handle"), "verdicts", {
+                    "ts_ns": event.get("ts_ns"), "by": payload.get("evaluator_handle"),
+                    "verdict": payload.get("verdict"), "payoff": payload.get("payoff"),
+                    "rationale": payload.get("rationale")})
+            elif event.get("kind") == "MetaVerdict":
+                self._later(payload.get("about"), "meta_verdicts", {
+                    "ts_ns": event.get("ts_ns"), "by": payload.get("by"),
+                    "judge": payload.get("evaluator_handle"), "tier": payload.get("tier"),
+                    "score": payload.get("score"), "rationale": payload.get("rationale")})
+        elif kind == "decision.open":
+            self._finish(str(item.get("handle")))
+        elif kind == "price.window":
+            # The rows read since are those written after this close: the window it
+            # opened (``_Observatory._on_price_window``).
+            index = item.get("window")
+            if type(index) is int:
+                self._place(index + 1)
+
+    def _row(self, item: dict) -> None:
+        handle = str(item.get("handle"))
+        after = self.later.pop(handle, {})
+        row = {
+            "window": None, "ts_ns": item.get("ts"), "handle": handle,
+            "seat": item.get("assembly_id"), "role": item.get("role"),
+            "model": item.get("served_by"), "status": item.get("status"),
+            "stop_reason": item.get("stop_reason"), "cost_micro": item.get("cost"),
+            "outputs": _outputs(item.get("outputs")),
+            **{field: after.get(field, [])[::-1]
+               for field in ("tool_calls", "verdicts", "meta_verdicts")},
+        }
+        self.total += 1
+        if len(self.latest) < self.limit:
+            self.latest.append(row)
+        self.rows_of.setdefault(handle, []).append(row)
+        self.open_rows.add(id(row))
+        self.unplaced.append(row)
+
+    def _finish(self, handle: str) -> None:
+        """Nothing older than this item names ``handle``: its rows are final."""
+        before = self.later.pop(handle, None)
+        rows = self.rows_of.pop(handle, [])
+        if rows and before:
+            first = rows[-1]
+            for field, entries in before.items():
+                first[field] = entries[::-1] + first[field]
+        for row in rows:
+            self.open_rows.discard(id(row))
+            if row["window"] is not None:
+                self.unfinished[row["window"]] -= 1
+        self._write_ready()
+
+    def _place(self, window: int) -> None:
+        rows, self.unplaced = self.unplaced, []
+        if not rows:
+            return
+        for row in rows:
+            row["window"] = window
+        self.held.setdefault(window, []).extend(rows)
+        self.unfinished[window] = (self.unfinished.get(window, 0)
+                                   + sum(id(row) in self.open_rows for row in rows))
+        self._write_ready()
+
+    def _write_ready(self) -> None:
+        for window in [w for w in self.held if not self.unfinished.get(w)]:
+            rows = self.held.pop(window)
+            self.unfinished.pop(window, None)
+            self.emit(window, rows[::-1])
+            self.per_window[window] = self.per_window.get(window, 0) + len(rows)
+            if len(self.per_window) > MAX_ROWS:
+                del self.per_window[min(self.per_window)]
+            self.first_window = window if self.first_window is None else min(
+                self.first_window, window)
+            self.last_window = window if self.last_window is None else max(
+                self.last_window, window)
+
+    def result(self) -> dict:
+        """The latest rows for the page, and where every older row is published.
+
+        Called once the oldest item is read: what is still held was written in the
+        first window, or names a handle whose opening the diary does not hold.
+        """
+        self._place(0)
+        for handle in list(self.rows_of):
+            self._finish(handle)
+        self.later.clear()
+        windows = sorted(self.per_window)
+        return {
+            "limit": self.limit, "total": self.total,
+            "rows": self.latest[::-1] if self.limit > 0 else [],
+            "pages": {
+                "file": RETURNS_PAGE,
+                "first_window": self.first_window,
+                "last_window": self.last_window,
+                "windows": [{"window": window, "rows": self.per_window[window]}
+                            for window in windows],
+            },
         }
 
 
@@ -893,9 +976,12 @@ class _Snapshot(Ledger):
         """Only role totals escape identity-bearing views, including new assemblies.
 
         An optional observatory reads the same authenticated stream once, so the
-        widened sections cost no second decryption pass over the diary.
+        widened sections cost no second decryption pass over the diary. The balance
+        series is folded from that stream, bounded (``_Series``), after the other
+        views have verified the chain it is read from.
         """
-        aggregates = {view: self.aggregate(view) for view in VIEWS}
+        aggregates = {view: self.aggregate(view) for view in VIEWS if view != "wallet_series"}
+        series = _Series()
         roles = {a.id: a.role for a in manifest.assemblies}
         allowed = {"producer", "evaluator", "meta", "antagonist", "adversary"}
         # Streaming projection avoids materialising the item diary. Identities
@@ -903,6 +989,7 @@ class _Snapshot(Ledger):
         for item in self.items():
             if observatory is not None:
                 observatory.feed(item)
+            series.feed(item)
             if item.get("kind") == "event":
                 event = item.get("event", {})
                 payload = event.get("payload", {})
@@ -917,7 +1004,73 @@ class _Snapshot(Ledger):
                 role = roles.get(name, "noop" if name == "NOOP" else "other")
                 totals[role if role in allowed | {"noop"} else "other"] += value
             aggregates[view] = {field: dict(sorted(totals.items()))}
+        aggregates["wallet_series"] = series.result()
         return aggregates
+
+
+class _Series:
+    """The wallet balance series, downsampled as it streams to at most ``SERIES_POINTS``.
+
+    Guarantees, for the same diary, the same points: every observation while there are
+    at most ``SERIES_POINTS``; past that, the observations split into at most a quarter
+    as many consecutive buckets of equal width (a power of two; the last may be short),
+    each publishing its first, last, lowest and highest point (the earliest on a tie),
+    in ledger order. So the first and last observation and every bucket's extremes,
+    each drawdown's depth among them, are published, and what is held is the buckets,
+    never the series (essay II.II.b, "memory"; ``Ledger.aggregate`` still answers the
+    whole series from the diary).
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.raw: list[tuple[int, int, int]] | None = []  # (index, ts, balance)
+        self.width = 1
+        self.buckets: list[list] = []  # [first, last, low, high, observations]
+
+    def feed(self, item: dict) -> None:
+        if item.get("kind") not in WALLET_SERIES_KINDS:
+            return
+        point = (self.count, item["ts"], item["balance_after"])
+        self.count += 1
+        if self.raw is not None:
+            self.raw.append(point)
+            if len(self.raw) <= SERIES_POINTS:
+                return
+            raw, self.raw = self.raw, None
+            for earlier in raw:
+                self._bucket(earlier)
+            return
+        self._bucket(point)
+
+    def _bucket(self, point: tuple[int, int, int]) -> None:
+        last = self.buckets[-1] if self.buckets else None
+        if last is None or last[4] >= self.width:
+            self.buckets.append([point, point, point, point, 1])
+        else:
+            last[1] = point
+            if point[2] < last[2][2]:
+                last[2] = point
+            if point[2] > last[3][2]:
+                last[3] = point
+            last[4] += 1
+        if len(self.buckets) > SERIES_POINTS // 4:
+            pairs = [self.buckets[i:i + 2] for i in range(0, len(self.buckets), 2)]
+            self.buckets = [self._merge(*pair) if len(pair) == 2 else pair[0]
+                            for pair in pairs]
+            self.width *= 2
+
+    @staticmethod
+    def _merge(a: list, b: list) -> list:
+        return [a[0], b[1], a[2] if a[2][2] <= b[2][2] else b[2],
+                a[3] if a[3][2] >= b[3][2] else b[3], a[4] + b[4]]
+
+    def result(self) -> dict:
+        if self.raw is not None:
+            points = self.raw
+        else:
+            points = sorted({p for bucket in self.buckets for p in bucket[:4]})
+        return {"series": [{"ts": ts, "balance": balance} for _, ts, balance in points],
+                "observations": self.count}
 
 
 def _open_snapshot(path: Path):
@@ -1006,19 +1159,181 @@ def _reserve() -> dict:
 def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep,
                  returns: int = RETURNS_ROWS) -> dict:
     """Exactly the allowlist escapes; a failed chain is retried once, never partially shown."""
-    return _collect_wake(path, now_ns=now_ns, sleep=sleep, returns=returns)[0]
+    return _collect_wake(path, now_ns=now_ns, sleep=sleep, returns=returns)
+
+
+class _Generation:
+    """One whole publication, built beside the last and switched in at once.
+
+    Every page, ``wake.json`` and ``wake.html`` of one collection are written into a
+    fresh directory under ``.wake/``; ``.wake/current`` names it, and each public name
+    in the wake directory is a symlink through ``.wake/current``. Publishing is one
+    ``os.replace`` of that pointer, taken last, after every public name the generation
+    needs is in place: a reader is served one generation or the one before, never a
+    mixture, and a run that fails at any earlier step leaves the one before served
+    exactly as it was.
+
+    One publisher at a time: an exclusive lock on ``.wake/lock`` is held from the first
+    look at the directory to the last removal, and a second publisher is refused
+    (``BlockingIOError``) rather than built beside the first. Guarantees at most two
+    generations on disk, the one ``current`` names and the one it named before the
+    switch, both read from ``current`` under the lock; a page whose bytes did not
+    change is a hard link to the previous generation's copy, not a second copy.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.root = directory / GENERATIONS
+        self.root.mkdir(exist_ok=True)
+        os.chmod(self.root, 0o755)  # the web server's user reads it
+        self.lock = os.open(self.root / "lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._migrate()
+            self.previous = self._current()
+            # A name of its own, never reused: the clock and this process (mkdir
+            # refuses a collision rather than sharing a directory).
+            self.dir = self.root / f"g-{time.time_ns()}-{os.getpid()}"
+            os.mkdir(self.dir, 0o755)
+            os.chmod(self.dir, 0o755)
+        except BaseException:
+            os.close(self.lock)
+            raise
+        self.world: str | None = None
+        self.names: list[str] = []
+        self.published = False
+
+    def _current(self) -> Path | None:
+        """The generation ``current`` names now, read from disk, or None."""
+        current = self.root / "current"
+        return self.root / os.readlink(current) if current.is_symlink() else None
+
+    def _migrate(self) -> None:
+        """Move a directory of plain public files (the layout before generations) into
+        a generation without changing a byte served.
+
+        The plain files are hard-linked into the generation ``current`` names (a new
+        one when there is none, switched in before any name changes), then each is
+        replaced by its link through ``current``: the same bytes either way, so a
+        failure part way leaves every name serving what it served, and the next run
+        finishes the move.
+        """
+        plain = [path for path in sorted(self.directory.iterdir()) if _public(path.name)
+                 and not path.is_symlink() and path.is_file()]
+        if not plain:
+            return
+        current = self._current()
+        if current is None:
+            current = self.root / f"g-{time.time_ns()}-{os.getpid()}-plain"
+            os.mkdir(current, 0o755)
+            os.chmod(current, 0o755)
+        for path in plain:
+            kept = current / path.name
+            if not kept.exists():
+                os.link(path, kept)
+        if self._current() != current:
+            _point(self.root / "current", Path(current.name))
+        for path in plain:
+            _point(path, Path(GENERATIONS) / "current" / path.name)
+
+    def reset(self, world: str) -> None:
+        """Start the generation again, empty, for one collection of ``world``."""
+        self.discard()
+        self.world = world
+
+    def discard(self) -> None:
+        for path in self.dir.iterdir():
+            path.unlink()
+        self.names = []
+
+    def commit(self) -> None:
+        """The collection is whole; nothing is public until ``publish``."""
+
+    def __call__(self, window: int, rows: list[dict]) -> None:
+        self.write(RETURNS_PAGE.format(window=window),
+                   json.dumps({"world": self.world, "window": window, "rows": rows},
+                              indent=2) + "\n")
+
+    def write(self, name: str, body: str) -> None:
+        kept = self.previous / name if self.previous is not None else None
+        try:
+            same = kept is not None and kept.read_text() == body
+        except OSError:
+            same = False
+        if same:
+            os.link(kept, self.dir / name)
+        else:
+            _publish(self.dir, name, body)
+        self.names.append(name)
+
+    def publish(self) -> None:
+        """Place every public name the generation needs, then switch ``current`` to it.
+
+        A name already linked through ``current`` is left; a missing one is linked now
+        (until the switch it serves the previous generation's page of that name, or
+        nothing for a name new to this one). Anything else under a public name is not
+        the wake's to replace, and refuses the generation. The switch is the last
+        change a reader can see; only removal of a generation no longer named follows.
+        """
+        through = Path(GENERATIONS) / "current"
+        for name in self.names:
+            path = self.directory / name
+            if path.is_symlink() and Path(os.readlink(path)) == through / name:
+                continue
+            if path.exists() or path.is_symlink():
+                raise OSError(f"{name} in the wake directory is not the wake's to replace")
+            _point(path, through / name)
+        previous = self._current()
+        _point(self.root / "current", Path(self.dir.name))
+        self.published = True
+        keep = {path.name for path in (self._current(), previous) if path is not None}
+        for path in self.root.iterdir():
+            if path.name.startswith("g-") and path.name not in keep:
+                shutil.rmtree(path, ignore_errors=True)
+
+    def abandon(self) -> None:
+        """Remove this generation unless ``current`` names it, and release the lock."""
+        try:
+            if not self.published and self._current() != self.dir:
+                shutil.rmtree(self.dir, ignore_errors=True)
+        finally:
+            os.close(self.lock)
+
+
+def _public(name: str) -> bool:
+    """Whether ``name`` is one the wake publishes in its directory."""
+    return name in ("wake.json", "wake.html") or (
+        name.startswith("returns-") and name.endswith(".json"))
+
+
+def _point(path: Path, target: Path) -> None:
+    """Make ``path`` a symlink to ``target`` in one ``os.replace``."""
+    temporary = path.parent / f".wake-link-{os.getpid()}-{path.name}"
+    if temporary.is_symlink():
+        temporary.unlink()
+    os.symlink(target, temporary)
+    try:
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep,
-                  returns: int = RETURNS_ROWS) -> tuple[dict, dict[int, list[dict]]]:
-    """The wake document and every return grouped by window, for the page files."""
+                  returns: int = RETURNS_ROWS, pages: _Generation | None = None) -> dict:
+    """The wake document; every return's window page goes to ``pages`` when given.
+
+    The returns are a second pass, newest first (``_Returns``), so the pages are
+    written as each window's rows become final and never all held at once.
+    """
     result = dict.fromkeys((*VIEWS, *SECTIONS, "world", "manifest_hash", "uptime_ns",
                             "last_event_time_ns"), UNAVAILABLE)
     manifest = None
-    pages: dict[int, list[dict]] = {}
     for attempt in range(2):
         try:
             ledger, candidate = _open_snapshot(Path(path))
+            if pages is not None:
+                pages.reset(candidate.name)
             observatory = _Observatory()
             aggregates = ledger.public_aggregates(candidate, observatory)
             live = candidate.exchange.kind != "fake"
@@ -1028,14 +1343,20 @@ def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sle
             # keeps: wall time while it lives, event time once it does not.
             as_of = (time.time_ns() if now_ns is None else now_ns) if live and not (
                 observatory.terminated_ns is not None) else timing["last_event_time_ns"]
-            result.update(aggregates,
-                          **observatory.result(candidate, now_ns=as_of, returns=returns),
-                          **timing, world=candidate.name,
+            folded = _Returns(returns, pages if pages is not None else lambda *_: None)
+            for item in ledger.items_newest_first():
+                folded.feed(item)
+            section = folded.result()
+            if pages is not None:
+                pages.commit()
+            result.update(aggregates, **observatory.result(candidate, now_ns=as_of),
+                          returns=section, **timing, world=candidate.name,
                           manifest_hash=candidate.manifest_hash())
             manifest = candidate
-            pages = observatory.pages()
             break
         except (LedgerIntegrityError, InvalidToken, OSError, ValueError, KeyError, TypeError):
+            if pages is not None:
+                pages.discard()
             if attempt == 0:
                 sleep(0.1)
     # An account is published only when this world owns it. A key in the
@@ -1055,7 +1376,7 @@ def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sle
             "usdc_micro": UNAVAILABLE,
             "venice_micro": UNAVAILABLE,
         }
-    return result, pages
+    return result
 
 
 def _chart(wallet) -> str:
@@ -1190,23 +1511,19 @@ def write_wake(path: str | Path, out: str | Path, *, returns: int = RETURNS_ROWS
 
     The page carries the latest ``returns`` rows; every return is also written to
     its window's ``returns-<window>.json`` beside ``wake.json``, so the page stays
-    bounded while nothing said is lost. A page file whose bytes have not changed
-    is left alone.
+    bounded while nothing said is lost. All of them are one generation
+    (``_Generation``), published at once only after its last byte is written; a
+    collection that fails publishes nothing and leaves the previous generation served.
     """
-    data, pages = _collect_wake(path, returns=returns)
     directory = Path(out)
     directory.mkdir(parents=True, exist_ok=True)
-    for name, body in (("wake.json", json.dumps(data, indent=2) + "\n"),
-                       ("wake.html", render_wake(data))):
-        _publish(directory, name, body)
-    for window, rows in sorted(pages.items()):
-        name = RETURNS_PAGE.format(window=window)
-        body = json.dumps({"world": data.get("world"), "window": window, "rows": rows},
-                          indent=2) + "\n"
-        try:
-            if (directory / name).read_text() == body:
-                continue
-        except OSError:
-            pass
-        _publish(directory, name, body)
+    generation = _Generation(directory)
+    try:
+        data = _collect_wake(path, returns=returns, pages=generation)
+        if data["wallet_series"] != UNAVAILABLE:
+            generation.write("wake.json", json.dumps(data, indent=2) + "\n")
+            generation.write("wake.html", render_wake(data))
+            generation.publish()
+    finally:
+        generation.abandon()
     return data

@@ -59,7 +59,7 @@ def _drawn_at(rt, chosen: str, at: int):
     keyed = isinstance(state.learner, _KeyedLearner)
     key = f"{state.learner.id}:{at}:{chosen}"
     if keyed:
-        state.learner.current_key = key
+        state.learner.current_key, state.learner.current_ordinal = key, rt.n
     feasible = lambda a: (a == chosen, "")  # noqa: E731 - only this arm may be woken
     sample = next(s for s in (state.router.route("Tick", feasible, random.Random(i))
                               for i in range(200)) if s.chosen == chosen)

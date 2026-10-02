@@ -609,8 +609,14 @@ class PricingMixin:
                 self.card_unmeasured.pop(card.id, None)
                 self.card_held.pop(card.id, None)
             known[card.id] = meaning
-        self.card_held = {cid: fact for cid, fact in self.card_held.items()
-                          if cid in {card.id for card in self.charter.cards}}
+        current = {card.id for card in self.charter.cards}
+        # A retired card's meaning is history, and the diary holds it: kept here it
+        # grows with every revision the charter ever made (essay II.II.b, "memory").
+        # Its price left with it (``_drop_cards``), so a card that returns under the
+        # same id is a new metric whatever it meant before.
+        for cid in [cid for cid in known if cid not in current]:
+            del known[cid]
+        self.card_held = {cid: fact for cid, fact in self.card_held.items() if cid in current}
 
     def _derive_regions(self) -> None:
         """Every readable card of the current edition holds a region; unreadable ones hold none.
@@ -622,6 +628,10 @@ class PricingMixin:
         """
         regions: dict[str, CardRegion] = {}
         self._reset_redefined_cards()
+        # Logged once per card per edition: an older edition's marks can never match
+        # again, so they are dropped rather than kept for the world's life.
+        self.unparsed_logged = {key for key in self.unparsed_logged
+                                if key[1] == self.charter.edition}
         for card in self.charter.cards:
             region = region_for(card, rolling=self.rolling, observations=self.observations)
             if region is None:

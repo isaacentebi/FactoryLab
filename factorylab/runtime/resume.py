@@ -1474,6 +1474,7 @@ def restore_runtime(rt, state: dict) -> None:
                 # Older checkpoints predate decision release (wave 17b): none released.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
+    _bounded_charter_book(rt.charter_book)
     # The recorded run sealed every release this checkpoint shows the moment it was
     # durable; the resumed one does the same, so the tail collects exactly what the
     # recording collected.
@@ -1691,6 +1692,22 @@ def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, ex
     except BaseException:
         lock.close()
         raise
+
+
+def _bounded_charter_book(book) -> None:
+    """A checkpoint written while the charter book kept its history restores to what the
+    book keeps now (essay II.II.b, "memory"): the edition in force, the latest
+    activation, and counts of sittings and deferrals. Its decided motions leave at
+    the next boundary, as every decided motion does."""
+    prefix = "_CharterBook__"
+    for field in ("sittings", "deferrals"):
+        value = getattr(book, prefix + field)
+        if not isinstance(value, int):
+            setattr(book, prefix + field, len(value))
+    setattr(book, prefix + "editions", list(getattr(book, prefix + "editions"))[-1:])
+    activations = getattr(book, prefix + "activations")
+    setattr(book, prefix + "activations",
+            {edition: activations[edition] for edition in sorted(activations)[-1:]})
 
 
 def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,

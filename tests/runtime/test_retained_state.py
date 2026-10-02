@@ -849,3 +849,27 @@ def test_an_artifact_list_cursor_pages_the_same_after_a_resume():
     assert twin._artifact_page("seed-decider", {"cursor": first["next_cursor"]}) == live
     unseen = twin._artifact_page("seed-decider", {"cursor": "1000:" + "0" * 64})
     assert unseen["items"] == first["items"] and "cursor_unknown" not in unseen
+
+
+def test_collected_hashes_do_not_accumulate_in_the_listing():
+    """The listing's memory follows the live archive, not its history: two cohorts of
+    put, list, release, collect leave it holding nothing (essay II.II.b, "memory").
+    A cursor naming a collected hash still resumes, from the first row at its time."""
+    from factorylab.runtime.compute import ArtifactListing
+
+    store, _ = _store()
+    listing = ArtifactListing(store)
+    sizes = []
+    for cohort in range(2):
+        for n in range(200):
+            sha = store.put(canonical({"c": cohort, "n": n}), owner="a", kind="working.state")
+            listing.sync()
+            store.release(sha, owner="a", kind="working.state")
+            store.seal_released()
+            store.collect()
+            listing.sync()
+        sizes.append((len(store.index), len(listing.row), len(listing.order)))
+    assert sizes == [(0, 0, 0), (0, 0, 0)]
+    kept = store.put(canonical({"kept": 1}), owner="a", kind="working.state")
+    listing.sync()
+    assert [row["sha"] for row in listing.rows_after("a", 1, sha)] == [kept]

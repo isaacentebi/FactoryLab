@@ -1793,6 +1793,10 @@ class GovernanceMixin:
                 self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
         self.ledger.append({"kind": "committee.completed", "amendment_id": am.id})
         self.voted_amendments.add(am.id)
+        # The motion's vote is held: ``voted_amendments`` now refuses a second one, so
+        # which seat was asked is the diary's (``committee.decision``), not memory's.
+        for seat in committee.seats:
+            self.vote_handles.pop(f"vote-{am.id}-{seat[0]}", None)
         if connector is not None:
             passed = connector_yes >= len(committee.seats) // 2 + 1
             self.ledger.append({"kind": "connector.tally", "vote_id": am.id,
@@ -1958,6 +1962,9 @@ class GovernanceMixin:
             self.controller.remove(card_id, amendment_id=reason_id)
             self.priced.remove(card_id)
             self.regions.pop(card_id, None)
+            # Its ratio clock goes with its price: a card that returns is registered
+            # anew, and no retired card's marker outlives it (essay II.II.b, "memory").
+            self.card_clock.pop(card_id, None)
 
     def _activate_charter_if_due(self) -> None:
         """Every window boundary: internal motions; a governance boundary: the committee.
@@ -1989,7 +1996,7 @@ class GovernanceMixin:
         after the committee's ledgered, non-binding testimony (M4). Passed
         motions then take effect, each as its own edition.
         """
-        boundary = len(self.charter_book.sittings()) + self.charter_book.deferrals() + 1
+        boundary = self.charter_book.boundaries() + 1
         self.cadence.boundary(boundary, window=self.window.index, now_ns=self.clock.now_ns,
                               tick_interval_ns=self.tick_clock)
         agenda = self.charter_book.agenda()
@@ -2012,6 +2019,28 @@ class GovernanceMixin:
                 if motion in pending and not self.wallet.dead:
                     self._hold_vote(pending[motion], committee)
         self._activate_passed()
+        self._prune_vote_books()
+
+    def _prune_vote_books(self) -> None:
+        """Keep the vote guards only for a vote that can still be held (essay II.II.b,
+        "memory"): a motion still on the charter's agenda, a retirement still voting,
+        a norm edition not yet applied.
+
+        Every vote is held once by construction: a charter motion leaves the agenda
+        when a committee is seated for it and its id is never proposed again (the
+        charter book keeps decided ids), a retirement's id is new, and a connector's
+        vote is held inside the one registration that names it. So a guard on a
+        motion that can no longer be voted guards nothing, and its record is the
+        diary's (``committee.completed``, ``committee.decision``).
+        """
+        voteable = {am.id for am in self.charter_book.agenda()}
+        voteable.update(motion for motion, row in self.retirement_proposals.items()
+                        if row["status"] == "voting")
+        self.voted_amendments &= voteable
+        due = len(self.charter_book.norm_editions()) + 1
+        for key in [key for key in self.vote_handles if key.startswith("testimony-")
+                    and key.split("-")[1].isdigit() and int(key.split("-")[1]) < due]:
+            del self.vote_handles[key]
 
     def _norm_edition_due(self) -> dict | None:
         """The next norm edition beside the ledger, verified, or None; a refusal is ledgered.

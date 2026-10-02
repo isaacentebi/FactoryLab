@@ -218,8 +218,9 @@ is a 16 MiB tmpfs. The ledger's existing
 resume and wake. No new viewing key is generated. Wake never releases the public
 seal. Do not use `postmortem`, `report`, summaries or key inspection as a live view.
 The web server has a separate dynamic user and no access to the key files or runs.
-Keep `www` exclusively for `wake.html`, `wake.json` and the `returns-<window>.json`
-pages the wake writes beside them; never symlink private files into it.
+Keep `www` exclusively for `wake.html`, `wake.json`, the `returns-<window>.json`
+pages and the `.wake/` generations they point into, all written by the wake; never
+symlink private files into it.
 
 ## Rehearse, start once, verify, leave it alone
 
@@ -653,17 +654,30 @@ Exactly these fields are published: `wallet_series`, `spend_by_capability`,
 `tools`, `observations`, `charter`, `compute`, `pots`, `immune`, `portfolio`,
 `money`, `deliveries`, `commitments`, `cells`, `liveness`, `entitlements`, `returns`,
 `world`, `manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a
-venue key is present and `reserve` when a reserve key is present. The five views originate
-from `Ledger.aggregate`, each verifying the same frozen chain. The three identity-bearing
+venue key is present and `reserve` when a reserve key is present. Four views originate
+from `Ledger.aggregate`, each verifying the same frozen chain; `wallet_series` is folded
+from the same verified stream and is bounded: every balance observation while there are at
+most 2,000, past that the first, last, lowest and highest point of each of at most 500
+equal consecutive buckets, with `observations`, the count the diary holds. The diary keeps
+the whole series. The three identity-bearing
 views (`spend_by_capability`, `invocations_by_assembly`, `action_frequencies`) are projected
 to role totals (`producer`, `evaluator`, `meta`, `antagonist`, `noop`, `other`).
 Registered assemblies join their declared role; unknown identities join `other`.
 In these five views no assembly ids, model bindings, positions or entry prices are
 published. Incomplete input or
-verification failure retries once after 100 ms; a second failure replaces all
-ledger-derived fields with `"unavailable"` and exits 1. Optional account failures
+verification failure retries once after 100 ms; a second failure publishes nothing,
+leaves the previous publication served, and exits 1. Optional account failures
 mark only their unavailable fields. There is no exception text in the artifacts.
-Each output file is atomically replaced; the pair is not a transactional bundle.
+Every page, `wake.json` and `wake.html` of one run are one generation: written into a
+fresh directory under `www/.wake/`, then published together by replacing the one
+symlink `www/.wake/current`, through which every public name points. A run that fails
+before that switch leaves the previous generation served whole: every public link the
+generation needs is placed first, and the switch is the last step. One wake publishes
+at a time (an exclusive lock on `www/.wake/lock`; a second exits 1 having published
+nothing). The current and the previous generation, read from `current` under the lock,
+are kept; a page whose bytes did not change is a hard link to the previous
+generation's copy. A `www` of plain files from before generations is moved into one
+without changing a byte served.
 
 #### The observatory sections (A17, widened)
 

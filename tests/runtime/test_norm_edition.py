@@ -156,6 +156,8 @@ def test_an_edition_applies_only_at_a_boundary_after_ledgered_testimony(tmp_path
     _to_boundary(rt)
     rt._activate_charter_if_due()
     assert rt.charter.edition == 2 and len(_items(rt, "charter.norm_edition")) == 1
+    # The applied edition's testimony guards leave with it; the diary keeps who testified.
+    assert not any(key.startswith("testimony-") for key in rt.vote_handles)
 
 
 def test_without_the_manifests_signer_no_edition_is_possible(tmp_path, monkeypatch):

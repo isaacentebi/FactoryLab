@@ -235,11 +235,12 @@ class ArtifactListing:
         self.by_sha: dict[str, list[tuple]] = {}
         self.by_owner: dict[str, list[tuple]] = {}  # each sorted
         # sha -> its place in the archive index's insertion order: relative order only,
-        # identical between a live run and a rebuild from the checkpointed index. A
-        # collected hash keeps its number (``gone``) so a cursor naming it still has a
-        # place; put again, it enters at the end of the index and is numbered anew.
+        # identical between a live run and a rebuild from the checkpointed index. Only
+        # indexed hashes are numbered, so this holds the live archive and never its
+        # history (essay II.II.b, "memory"): a collected hash loses its number, a
+        # cursor naming it resumes from the first row at its time (``rows_after``),
+        # exactly as after a resume, and put again it is numbered anew at the end.
         self.order: dict[str, int] = {}
-        self.gone: set[str] = set()
         self.next_order = 0
 
     def sync(self) -> None:
@@ -252,7 +253,7 @@ class ArtifactListing:
         if epoch != self.epoch:
             self.epoch = epoch
             self.order = {sha: n for n, sha in enumerate(store.index)}
-            self.gone, self.next_order = set(), len(self.order)
+            self.next_order = len(self.order)
             self._rebuild(row for sha in list(store.index) for row in self._rows_for_sha(sha))
             return
         self._number(changed)
@@ -271,10 +272,9 @@ class ArtifactListing:
         """
         index = self.store.index
         for sha in changed:
-            if sha not in index and sha in self.order:
-                self.gone.add(sha)
-        entered = {sha for sha in changed
-                   if sha in index and (sha not in self.order or sha in self.gone)}
+            if sha not in index:
+                self.order.pop(sha, None)
+        entered = {sha for sha in changed if sha in index and sha not in self.order}
         tail = []
         for sha in reversed(index):
             if len(tail) == len(entered):
@@ -283,7 +283,6 @@ class ArtifactListing:
                 tail.append(sha)
         for sha in reversed(tail):
             self.order[sha] = self.next_order
-            self.gone.discard(sha)
             self.next_order += 1
 
     def rows_for(self, owner: str) -> list[dict[str, Any]]:
@@ -292,10 +291,10 @@ class ArtifactListing:
     def rows_after(self, owner: str, ns: int, sha: str) -> list[dict[str, Any]]:
         """``owner``'s rows after the listing position of the row ``(ns, sha)``.
 
-        Guarantees the same answer whether or not that row is still listed: a hash
-        the listing has numbered keeps its place, and a hash it never numbered (one
-        collected before a resume) resumes from the first row at ``ns``, so paging
-        may repeat a row it already returned but never skips one.
+        Guarantees paging never skips a row: a hash still in the archive keeps its
+        place, and a hash the listing does not number (one collected, before or after
+        a resume) resumes from the first row at ``ns``, so paging may repeat a row it
+        already returned but never skips one.
         """
         place = self.order.get(sha)
         cut = (-ns, place, float("inf")) if place is not None else (-ns, -1)
@@ -3057,7 +3056,7 @@ class ComputeMixin:
         total = sum(executed.values())
         executed = {a: p / total for a, p in executed.items()}
         try:
-            learner.distribution_for(handle, support)
+            learner.distribution_for(handle, support, ordinal=self.n)
             learner.record_executed(handle, executed)
         except (KeyError, ValueError, RuntimeError, TypeError) as exc:
             self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
