@@ -529,7 +529,7 @@ def test_a_failed_publication_leaves_the_previous_generation_whole(tmp_path, fai
     else:
         assert write_wake(second, out, returns=10)["world"] == UNAVAILABLE
     assert _published(out) == before
-    generations = [p for p in (out / ".wake").iterdir() if not p.is_symlink()]
+    generations = [p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]
     assert len(generations) == 1
 
 
@@ -542,4 +542,106 @@ def test_only_the_current_and_previous_generations_are_kept(tmp_path):
         write_wake(path, out, returns=5)
         assert json.loads((out / "wake.json").read_text())["returns"]["total"] == count
         assert json.loads((out / f"returns-{count // 10 - 1}.json").read_text())["rows"]
-    assert len([p for p in (out / ".wake").iterdir() if not p.is_symlink()]) == 2
+    assert len([p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]) == 2
+
+
+def _diary_of(tmp_path: Path, name: str, count: int) -> Path:
+    path = tmp_path / name / "world.jsonl"
+    path.parent.mkdir()
+    _wake_diary(path, count)
+    return path
+
+
+def test_a_link_that_cannot_be_placed_aborts_before_the_switch(tmp_path):
+    """Every public name the next generation needs is placed first; the switch of
+    ``current`` is the last step. A link that cannot be placed (here a new window's
+    page, its temporary name obstructed) leaves the previous generation served."""
+    import os
+
+    out = tmp_path / "www"
+    write_wake(_diary_of(tmp_path, "first", 20), out, returns=10)
+    before = _published(out)
+    assert "returns-2.json" not in before
+    (out / f".wake-link-{os.getpid()}-returns-2.json").mkdir()
+    with pytest.raises(OSError):
+        write_wake(_diary_of(tmp_path, "second", 40), out, returns=10)
+    assert _published(out) == before
+    assert len([p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]) == 1
+
+
+def test_migrating_from_plain_files_is_whole_or_aborts_cleanly(tmp_path):
+    """A wake directory of plain files (the layout before generations) moves to the
+    generation layout without ever serving a mixture: a failure part way through
+    leaves every public name serving the old bytes, and the next run completes it."""
+    import os
+    import shutil
+
+    published = tmp_path / "published"
+    write_wake(_diary_of(tmp_path, "first", 20), published, returns=10)
+    out = tmp_path / "www"
+    out.mkdir()
+    for name, body in _published(published).items():
+        (out / name).write_text(body)  # plain files, as the old wake wrote them
+    before = _published(out)
+    obstruction = out / f".wake-link-{os.getpid()}-wake.html"
+    obstruction.mkdir()
+    with pytest.raises(OSError):
+        write_wake(_diary_of(tmp_path, "second", 40), out, returns=10)
+    assert _published(out) == before
+    shutil.rmtree(obstruction)
+    data = write_wake(_diary_of(tmp_path, "third", 40), out, returns=10)
+    assert data["returns"]["total"] == 40
+    assert all((out / name).is_symlink() for name in _published(out))
+    assert json.loads((out / "wake.json").read_text())["returns"]["total"] == 40
+
+
+def test_publishers_exclude_each_other_and_never_remove_the_current_generation(tmp_path):
+    """One publisher at a time (a lock in ``.wake/``): a second refuses rather than
+    build beside the first. Cleanup keeps what ``current`` names when it looks, read
+    under the lock, never what the publisher remembered."""
+    import fcntl
+    import os
+    import shutil
+
+    out = tmp_path / "www"
+    write_wake(_diary_of(tmp_path, "first", 20), out, returns=10)
+    before = _published(out)
+    fd = os.open(out / ".wake" / "lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with pytest.raises(BlockingIOError):
+            write_wake(_diary_of(tmp_path, "second", 30), out, returns=10)
+    finally:
+        os.close(fd)
+    assert _published(out) == before
+    assert len([p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]) == 1
+    # Another publisher's switch since this one looked: what ``current`` names stays.
+    current = out / ".wake" / "current"
+    other = out / ".wake" / "g-other"
+    shutil.copytree(out / ".wake" / os.readlink(current), other)
+    os.replace(current, out / ".wake" / "old-current")
+    os.symlink("g-other", current)
+    os.unlink(out / ".wake" / "old-current")
+    write_wake(_diary_of(tmp_path, "third", 30), out, returns=10)
+    write_wake(_diary_of(tmp_path, "fourth", 40), out, returns=10)
+    assert json.loads((out / "wake.json").read_text())["returns"]["total"] == 40
+    assert (out / ".wake" / os.readlink(current)).is_dir()
+
+
+def test_the_cli_refuses_while_another_wake_publishes(tmp_path, capsys):
+    """A second publisher exits 1 with the refusal code and publishes nothing."""
+    import fcntl
+    import os
+
+    path = _diary_of(tmp_path, "first", 20)
+    out = tmp_path / "www"
+    assert main(["wake", "--ledger", str(path), "--out", str(out)]) == 0
+    before = _published(out)
+    fd = os.open(out / ".wake" / "lock", os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        assert main(["wake", "--ledger", str(path), "--out", str(out)]) == 1
+    finally:
+        os.close(fd)
+    assert "wake_unavailable" in capsys.readouterr().err
+    assert _published(out) == before

@@ -22,6 +22,7 @@ weights and propensities, private memories, prompts and per-decision scores.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import html
 import json
@@ -1164,11 +1165,17 @@ class _Generation:
     Every page, ``wake.json`` and ``wake.html`` of one collection are written into a
     fresh directory under ``.wake/``; ``.wake/current`` names it, and each public name
     in the wake directory is a symlink through ``.wake/current``. Publishing is one
-    ``os.replace`` of that pointer, so a reader is served one generation or the one
-    before, never a mixture, and a generation that fails before the switch leaves the
-    one before served exactly as it was. Guarantees at most two generations on disk:
-    the current and the previous; a page whose bytes did not change is a hard link to
-    the previous generation's copy, not a second copy.
+    ``os.replace`` of that pointer, taken last, after every public name the generation
+    needs is in place: a reader is served one generation or the one before, never a
+    mixture, and a run that fails at any earlier step leaves the one before served
+    exactly as it was.
+
+    One publisher at a time: an exclusive lock on ``.wake/lock`` is held from the first
+    look at the directory to the last removal, and a second publisher is refused
+    (``BlockingIOError``) rather than built beside the first. Guarantees at most two
+    generations on disk, the one ``current`` names and the one it named before the
+    switch, both read from ``current`` under the lock; a page whose bytes did not
+    change is a hard link to the previous generation's copy, not a second copy.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -1176,16 +1183,55 @@ class _Generation:
         self.root = directory / GENERATIONS
         self.root.mkdir(exist_ok=True)
         os.chmod(self.root, 0o755)  # the web server's user reads it
-        current = self.root / "current"
-        self.previous = self.root / os.readlink(current) if current.is_symlink() else None
-        # A name of its own, never reused: the clock and this process (mkdir refuses a
-        # collision rather than sharing a directory).
-        self.dir = self.root / f"g-{time.time_ns()}-{os.getpid()}"
-        os.mkdir(self.dir, 0o755)
-        os.chmod(self.dir, 0o755)
+        self.lock = os.open(self.root / "lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._migrate()
+            self.previous = self._current()
+            # A name of its own, never reused: the clock and this process (mkdir
+            # refuses a collision rather than sharing a directory).
+            self.dir = self.root / f"g-{time.time_ns()}-{os.getpid()}"
+            os.mkdir(self.dir, 0o755)
+            os.chmod(self.dir, 0o755)
+        except BaseException:
+            os.close(self.lock)
+            raise
         self.world: str | None = None
         self.names: list[str] = []
         self.published = False
+
+    def _current(self) -> Path | None:
+        """The generation ``current`` names now, read from disk, or None."""
+        current = self.root / "current"
+        return self.root / os.readlink(current) if current.is_symlink() else None
+
+    def _migrate(self) -> None:
+        """Move a directory of plain public files (the layout before generations) into
+        a generation without changing a byte served.
+
+        The plain files are hard-linked into the generation ``current`` names (a new
+        one when there is none, switched in before any name changes), then each is
+        replaced by its link through ``current``: the same bytes either way, so a
+        failure part way leaves every name serving what it served, and the next run
+        finishes the move.
+        """
+        plain = [path for path in sorted(self.directory.iterdir()) if _public(path.name)
+                 and not path.is_symlink() and path.is_file()]
+        if not plain:
+            return
+        current = self._current()
+        if current is None:
+            current = self.root / f"g-{time.time_ns()}-{os.getpid()}-plain"
+            os.mkdir(current, 0o755)
+            os.chmod(current, 0o755)
+        for path in plain:
+            kept = current / path.name
+            if not kept.exists():
+                os.link(path, kept)
+        if self._current() != current:
+            _point(self.root / "current", Path(current.name))
+        for path in plain:
+            _point(path, Path(GENERATIONS) / "current" / path.name)
 
     def reset(self, world: str) -> None:
         """Start the generation again, empty, for one collection of ``world``."""
@@ -1218,38 +1264,50 @@ class _Generation:
         self.names.append(name)
 
     def publish(self) -> None:
-        """Switch the wake to this generation, then point every public name through it.
+        """Place every public name the generation needs, then switch ``current`` to it.
 
-        Every public name is checked first: one the wake cannot point (a directory,
-        anything but a symlink or a plain file) refuses the generation before the
-        switch, with the previous one still served.
+        A name already linked through ``current`` is left; a missing one is linked now
+        (until the switch it serves the previous generation's page of that name, or
+        nothing for a name new to this one). Anything else under a public name is not
+        the wake's to replace, and refuses the generation. The switch is the last
+        change a reader can see; only removal of a generation no longer named follows.
         """
-        for name in self.names:
-            path = self.directory / name
-            if (path.exists() or path.is_symlink()) and not (path.is_symlink()
-                                                              or path.is_file()):
-                raise OSError(f"{name} in the wake directory is not the wake's to replace")
-        _point(self.root / "current", Path(self.dir.name))
-        self.published = True
         through = Path(GENERATIONS) / "current"
         for name in self.names:
             path = self.directory / name
-            if not (path.is_symlink() and Path(os.readlink(path)) == through / name):
-                _point(path, through / name)
-        keep = {self.dir.name, *([self.previous.name] if self.previous else [])}
+            if path.is_symlink() and Path(os.readlink(path)) == through / name:
+                continue
+            if path.exists() or path.is_symlink():
+                raise OSError(f"{name} in the wake directory is not the wake's to replace")
+            _point(path, through / name)
+        previous = self._current()
+        _point(self.root / "current", Path(self.dir.name))
+        self.published = True
+        keep = {path.name for path in (self._current(), previous) if path is not None}
         for path in self.root.iterdir():
-            if not path.is_symlink() and path.name not in keep:
+            if path.name.startswith("g-") and path.name not in keep:
                 shutil.rmtree(path, ignore_errors=True)
 
     def abandon(self) -> None:
-        if not self.published:
-            shutil.rmtree(self.dir, ignore_errors=True)
+        """Remove this generation unless ``current`` names it, and release the lock."""
+        try:
+            if not self.published and self._current() != self.dir:
+                shutil.rmtree(self.dir, ignore_errors=True)
+        finally:
+            os.close(self.lock)
+
+
+def _public(name: str) -> bool:
+    """Whether ``name`` is one the wake publishes in its directory."""
+    return name in ("wake.json", "wake.html") or (
+        name.startswith("returns-") and name.endswith(".json"))
 
 
 def _point(path: Path, target: Path) -> None:
     """Make ``path`` a symlink to ``target`` in one ``os.replace``."""
     temporary = path.parent / f".wake-link-{os.getpid()}-{path.name}"
-    temporary.unlink(missing_ok=True)
+    if temporary.is_symlink():
+        temporary.unlink()
     os.symlink(target, temporary)
     try:
         os.replace(temporary, path)
