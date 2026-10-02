@@ -26871,7 +26871,7 @@
     "factorylab/kernel/reserve.py": "11373ac82be95c9800c266b4fb5a1dbc035688602a2999c2bad4395c4d098a64",
     "factorylab/runtime/composition.py": "92b37c56130bf84cc53cea68c1c73b1f83d13b0db423641d90741583d80decfe",
     "factorylab/runtime/compute.py": "28e568b50d6b6256e53320daf6f6520d40e41bb546f067603879954a898953fe",
-    "factorylab/runtime/governance.py": "9c6b9eb2afb2d8ca9465a002e898cce5a219fb5317937545fbd595ff3b0e1eb0",
+    "factorylab/runtime/governance.py": "3e870164acf1ca47e9325ceea9e433c0be41ac48e1fad951fb3f615e8e58c523",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
     "factorylab/runtime/polymarket.py": "737e9964f9ee209a7d033c6d1b60448a1770e2d6a8de84a3f816eaf43fcba165",
     "factorylab/runtime/propensity.py": "488c4992bdb4707ff1f2c64549995c629e8f55909dde38822ce9f5132fc00280",

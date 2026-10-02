@@ -71,7 +71,7 @@ def test_aggregate_verification_failure_discards_all_partial_views(world, monkey
 
     monkeypatch.setattr(Ledger, "aggregate", fail)
     result = collect_wake(world, sleep=sleeps.append)
-    assert calls.count("wallet_series") == 2 and sleeps == [0.1]
+    assert calls.count("spend_by_capability") == 2 and sleeps == [0.1]
     assert set(result.values()) == {UNAVAILABLE}
 
 
@@ -447,3 +447,41 @@ def test_the_seller_catalogue_reads_the_diary_without_holding_it(tmp_path):
         assert services["oracle"].price_micro == 20 and services["oracle"].version == 2
         assert facilitator == "https://facilitator.example" and liveness()
     assert peaks[1] - peaks[0] < 500_000, peaks
+
+
+def test_the_published_balance_series_is_bounded_and_keeps_every_drawdown(tmp_path):
+    """The wake publishes at most ``SERIES_POINTS`` balance points however long the
+    world lives (essay II.II.b, "memory"; the full series stays in the diary): the
+    first, the last, and each bucket's first, last, lowest and highest, so a drawdown
+    is never smoothed away. A short series is published exactly."""
+    from factorylab.runtime.wake import SERIES_POINTS
+
+    manifest = load_manifest("scripted")
+    for count in (2_500, 8_000):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        ledger = Ledger(path, manifest=json.loads(manifest.canonical_json()),
+                        key_path=str(path) + ".key", clock_ns=lambda: 1)
+        balances = [1_000_000 + (n * 7919) % 1000 for n in range(count)]
+        balances[count // 3] = 5  # the drawdown
+        balances[2 * count // 3] = 9_000_000  # the peak
+        for n, balance in enumerate(balances):
+            ledger.append({"kind": "wallet.drip", "amount": 1, "balance_after": balance,
+                           "ts": 1_000 + n})
+        series = collect_wake(path)["wallet_series"]
+        points = series["series"]
+        assert series["observations"] == count
+        assert len(points) <= SERIES_POINTS
+        assert points[0] == {"ts": 1_000, "balance": balances[0]}
+        assert points[-1] == {"ts": 1_000 + count - 1, "balance": balances[-1]}
+        assert {"ts": 1_000 + count // 3, "balance": 5} in points
+        assert {"ts": 1_000 + 2 * count // 3, "balance": 9_000_000} in points
+        assert [p["ts"] for p in points] == sorted({p["ts"] for p in points})
+    short = tmp_path / "short" / "world.jsonl"
+    short.parent.mkdir()
+    ledger = Ledger(short, manifest=json.loads(manifest.canonical_json()),
+                    key_path=str(short) + ".key", clock_ns=lambda: 1)
+    for n in range(10):
+        ledger.append({"kind": "wallet.drip", "amount": 1, "balance_after": n, "ts": n})
+    assert collect_wake(short)["wallet_series"] == {
+        "series": [{"ts": n, "balance": n} for n in range(10)], "observations": 10}

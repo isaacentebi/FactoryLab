@@ -624,8 +624,12 @@ Exactly these fields are published: `wallet_series`, `spend_by_capability`,
 `tools`, `observations`, `charter`, `compute`, `pots`, `immune`, `portfolio`,
 `money`, `deliveries`, `commitments`, `cells`, `liveness`, `entitlements`, `returns`,
 `world`, `manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a
-venue key is present and `reserve` when a reserve key is present. The five views originate
-from `Ledger.aggregate`, each verifying the same frozen chain. The three identity-bearing
+venue key is present and `reserve` when a reserve key is present. Four views originate
+from `Ledger.aggregate`, each verifying the same frozen chain; `wallet_series` is folded
+from the same verified stream and is bounded: every balance observation while there are at
+most 2,000, past that the first, last, lowest and highest point of each of at most 500
+equal consecutive buckets, with `observations`, the count the diary holds. The diary keeps
+the whole series. The three identity-bearing
 views (`spend_by_capability`, `invocations_by_assembly`, `action_frequencies`) are projected
 to role totals (`producer`, `evaluator`, `meta`, `antagonist`, `noop`, `other`).
 Registered assemblies join their declared role; unknown identities join `other`.

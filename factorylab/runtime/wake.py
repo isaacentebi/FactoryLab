@@ -39,7 +39,7 @@ from pathlib import Path
 from cryptography.fernet import InvalidToken
 
 from factorylab.cortex.request import public_return
-from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, canonical
+from factorylab.kernel.ledger import WALLET_SERIES_KINDS, Ledger, LedgerIntegrityError, canonical
 from factorylab.runtime.worlds import WORLDS_DIR, load_manifest
 
 VIEWS = (
@@ -63,6 +63,8 @@ MAX_ROWS = 200
 #: The page carries the latest returns; every older row lives in its window's page file.
 RETURNS_ROWS = 500
 RETURNS_PAGE = "returns-{window}.json"
+#: The most balance points ``wallet_series`` publishes; the diary keeps every one.
+SERIES_POINTS = 2_000
 ROLES = ("producer", "evaluator", "meta", "antagonist", "adversary")
 RAILS = ("openrouter", "venice", "x402")
 INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
@@ -968,9 +970,12 @@ class _Snapshot(Ledger):
         """Only role totals escape identity-bearing views, including new assemblies.
 
         An optional observatory reads the same authenticated stream once, so the
-        widened sections cost no second decryption pass over the diary.
+        widened sections cost no second decryption pass over the diary. The balance
+        series is folded from that stream, bounded (``_Series``), after the other
+        views have verified the chain it is read from.
         """
-        aggregates = {view: self.aggregate(view) for view in VIEWS}
+        aggregates = {view: self.aggregate(view) for view in VIEWS if view != "wallet_series"}
+        series = _Series()
         roles = {a.id: a.role for a in manifest.assemblies}
         allowed = {"producer", "evaluator", "meta", "antagonist", "adversary"}
         # Streaming projection avoids materialising the item diary. Identities
@@ -978,6 +983,7 @@ class _Snapshot(Ledger):
         for item in self.items():
             if observatory is not None:
                 observatory.feed(item)
+            series.feed(item)
             if item.get("kind") == "event":
                 event = item.get("event", {})
                 payload = event.get("payload", {})
@@ -992,7 +998,73 @@ class _Snapshot(Ledger):
                 role = roles.get(name, "noop" if name == "NOOP" else "other")
                 totals[role if role in allowed | {"noop"} else "other"] += value
             aggregates[view] = {field: dict(sorted(totals.items()))}
+        aggregates["wallet_series"] = series.result()
         return aggregates
+
+
+class _Series:
+    """The wallet balance series, downsampled as it streams to at most ``SERIES_POINTS``.
+
+    Guarantees, for the same diary, the same points: every observation while there are
+    at most ``SERIES_POINTS``; past that, the observations split into at most a quarter
+    as many consecutive buckets of equal width (a power of two; the last may be short),
+    each publishing its first, last, lowest and highest point (the earliest on a tie),
+    in ledger order. So the first and last observation and every bucket's extremes,
+    each drawdown's depth among them, are published, and what is held is the buckets,
+    never the series (essay II.II.b, "memory"; ``Ledger.aggregate`` still answers the
+    whole series from the diary).
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.raw: list[tuple[int, int, int]] | None = []  # (index, ts, balance)
+        self.width = 1
+        self.buckets: list[list] = []  # [first, last, low, high, observations]
+
+    def feed(self, item: dict) -> None:
+        if item.get("kind") not in WALLET_SERIES_KINDS:
+            return
+        point = (self.count, item["ts"], item["balance_after"])
+        self.count += 1
+        if self.raw is not None:
+            self.raw.append(point)
+            if len(self.raw) <= SERIES_POINTS:
+                return
+            raw, self.raw = self.raw, None
+            for earlier in raw:
+                self._bucket(earlier)
+            return
+        self._bucket(point)
+
+    def _bucket(self, point: tuple[int, int, int]) -> None:
+        last = self.buckets[-1] if self.buckets else None
+        if last is None or last[4] >= self.width:
+            self.buckets.append([point, point, point, point, 1])
+        else:
+            last[1] = point
+            if point[2] < last[2][2]:
+                last[2] = point
+            if point[2] > last[3][2]:
+                last[3] = point
+            last[4] += 1
+        if len(self.buckets) > SERIES_POINTS // 4:
+            pairs = [self.buckets[i:i + 2] for i in range(0, len(self.buckets), 2)]
+            self.buckets = [self._merge(*pair) if len(pair) == 2 else pair[0]
+                            for pair in pairs]
+            self.width *= 2
+
+    @staticmethod
+    def _merge(a: list, b: list) -> list:
+        return [a[0], b[1], a[2] if a[2][2] <= b[2][2] else b[2],
+                a[3] if a[3][2] >= b[3][2] else b[3], a[4] + b[4]]
+
+    def result(self) -> dict:
+        if self.raw is not None:
+            points = self.raw
+        else:
+            points = sorted({p for bucket in self.buckets for p in bucket[:4]})
+        return {"series": [{"ts": ts, "balance": balance} for _, ts, balance in points],
+                "observations": self.count}
 
 
 def _open_snapshot(path: Path):

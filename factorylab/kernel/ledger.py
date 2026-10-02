@@ -22,6 +22,11 @@ if TYPE_CHECKING:
     from factorylab.kernel.termination import Termination
 
 
+#: The items that move the compute wallet's balance: one ``wallet_series`` point each.
+WALLET_SERIES_KINDS = ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle",
+                       "wallet.settle_uncertain")
+
+
 class LedgerIntegrityError(RuntimeError):
     """Evidence is unavailable when its authenticated chain is invalid."""
 
@@ -1004,9 +1009,7 @@ class Ledger:
                 "series": [
                     {"ts": item["ts"], "balance": item["balance_after"]}
                     for item in selected
-                    if item.get("kind")
-                    in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle",
-                        "wallet.settle_uncertain")
+                    if item.get("kind") in WALLET_SERIES_KINDS
                 ]
             }
         if view == "spend_by_capability":
