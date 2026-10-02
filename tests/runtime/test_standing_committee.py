@@ -8,7 +8,9 @@ boundary, where one committee, stratified and at quorum, votes on every waiting
 motion. Retirements are internal self-organization with their own queue.
 """
 
-from factorylab.charter.amendment import PredictedEffect
+import pytest
+
+from factorylab.charter.amendment import Amendment, PredictedEffect
 from factorylab.cortex.registration import RetireProposal
 from factorylab.kernel.queue import PropensityRecord
 from tests.conftest import make_runtime
@@ -204,3 +206,34 @@ def test_saturation_statistics_reach_the_world_the_wake_and_the_agenda(monkeypat
         assert agenda["penalty_cap"] == rt.m.prices.penalty_cap
         row = next(r for r in agenda["cards"] if r["card_id"] == card)
         assert {k: row[k] for k in stats} == stats
+
+
+def test_completed_votes_leave_no_vote_books_behind(monkeypatch):
+    """A ballot opened once per seat per motion needs remembering only while its motion's
+    vote can still be held; a decided motion's id is the charter book's to keep
+    (essay II.II.b, "memory"). Two cohorts of boundaries, each voting a clock motion,
+    leave ``voted_amendments`` and ``vote_handles`` holding nothing."""
+    rt, _ = _runtime(monkeypatch)
+    sizes = []
+    for cohort in range(2):
+        for n in range(4):
+            seconds = 2 + (cohort * 4 + n) % 2
+            rt._propose_amendment(_handle(rt, event=f"p-{cohort}-{n}"), {
+                "kind": "amendment", "id": f"clock-{cohort}-{n}",
+                "tick_interval": f"{seconds}s",
+                "predicted_effect": {"observation": "burn_per_window",
+                                     "direction": "increase", "window": 1}})
+            _to_boundary(rt)
+            rt._activate_charter_if_due()
+            assert any(i["amendment_id"] == f"clock-{cohort}-{n}"
+                       for i in _items(rt, "committee.completed"))
+        _to_boundary(rt)
+        rt._activate_charter_if_due()
+        sizes.append((len(rt.voted_amendments), len(rt.vote_handles)))
+    assert sizes == [(0, 0), (0, 0)]
+    # A decided motion's id still cannot be proposed again.
+    with pytest.raises(ValueError, match="already proposed"):
+        rt.charter_book.validate(Amendment(
+            "clock-0-0", "decision-1", rt.charter.edition, (), (), (),
+            {"observation": "burn_per_window", "direction": "increase", "window": 1},
+            tick_interval="9s"))
