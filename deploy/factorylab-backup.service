@@ -2,6 +2,8 @@
 Description=Encrypted Factory Lab backup
 Wants=network-online.target
 After=network-online.target
+# A failed or timed-out backup reaches the owner (deploy/alert.sh), never only a log.
+OnFailure=factorylab-alert@backup_failed.service
 
 [Service]
 Type=oneshot
@@ -17,3 +19,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+# backup.sh pins the sidecars with hard links in runs/.backup-pin/ and removes the pin on
+# exit. A hard link cannot cross mount points (EXDEV), even of one filesystem, so the pin
+# and the files it pins must share one writable mount: runs/ itself. Staging is in the
+# unit's PrivateTmp; nothing else is written.
+ReadWritePaths=/srv/factorylab/runs
