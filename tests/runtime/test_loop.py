@@ -77,7 +77,6 @@ def _recursive_runtime(*, events=100, provider=None):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        router_gamma=0.1,
         provider=provider or RecursiveMetaProvider(),
     )
 
@@ -226,7 +225,6 @@ def _consequence_runtime(*, provider=None, exchange=None, manifest=None):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        router_gamma=0.2,
         provider=provider,
         exchange=exchange,
     )
@@ -487,7 +485,7 @@ def _market_runtime(market_http, *, provider=None, events=10, treasury=None, see
     })
     return Runtime(
         manifest, events=events, seed=1, initial_balance_micro=None, ledger_path=None,
-        router_gamma=0.2, provider=provider or ScriptedProvider(),
+        provider=provider or ScriptedProvider(),
         market=X402Provider(private_key=TEST_KEY, transport=market_http),
     )
 
@@ -563,7 +561,7 @@ def test_insolvency_terminates_scripted_world_when_seller_demands_unaffordable_p
     runtime.market.complete = demand
     # A single x402 route removes seeded alternatives while preserving ordinary router sampling.
     del runtime.assemblies["seed-market"]
-    runtime._build_router("Tick", "exp3", 0.2)
+    runtime._build_router("Tick", "exp3")
     result = runtime.run()
     assert result["terminated"] and result["termination_reason"] == "insolvency:compute"
     assert result["seal_key_released"] and result["wallet_balance_micro"] > 0

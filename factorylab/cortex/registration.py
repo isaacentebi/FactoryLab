@@ -207,7 +207,6 @@ class RetireProposal:
 class RouterProposal:
     event_kind: str
     learner: str
-    gamma: float
     add: bool = False  # True: add another router for the kind instead of replacing
 
 
@@ -250,7 +249,6 @@ class LearnerProposal:
     assembly_id: str
     learner: str
     actions: tuple[str, ...]
-    gamma: float
 
 
 # --- connectors: admission policy lives in the runtime sortition path --------
@@ -668,6 +666,18 @@ def _assembly(
     )
 
 
+def _refuse_gamma(item: dict[str, Any]) -> None:
+    """Refuse an exploration parameter: a learner's exploration is its own schedule.
+
+    Guarantees a proposal naming ``gamma`` is refused whatever its value. Exploration
+    is a function of the learner's own rounds (docs/architecture/learners-noregret.md
+    §2.1, §2.2), so a parameter that set it would set nothing; accepting one silently
+    would tell its author it did.
+    """
+    if "gamma" in item:
+        raise ValueError("gamma is refused: a learner's exploration is its own schedule")
+
+
 def _router(item: dict[str, Any], event_kinds: frozenset[str]) -> RouterProposal:
     kind = event_name(item.get("event_kind"))
     if kind not in event_kinds:
@@ -675,15 +685,13 @@ def _router(item: dict[str, Any], event_kinds: frozenset[str]) -> RouterProposal
     learner = item.get("learner")
     if learner not in LEARNERS:
         raise ValueError("learner must be exp3 or blum_mansour")
-    gamma = item.get("gamma", 0.1)
-    if not isinstance(gamma, int | float) or isinstance(gamma, bool) or not 0 < gamma <= 1:
-        raise ValueError("gamma must be in (0, 1]")
+    _refuse_gamma(item)
     add = item.get("add", False)
     if isinstance(add, str) and add.lower() in ("true", "false"):
         add = add.lower() == "true"
     if not isinstance(add, bool):
         raise ValueError("add must be a boolean")
-    return RouterProposal(kind, learner, float(gamma), add)
+    return RouterProposal(kind, learner, add)
 
 
 def _tool(
@@ -829,7 +837,5 @@ def _learner(item: dict[str, Any], known_assemblies: frozenset[str]) -> LearnerP
     ordered = tuple(dict.fromkeys(a.strip() for a in actions))
     if len(ordered) != len(actions):
         raise ValueError("action ids must be unique")
-    gamma = item.get("gamma", 0.1)
-    if not isinstance(gamma, int | float) or isinstance(gamma, bool) or not 0 < gamma <= 1:
-        raise ValueError("gamma must be in (0, 1]")
-    return LearnerProposal(aid, learner, ordered, float(gamma))
+    _refuse_gamma(item)
+    return LearnerProposal(aid, learner, ordered)

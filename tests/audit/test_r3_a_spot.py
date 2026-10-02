@@ -135,7 +135,7 @@ def test_durable_spot_inventory_write_replays_once_after_interruption(tmp_path,
 
     def build(path=None):
         return Runtime(load_manifest("scripted"), events=40, seed=1,
-                       initial_balance_micro=None, ledger_path=path, router_gamma=.1)
+                       initial_balance_micro=None, ledger_path=path)
 
     # The uninterrupted reference is build().run(), shared with test_venue_spot.
     expected = scripted_runtime_run(load_manifest("scripted"), 40, 1).summary

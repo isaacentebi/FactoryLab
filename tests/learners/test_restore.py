@@ -1,14 +1,13 @@
 import json
-import math
+from collections import deque
 from random import Random
 
 import pytest
 
-from factorylab.learners.base import BanditFeedback, FullInfoFeedback, restore_learner
+from factorylab.learners.base import BanditFeedback, restore_learner
 from factorylab.learners.blum_mansour import BlumMansour
 from factorylab.learners.delayed import SnapshotLearner
 from factorylab.learners.exp3 import EXP3
-from factorylab.learners.hedge import Hedge
 from factorylab.learners.router import Router
 
 
@@ -19,91 +18,65 @@ def round_trip(learner):
     return restored
 
 
-@pytest.mark.parametrize("kind", ["hedge", "exp3", "bm_full", "bm_bandit"])
-def test_restore_preserves_exact_queries_pending_rounds_and_future_updates(kind):
+def _run(learner, start, stop, pending, rng, log, *, delay=7, restore_at=None):
+    """Drive ``learner`` over rounds [start, stop) with delayed feedback; log results."""
+    actions = learner.inner.actions
+    for t in range(start, stop):
+        if t == restore_at:
+            learner = round_trip(learner)
+        while pending and pending[0][0] <= t:
+            _, handle, feedback = pending.popleft()
+            log.append((handle, learner.update_for(handle, feedback)))
+        p = learner.distribution_for(f"h{t}", actions, ordinal=t)
+        log.append(tuple(sorted(p.items())))
+        k = rng.choices(actions, weights=[p[a] for a in actions], k=1)[0]
+        pending.append((t + delay, f"h{t}", BanditFeedback(k, rng.random(), p[k])))
+    return learner
+
+
+@pytest.mark.parametrize("core", [False, True])
+def test_checkpoint_continues_across_epoch_boundary(core):
+    """Checkpoint with rounds of the previous epoch (or many rounds) still in flight;
+    the restored run continues bit for bit, orphans included."""
     actions = ("z", "a", "NOOP")
-    bandit = kind in ("exp3", "bm_bandit")
-    if kind == "hedge":
-        learner = Hedge(actions, math.nextafter(0.2, 1.0), id="original")
-    elif kind == "exp3":
-        learner = EXP3(actions, math.nextafter(0.2, 1.0), id="original")
-    else:
-        learner = BlumMansour(
-            lambda a: EXP3(a, 0.2) if bandit else Hedge(a, 0.2), actions, id="original",
-        )
-    rng = Random(3)
-    for i in range(20):
-        support = actions if i % 2 else ("NOOP", "z")
-        p = learner.distribution(support)
-        restored = round_trip(learner)
-        assert restored.distribution(support) == p
-        a = rng.choices(list(p), weights=list(p.values()))[0]
-        feedback = (BanditFeedback(a, rng.random(), p[a]) if bandit else
-                    FullInfoFeedback({a: rng.random() for a in actions}))
-        learner.update(feedback)
-        restored.update(feedback)
-        assert restored.state() == learner.state()
-    # The returned snapshot owns no mutable weight dictionary in the live learner.
-    saved = learner.state()
-    saved["id"] = "edited"
-    assert learner.id == "original"
+
+    def make():
+        return SnapshotLearner(BlumMansour(actions, first_epoch=6, coverage=1.0) if core
+                               else EXP3(actions), id="L")
+
+    horizon = 80
+    straight_log, resumed_log = [], []
+    straight = _run(make(), 0, horizon, deque(), Random(5), straight_log)
+    # The boundary of epoch 0 (6 rounds) passes with feedback 7 rounds late: the
+    # restore at round 9 holds rounds of the closed epoch in flight.
+    resumed = _run(make(), 0, horizon, deque(), Random(5), resumed_log, restore_at=9)
+    assert resumed_log == straight_log
+    assert resumed.state() == straight.state()
+    outcomes = [x for x in straight_log if isinstance(x[1], bool)]
+    assert any(ok for _handle, ok in outcomes)
+    if core:
+        assert ("h0", False) in outcomes  # a round of epoch 0, orphaned
 
 
-def test_expanded_exp3_round_trip_keeps_carried_weights():
-    learner = EXP3(("b", "a"), 0.13)
-    learner.update(BanditFeedback("b", 0.12345678901234568, 0.51))
-    learner = learner.expand(("b", "a", "new", "NOOP"))
-    restored = round_trip(learner)
-    assert restored.distribution(learner.actions) == learner.distribution(learner.actions)
-
-
-@pytest.mark.parametrize("bandit", [False, True])
-def test_snapshot_restore_rebinds_old_rounds_and_preserves_spent_handles(bandit):
-    actions = ("z", "a", "b")
-    inner = BlumMansour(lambda a: EXP3(a, .3) if bandit else Hedge(a, .3), actions)
-    learner = SnapshotLearner(inner, id="delayed-id")
-    ordinals = {"spent": 0, "older": 1, "newer": 1}
-    policies = {h: learner.distribution_for(h, menu, ordinal=ordinals[h])
-                for h, menu in (("spent", actions), ("older", ("b", "z")), ("newer", actions))}
-
-    def feedback(handle):
-        a = next(iter(policies[handle]))
-        return (BanditFeedback(a, 0.71, policies[handle][a]) if bandit else
-                FullInfoFeedback(dict(zip(actions, (.1, .8, .3), strict=True))))
-
-    learner.update_for("spent", feedback("spent"))
-    restored = round_trip(learner)
-    for handle in ("newer", "older"):
-        learner.update_for(handle, feedback(handle))
-        restored.update_for(handle, feedback(handle))
-        assert learner.state() == restored.state()
-    restored = round_trip(restored)
-    assert restored.id == "delayed-id" and not restored.state()["snapshots"]
-    for handle in policies:
-        with pytest.raises(KeyError):
-            restored.distribution_for(handle, actions, ordinal=ordinals[handle])
-        with pytest.raises(KeyError):
-            restored.update_for(handle, feedback(handle))
+def test_restore_refuses_a_state_from_another_release():
+    with pytest.raises(ValueError):
+        restore_learner({"algorithm": "arbitrary.module"})
+    with pytest.raises(ValueError):
+        restore_learner({"algorithm": "EXP3", "id": "x", "actions": ["a"], "gamma": 0.1,
+                         "log_weights": {"a": 0.0}})
 
 
 def test_router_restore_preserves_logged_distribution_and_rng_sample():
     def lookup(_):
         return ["z", "a"]
-    learner = EXP3(("z", "a", "NOOP"), 0.23)
+    learner = EXP3(("z", "a", "NOOP"))
+    learner.open_round()
     learner.update(BanditFeedback("z", 0.4, .7))
     router = Router(learner, lookup)
     restored = Router.restore(json.loads(json.dumps(router.state())), lookup)
+
     def feasible(a):
         return a != "a", "unavailable" if a == "a" else ""
     assert restored.route("Tick", feasible, Random(13)) == router.route(
         "Tick", feasible, Random(13),
     )
-
-
-def test_restore_rejects_unknown_algorithm_and_nonfinite_weights():
-    with pytest.raises(ValueError):
-        restore_learner({"algorithm": "arbitrary.module"})
-    state = EXP3(("a",), .1).state()
-    state["log_weights"]["a"] = float("inf")
-    with pytest.raises(ValueError):
-        EXP3.restore(state)

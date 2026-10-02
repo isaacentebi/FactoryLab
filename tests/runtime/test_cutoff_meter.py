@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from tests.helpers import freeze_round
 from tests.runtime.test_penalty_attribution import _runtime
 
 
@@ -67,6 +68,7 @@ def _drawn_at(rt, chosen: str, at: int):
                            propensity=rt._propensity(sample), channel="verdict",
                            deadline_ns=10**18, deadline_tick=at + 1_000, parent_handle=None,
                            cost_ceiling=rt.wallet.available)
+    freeze_round(rt, handle, state)
     if keyed:
         rt.snapshot_keys[handle] = key
     return state, handle

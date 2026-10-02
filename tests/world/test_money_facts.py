@@ -235,7 +235,7 @@ def test_a_runtime_publishes_no_direction_its_rail_refuses():
     from factorylab.runtime.worlds import load_manifest
 
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     assert rt.tool_specs["treasury.transfer"]["args_schema"]["properties"]["direction"][
         "enum"] == list(TRANSFER_DIRECTIONS)
     rt.treasury.rail.target = Denying(rt.treasury.rail.target, ("to_venice",))
@@ -257,7 +257,7 @@ def test_the_seat_view_publishes_no_manifest_commitment_as_a_balance():
     from factorylab.runtime.worlds import load_manifest
 
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     inventory = rt._provider_inventory()
     assert "committed_at_launch" not in inventory
     assert "[providers]" not in inventory["as_of"]

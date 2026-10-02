@@ -19,6 +19,7 @@ from factorylab.learners.base import NEUTRAL_REWARD
 from factorylab.runtime import pricing
 from factorylab.runtime.routing import RouterState
 from factorylab.runtime.shared import CH_CONFORMITY, NOOP
+from tests.helpers import freeze_round
 from tests.runtime.test_attributable_blame import _card, _commitments, _decision, _runtime
 
 
@@ -26,7 +27,7 @@ def _state():
     from factorylab.learners.exp3 import EXP3
     from factorylab.learners.router import Router
 
-    learner = EXP3(["a", "b", NOOP], 0.1, id="router:X")
+    learner = EXP3(["a", "b", NOOP], id="router:X")
     return RouterState("X", ["a", "b", NOOP], learner,
                        Router(learner, lambda _k: ["a", "b"]))
 
@@ -56,6 +57,7 @@ def _drawn(rt, state, seat, channel=CH_CONFORMITY, *, role="evaluator"):
     handle = rt.queue.open(actor=state.learner.id, event_id=f"draw-{seat}",
                            propensity=rt._propensity(sample), channel=channel,
                            deadline_ns=10**18, parent_handle=None, cost_ceiling=0)
+    freeze_round(rt, handle, state)
     rt.handle_to_assembly[handle] = seat
     sample_row = rt._contribution(handle, role)
     sample_row["invocations"] = sample_row["ok"] = 1
@@ -77,6 +79,7 @@ def test_noop_decline_and_censored_are_one_credit_to_the_micro_unit(monkeypatch)
                          deadline_ns=10**18, parent_handle=None, cost_ceiling=0,
                          propensity=PropensityRecord((NOOP,), (1.0,), NOOP, 0,
                                                      state.learner.id, "state"))
+    freeze_round(rt, noop, state)
     rt._contribution(noop, "evaluator")
     _commitments(rt, "eval-a", censored=4)
     rt._close_price_window()

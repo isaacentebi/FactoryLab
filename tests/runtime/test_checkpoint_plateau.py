@@ -183,7 +183,7 @@ def plateau_problems(checkpoints: list[tuple]) -> list[str]:
 @pytest.mark.soak
 def test_the_checkpoint_plateaus_between_1500_and_5000_events():
     rt = Runtime(load_manifest("scripted"), events=EVENTS, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=.1)
+                 ledger_path=None)
     checkpoints = []
     snapshot = rt._snapshot
 

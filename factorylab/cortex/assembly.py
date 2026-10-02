@@ -361,7 +361,6 @@ MAX_PROGRAM_STATE_BYTES = 65_536
 PROGRAM_STATE_POLICIES = ("none", "private")
 ASSEMBLY_MEMORY_POLICIES = ("none", "handle-scoped")
 FORECAST_HORIZON_MAX_EVENTS = 200
-PROPOSAL_MIN_GAMMA = 1e-300
 PROPOSAL_MIN_MAX_TOKENS = 16
 CHILD_AUTHOR_FIELDS = ("author", "author_id", "requester", "lineage")
 
@@ -1905,8 +1904,7 @@ def proposal_field_schema() -> dict:
         "unit", "assembly_id", "state_policy")}
     # A tool's timeout stays within [1, 5] (checked where tools are parsed); a
     # program seat's may reach MAX_PROGRAM_TIMEOUT_S.
-    fields.update({"gamma": {"type": "number", "minimum": PROPOSAL_MIN_GAMMA, "maximum": 1},
-                   "max_tokens": {"type": ["integer", "null"], "minimum": PROPOSAL_MIN_MAX_TOKENS},
+    fields.update({"max_tokens": {"type": ["integer", "null"], "minimum": PROPOSAL_MIN_MAX_TOKENS},
                    "timeout_s": {"type": "integer", "minimum": 1,
                                  "maximum": MAX_PROGRAM_TIMEOUT_S},
                    "accepts": {"type": "array", "items": {"type": "string"}},

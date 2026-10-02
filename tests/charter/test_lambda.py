@@ -11,7 +11,7 @@ from factorylab.runtime.worlds import load_manifest
 
 def runtime():
     return Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=0.1)
+                   ledger_path=None)
 
 
 def amendment(**changes):

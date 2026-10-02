@@ -597,6 +597,11 @@ class NormHouseSpec:
     signer: str | None = None
 
 
+#: The event kinds the kernel delivers at most once per world tick: the kinds a
+#: no-swap-regret core may route (its draws per tick are then at most one).
+PER_TICK_KINDS = frozenset({"Tick"})
+
+
 @dataclass(frozen=True)
 class ImmuneSpec:
     """Detection horizons and bounded interventions are immutable launch casts.
@@ -606,14 +611,11 @@ class ImmuneSpec:
     """
 
     #: The stable-failure price ratchet's lambda step per window of duration (essay
-    #: II.II.b). Required: a lambda step and the exploration-gain step are different
-    #: units, so neither stands in for the other (versioning S3).
+    #: II.II.b; versioning S3). The ratchet is the gain: §IV.b's gain is lambda.
     price_step: float
     k: int = 3
     tv_threshold: float = 0.2
     gap_threshold: float = 0.8
-    gain_step: float = 0.05
-    gamma_max: float = 0.5
     registration_bins: tuple[float, ...] = (0.0, 2.0)
     revision_bins: tuple[float, ...] = (0.0,)
 
@@ -1459,6 +1461,14 @@ class WorldManifest:
             # A misspelt kind would seed no router at all and leave the core silently empty.
             raise ValueError("evaluation.no_swap_regret_kinds names no event kind this world "
                              f"can route: {', '.join(unknown)}")
+        unbounded = sorted(set(core) - PER_TICK_KINDS)
+        if unbounded:
+            # The core's first epoch is its delivery bound in draws, read at one draw per
+            # tick (docs/architecture/learners-noregret.md §2.2, §2.6): a kind with no
+            # per-tick draw bound has no such conversion.
+            raise ValueError("evaluation.no_swap_regret_kinds names a kind with no per-tick "
+                             f"draw bound: {', '.join(unbounded)} (bounded: "
+                             f"{', '.join(sorted(PER_TICK_KINDS))})")
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
@@ -1546,7 +1556,7 @@ class WorldManifest:
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
-        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max"):
+        for name in ("tv_threshold", "gap_threshold"):
             value = getattr(self.immune, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
@@ -1802,6 +1812,11 @@ def _manifest_immune(raw: Any) -> ImmuneSpec:
     if "decay_step" in raw:
         raise ValueError("immune.decay_step was removed: thrash is priced by its duration "
                          "(the thrash PID), never answered by lowering card prices")
+    for key in ("gain_step", "gamma_max"):
+        if key in raw:
+            raise ValueError(f"immune.{key} was removed: no diagnosis changes a learner's "
+                             "exploration, which is the learner's own schedule "
+                             "(docs/architecture/learners-noregret.md §2.5)")
     if "price_step" not in raw:
         raise ValueError("immune.price_step is required: the stable-failure ratchet's "
                          "lambda step per window")

@@ -32,8 +32,7 @@ def test_crash_at_launch_boundary_has_a_recoverable_snapshot(tmp_path, cut):
 
     m = load_manifest("scripted")
     path = str(tmp_path / "launch.jsonl")
-    rt = Runtime(m, events=2, seed=1, initial_balance_micro=None, ledger_path=path,
-                 router_gamma=.1)
+    rt = Runtime(m, events=2, seed=1, initial_balance_micro=None, ledger_path=path)
     if cut == "snapshot":
         snapshot = rt._snapshot
 

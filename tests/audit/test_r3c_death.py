@@ -501,8 +501,7 @@ def _unchanged(rt, before: dict) -> None:
 def test_a_refused_restore_leaves_every_runtime_field_exactly_as_it_was(monkeypatch):
     """Every identity constraint is checked against the saved state before one assignment."""
     m = load_manifest("scripted")
-    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1)
+    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None)
     rt.run()
     state = runtime_state(rt)
     rt.termination.kill("explicit_kill:operator")      # the checkpoint names a dead identity
@@ -527,8 +526,7 @@ def test_a_refused_restore_leaves_every_runtime_field_exactly_as_it_was(monkeypa
 def test_a_restore_refused_on_the_witness_requirement_changes_nothing(monkeypatch):
     monkeypatch.setenv(witness.URL_ENV, "https://receiver.invalid/witness")
     m = load_manifest("scripted")
-    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1)
+    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None)
     rt.run()
     state = runtime_state(rt)
     twin = _twin(m, state)
@@ -543,8 +541,7 @@ def test_a_restore_refused_on_the_witness_requirement_changes_nothing(monkeypatc
 def test_a_restore_refused_on_a_missing_artifact_changes_nothing(tmp_path):
     """The archive is checked from the saved state, so the refusal precedes every write."""
     m = load_manifest("scripted")
-    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1)
+    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None)
     rt.run()
     rt.working_state.heads["ghost"] = {"sha": "f" * 64, "bytes": 1, "ts_ns": 0}
     state = runtime_state(rt)

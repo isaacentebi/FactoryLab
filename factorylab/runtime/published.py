@@ -245,6 +245,6 @@ def render_schematics(manifest: Any, *, rail: InertRail) -> dict[str, Any]:
     from factorylab.runtime.loop import Runtime
 
     rt = Runtime(manifest, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, provider=ManifestCatalogue(manifest), market=InertMarket(),
+                 provider=ManifestCatalogue(manifest), market=InertMarket(),
                  exchange=InertVenue(manifest.exchange), _schematics_rail=rail)
     return rt._world_block()

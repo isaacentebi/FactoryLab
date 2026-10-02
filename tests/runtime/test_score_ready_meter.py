@@ -143,7 +143,7 @@ def test_the_price_loop_does_not_run_away_when_every_producer_decision_defers(ev
     manifest = replace(seed, charter=replace(seed.charter, cards=(HOLDS,)),
                        charter_prices=((HOLDS.id, 0.8),))
     rt = Runtime(manifest, events=events, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     rt.run()
     items = rt.ledger._recovery_items()
     deferred, closed = RUNAWAY[events]

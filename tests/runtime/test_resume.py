@@ -46,7 +46,6 @@ def make_runtime(manifest, path, **kwargs):
         seed=1,
         initial_balance_micro=None,
         ledger_path=str(path),
-        router_gamma=0.1,
         **kwargs,
     )
 
@@ -75,7 +74,7 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 
 rt = Runtime(load_manifest('scripted'), events=140, seed=1, initial_balance_micro=None,
-             ledger_path=sys.argv[1], router_gamma=.1)
+             ledger_path=sys.argv[1])
 original = rt._process_event
 def interrupt(event):
     result = original(event)
@@ -159,7 +158,7 @@ sys.path.insert(0, 'tests/runtime')
 from test_resume import ClockAmendmentProvider, clock_manifest
 from factorylab.runtime.loop import Runtime
 rt = Runtime(clock_manifest(), events=140, seed=1, initial_balance_micro=None,
-             ledger_path=sys.argv[1], router_gamma=.1,
+             ledger_path=sys.argv[1],
              provider=ClockAmendmentProvider())
 snapshot = rt._snapshot
 def interrupt_snapshot(boundary):
@@ -263,8 +262,8 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
     path = tmp_path / "state.jsonl"
     rt = make_runtime(m, path)
     rt.events_budget = 9
-    rt._build_router("Tick", "blum_mansour", 0.2)
-    rt._build_router("Tick", "exp3", 0.3, replace=False)
+    rt._build_router("Tick", "blum_mansour")
+    rt._build_router("Tick", "exp3", replace=False)
     # A price window is at least min_ratio ticks (time audit T1): by tick seven two
     # windows have opened after the launch, each a snapshot.
     stop_after(rt, lambda r, e: r.ticks_consumed == 7 and str(e.kind) == "Tick")
@@ -684,7 +683,7 @@ def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypa
     m = replace(base, treasury=replace(base.treasury, fake_fee_micro=1_000_000))
     path = tmp_path / 'treasury-shock.jsonl'
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=6_400_000,
-                 ledger_path=str(path), router_gamma=.1)
+                 ledger_path=str(path))
     poll = FakeRail.poll
 
     def cheaper_receipt(rail, step, state):
@@ -741,8 +740,7 @@ def test_hybrid_conversion_killed_between_its_legs_resumes_without_a_second_spen
                                        venice_pay_to=payee))
     m.validate()
     path = tmp_path / 'hybrid-cut.jsonl'
-    rt = Runtime(m, events=4, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 router_gamma=.1)
+    rt = Runtime(m, events=4, seed=1, initial_balance_micro=None, ledger_path=str(path))
     assert rt.treasury.rail.name == 'scripted-hybrid'
     cash = rt.exchange._cash
     mainnet = rt.treasury.rail.hybrid_books['mainnet_reserve']

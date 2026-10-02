@@ -8,7 +8,7 @@ from factorylab.runtime.live import LiveClock
 from factorylab.runtime.resume import checkpoint_state
 from factorylab.world.events import WorldEvent, WorldEventKind
 from tests.conftest import make_runtime
-from tests.helpers import keep_every_checkpoint
+from tests.helpers import freeze_round, keep_every_checkpoint
 
 
 def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch(monkeypatch):
@@ -24,9 +24,10 @@ def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch(monkeypatch)
     assert checkpoint_state(rt.ledger, snapshot)["clock_ns"] == 12345
 
 
-def test_a_retired_learner_return_trains_its_replacement_not_itself():
-    """A reward settled after its router was replaced trains the live replacement once;
-    the retired copy, which never samples again, is left exactly as it was."""
+def test_a_retired_routers_return_trains_nothing_and_is_ledgered_orphaned():
+    """A reward settled after its router was replaced trains nothing: the retired copy
+    never samples again, and no theorem carries its round to the replacement (learners
+    design §2.5). The round still settles for the kernel, and its snapshot is released."""
     rt = make_runtime()
     old = rt.routers["Tick"][0]
     action = next(a for a in old.universe if a != "NOOP")
@@ -35,38 +36,48 @@ def test_a_retired_learner_return_trains_its_replacement_not_itself():
         propensity=PropensityRecord((action,), (1.0,), action, 1, old.learner.id, "state"),
         channel="test", deadline_ns=100, parent_handle=None, cost_ceiling=0,
     )
-    fresh = rt._build_router("Tick", "exp3", .1)
-    old_before = old.learner.state()
+    freeze_round(rt, handle, old)
+    fresh = rt._build_router("Tick", "exp3")
+    old_inner, fresh_before = old.learner.inner.inner.state(), fresh.learner.state()
     rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
                     definition_version="1", sampling_ref=None)
     rt._deliver_returns()
-    after = fresh.learner.state()["log_weights"]
-    assert after[action] > max(w for a, w in after.items() if a != action)
-    assert old.learner.state() == old_before
-    assert any(i["kind"] == "router.carried" and i["handle"] == handle
-               and i["to"] == fresh.learner.id for i in rt.ledger._recovery_items())
+    assert fresh.learner.state() == fresh_before
+    assert old.learner.inner.inner.state() == old_inner
+    assert old.learner.inner.outstanding() == []
+    assert [i["handle"] for i in rt.ledger._recovery_items()
+            if i["kind"] == "learner.orphaned"] == [handle]
     rt._deliver_returns()
-    assert fresh.learner.state()["log_weights"] == after  # once, not per delivery
-    assert old.learner.id != fresh.learner.id
+    assert fresh.learner.state() == fresh_before  # once, not per delivery
     assert rt.queue.history(handle)[0].score == 1.0
-    again = rt._build_router("Tick", "exp3", .1)
+    again = rt._build_router("Tick", "exp3")
     assert len({old.learner.id, fresh.learner.id, again.learner.id}) == 3
 
 
-def test_swap_epoch_preserves_immune_gamma_and_retires_the_old_identity(monkeypatch):
-    from factorylab.runtime.immune import _gain, gamma
+def test_a_raised_core_coverage_bound_opens_a_fresh_phase_under_a_new_identity():
+    """Learners design §2.5: a menu grows in place, except where a seat would raise a core
+    menu's coverage bound kappa, which the learner fixes for its life: that is a new
+    phase, a fresh learner of the same class, no weight carried, its kappa read from the
+    new menu."""
+    from dataclasses import replace
+
+    from factorylab.learners.blum_mansour import BlumMansour
 
     rt = make_runtime()
-    old = rt._build_router("Tick", "blum_mansour", .2)
-    _gain(rt, "stable_failure", 1)
-    adjusted = gamma(old.learner)
-    assert adjusted > old.seed_gamma
-    monkeypatch.setattr(rt, "_universe_for", lambda _: [*old.universe, "new-action"])
+    old = rt._build_router("Tick", "blum_mansour")
+    judge = next(a.spec for a in rt.assemblies.values() if a.spec.role == "evaluator")
+    rt._instantiate(replace(judge, id="new-action", accepts=frozenset({"Tick"})))
+    rt.ticks_consumed = rt.m.timing.min_ratio * rt._delivery_bound()  # the gate is open
     rt._open_epoch("Tick")
     fresh = rt.routers["Tick"][0]
     assert fresh.learner.id != old.learner.id
-    assert gamma(fresh.learner) == adjusted and fresh.seed_gamma == .2
+    inner = fresh.learner.inner.inner
+    assert isinstance(inner, BlumMansour) and inner.epoch == 0 and inner.epoch_rounds == 0
+    assert set(inner.actions) == {*old.universe, "new-action"}
+    assert fresh.coverage == rt._coverage(fresh.universe) > old.coverage
     assert fresh.epoch == old.epoch + 1 and rt.delivered_seen[fresh.learner.id] == 0
+    phase = [i for i in rt.ledger._recovery_items() if i["kind"] == "epoch"][-1]
+    assert phase["cause"] == "coverage" and phase["carried"] is False
     assert any(item["kind"] == "actor.retire" and item["actor"] == old.learner.id
                for item in rt.ledger._recovery_items())
 

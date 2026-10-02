@@ -53,7 +53,7 @@ def _live_runtime(namespace: str | None = NAMESPACE) -> Runtime:
     if namespace is not None:
         venue._client_namespace = namespace
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                   ledger_path=None, router_gamma=0.1,
+                   ledger_path=None,
                    exchange=venue, provider=ScriptedProvider())
 
 

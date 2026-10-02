@@ -44,7 +44,7 @@ def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
     rt._manage_reserve_window()
     cap = rt.m.tools.max_routers_per_kind
     while len(rt.routers['Tick']) < cap:
-        rt._build_router('Tick', 'exp3', .1, replace=False)
+        rt._build_router('Tick', 'exp3', replace=False)
     registry, remaining = rt.registry.state(), rt.reserve.remaining()
     rt._apply_registrations('author', Return('author', {'register': [
         {'kind': 'router', 'learner': 'exp3', 'event_kind': 'Tick', 'add': True}]}, 0, 'ok'))
@@ -55,9 +55,13 @@ def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
     assert rt.registry.state() == registry and rt.reserve.remaining() == remaining
     assert not [i for i in rt.ledger._recovery_items() if i['kind'] == 'novelty.release']
     assert rt.wallet.check_conservation()
-    # Replacing a router is still allowed at the cap, and that one does register.
-    rt._register('author', RouterProposal('Tick', 'exp3', .1))
-    assert len(rt.routers['Tick']) == 1 and rt.reserve.remaining() < remaining
+    # Replacing a router is still allowed at the cap, and that one does register; it
+    # replaces the kind's routers once the kind's settle gate allows (design §2.5).
+    rt._register('author', RouterProposal("Tick", "exp3"))
+    assert rt.reserve.remaining() < remaining and rt.pending_routers['Tick']
+    rt.ticks_consumed = rt.m.timing.min_ratio * rt._delivery_bound()
+    rt._open_pending_epochs()
+    assert len(rt.routers['Tick']) == 1 and not rt.pending_routers
 
 
 FLOOR = CardRegion("well_formed_rate", "min", 0.9, None, 1.0)

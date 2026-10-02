@@ -38,7 +38,7 @@ def fake(n: int) -> FakeExchange:
 
 def runtime(n: int, *, path=None, events=0) -> Runtime:
     return Runtime(universe_manifest(), events=events, seed=1, initial_balance_micro=None,
-                   ledger_path=None if path is None else str(path), router_gamma=.1,
+                   ledger_path=None if path is None else str(path),
                    provider=ScriptedProvider(), exchange=fake(n))
 
 
@@ -89,7 +89,7 @@ def test_an_order_outside_the_universe_is_refused_by_the_venue_tools():
 
 def test_a_world_without_selectors_is_unchanged():
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
+                 ledger_path=None, provider=ScriptedProvider(),
                  exchange=FakeExchange(listed_coins=("SOL",)))
     assert rt.universe is None
     assert rt._broadcast_markets() == rt._trading_markets()
@@ -190,7 +190,7 @@ def _produced(n: int, reply: dict, in_play: str | None = None):
         manifest = replace(manifest, exchange=replace(manifest.exchange,
                                                       coins=(in_play, "*")))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=.1, provider=seat, exchange=fake(n))
+                 ledger_path=None, provider=seat, exchange=fake(n))
     rt._manage_reserve_window()
     handle, _event = _consequence_produce(rt)
     (prompt,) = seat.prompts
@@ -231,7 +231,7 @@ def test_a_counterfactual_on_a_listed_market_outside_the_universe_opens_and_sett
                                               spot_pairs=("*/USDC",)))
     seat = Seat({"action": "hold", "counterfactual": {"coin": "C5", "side": "buy"}})
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=seat, exchange=fake(8))
+                 provider=seat, exchange=fake(8))
     rt._manage_reserve_window()
     rt._read_fee_schedule()  # the listing, as the first broadcast mid reads it
     assert "C5" in rt._listed_instruments() and "C5" not in rt.venue_tools.coins

@@ -13,8 +13,8 @@ under test, so the constants tested are the constants launched. The latest launc
 world on this branch is ``edition6-capital-loop``.
 
 A run records its ledger rows and instruments the immune organ without changing it:
-the state a close must not touch (S6) and each router's rows before and after a
-gain act (S8) are read around the call and the call itself is untouched.
+the state a close must not touch (S6), every router's learner included, is read
+around the call and the call itself is untouched.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from factorylab.kernel.ledger import canonical
-from factorylab.runtime import immune, pricing
+from factorylab.runtime import pricing
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import manifest_from_dict
 from factorylab.world.models import ModelRequest, ModelResponse
@@ -323,7 +323,6 @@ class Run:
     events: list[dict]
     manifest: dict
     closes: list[dict] = field(default_factory=list)
-    gains: list[dict] = field(default_factory=list)
     #: (seat, request form, diagnosis labels its prompt carried): what S2 reads.
     requests: list[tuple[str | None, str, list[str]]] = field(default_factory=list)
     emitted: set[str] = field(default_factory=set)
@@ -341,7 +340,7 @@ class Run:
 
     def detached(self) -> Run:
         """The same evidence without the runtime: picklable, and shareable."""
-        return Run(self.events, self.manifest, self.closes, self.gains, list(self.requests),
+        return Run(self.events, self.manifest, self.closes, list(self.requests),
                    set(self.emitted))
 
 
@@ -351,7 +350,8 @@ def _digest(value: Any) -> str:
 
 
 def _guarded_state(rt: Runtime) -> dict[str, str]:
-    """What the organ may never write (S6, S7): each read as a digest."""
+    """What the organ may never write (S6): each read as a digest. The routers' learners
+    are among it: no diagnosis changes a learner (learners design §2.5)."""
     seats = sorted(rt.assemblies)
     return {
         "charter_cards": _digest([asdict(c) for c in rt.charter.cards]),
@@ -359,12 +359,10 @@ def _guarded_state(rt: Runtime) -> dict[str, str]:
         "seat_learners": _digest({a: learner.state()
                                   for a, learner in sorted(rt.assembly_learners.items())}),
         "subscriptions": _digest(rt.subscription_book.state()),
+        "router_learners": _digest({st.learner.id: st.learner.state()
+                                    for st in rt._all_router_states()}),
         "working_state": _digest({a: rt.working_state.render(a) for a in seats}),
     }
-
-
-def _bases(state: dict) -> list[dict]:
-    return immune._bases(state["router"]["learner"])
 
 
 @contextmanager
@@ -378,18 +376,17 @@ def _patched(target: Any, name: str, value: Any):
 
 
 def run(manifest: Any, population: Population, *, events: int = 300, seed: int = 1,
-        patches: Iterable[tuple[Any, str, Any]] = (), gamma: float = 0.1,
+        patches: Iterable[tuple[Any, str, Any]] = (),
         instrument: bool = True, ledger_path: str | None = None) -> Run:
     """Run ``population`` in ``manifest`` for ``events`` events and return its evidence.
 
     ``patches`` are ``(target, attribute, value)`` substitutions held for the run: a
     negative control disables a mechanism this way. Instruments wrap the organ's
-    close and gain act only to read state around them.
+    close only to read state around it.
     """
     rows: list[dict] = []
     closes: list[dict] = []
-    gains: list[dict] = []
-    real_close, real_gain = pricing.close_window, immune._gain
+    real_close = pricing.close_window
 
     def close(runtime, values):
         before, start = _guarded_state(runtime), len(rows)
@@ -398,16 +395,6 @@ def run(manifest: Any, population: Population, *, events: int = 300, seed: int =
                        "kinds": sorted({r["kind"] for r in rows[start:]}),
                        "before": before, "after": _guarded_state(runtime)})
 
-    def gain(runtime, kind, window):
-        before = {st.learner.id: _bases(st.state()) for st in runtime._all_router_states()}
-        real_gain(runtime, kind, window)
-        for st in runtime._all_router_states():
-            after = _bases(st.state())
-            if after != before.get(st.learner.id, after):
-                gains.append({"router": st.learner.id, "window": window,
-                              "before": {"bases": before[st.learner.id]},
-                              "after": {"bases": after}})
-
     with ExitStack() as stack:
         # Patches are in force before the runtime is built: a mechanism bound at
         # bootstrap (the wallet's novelty predicate, say) is disabled too.
@@ -415,13 +402,12 @@ def run(manifest: Any, population: Population, *, events: int = 300, seed: int =
             stack.enter_context(_patched(target, name, value))
         if instrument:
             stack.enter_context(_patched(pricing, "close_window", close))
-            stack.enter_context(_patched(immune, "_gain", gain))
         # The Launch is the diary's record of its seed: the manifest launched carries
         # the seed the run draws, so the diary is bound to it (``bind_diary``).
         if manifest.seed != seed:
             manifest = dataclasses.replace(manifest, seed=seed)
         rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                     ledger_path=ledger_path, router_gamma=gamma, provider=population)
+                     ledger_path=ledger_path, provider=population)
         population.bind(rt)
         append = rt.ledger.append
 
@@ -443,7 +429,7 @@ def run(manifest: Any, population: Population, *, events: int = 300, seed: int =
     launched = json.loads(manifest.canonical_json())
     # The diary every criterion reads is bound to the world and seed it ran (its Launch).
     gauntlet.bind_diary(rows, world=manifest.name, seed=seed, manifest=launched)
-    return Run(rows, launched, closes, gains, requests, population.emitted, rt)
+    return Run(rows, launched, closes, requests, population.emitted, rt)
 
 
 # --- the pricing-not-steering helper (design §1.2, Astra C-2) ------------------------------
@@ -455,29 +441,27 @@ def organ_kinds_ok(kinds: Iterable[str]) -> list[str]:
 
 
 def prices_not_steers(result: Run, *, s5: bool = True) -> dict[str, gauntlet.Result]:
-    """The S1-S8 readings of ``assert_prices_not_steers``, without asserting them."""
+    """The S1-S6 readings of ``assert_prices_not_steers``, without asserting them."""
     return assert_prices_not_steers(result, s5=s5, check=False)
 
 
 def assert_prices_not_steers(result: Run, *, s5: bool = True,
                              check: bool = True) -> dict[str, gauntlet.Result]:
-    """S1–S8: the physics answered by moving prices and gain, never by steering.
+    """S1–S6: the physics answered by moving prices, never by steering.
 
     S1 every draw is the router's replayed sample and every act traces to a return;
     S2 no seat-visible request names a diagnosis; S3 is metamorphic and lives in the
     tests that relabel actions; S4 every penalty and reward is bounded; S5 abstentions
     and declines share one credit formula; S6 the organ's close writes only its own
-    kinds and touches no seat's state, charter card, subscription or learner; S7 gain
-    names only kernel routers; S8 every gain act changed γ alone, by one step, and
-    moved each arm by the arm-symmetric map (the gain is never a selection channel).
-    Returns every reading; raises AssertionError naming each that failed.
+    kinds and touches no seat's state, charter card, subscription or learner. S7 and
+    S8 read the exploration ratchet, deleted with it (learners design §2.5): no
+    diagnosis changes a learner, which S6 reads. Returns every reading; raises
+    AssertionError naming each that failed.
     """
     events, manifest = result.events, result.manifest
     readings: dict[str, gauntlet.Result] = {
         "S1": gauntlet.s1_draw_sovereignty(events, manifest),
         "S4": gauntlet.s4_boundedness(events, manifest),
-        "S7": gauntlet.s7_gain_targets(events, manifest),
-        "S8": gauntlet.s8_gain_rows_uniform(events, manifest),
     }
     if s5:
         readings["S5"] = gauntlet.s5_neutral_imputation(events, manifest)
@@ -493,13 +477,8 @@ def assert_prices_not_steers(result: Run, *, s5: bool = True,
                                        closes=len(result.closes), foreign=foreign,
                                        touched=touched) if result.closes
                       else gauntlet._unsupported("S6", "no organ close was instrumented"))
-    # Every gain act's instrumented reading, by the one aggregation rule: a failed or
-    # unsupported act is never dropped, and no gain act at all is unsupported (B).
-    readings["S8-instrumented"] = gauntlet.aggregate(
-        "S8-instrumented", [gauntlet.gain_neutral(g["before"], g["after"], manifest)
-                            for g in result.gains], acts=len(result.gains))
     if check:
-        overall = gauntlet.aggregate("S1-S8", readings.values())
+        overall = gauntlet.aggregate("S1-S6", readings.values())
         assert overall.status != gauntlet.FAIL, overall.evidence["failed"]
     return readings
 
@@ -991,11 +970,11 @@ DEFINING: dict[str, Callable[[Run], list[gauntlet.Result]]] = {
 
 def defining_readings(name: str, result: Run) -> list[gauntlet.Result]:
     """The population's own readings: its defining criteria (``DEFINING``) and the
-    pricing-not-steering readings only a population run holds (S2, S6, S8-instrumented:
-    the requests, the instrumented closes and the gain acts)."""
+    pricing-not-steering readings only a population run holds (S2, S6: the requests and
+    the instrumented closes)."""
     readings = list(DEFINING.get(name, lambda _r: [])(result))
     own = prices_not_steers(result)
-    return readings + [own[k] for k in ("S2", "S6", "S8-instrumented")]
+    return readings + [own[k] for k in ("S2", "S6")]
 
 
 SWEEPABLE = frozenset({"sf1", "th1", "th2", "th2_reversion", "th3", "th4", "ld1", "of2",

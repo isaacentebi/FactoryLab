@@ -27,7 +27,6 @@ from factorylab.runtime.continuity import HARD_STATE_BYTES
 from factorylab.runtime.custody import UNAVAILABLE
 from factorylab.runtime.observations import window_fact_names
 from factorylab.runtime.propensity import (
-    MIN_DECLARED_MASS,
     action_vocabulary,
     propensity_field,
 )
@@ -234,7 +233,6 @@ class SchematicsMixin:
             "kind": "router",
             "event_kind": "Tick",
             "learner": "exp3",
-            "gamma": 0.1,
             "add": False,
         },
         "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue",
@@ -300,7 +298,6 @@ class SchematicsMixin:
             "assembly_id": "an id from world.catalogue, usually inputs.you",
             "learner": "blum_mansour",
             "actions": ["hold", "buy:BTC", "sell:BTC"],
-            "gamma": 0.1,
         },
         "amendment": {
             "kind": "amendment",
@@ -401,9 +398,8 @@ class SchematicsMixin:
             "action includes what the return executed through venue and treasury tools "
             "and the children it requested; a decline is labelled declined). The "
             "propensity a request forwards under SUBJECT PROPENSITY is the distribution "
-            "of the decision the request is about, not yours. The action taken needs at least "
-            f"{MIN_DECLARED_MASS} mass or is floored to it before it weights a reward. It "
-            "travels forward on the request about this return"
+            "of the decision the request is about, not yours. It is recorded as declared "
+            "and travels forward on the request about this return"
         ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "

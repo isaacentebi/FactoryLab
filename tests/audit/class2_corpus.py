@@ -181,7 +181,7 @@ def static_runtime(name: str):
     from scripts import fastloop
 
     return Runtime(simulated_manifest(name), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=0.1,
+                   ledger_path=None,
                    provider=fastloop.PolicyProvider(WORLDS / f"{name}.toml"))
 
 
@@ -392,7 +392,7 @@ def render_dynamic(name: str, *, ticks: int = 60) -> Rendered:
         directory = Path(scratch)
         runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
                           initial_balance_micro=None,
-                          ledger_path=str(directory / "ledger.jsonl"), router_gamma=0.1,
+                          ledger_path=str(directory / "ledger.jsonl"),
                           provider=Recording(WORLDS / f"{name}.toml"), kill_at_end=True)
         surface = getattr(runtime, "polymarket", None)
         if surface is not None and not surface.writes:
@@ -440,7 +440,7 @@ def render_governance(name: str) -> Rendered:
     recorder = _recorder(fastloop.PolicyProvider, name, rendered, set(), _inputs_from_prompt,
                          request_form)
     rt = Runtime(simulated_manifest(name), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1, provider=recorder(WORLDS / f"{name}.toml"))
+                 ledger_path=None, provider=recorder(WORLDS / f"{name}.toml"))
     rt._manage_reserve_window()
     # The one piece of state a fresh world lacks: seats qualify for a committee by
     # settled experience (``_committee_eligible``), which no run has given them yet.

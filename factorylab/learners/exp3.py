@@ -1,11 +1,31 @@
-"""EXP3 uses q[a]=(1-gamma)w[a]/sum(w)+gamma/K and eta=gamma/N.
+"""The frontier learner: anytime, mean-based EXP3 in follow-the-regularised-leader form.
 
-N is the fixed universe size; K is the feasible menu size. On a fixed menu this
-is the standard EXP3 algorithm of Auer et al. (2002), Figure 1:
-https://cseweb.ucsd.edu/~yfreund/papers/bandits.pdf
-The executed action's estimator is reward / logged propensity. Menu changes
-retain weights but carry no fixed-menu regret guarantee. Gamma is fixed for an
-epoch; the caller chooses it for the horizon (or starts a new epoch).
+Chapter II §I.a asks for "at least some naive, mean-based no-regret learning
+somewhere": a chaser of running averages. This learner keeps one cumulative loss
+estimate per action and, at its t-th opened round, plays
+
+    gamma_t = min(1, t^(-1/2)),  eta_t = gamma_t / N,
+    q_t = (1 - gamma_t) * softmax(-eta_t * L) + gamma_t / K   (K = feasible menu)
+
+with no restart (docs/architecture/learners-noregret.md §2.1). On a fixed menu with
+synchronous on-policy feedback its expected regret is at most
+(N ln N + 4) sqrt(T) + 3, and the decaying exploration keeps it mean-based
+(Braverman, Mao, Schneider & Weinberg 2018, Thm D.3, adapted to an anytime schedule).
+
+A menu grows in place (§2.5): a new arm's cumulative loss is set so that its weight at
+the pre-growth rate is the mean weight of the arms already there; N then grows, so
+eta_t stays nonincreasing (and the new arm's weight at the next, lower rate is no
+longer exactly that mean). Mourtada & Maillard (2017) give the full-information step:
+an arm entering at the mean weight raises the potential by at most ln(1 + 1/N), so
+regret against each arm counts from its arrival with N_T for N. The bandit step is our
+own argument, measured, not published (§2.5).
+
+The estimate is the truthful logged propensity's: a round that played action k with
+probability pi_k and lost l adds l / pi_k to L[k] (on-policy). An off-policy learner
+(one trained on another agent's declared propensities) adds l / (pi_k + beta) with
+beta = eta/2 of the round it opened (implicit exploration, Neu 2015): one update moves
+a logit by at most 2, and its bias is optimistic for actions the behaviour rarely
+takes. No regret is claimed for an off-policy learner (§2.4).
 """
 
 import math
@@ -15,81 +35,127 @@ from .base import (
     BanditFeedback,
     Feedback,
     _actions,
-    _center,
-    _restore_weights,
     _state,
     _support,
-    _weights,
 )
+
+SCHEDULE = "t^-1/2"
+
+
+def exploration(t: int) -> float:
+    """``gamma_t = min(1, t^(-1/2))`` for round ``t >= 1``, from correctly rounded sqrt."""
+    if not isinstance(t, int) or isinstance(t, bool) or t < 1:
+        raise ValueError("a round index is a positive integer")
+    return min(1.0, 1.0 / math.sqrt(t))
 
 
 class EXP3:
-    """Exploration stays positive and bandit estimates use supplied propensities."""
+    """The distribution is a pure function of (losses, rounds); opening a round counts it."""
 
-    def __init__(self, actions: Sequence[str], gamma: float, *, id: str = "exp3") -> None:
-        """Start uniform weights with exploration gamma in (0, 1]."""
-        if not math.isfinite(gamma) or not 0 < gamma <= 1:
-            raise ValueError("gamma must be in (0, 1]")
+    def __init__(self, actions: Sequence[str], *, id: str = "exp3",
+                 off_policy: bool = False) -> None:
+        """Start with zero losses and no rounds opened."""
         self.actions = _actions(actions)
         self.id = id
-        self.gamma = gamma
-        self._log_weights = dict.fromkeys(self.actions, 0.0)
+        self.off_policy = bool(off_policy)
+        self._losses = dict.fromkeys(self.actions, 0.0)
+        self._rounds = 0
+
+    @property
+    def rounds(self) -> int:
+        """Rounds opened and not withdrawn."""
+        return self._rounds
+
+    def rates(self) -> tuple[float, float]:
+        """(gamma, eta) of the next round to be opened."""
+        gamma = exploration(self._rounds + 1)
+        return gamma, gamma / len(self.actions)
 
     def distribution(self, feasible: Sequence[str]) -> dict[str, float]:
-        """Mix conditioned weights with uniform exploration on the feasible menu."""
+        """The next round's policy on ``feasible``; changes nothing."""
         support = _support(feasible, self.actions)
-        weights = _weights(self._log_weights, support)
-        return {a: (1 - self.gamma) * weights[a] + self.gamma / len(support) for a in support}
+        gamma, eta = self.rates()
+        low = min(self._losses[a] for a in support)
+        weights = {a: math.exp(-eta * (self._losses[a] - low)) for a in support}
+        total = math.fsum(weights.values())
+        return {a: (1 - gamma) * weights[a] / total + gamma / len(support) for a in support}
 
-    def update(self, feedback: Feedback) -> None:
-        """Increase only the observed action's log weight by gamma/N * reward/propensity."""
+    def open_round(self) -> dict[str, float]:
+        """Count one round; return the rates it was drawn at (frozen in its snapshot)."""
+        gamma, eta = self.rates()
+        self._rounds += 1
+        return {"gamma": gamma, "eta": eta}
+
+    def withdraw_round(self) -> None:
+        """Uncount one opened round that never became a decision (a quiet draw)."""
+        if self._rounds < 1:
+            raise RuntimeError("no round to withdraw")
+        self._rounds -= 1
+
+    def add_actions(self, new: Sequence[str]) -> None:
+        """Grow the menu in place without restarting.
+
+        Guarantees the round count and every existing arm's loss are unchanged, and
+        each new arm's weight ``exp(-eta * L)`` at the pre-growth rate (the next round's
+        rate before N grows) equals the mean weight of the arms already on the menu
+        (learners design §2.5). An empty ``new`` changes nothing; an arm already on the
+        menu raises ValueError and changes nothing.
+        """
+        if not tuple(new):
+            return
+        added = _actions(new)
+        if set(added) & set(self.actions):
+            raise ValueError("an action already on the menu is not new")
+        _gamma, eta = self.rates()
+        low = min(self._losses.values())
+        mean = math.fsum(math.exp(-eta * (v - low)) for v in self._losses.values())
+        mean /= len(self._losses)
+        # The mean of weights at most 1 is in [1/N, 1], so the loss is finite and >= low.
+        start = low - math.log(mean) / eta
+        self.actions = (*self.actions, *added)
+        for action in added:
+            self._losses[action] = start
+
+    def estimate(self, feedback: BanditFeedback, eta: float | None = None) -> float:
+        """The loss estimate this round adds to its action; raises if it is not finite."""
         if not isinstance(feedback, BanditFeedback):
             raise TypeError("EXP3 requires BanditFeedback")
-        if feedback.action not in self._log_weights:
+        if feedback.action not in self._losses:
             raise ValueError("unknown action")
-        weights = self._log_weights.copy()
-        weights[feedback.action] += (
-            self.gamma / len(self.actions) * feedback.reward / feedback.propensity
-        )
-        self._log_weights = _center(weights)
+        beta = 0.0
+        if self.off_policy:
+            if eta is None or not math.isfinite(eta) or eta <= 0:
+                raise ValueError("an off-policy update needs its round's eta")
+            beta = eta / 2
+        value = (1.0 - feedback.reward) / (feedback.propensity + beta)
+        if not math.isfinite(value) or not math.isfinite(self._losses[feedback.action] + value):
+            raise ValueError("loss estimate is not finite")
+        return value
 
-    def expand(self, actions: Sequence[str]) -> "EXP3":
-        """Return a new learner over ``actions`` (a superset) for a new comparator epoch.
-
-        Existing actions carry their log-weights; new actions start at the carried
-        mean. No regret guarantee spans the epoch boundary.
-        """
-        new = _actions(actions)
-        if not set(self.actions) <= set(new):
-            raise ValueError("an epoch may only add actions")
-        carried = [self._log_weights[a] for a in self.actions]
-        mean = sum(carried) / len(carried)
-        learner = EXP3(new, self.gamma, id=self.id)
-        learner._log_weights = _center({a: self._log_weights.get(a, mean) for a in new})
-        return learner
+    def update(self, feedback: Feedback, *, eta: float | None = None) -> None:
+        """Add the round's loss estimate to its action; change nothing on failure."""
+        value = self.estimate(feedback, eta)
+        self._losses[feedback.action] += value
 
     def state(self) -> dict:
-        """Return deterministic weights, parameters, and identity."""
-        return _state(
-            algorithm="EXP3",
-            id=self.id,
-            actions=self.actions,
-            gamma=self.gamma,
-            log_weights=self._log_weights,
-        )
+        """Return the exact losses, round count, identity and estimator mode."""
+        return _state(algorithm="EXP3", schedule=SCHEDULE, id=self.id, actions=self.actions,
+                      off_policy=self.off_policy, rounds=self._rounds, losses=self._losses)
 
     @classmethod
     def restore(cls, state: dict) -> "EXP3":
-        """Preserve weights bit for bit, including expanded epochs and their action order."""
-        weights = _restore_weights(state, "EXP3")
-        learner = cls(state["actions"], state["gamma"], id=state["id"])
-        learner._log_weights = weights
+        """Preserve losses bit for bit; refuse a state from another schedule."""
+        if state.get("algorithm") != "EXP3" or state.get("schedule") != SCHEDULE:
+            raise ValueError("learner state from another algorithm or schedule")
+        learner = cls(state["actions"], id=state["id"], off_policy=state["off_policy"])
+        losses, rounds = state["losses"], state["rounds"]
+        if set(losses) != set(learner.actions) or any(
+            type(v) not in (int, float) or not math.isfinite(v) or v < 0
+            for v in losses.values()
+        ):
+            raise ValueError("invalid saved losses")
+        if not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 0:
+            raise ValueError("invalid saved round count")
+        learner._losses = {a: float(losses[a]) for a in learner.actions}
+        learner._rounds = rounds
         return learner
-
-    def update_observed_gain(self, action: str, gain: float, proposal_probability: float) -> None:
-        """Apply the SR_MAB observed gain using its row proposal denominator (Lemma 10).
-
-        This is the paper's off-proposal feedback interface, not an assertion
-        that the master action was drawn from this row's distribution.
-        """
-        self.update(BanditFeedback(action, gain, proposal_probability))

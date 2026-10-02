@@ -33,7 +33,7 @@ def test_delayed_funding_oracle_evidence_survives_runtime_checkpoint(tmp_path):
     manifest = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
     path = tmp_path / "oracle.jsonl"
     runtime = Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                      ledger_path=str(path), router_gamma=0.1, exchange=exchange,
+                      ledger_path=str(path), exchange=exchange,
                       clock_source=ClockSource(observed, 1_000_000_000, 1).events())
     process = runtime._process_event
 
@@ -92,7 +92,7 @@ def test_stale_mark_retains_gap_for_later_named_trade_and_releases_it():
     manifest = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)),
                        timing=replace(base.timing, world_repricing_ns=270 * S))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1, exchange=exchange,
+                 ledger_path=None, exchange=exchange,
                  provider=Population(counterfactual={"coin": "BTC", "side": "buy"},
                                      verdicts=(0.8,)),
                  clock_source=ClockSource(0, S, 1).events())
@@ -163,7 +163,7 @@ def test_permanently_stale_mark_retains_only_frozen_horizon_and_replays():
     manifest = replace(base, exchange=replace(base.exchange, kind='hyperliquid', coins=('BTC',)),
                        timing=replace(base.timing, world_repricing_ns=270_000_000_000))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1, exchange=exchange,
+                 ledger_path=None, exchange=exchange,
                  clock_source=ClockSource(0, 1_000_000_000, 1).events())
     try:
         rt._observe_mid('BTC', 0, '100')
@@ -227,10 +227,10 @@ def test_settled_launch_fingerprints_and_gaps_survive_checkpoint():
     base = load_manifest("scripted")
     manifest = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
     runtime = Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                      ledger_path=None, router_gamma=0.1, exchange=exchange,
+                      ledger_path=None, exchange=exchange,
                       clock_source=ClockSource(NS_PER_HOUR // 2, 1_000_000_000, 1).events())
     restored = Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                       ledger_path=None, router_gamma=0.1, exchange=exchange,
+                       ledger_path=None, exchange=exchange,
                        clock_source=ClockSource(3 * NS_PER_HOUR, 1_000_000_000, 1).events())
     try:
         restore_runtime(restored, runtime_state(runtime))

@@ -856,7 +856,7 @@ def _live_world(where, *, wall=True, ledger=True):
     where.mkdir(parents=True, exist_ok=True)
     return Runtime(_live_manifest(), events=40, seed=1, initial_balance_micro=None,
                    ledger_path=str(where / "world.jsonl") if ledger else None,
-                   router_gamma=.1, exchange=FakeExchange(),
+                   exchange=FakeExchange(),
                    clock_source=_wall_clock() if wall else None)
 
 

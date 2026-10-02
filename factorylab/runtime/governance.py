@@ -47,6 +47,7 @@ from factorylab.runtime.observations import (
 )
 from factorylab.runtime.shared import PredicateRunner, _to_plain, assembly_rewards
 from factorylab.runtime.summary import _assembly_contract, _model_contract
+from factorylab.runtime.worlds import PER_TICK_KINDS
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 from factorylab.world.x402 import X402Error
 
@@ -388,6 +389,7 @@ class GovernanceMixin:
         that set and the reward that settles each decision trains the learner
         off-policy through the declared propensity.
         """
+        from factorylab.learners.blum_mansour import BlumMansour
         from factorylab.learners.delayed import SnapshotLearner
         from factorylab.learners.exp3 import EXP3
 
@@ -415,12 +417,14 @@ class GovernanceMixin:
         self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
         self._move_trial(handle, self.ev.trial_amount_micro, to=None, reason="trial:learner")
         lid = self._assembly_learner_id(prop.assembly_id)
+        # Trained on the seat's declared propensities: off-policy, so the estimator is
+        # implicit-exploration inside the learner and no regret is claimed (learners
+        # design §2.4). The declaration itself is never rewritten.
         if prop.learner == "blum_mansour":
-            from factorylab.learners.blum_mansour import BlumMansour
-
-            inner = BlumMansour(lambda acts: EXP3(acts, prop.gamma), actions, id=lid)
+            inner = BlumMansour(actions, id=lid, first_epoch=self._first_epoch(),
+                                off_policy=True)
         else:
-            inner = EXP3(actions, prop.gamma, id=lid)
+            inner = EXP3(actions, id=lid, off_policy=True)
         self.assembly_learners[prop.assembly_id] = SnapshotLearner(inner, id=lid)
         self.stats.assembly_learners_registered += 1
         self._emit(EventKind.REGISTERED, {"kind": "learner", "id": prop.assembly_id,
@@ -992,6 +996,13 @@ class GovernanceMixin:
                 len(self.routers.get(prop.event_kind, [])) >= self.m.tools.max_routers_per_kind
             ):
                 raise ValueError("router cap reached for this event kind")
+            if prop.learner == "blum_mansour" and prop.event_kind not in PER_TICK_KINDS:
+                # The load-time rule for [evaluation] no_swap_regret_kinds, on proposals
+                # too (Sol on #189/#190, P1 5): a core's first epoch is its delivery
+                # bound in draws at one draw per tick (learners design §2.2).
+                raise ValueError("a blum_mansour router needs a kind with a per-tick draw "
+                                 f"bound ({', '.join(sorted(PER_TICK_KINDS))}); "
+                                 f"{prop.event_kind} has none")
             contract = Contract(
                 id=f"router:{prop.event_kind}:{prop.learner}:{self.n}",
                 version=1,
@@ -1004,18 +1015,44 @@ class GovernanceMixin:
                 resource_bounds=ResourceBounds(),
             )
             self._register_with_trial(contract, handle, amount)
-            self._build_router(prop.event_kind, prop.learner, prop.gamma, replace=not prop.add)
-            self.stats.routers_replaced += 1
-            self._emit(
-                EventKind.ROUTER_REPLACED,
-                {
-                    "event_kind": prop.event_kind,
-                    "learner": prop.learner,
-                    "gamma": prop.gamma,
-                    "added": prop.add,
-                    "by": handle,
-                },
-            )
+            kind = prop.event_kind
+            if prop.add or not self.routers.get(kind) or self._epoch_due(kind):
+                self._activate_router(kind, prop.learner, add=prop.add, by=handle)
+                return
+            # A replacement orphans every round its router has in flight, so it opens a
+            # phase and waits for the kind's settle gate, as any phase does (learners
+            # design §2.5; Sol on #189/#190, P1 2). A later replacement of the same kind
+            # supersedes one still waiting: the kind gets the router last proposed.
+            superseded = self.pending_routers.get(kind)
+            self.pending_routers[kind] = {"learner": prop.learner, "by": handle,
+                                          "since_tick": self.ticks_consumed}
+            self.ledger.append({"kind": "router.deferred", "event_kind": kind,
+                                "learner": prop.learner, "by": handle,
+                                "tick": self.ticks_consumed,
+                                "phase_opened_tick": self.clockwork.opened(f"epoch:{kind}"),
+                                "supersedes": superseded and superseded["by"],
+                                "ts": self.clock.now_ns})
+
+    def _activate_router(self, kind: str, learner: str, *, add: bool, by: str) -> None:
+        """Build a population router now: added beside the kind's routers, or replacing
+        them and opening the kind's next phase at this tick (``_phase_opened``)."""
+        self._build_router(kind, learner, replace=not add)
+        if not add:
+            # Built over the kind's whole menu: a replacement still waiting, or a
+            # coverage phase, has nothing left to change.
+            self.pending_routers.pop(kind, None)
+            self.pending_epochs.pop(kind, None)
+            self._phase_opened(kind)
+        self.stats.routers_replaced += 1
+        self._emit(
+            EventKind.ROUTER_REPLACED,
+            {
+                "event_kind": kind,
+                "learner": learner,
+                "added": add,
+                "by": by,
+            },
+        )
 
     def _register_connector(self, handle: str, prop: ConnectorProposal, *,
                             predicted_effect: PredictedEffect | None = None) -> None:

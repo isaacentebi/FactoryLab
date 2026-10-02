@@ -31,7 +31,7 @@ UNTIL = 50  # the window after which flip is steady
 #: frontier), TH-2 at 100, TH-3 at 150 (two charter boundaries). The soak tier
 #: (``-m soak``) reads the original lengths too, and alone runs what only a long run
 #: shows: TH-1e's release after flip is steady (window 50 of 300 events), TH-1b's
-#: frozen integral (360), TH-1f's priority and TH-4's null (300-event statistics).
+#: frozen integral (360) and TH-4's null (300-event statistics).
 SHORT, LONG = "short", pytest.param("long", marks=pytest.mark.soak)
 TH1_EVENTS = {"short": 100, "long": 300}
 
@@ -122,12 +122,6 @@ def test_th1e_once_flip_is_steady_the_flag_clears_and_the_price_leaks_away(th1_l
     assert result.ok, result.evidence
 
 
-@pytest.mark.soak  # unsupported before both flags coincide, late in the 300 events
-def test_th1f_where_thrash_and_stable_failure_coincide_gain_moves_down(th1_long):
-    result = g.th1f_priority(th1_long.events, th1_long.manifest)
-    assert result.status != g.FAIL, result.evidence
-
-
 def test_th1_the_physics_prices_and_never_steers(th1):
     """Rules out the steering signature: the kernel slowing flip's wakes, changing its
     cadence floor or its prompt (S6: the organ touches no subscription or seat state;
@@ -172,19 +166,24 @@ def th2(shared_run, request):
     return shared_run(f"th2-{events}", lambda: P.run(*P.th2(every=3), events=events))
 
 
-def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop(th2):
-    """Not TH-2's detector: the kernel's own speed limit. The population registers a fresh
+def test_th2_a_growing_menu_grows_its_live_router_and_never_outruns_its_loop(th2):
+    """Not TH-2's detector: the kernel's own physics. The population registers a fresh
     judge every third decision; each is admitted (no speed limit is committed on the
-    population), and each growth of the judges' router menu waits ``min_ratio`` measured
-    router periods (``RoutingMixin._epoch_due``), so every lifespan of that loop is at
-    least its correcting loop: no short lifespan exists for TH-2 to read (unsupported)."""
+    population), and each grows the judges' live router in place (``router.grown``;
+    learners design §2.5): nothing in flight is orphaned, no phase opens, and the router's
+    configuration loop is never replaced, so no short lifespan exists for TH-2 to read
+    (unsupported). The growth is neither deferred nor refused."""
     result = g.th2_short_lived(th2.events, th2.manifest, loop="router:ProducerReturn")
     assert result.status == g.UNSUPPORTED, result.evidence
-    assert result.evidence["lifespans"] > 0 and result.evidence["speed_refusals"] == 0
+    assert result.evidence.get("speed_refusals", 0) == 0
+    assert not th2.rows("epoch.deferred")
+    grown = [r for r in th2.rows("router.grown") if r["event_kind"] == "ProducerReturn"]
     registered = [r for r in th2.rows("registry.register")
                   if r["contract"]["id"].startswith("molt-judge")]
     refused = [r for r in th2.rows("registration.rejected")]
     assert registered and not refused
+    assert {a for r in grown for a in r["added"]} >= {
+        r["contract"]["id"] for r in registered}
     assert th2.physics.r >= 3
     assert all(row["ratio"] >= th2.physics.r for row in th2.rows("config.lifespan")
                if row["loop"] == "router:ProducerReturn")
@@ -195,15 +194,18 @@ def th2r(shared_run):
     return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=150))
 
 
-@pytest.mark.parametrize("loop", ["seat:molt-seat", "router:ProducerReturn"])
-def test_th2_a_seat_driven_reversion_is_read_as_thrash(th2r, loop):
+def test_th2_a_seat_driven_reversion_is_read_as_thrash(th2r):
     """TH-2 exercised on the path a seat drives: retire a seat (the committee votes, the
     next window boundary activates it) and register its next version (``_register``),
     again and again. Each version of ``seat:<id>`` lives shorter than the consequence
-    loop that corrects it, and each shrink of the router's menu opens its epoch at once
-    (only growth waits, ``_open_epoch``); the organ reads every such lifespan as thrash
-    with ``unsettled >= 1 − ratio`` in the windows whose tail holds it, and nothing is
-    refused for its speed."""
+    loop that corrects it; the organ reads every such lifespan as thrash with
+    ``unsettled >= 1 − ratio`` in the windows whose tail holds it, and nothing is
+    refused for its speed. The router's own loop does not thrash with it: a retirement
+    opens no phase, and a growth waits its delivery bounds (learners design §2.5)."""
+    loop = "seat:molt-seat"
+    router = [row for row in th2r.rows("config.lifespan")
+              if row["loop"] == "router:ProducerReturn" and row["ratio"] < 1]
+    assert not router
     short = [row for row in th2r.rows("config.lifespan")
              if row["loop"] == loop and row["ratio"] < 1]
     assert short, "the population produced no short-lived configuration"

@@ -132,7 +132,7 @@ def _returns_runtime():
     charter = replace(seed.charter, cards=tuple(replace(c, window=window)
                                                for c in seed.charter.cards))
     rt = Runtime(replace(seed, charter=charter), events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     rt._derive_regions()
     return rt
 
@@ -225,21 +225,29 @@ def test_a_trial_is_protected_for_min_ratio_measured_consequence_periods_in_tick
     assert not rt._unhistoried("newcomer")
 
 
-def test_a_grown_menu_waits_min_ratio_measured_round_periods_for_its_epoch(monkeypatch):
-    """Time audit T6, Codex review of #133: a speed limit on refactoring; a registration
-    joins a routed kind at most once per min_ratio periods of that router's own rounds."""
-    rt = make_runtime()
+def test_a_phase_waits_min_ratio_measured_round_periods_and_delivery_bounds():
+    """Time audit T6, Codex review of #133: a speed limit on refactoring. A change that
+    opens a router phase (here a forecast-shaped seat raising the Tick core's coverage
+    bound; learners design §2.5) waits min_ratio periods of that router's own rounds, and
+    never fewer than min_ratio delivery bounds: a round's learning may outlast its
+    measured closure. A seat that keeps the bound grows the menu in place and waits for
+    nothing."""
+    from tests.runtime.test_menu_growth import _core_tick_runtime
+
+    rt = _core_tick_runtime()
     kind = "Tick"
     state = rt.routers[kind][0]
     rt.clockwork.record(f"router:{kind}", 5)
     rt.clockwork.loops[f"epoch:{kind}"] = {"opened": rt.ticks_consumed, "due": 0,
                                            "period": 1.0, "inner": 5, "fires": 1}
-    grown = [*state.universe, "newcomer"]
-    monkeypatch.setattr(rt, "_universe_for", lambda k, ev=None: list(grown))
+    judge = next(a.spec for a in rt.assemblies.values() if a.spec.role == "evaluator")
+    rt._instantiate(replace(judge, id="newcomer", accepts=frozenset({kind})))
     rt._open_epoch(kind)
     assert "newcomer" not in state.universe and kind in rt.pending_epochs
     assert _items(rt, "epoch.deferred")[-1]["inner_ticks"] == 5
-    rt.ticks_consumed += rt.m.timing.min_ratio * 5 - 1
+    wait = rt.m.timing.min_ratio * max(5, rt._delivery_bound())
+    assert wait > rt.m.timing.min_ratio * 5  # the delivery bound is the longer here
+    rt.ticks_consumed += wait - 1
     rt._open_pending_epochs()
     assert "newcomer" not in rt.routers[kind][0].universe
     rt.ticks_consumed += 1
@@ -327,12 +335,12 @@ def test_a_censored_version_keeps_its_late_settlement_and_marks_the_boundary_uns
 def test_governance_is_ledgered_nonviable_when_its_period_outlasts_the_run_or_the_world():
     manifest = load_manifest("scripted")  # three backstops of 20 ticks: 60 ticks
     short = Runtime(manifest, events=50, seed=1, initial_balance_micro=None, ledger_path=None,
-                    router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                    exchange=FakeExchange(), provider=ScriptedProvider())
     short._manage_reserve_window()
     nonviable, = _items(short, "governance.nonviable")
     assert nonviable["needed_ticks"] == 60 and nonviable["run_ticks"] == 50
     long = Runtime(manifest, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
-                   router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                   exchange=FakeExchange(), provider=ScriptedProvider())
     long._manage_reserve_window()
     assert not _items(long, "governance.nonviable") and long.governance_viable
     # A world repriced every 59 s: H = 59/3 s is 20 one-second ticks (the first tick at
@@ -347,7 +355,7 @@ def _repriced(manifest, seconds):
     world = Runtime(replace(manifest, timing=replace(manifest.timing,
                                                      world_repricing_ns=seconds * 10**9)),
                     events=500, seed=1, initial_balance_micro=None, ledger_path=None,
-                    router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                    exchange=FakeExchange(), provider=ScriptedProvider())
     world._manage_reserve_window()
     return world
 
@@ -375,7 +383,7 @@ def test_a_short_backstop_never_schedules_launch_or_passes_viability_below_h():
     manifest = replace(base, timing=replace(base.timing, world_repricing_ns=60 * 10**9),
                        evaluation=replace(base.evaluation, consequence_backstop_events=3))
     rt = Runtime(manifest, events=20, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                 exchange=FakeExchange(), provider=ScriptedProvider())
     assert rt._horizon_ticks() == 20
     assert rt.cadence.consequence_period_events() == 20  # before any window opens
     rt._manage_reserve_window()
@@ -396,7 +404,7 @@ def test_a_faster_clock_mid_window_moves_the_floor_at_once():
     manifest = replace(base, tick_interval_ns=2 * 10**9,
                        timing=replace(base.timing, world_repricing_ns=60 * 10**9))
     rt = Runtime(manifest, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                 exchange=FakeExchange(), provider=ScriptedProvider())
     rt._manage_reserve_window()
     assert rt.cadence.consequence_period_events() == 10
     rt.tick_clock.set_interval(10**9)  # what an activated clock amendment does, mid-window
@@ -737,7 +745,7 @@ def test_a_fill_the_venue_makes_while_a_model_thinks_settles_between_tool_rounds
     manifest = replaced(base, exchange=replaced(base.exchange, kind="hyperliquid",
                                                 coins=("BTC",)))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.2, exchange=LateFill(coins=("BTC",),
+                 exchange=LateFill(coins=("BTC",),
                                                      start_prices={"BTC": Decimal("100")},
                                                      start_cash_usd=Decimal("1000")),
                  provider=Slow({"action": "order", "tool_calls": [{

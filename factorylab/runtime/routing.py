@@ -379,8 +379,9 @@ def learning_death_floor(gamma: float) -> float:
     """The NOOP probability at or above which a draw woke its seats only by exploration.
 
     Learning death is the frontier that "is no longer being invoked" (essay II.II.a).
-    A router whose every draw in a whole window gave NOOP at least ``1 - gamma`` left
-    its seats at most the exploration mass: they sat at the gamma floor all window.
+    A draw that gave NOOP at least ``1 - gamma``, ``gamma`` the exploration that draw
+    was made at, left its seats at most the exploration mass. The threshold is read
+    per draw (learners design §2.7): the frontier's gamma falls as ``t^(-1/2)``.
     """
     return 1.0 - gamma
 
@@ -392,12 +393,16 @@ class RouterState:
     learner: Any
     router: Router
     epoch: int = 1
-    seed_gamma: float = 0.1
+    # The phase-wide coverage bound kappa (learners design §2.3): the world's draw
+    # transforms guarantee every executed propensity is at least the learner's own
+    # divided by it. Fixed for the router's life: its menu is fixed for that life.
+    coverage: float = 1.0
     # The rewards this router's own draws observed, per arm: what a censored draw
     # is credited instead of a zero (defect 2).
     observed: ObservedRewards = field(default_factory=ObservedRewards)
-    # The live router that replaced this one: a retired router's settled rounds
-    # train its successor, so no reward is spent on a copy that never samples again.
+    # The live router that replaced this one. A retired router never samples again,
+    # so its settled rounds train nothing (``learner.orphaned``; learners design §2.5);
+    # its successor is still where its neutral credit is read.
     successor: str | None = None
     # [total ticks, rounds]: how long this router's learned seat rounds took to be
     # learned, in world ticks, the delay an abstention's credit is deferred by.
@@ -451,7 +456,7 @@ class RouterState:
             "universe": list(self.universe),
             "router": self.router.state(),
             "epoch": self.epoch,
-            "seed_gamma": self.seed_gamma,
+            "coverage": self.coverage,
             "observed": self.observed.state(),
         }
         if self.successor is not None:
@@ -480,7 +485,7 @@ class RouterState:
         universe = list(state["universe"])
         router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
         return cls(state["kind"], universe, learner, router, state["epoch"],
-                   state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")),
+                   state["coverage"], ObservedRewards(state.get("observed")),
                    # A router saved before the tick clock measured its delay in wall
                    # nanoseconds ("latency"): that sample is not read, and restarts.
                    state.get("successor"), list(state.get("latency_ticks", [0, 0])),
@@ -681,19 +686,85 @@ class RoutingMixin:
         return next((st for st in self._all_router_states()
                      if st.learner.id == state.successor), state)
 
-    def _make_learner(
-        self, kind: str, learner_kind: str, gamma: float, universe: list[str], lid: str
-    ):
-        if learner_kind == "blum_mansour":
-            from factorylab.learners.blum_mansour import BlumMansour
-            from factorylab.learners.delayed import SnapshotLearner
+    def _coverage(self, universe: list[str]) -> float:
+        """The phase-wide coverage bound kappa of a menu (learners design §2.3).
 
-            inner = BlumMansour(lambda acts: EXP3(acts, gamma), universe, id=lid)
-            return _KeyedLearner(SnapshotLearner(inner, id=lid))
-        return EXP3(universe, gamma, id=lid)
+        Guarantees every executed propensity the world's draw transforms produce on this
+        menu is at least the learner's own divided by the returned value:
+        ``_mix_with_standing`` keeps at least ``1 - s`` of every arm (``s`` never above
+        ``evaluation.sampling_cap``) when a forecast-shaped evaluator is on the menu,
+        and ``_cap_adversarial`` keeps at least ``adversarial_share`` of an adversary's
+        mass when one is. Both bounds are fixed for the world's life, so kappa is too.
+        """
+        seats = [self.assemblies[a].spec for a in universe if a in self.assemblies]
+        shapes = [set(assembly_rewards(spec).values()) for spec in seats]
+        kappa = 1.0
+        if any("forecast" in shape for shape in shapes):
+            kappa /= 1.0 - self.ev.sampling_cap
+        if self.ev.adversarial_share > 0 and any(shape & ADVERSARIAL_SHAPES
+                                                 for shape in shapes):
+            kappa /= self.ev.adversarial_share
+        return kappa
+
+    def _decision_horizon(self, channels: Any) -> int:
+        """A decision's cutoff in world ticks from its return channels (time audit T3)."""
+        horizon = self.ev.verdict_timeout_ticks
+        if set(channels) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE,
+                            CH_COUNTER}:
+            # An evaluator decision is graded against its judged decision's measured
+            # outcome and an exposure against its judges' (ruling R1), so each lives as
+            # long as the consequence patience on the venue's clock, in delivered ticks
+            # (wave 16, D2), and at least the backstop, like a forecast.
+            horizon = max(self.ev.consequence_backstop_ticks,
+                          self._patience_ticks() + self.ev.verdict_timeout_ticks)
+        if CH_CONSEQUENCE in channels:
+            # A population forecast may select any admitted horizon; its invocation
+            # must not be cut off before its predictions come due.
+            horizon = max(horizon, MAX_FORECAST_HORIZON)
+        return horizon
+
+    def _first_epoch(self) -> int:
+        """The core's first epoch in draws: at least the delivery bound (design §2.2).
+
+        The delivery bound (``_delivery_bound``) at one draw per tick, the bound a core
+        kind is held to (``[evaluation] no_swap_regret_kinds``), so an epoch is at
+        least as long as its feedback takes to arrive (essay II.IV.c).
+        """
+        return self._delivery_bound()
+
+    def _delivery_bound(self) -> int:
+        """``L``: the latest, in ticks after it opened, any router round may still be
+        learned (design §2.6).
+
+        Guarantees ``L`` is at least every router round's own delivery deadline span:
+        the longest horizon any routed decision can carry (``_decision_horizon`` over
+        every channel), cut off as the queue cuts it off (``clockwork.deadline_ticks``,
+        the horizon plus its ratio slack), and stretched by the same formula a
+        round's deadline is (``clockwork.delivery_ticks``). Reading the horizon
+        without its slack put the bound below the delivery it bounds (Sol on
+        #189/#190, P1 3: 800 against 1,068 on edition 8).
+        """
+        from factorylab.runtime.clockwork import deadline_ticks, delivery_ticks
+
+        ratio = self.m.timing.min_ratio
+        longest = self._decision_horizon({CH_FAST, CH_CONSEQUENCE})
+        return delivery_ticks(deadline_ticks(longest, ratio), ratio)
+
+    def _make_learner(self, learner_kind: str, universe: list[str], lid: str,
+                      coverage: float):
+        """A keyed learner: the frontier's EXP3, or the core's Blum-Mansour."""
+        from factorylab.learners.blum_mansour import BlumMansour
+        from factorylab.learners.delayed import SnapshotLearner
+
+        if learner_kind == "blum_mansour":
+            inner = BlumMansour(universe, id=lid, first_epoch=self._first_epoch(),
+                                coverage=coverage)
+        else:
+            inner = EXP3(universe, id=lid)
+        return _KeyedLearner(SnapshotLearner(inner, id=lid))
 
     def _build_router(
-        self, kind: str, learner_kind: str, gamma: float, *, replace: bool = True
+        self, kind: str, learner_kind: str, *, replace: bool = True
     ) -> RouterState:
         """Create a router for ``kind``. ``replace`` swaps the whole set; else one is added."""
         universe = self._universe_for(kind)
@@ -703,13 +774,15 @@ class RoutingMixin:
             raise ValueError("router cap reached for this event kind")
         lid = f"router:{kind}" if index == 0 else f"router:{kind}#{index}"
         lid = self._fresh_router_id(lid)
-        learner = self._make_learner(kind, learner_kind, gamma, universe, lid)
+        coverage = self._coverage(universe)
+        learner = self._make_learner(learner_kind, universe, lid, coverage)
         router = Router(learner, lambda _k, u=universe: [x for x in u if x != NOOP])
-        state = RouterState(kind, universe, learner, router, seed_gamma=gamma)
+        state = RouterState(kind, universe, learner, router, coverage=coverage)
         created = {"kind": "router.created", "learner_id": lid, "event_kind": kind,
                    "replaces": [st.learner.id for st in existing] if replace else []}
         if learner_kind != "exp3":
             created["learner"] = learner_kind
+        created["coverage"] = coverage
         self.ledger.append(created)
         if replace:
             for retired in existing:
@@ -1213,10 +1286,19 @@ class RoutingMixin:
         only its counter-shaped readers are on the menu, at "release" only the rest.
         """
         kind = str(ev.kind)
-        def mix(dist):
-            return self._cap_adversarial(self._mix_with_standing(dist))
+        transform: dict[str, float] = {}
 
-        key = (f"{state.learner.id}:{self.n}" + (f":{draw}" if draw else "")
+        def mix(dist):
+            # The world's draw transforms act outside the learner (learners design
+            # §2.3): what they move is the extra regret of the executed policy over
+            # the learner's own, at most twice this distance, on the record per draw.
+            executed = self._cap_adversarial(self._mix_with_standing(dist))
+            transform["tv"] = 0.5 * math.fsum(abs(executed[a] - dist[a]) for a in dist)
+            return executed
+
+        # One key per draw: several events may be released and drawn at one event
+        # number (a cascade's releases), so the event's id is part of it.
+        key = (f"{state.learner.id}:{self.n}:{ev.id}" + (f":{draw}" if draw else "")
                + (":emission" if phase == "emission" else ""))
         if isinstance(state.learner, _KeyedLearner):
             state.learner.current_key = key
@@ -1230,6 +1312,10 @@ class RoutingMixin:
         taken = {self._family(a) for a in exclude}
 
         def feasible(action_id: str) -> tuple[bool, str]:
+            if action_id in self.retired_assemblies:
+                # A retirement opens no phase: the seat is infeasible in the one in
+                # force (learners design §2.5), never drawn again.
+                return False, "retired"
             if action_id not in universe:
                 return False, "self-judgement"
             if action_id in exclude:
@@ -1239,6 +1325,11 @@ class RoutingMixin:
                 return False, "read at release"
             if phase == "release" and counter:
                 return False, "read at emission"
+            if (self.ev.adversarial_share == 0 and set(assembly_rewards(
+                    self.assemblies[action_id].spec).values()) & ADVERSARIAL_SHAPES):
+                # No adversarial mass may be executed, so none is offered: the seat is
+                # outside the learner's support and its comparator (design §2.3).
+                return False, "adversarial share 0"
             judging = self._judging(action_id)
             if judging and self._family(action_id) in chain:
                 return False, "same-family"
@@ -1258,10 +1349,9 @@ class RoutingMixin:
         candidates = [a for a in universe if a != NOOP]
         excluded = dict(sample.excluded)
         if self._quiet_tick(ev, candidates, excluded):
-            if isinstance(state.learner, _KeyedLearner):
-                # A draw that opened no decision is no round: the snapshot the
-                # distribution froze for it would otherwise wait forever.
-                state.learner.inner.discard_for(key)
+            # A draw that opened no decision is no round: it is withdrawn, so it neither
+            # waits forever nor advances the learner's schedule (design §2.1).
+            state.learner.inner.withdraw_for(key)
             return None
         unaffordable = bool(candidates) and all(
             excluded.get(a, "").startswith("compute:") for a in candidates
@@ -1272,6 +1362,7 @@ class RoutingMixin:
                 "event_id": ev.id,
                 "router": state.learner.id,
                 "unaffordable": unaffordable,
+                **({"transform_tv": transform["tv"]} if transform.get("tv") else {}),
             }
         )
         self._compute_routed = True
@@ -1286,19 +1377,7 @@ class RoutingMixin:
         channel = next(iter(channels.values()), CH_VERDICT)
         # A decision's cutoff is the loop it waits on, in world ticks, plus a ratio
         # slack (time audit T3, T12): a producer's return waits on its judges.
-        horizon = self.ev.verdict_timeout_ticks
-        if set(channels.values()) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE,
-                                     CH_COUNTER}:
-            # An evaluator decision is graded against its judged decision's measured
-            # outcome and an exposure against its judges' (ruling R1), so each lives as
-            # long as the consequence patience on the venue's clock, in delivered ticks
-            # (wave 16, D2), and at least the backstop, like a forecast.
-            horizon = max(self.ev.consequence_backstop_ticks,
-                          self._patience_ticks() + self.ev.verdict_timeout_ticks)
-        if CH_CONSEQUENCE in channels.values():
-            # A population forecast may select any admitted horizon; its invocation
-            # must not be cut off before its predictions come due.
-            horizon = max(horizon, MAX_FORECAST_HORIZON)
+        horizon = self._decision_horizon(set(channels.values()))
         handle = self.queue.open(
             actor=sample.learner_id,
             event_id=ev.id,
@@ -1320,7 +1399,7 @@ class RoutingMixin:
             roles = self._abstention_roles(sample)
             row = self._contribution(handle, max(sorted(roles), key=roles.get))
             row["menu_roles"] = roles
-        self._watch_abstention(state, sample)
+        self._watch_abstention(state, sample, state.learner.inner.exploration(key))
         self._record_movement(state, sample, handle)
         self.stats.decisions += 1
         if self.stats.sample_propensity is None and sample.chosen != NOOP:
@@ -1361,14 +1440,16 @@ class RoutingMixin:
             mass[role] = mass.get(role, 0.0) + (p / total if total > 0 else 1 / len(seats))
         return mass or {"producer": 1.0}
 
-    def _watch_abstention(self, state: RouterState, sample: Sample) -> None:
+    def _watch_abstention(self, state: RouterState, sample: Sample, gamma: float) -> None:
         """Watch this draw's NOOP probability: the router's frontier-invocation evidence.
 
         Guarantees the draw is made and nothing here changes it. A draw without NOOP
         on its menu is not watched; a draw in a new window starts a new watch. The
         immune organ reads the watches of the window it closes as the frontier signal
         of its one learning-death diagnosis (``frontier_invocation``; ruling R9,
-        versioning U1, time T16).
+        versioning U1, time T16). ``gamma`` is the exploration this draw was made at:
+        every threshold is the draw's own (learners design §2.7), never a router-wide
+        constant, since the frontier's exploration falls as ``t^(-1/2)``.
         """
         if NOOP not in sample.action_ids:
             return
@@ -1378,21 +1459,24 @@ class RoutingMixin:
         fresh = [q for a, q in zip(sample.action_ids, sample.probs, strict=True)
                  if a != NOOP and a in self.assemblies and self._unhistoried(a)]
         self._close_abstention_watch(state)
+        # How far this draw's NOOP stood above its own floor: every draw at or above it
+        # woke its seats only by exploration.
+        slack = p - learning_death_floor(gamma)
         if not state.watch:
-            state.watch = {"window": self.window.index, "draws": 0, "min_p": p}
+            state.watch = {"window": self.window.index, "draws": 0, "min_p": p,
+                           "min_slack": slack}
         state.watch["draws"] += 1
         state.watch["min_p"] = min(state.watch["min_p"], p)
+        state.watch["min_slack"] = min(state.watch["min_slack"], slack)
         known = [q for a, q in zip(sample.action_ids, sample.probs, strict=True)
                  if a != NOOP and a in self.assemblies and not self._unhistoried(a)]
         if fresh:
-            from factorylab.runtime.immune import gamma
-
             watch = state.watch
             watch["unhistoried_offered"] = watch.get("unhistoried_offered", 0) + 1
             watch["unhistoried_mass"] = watch.get("unhistoried_mass", 0.0) + math.fsum(fresh)
             # The exploration floor gamma/N is what EXP3 gives every arm whatever its
             # weight; a fresh seat held at it is offered and never chosen on merit.
-            floor = gamma(state.learner) / len(sample.action_ids)
+            floor = gamma / len(sample.action_ids)
             watch["fresh_ratio_max"] = max(watch.get("fresh_ratio_max", 0.0),
                                            max(fresh) / floor if floor > 0 else math.inf)
             watch["incumbent_min"] = min(watch.get("incumbent_min", 1.0), max(known, default=0.0))
@@ -1455,31 +1539,34 @@ class RoutingMixin:
 
         Guarantees one row per router that drew with NOOP on its menu in this
         window: its draws, its lowest NOOP probability, and ``uninvoked`` when every
-        draw gave NOOP at least ``learning_death_floor(seed_gamma)``, so its seats were
-        woken only by exploration all window, the frontier "no longer being invoked"
-        (essay II.II.a). It is evidence inside the immune organ's learning-death
-        diagnosis, not a second definition of it.
+        draw gave NOOP at least ``learning_death_floor`` of the exploration that draw was
+        made at (``min_slack >= 0``), so its seats were woken only by exploration all
+        window, the frontier "no longer being invoked" (essay II.II.a). A core router
+        (a Blum-Mansour learner) is marked ``core`` and never uninvoked or quarantined:
+        the frontier-floor diagnostics are the frontier's (learners design §2.7). It is
+        evidence inside the immune organ's learning-death diagnosis, not a second
+        definition of it.
         """
         rows = []
         for state in self._all_router_states():
             watch = state.watch
             if not watch or watch["window"] != self.window.index:
                 continue
-            floor = learning_death_floor(state.seed_gamma)
+            # The retentive core (essay II.I.a) is not the frontier.
+            core = state.learner.inner.core
             # Quarantined (essay II.II.a): every draw that offered an unhistoried seat
-            # held it within the organ's tolerance of the exploration floor,
+            # held it within the organ's tolerance of that draw's exploration floor,
             # (1 + immune.tv_threshold) * gamma / N, while a historied seat held more
             # than all the other arms together.
             offered = watch.get("unhistoried_offered", 0)
-            quarantined = bool(offered) and (
+            quarantined = not core and bool(offered) and (
                 watch.get("fresh_ratio_max", math.inf) <= 1 + self.m.immune.tv_threshold
                 and watch.get("incumbent_min", 0.0) > 0.5)
+            slack = watch.get("min_slack", -math.inf)
             rows.append({"router": state.learner.id, "event_kind": state.kind,
-                         "quarantined": quarantined,
-                         # The retentive core (essay II.I.a) is not the frontier.
-                         "core": state.kind in self.m.evaluation.no_swap_regret_kinds,
+                         "quarantined": quarantined, "core": core,
                          "draws": watch["draws"], "min_p_noop": watch["min_p"],
-                         "floor": floor, "uninvoked": watch["min_p"] >= floor,
+                         "min_slack": slack, "uninvoked": not core and slack >= 0,
                          "unhistoried_offered": watch.get("unhistoried_offered", 0),
                          "unhistoried_mass": watch.get("unhistoried_mass", 0.0)})
         return sorted(rows, key=lambda row: row["router"])
@@ -1524,25 +1611,78 @@ class RoutingMixin:
                 for kind in kinds}
 
     def _epoch_due(self, kind: str) -> bool:
-        """Whether a kind's routers may open a new epoch now (time audit T6).
+        """Whether a kind's routers may open a new phase now (time audit T6).
 
         Essay II.IV.b: "some speed limit needs to be applied to the velocity with
         which the factory refactors itself, allowing feedback loops the time they
-        need to actually close". A router's menu grows at most once per
-        ``min_ratio`` measured periods of its own rounds, in ticks: a registration
-        waits for the rounds drawn over the old menu to be learned before the menu
-        changes again.
+        need to actually close". Only a change that orphans rounds in flight opens a
+        phase (learners design §2.5): a population router replacement, or a core
+        menu's growth that raises its coverage bound. Such a change waits
+        ``min_ratio`` measured periods of the router's own rounds, in ticks, and
+        ``min_ratio`` delivery bounds since the kind's last phase opened. A menu that
+        grows in place orphans nothing and never waits here.
         """
         opened = self.clockwork.opened(f"epoch:{kind}")
         inner = self.clockwork.measured(f"router:{kind}")
-        # §IV.c: the loop changing a router's action set is an outer loop over that
-        # router's rounds, so it keeps the same min_ratio separation (Codex review).
-        return opened is None or self.ticks_consumed - opened >= self.m.timing.min_ratio * inner
+        # §IV.c: the loop changing a router is an outer loop over that router's rounds,
+        # so it keeps the same min_ratio separation (Codex review). The measured period
+        # alone does not bound when a round is learned (a round that never closes is
+        # never measured, and a credit waits on its window), so the change also waits
+        # min_ratio delivery bounds (learners design §2.5): at least 1 - 1/min_ratio of
+        # a phase's rounds are learned inside it.
+        wait = self.m.timing.min_ratio * max(inner, self._delivery_bound())
+        return opened is None or self.ticks_consumed - opened >= wait
+
+    def _phase_opened(self, kind: str) -> None:
+        """Record that a router phase of ``kind`` opened at this tick: the settle gate
+        (``_epoch_due``) counts the next phase-opening change from it."""
+        previous = self.clockwork.loops.get(f"epoch:{kind}", {})
+        now = self.ticks_consumed
+        self.clockwork.loops[f"epoch:{kind}"] = {
+            "opened": now, "due": now, "period": 1.0,
+            "inner": self.clockwork.measured(f"router:{kind}"),
+            "fires": previous.get("fires", 0) + 1}
 
     def _open_pending_epochs(self) -> None:
-        """Open every deferred epoch whose speed limit has passed."""
+        """Activate every deferred router replacement, then open every deferred phase,
+        whose speed limit has passed."""
+        for kind in list(self.pending_routers):
+            if self._epoch_due(kind):
+                pending = self.pending_routers.pop(kind)
+                self._activate_router(kind, pending["learner"], add=False,
+                                      by=pending["by"])
         for kind in list(self.pending_epochs):
             self._open_epoch(kind)
+
+    def _grow_in_place(self, state: RouterState, universe: list[str]) -> None:
+        """Add the seats of ``universe`` missing from ``state``'s menu to its live learner.
+
+        Learners design §2.5 (Mourtada & Maillard 2017; the bandit step is ours): a
+        new arm joins the learner in force at the mean weight, so nothing in flight
+        is orphaned, no identity changes and no gate applies; a founded seat is
+        drawable on the next event of its kind, inside its novelty trial (essay
+        II.IV.b: the compensation period is shorter than the lifetime). Guarantees a
+        core menu's coverage bound never changes in place: a seat whose arrival would
+        raise it is left off, for a phase (``_open_epoch``). A frontier's bound is the
+        grown menu's, as a fresh router's is (§2.3). The grown menu keeps every seat
+        it had, a retired one included (infeasible, never drawn), in id order with
+        NOOP last.
+        """
+        new = [a for a in universe if a not in state.universe]
+        if state.learner.inner.core:
+            new = [a for a in new if self._coverage([*state.universe, a]) <= state.coverage]
+        if not new:
+            return
+        grown = sorted({a for a in (*state.universe, *new) if a != NOOP}) + [NOOP]
+        state.learner.inner.add_actions(new)
+        state.universe = grown
+        state.router.action_ids_for_event = lambda _k, u=grown: [x for x in u if x != NOOP]
+        if not state.learner.inner.core:
+            state.coverage = self._coverage(grown)
+        self.ledger.append({"kind": "router.grown", "learner_id": state.learner.id,
+                            "event_kind": state.kind, "added": new, "universe": grown,
+                            "coverage": state.coverage, "ordinal": self.n,
+                            "tick": self.ticks_consumed, "ts": self.clock.now_ns})
 
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
@@ -1550,19 +1690,27 @@ class RoutingMixin:
         states = self.routers.get(kind)
         now = self.ticks_consumed
         if not states:
-            self._build_router(kind, self._seed_learner_kind(kind), self.router_gamma)
+            self._build_router(kind, self._seed_learner_kind(kind))
             self.ledger.append({**entry, "carried": False})
             self.stats.epochs += 1
             configuration_changed(self, f"router:{kind}", self.clockwork.measured(
                 f"router:{kind}"))
-            self.clockwork.loops[f"epoch:{kind}"] = {"opened": now, "due": now, "period": 1.0,
-                                                    "inner": 1, "fires": 1}
+            self._phase_opened(kind)
             return
-        # Only a grown menu waits: a retirement is already cadence-gated, and a router
-        # must never keep drawing an assembly that left.
-        grows = (any(set(universe) > set(st.universe) for st in states)
-                 and not any(set(st.universe) - set(universe) for st in states))
-        if grows and not self._epoch_due(kind):
+        # A grown menu grows each live learner in place (design §2.5): no phase, no
+        # gate, nothing orphaned.
+        for state in states:
+            self._grow_in_place(state, universe)
+        # A retirement alone opens no phase: the retired seat is infeasible in the phase
+        # in force (``_route_with``), so nothing in flight is orphaned (design §2.5).
+        if all(set(universe) <= set(st.universe) for st in states):
+            self.pending_epochs.pop(kind, None)
+            return
+        # What is left is a seat that would raise a core menu's coverage bound kappa,
+        # which the learner fixes for its life (§2.3): that opens a phase, and waits for
+        # the gate; a retired seat in the menu is already infeasible, so the wait never
+        # draws an assembly that left.
+        if not self._epoch_due(kind):
             if kind not in self.pending_epochs:
                 self.ledger.append({"kind": "epoch.deferred", "event_kind": kind,
                                     "universe": universe, "tick": now,
@@ -1572,67 +1720,43 @@ class RoutingMixin:
                 self.pending_epochs[kind] = now
             return
         self.pending_epochs.pop(kind, None)
-        if any(universe != st.universe for st in states):
-            # Time audit T14: an epoch replaces the router's configuration; how long
-            # the last one lived, against the loop that corrects it.
-            configuration_changed(self, f"router:{kind}", self.clockwork.measured(
-                f"router:{kind}"))
-            previous = self.clockwork.loops.get(f"epoch:{kind}", {})
-            self.clockwork.loops[f"epoch:{kind}"] = {
-                "opened": now, "due": now, "period": 1.0,
-                "inner": self.clockwork.measured(f"router:{kind}"),
-                "fires": previous.get("fires", 0) + 1}
+        # Time audit T14: a phase replaces the router's configuration; how long the last
+        # one lived, against the loop that corrects it.
+        configuration_changed(self, f"router:{kind}", self.clockwork.measured(
+            f"router:{kind}"))
+        self._phase_opened(kind)
         for i, state in enumerate(list(states)):
-            if universe == state.universe:
+            if set(universe) <= set(state.universe):
                 continue
-            if isinstance(state.learner, EXP3) and set(state.universe) <= set(universe):
-                new_learner = state.learner.expand(universe)
-                state.learner = new_learner
-                state.universe = universe
-                state.router = Router(
-                    new_learner, lambda _k, u=universe: [x for x in u if x != NOOP]
-                )
-                state.epoch += 1
-                self.ledger.append({**entry, "carried": True, "router": state.learner.id})
-            else:
-                # A shrinking universe (or any swap router's) gets a new identity that
-                # keeps the weights learned so far; the old identity stays addressable
-                # for its in-flight decisions, whose settled rounds train the new one.
-                lid = self._fresh_router_id(state.learner.id)
-                if isinstance(state.learner, EXP3):
-                    saved = state.learner.state()
-                    # A universe may lose one action and gain another in the same
-                    # epoch (a seat's accepts change while another registers). The
-                    # survivors keep their weights and an action this learner never
-                    # held starts at their mean, exactly as ``EXP3.expand`` admits a
-                    # new one, rather than raising on a weight that was never there.
-                    retained = {a: w for a, w in saved["log_weights"].items() if a in universe}
-                    mean = sum(retained.values()) / len(retained) if retained else 0.0
-                    saved.update(id=lid, actions=list(universe), log_weights={
-                        a: retained.get(a, mean) for a in universe})
-                    fresh = EXP3.restore(saved)
-                else:
-                    from factorylab.learners.delayed import SnapshotLearner
-
-                    swap = state.learner.inner.inner.reshaped(universe, id=lid)
-                    fresh = _KeyedLearner(SnapshotLearner(swap, id=lid))
-                self.ledger.append({**entry, "carried": False, "router": lid})
-                self._hand_over(state, lid)
-                self._retain_router(state)
-                self.delivered_seen[lid] = 0
-                states[i] = RouterState(
-                    kind,
-                    universe,
-                    fresh,
-                    Router(fresh, lambda _k, u=universe: [x for x in u if x != NOOP]),
-                    state.epoch + 1,
-                    state.seed_gamma,
-                    # The new identity learns on the same arms' evidence it inherits.
-                    ObservedRewards(state.observed.state()),
-                    latency=list(state.latency),
-                    definitions={d: list(row) for d, row in state.definitions.items()},
-                    watch=dict(state.watch),
-                )
+            # A raised coverage bound opens a new phase (learners design §2.5): a fresh
+            # learner of the same class under a new identity. No weight is carried,
+            # since the bound scales every gain the rows learned. The old identity stays
+            # addressable for its in-flight decisions, which settle in the kernel and
+            # train nothing (``learner.orphaned``).
+            lid = self._fresh_router_id(state.learner.id)
+            coverage = self._coverage(universe)
+            fresh = self._make_learner("blum_mansour" if state.learner.inner.core else "exp3",
+                                       universe, lid, coverage)
+            self.ledger.append({**entry, "carried": False, "router": lid,
+                                "phase": state.epoch + 1, "cause": "coverage",
+                                "ordinal": self.n})
+            self._hand_over(state, lid)
+            self._retain_router(state)
+            self.delivered_seen[lid] = 0
+            states[i] = RouterState(
+                kind,
+                universe,
+                fresh,
+                Router(fresh, lambda _k, u=universe: [x for x in u if x != NOOP]),
+                state.epoch + 1,
+                coverage,
+                # Router statistics, not learner weights: the neutral imputation and
+                # the delays it is deferred by describe the same world (wave 16, D4).
+                ObservedRewards(state.observed.state()),
+                latency=list(state.latency),
+                definitions={d: list(row) for d, row in state.definitions.items()},
+                watch=dict(state.watch),
+            )
             self.stats.epochs += 1
 
     def _retire_assembly(self, assembly_id: str, proposal_id: str) -> None:

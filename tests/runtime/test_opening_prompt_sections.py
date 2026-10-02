@@ -27,7 +27,7 @@ SEAT = "seed-decider"
 def runtime():
     manifest = load_manifest("scripted")
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   router_gamma=0.1, provider=ScriptedProvider(),
+                   provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
 
 

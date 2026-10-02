@@ -101,7 +101,7 @@ def _runtime(clock, **kw):
     from factorylab.world.exchange import FakeExchange
 
     return Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
+                   ledger_path=None, provider=ScriptedProvider(),
                    exchange=kw.pop("exchange", FakeExchange()), clock_source=clock, **kw)
 
 
@@ -115,7 +115,7 @@ def _tape_runtime(busy):
     clock = IdleSkipClock(10 * S, 50, origin_ns=tape.start_ns, monotonic=busy,
                           deadline_ns=tape.end_ns + 1)
     rt = Runtime(manifest, events=50, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=venue,
+                 provider=ScriptedProvider(), exchange=venue,
                  clock_source=clock)
     return rt, tape
 
@@ -230,7 +230,7 @@ def test_the_wind_down_flattens_a_tape_world_at_its_last_recorded_book():
     venue = TapeVenue(tape, coins=manifest.exchange.coins, spot_pairs=("PURR/USDC",),
                       start_cash_usd=Decimal(1000))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=venue,
+                 provider=ScriptedProvider(), exchange=venue,
                  clock_source=IdleSkipClock(10 * S, 5, origin_ns=tape.start_ns,
                                             monotonic=Monotonic()))
     rt.exchange.advance(tape.end_ns)
@@ -370,7 +370,7 @@ def _winding_world():
         base.exchange, tape=TapeSpec.of(tape, allow_unknown_cutoff=True)))
     venue = TapeVenue(tape, coins=manifest.exchange.coins, start_cash_usd=Decimal(1000))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=venue,
+                 provider=ScriptedProvider(), exchange=venue,
                  clock_source=IdleSkipClock(10 * S, 5, origin_ns=tape.start_ns,
                                             monotonic=Monotonic()))
     return rt, tape, venue

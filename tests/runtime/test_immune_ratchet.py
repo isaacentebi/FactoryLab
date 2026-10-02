@@ -1,10 +1,12 @@
-"""Stable failure is priced by its duration; the exploration ratchet unwinds once it clears.
+"""Stable failure is priced by its duration; no learner is changed by a diagnosis.
 
 Essay II.II.b: "In the case of stable failure, one should price the duration of
 failure, ratcheting up penalties the longer the factory spends in a wide-spectral-gap
 attractor that is failing its input-output target." The organ used to halve the
-violated cards' price for a window instead, and its exploration raise never came
-back down unless thrash was diagnosed.
+violated cards' price for a window instead, and it used to raise every router's
+exploration while failure held: an exploration floor inside the learners, which made
+them not no-regret (audit s06 #2). The gain is lambda (essay II.IV.b); the learners'
+exploration is their own schedule (docs/architecture/learners-noregret.md §2.5).
 """
 
 from dataclasses import replace
@@ -12,7 +14,7 @@ from dataclasses import replace
 import pytest
 
 from factorylab.charter.windows import MetricWindow
-from factorylab.runtime.immune import gamma
+from factorylab.learners.base import state_bytes
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.worlds import load_manifest
@@ -26,7 +28,7 @@ def _runtime(**prices):
     charter = replace(seed.charter, cards=tuple(replace(c, window=MetricWindow("windows", 1, None))
                                                for c in seed.charter.cards))
     rt = Runtime(replace(seed, charter=charter), events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     rt._derive_regions()
     return rt
 
@@ -72,21 +74,25 @@ def test_stable_failure_raises_violated_price_with_duration_and_never_halves_it(
     assert prices == sorted(prices) and prices[-1] <= bound
 
 
-def test_leaving_the_attractor_ends_the_ratchet_and_unwinds_exploration():
+def test_stable_failure_ratchets_price_not_learner():
+    """Every learner is byte-identical through a stable-failure episode and its end: the
+    organ ratchets the price, writes no gain row and touches no learner."""
     rt = _runtime()
+
+    def learners():
+        return [state_bytes(r.learner.state()) for r in rt._all_router_states()]
+
+    before = learners()
     for _ in range(4):
         _close(rt, 0.2)
-    raised = [gamma(r.learner) for r in rt._all_router_states()]
-    seeds = [r.seed_gamma for r in rt._all_router_states()]
-    assert any(g > s for g, s in zip(raised, seeds, strict=True))
+    assert _items(rt, "pathology.stable_failure") and _items(rt, "immune.price_ratchet")
     assert rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"] > 0
     for i in range(12):
         _close(rt, 1.0, registrations=3 * (i % 2))  # compliant and active: no pathology
     assert rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"] == 0
     assert _items(rt, "immune.price_ratchet_ended")
-    assert [gamma(r.learner) for r in rt._all_router_states()] == seeds
-    cleared = [i for i in _items(rt, "immune.gain") if i["pathology"] == "cleared"]
-    assert cleared and all(max(i["gamma_after"]) < max(i["gamma_before"]) for i in cleared)
+    assert learners() == before
+    assert not _items(rt, "immune.gain")
 
 
 def test_the_organ_diagnoses_every_window_and_acts_on_its_own_slower_loop():
@@ -144,34 +150,6 @@ def test_an_unmeasured_failing_card_holds_its_duration():
     after = rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"]
     assert after >= before
     assert not _items(rt, "immune.price_ratchet_ended")
-
-
-@pytest.mark.parametrize("kind", ["stable_failure", "cleared", "thrash"])
-def test_the_organ_never_leaves_or_holds_a_gamma_above_gamma_max(kind):
-    """A router seeded (or restored) above ``gamma_max`` is clamped to it on the organ's
-    next step, whichever way it steps: a value above its bound would sit where no
-    step reaches it (Codex on #152, the R10-e sweep)."""
-    from factorylab.runtime.immune import _gain
-    from tests.conftest import make_runtime
-
-    rt = make_runtime()
-    router = rt._build_router("Tick", "exp3", 0.9)
-    assert gamma(router.learner) == 0.9 > rt.m.immune.gamma_max
-    _gain(rt, kind, 1)
-    assert gamma(router.learner) == rt.m.immune.gamma_max
-
-
-@pytest.mark.parametrize("seed", [0.9, 0.5000001, 0.0, -0.1])
-def test_a_seed_gamma_outside_the_organ_s_bound_is_refused_at_load(seed):
-    """A seed exploration above ``immune.gamma_max`` is invalid physics (no step could
-    reach it): refused at load, as SF-0 is, never clamped silently later."""
-    manifest = load_manifest("scripted")
-    assert manifest.immune.gamma_max == 0.5
-    with pytest.raises(ValueError, match="router_gamma"):
-        Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                router_gamma=seed)
-    Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-            router_gamma=0.5)  # at the bound: accepted
 
 
 def _answering_for(rt, **change):

@@ -42,14 +42,14 @@ def test_valid_proposals_of_each_kind() -> None:
                 "accepts": ["MarketMid", "MarketMid", "Tick"],
                 "max_tokens": 256,
             },
-            {"kind": "router", "event_kind": "Tick", "learner": "blum_mansour", "gamma": 0.2},
+            {"kind": "router", "event_kind": "Tick", "learner": "blum_mansour"},
         ]
     )
     assert rej == []
     assert acc[0] == ModelProposal("meta/muse-spark-1.3")
     assert isinstance(acc[1], AssemblyProposal) and acc[1].accepts == ("MarketMid", "Tick")
     assert acc[1].effort == "low"
-    assert acc[2] == RouterProposal("Tick", "blum_mansour", 0.2)
+    assert acc[2] == RouterProposal("Tick", "blum_mansour")
 
 
 def test_assembly_max_tokens_uses_provider_native_allowance_when_unspecified() -> None:
@@ -156,7 +156,8 @@ def test_rejections_carry_reasons_and_cap_is_enforced() -> None:
     assert "accepts must be a non-empty list of event kinds" in reasons
     assert any("exceeds" in r for r in reasons)
     assert "event_kind must name a world or population-declared event kind" in reasons
-    assert "gamma must be in (0, 1]" in reasons
+    # Exploration is the learner's own schedule: no value of gamma is admitted.
+    assert "gamma is refused: a learner's exploration is its own schedule" in reasons
     assert "openrouter_id must look like vendor/model" in reasons
     assert "unknown proposal kind" in reasons
     assert "proposal must be an object" in reasons
