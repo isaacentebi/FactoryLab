@@ -614,7 +614,7 @@ class PricingMixin:
         # grows with every revision the charter ever made (essay II.II.b, "memory").
         # Its price left with it (``_drop_cards``), so a card that returns under the
         # same id is a new metric whatever it meant before.
-        for cid in set(known) - current:
+        for cid in [cid for cid in known if cid not in current]:
             del known[cid]
         self.card_held = {cid: fact for cid, fact in self.card_held.items() if cid in current}
 

@@ -154,7 +154,7 @@ class SettledMixin:
         # read for recusal and as a ballot's parent.
         roots.append([getattr(self.charter_book, f"_CharterBook__{name}", None)
                       for name in ("proposals", "committees", "ballots", "activations",
-                                   "bindings", "sittings", "deferrals", "voters")])
+                                   "bindings", "voters")])
         named = _names_in(roots, handles)
         subjects = self.decision_subjects
         referrers: Counter = Counter()

@@ -29,26 +29,34 @@ class CharterBook:
 
     All mutations append evidence before changing book state. The caller owns
     boundary scheduling; each ``activate_due`` call is one boundary notification.
+
+    The book holds the edition in force and the motions still undecided or passed
+    and waiting, never the charter's history: a decided motion (activated, refused
+    or failed) leaves at the next boundary, keeping only its id, so no motion is ever
+    proposed twice under one id; past editions, sittings and deferrals are counts.
+    Their evidence is the diary's, which ledgered each before the book changed (essay
+    II.II.b, "memory"; II.IV.a, revision "on the cadence of charter revision" for the
+    world's whole life).
     """
 
     def __init__(self, ledger: Ledger, seed_charter: Charter, observations=None) -> None:
         self.__ledger = ledger
         self.__observations = observations
         # Detach even a seed constructed with lists from caller-owned containers.
-        self.__editions = [
+        self.__editions = [  # the edition in force, alone
             Charter(seed_charter.edition, tuple(seed_charter.norms), tuple(seed_charter.cards))
         ]
         self.__proposals: dict[str, Amendment] = {}
         self.__committees: dict[str, Committee] = {}
         self.__ballots: dict[str, dict[str, Ballot]] = {}
-        self.__activated: set[str] = set()
-        self.__activations: dict[int, Amendment] = {}
+        self.__activated: set[str] = set()  # every decided motion's id, for uniqueness
+        self.__activations: dict[int, Amendment] = {}  # the latest activation, alone
         self.__bindings: dict[str, dict[str, dict]] = {}
-        # Standing committees by governance boundary (charter audit C1), the
-        # boundaries that fell below quorum, each motion's voting aliases, and the
+        # How many standing committees were seated (charter audit C1) and how many
+        # boundaries fell below quorum, each motion's voting aliases, and the
         # editions a norm edition produced (charter audit M4).
-        self.__sittings: dict[int, StandingCommittee] = {}
-        self.__deferrals: set[int] = set()
+        self.__sittings = 0
+        self.__deferrals = 0
         self.__voters: dict[str, tuple[str, ...]] = {}
         self.__norm_editions: dict[int, dict] = {}
 
@@ -65,10 +73,6 @@ class CharterBook:
     def current(self) -> Charter:
         """Return the most recently activated immutable edition."""
         return self.__editions[-1]
-
-    def editions(self) -> tuple[Charter, ...]:
-        """Return every edition in activation order without exposing mutable storage."""
-        return tuple(self.__editions)
 
     def propose(self, amendment: Amendment, observations=None) -> None:
         """Freeze a unique candidate valid against the current edition's cards and norms.
@@ -92,7 +96,7 @@ class CharterBook:
         """Reject unchanged or unmeasurable candidate editions before any vote or reservation."""
         if not isinstance(amendment, Amendment):
             raise ValueError("proposal must be an Amendment")
-        if amendment.id in self.__proposals:
+        if amendment.id in self.__proposals or amendment.id in self.__activated:
             raise ValueError("amendment id already proposed")
         charter = self.current()
         if amendment.edition_base != charter.edition:
@@ -143,13 +147,36 @@ class CharterBook:
         return [amendment for amendment_id, amendment in self.__proposals.items()
                 if amendment_id not in self.__activated and amendment_id not in self.__committees]
 
-    def sittings(self) -> tuple[StandingCommittee, ...]:
-        """Every standing committee seated so far, in boundary order."""
-        return tuple(self.__sittings.values())
+    def sittings(self) -> int:
+        """How many standing committees were seated so far."""
+        return self.__sittings
 
     def deferrals(self) -> int:
         """How many governance boundaries seated no committee, for want of a quorum."""
-        return len(self.__deferrals)
+        return self.__deferrals
+
+    def boundaries(self) -> int:
+        """How many governance boundaries were held: seated or deferred."""
+        return self.__sittings + self.__deferrals
+
+    def _close_decided(self) -> None:
+        """Forget every motion that was decided: activated, refused or failed.
+
+        Guarantees nothing a later vote, tally or activation reads is dropped: an
+        undecided motion and a passed one still waiting stay, and a decided one can
+        neither be voted on nor activated again (its committee is gone, so a ballot
+        is refused) nor proposed again (its id stays decided). Its proposal, ballots
+        and bindings are already in the diary.
+        """
+        decided = [motion for motion in self.__proposals
+                   if motion in self.__activated or (
+                       motion in self.__committees
+                       and self.tally(self.__committees[motion], motion) == "failed")]
+        for motion in decided:
+            for book in (self.__proposals, self.__committees, self.__ballots,
+                         self.__bindings, self.__voters):
+                book.pop(motion, None)
+            self.__activated.add(motion)
 
     def seat(
         self, boundary: int, eligible: dict[str, str], rng: random.Random, *, size: int = 5,
@@ -171,8 +198,9 @@ class CharterBook:
 
         if type(boundary) is not int or boundary < 0:
             raise ValueError("boundary must be a nonnegative integer")
-        if boundary in self.__sittings or boundary in self.__deferrals:
+        if boundary <= self.boundaries():
             raise ValueError("this boundary already has a committee")
+        self._close_decided()
         if type(quorum) is not int or quorum < 1:
             raise ValueError("quorum must be a positive integer")
         motions = [amendment.id for amendment in self.agenda()]
@@ -181,7 +209,7 @@ class CharterBook:
                                   "eligible": len(eligible), "quorum": quorum,
                                   "agenda": motions,
                                   "coverage": coverage(eligible, (), learners)})
-            self.__deferrals.add(boundary)
+            self.__deferrals += 1
             return None
         seats = draw(eligible, rng, size, learners=learners)
         recused = recusals or {}
@@ -190,7 +218,7 @@ class CharterBook:
                   for motion in motions}
         agenda = tuple(motion for motion in motions if len(voters[motion]) >= quorum)
         deferred = tuple(motion for motion in motions if motion not in agenda)
-        committee = StandingCommittee(boundary, len(self.__sittings) + 1, seats,
+        committee = StandingCommittee(boundary, self.__sittings + 1, seats,
                                       agenda, deferred)
         self.__ledger.append(
             {
@@ -205,7 +233,7 @@ class CharterBook:
                 "coverage": coverage(eligible, seats, learners),
             }
         )
-        self.__sittings[boundary] = committee
+        self.__sittings += 1
         for motion in agenda:
             self.__committees[motion] = committee
             self.__voters[motion] = voters[motion]
@@ -258,6 +286,7 @@ class CharterBook:
         """
         if type(now_ns) is not int or now_ns < 0:
             raise ValueError("now_ns must be nonnegative integer nanoseconds")
+        self._close_decided()
         for amendment_id, amendment in self.__proposals.items():
             committee = self.__committees.get(amendment_id)
             if (
@@ -322,9 +351,9 @@ class CharterBook:
                     "ts": now_ns,
                 }
             )
-            self.__editions.append(edition)
+            self.__editions = [edition]
             self.__activated.add(amendment_id)
-            self.__activations[edition.edition] = amendment
+            self.__activations = {edition.edition: amendment}
             return edition
         return None
 
@@ -353,7 +382,8 @@ class CharterBook:
         return None
 
     def activated_amendment(self, edition: int) -> Amendment:
-        """Return the frozen amendment that produced an edition; unknown editions raise KeyError."""
+        """Return the frozen amendment that produced the latest activated edition; any other
+        edition raises KeyError (the diary's ``charter.activate`` names each one)."""
         return self.__activations[edition]
 
     def norm_editions(self) -> dict[int, dict]:
@@ -401,7 +431,7 @@ class CharterBook:
                                   "reason": f"a card names a norm removed by norm edition "
                                             f"{sequence}", "ts": now_ns})
             self.__activated.add(amendment_id)
-        self.__editions.append(edition)
+        self.__editions = [edition]
         self.__norm_editions[edition.edition] = {"sequence": sequence, "digest": digest,
                                                  "signer": signer}
         return edition, refused_cards, refused_motions

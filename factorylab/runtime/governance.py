@@ -1992,7 +1992,7 @@ class GovernanceMixin:
         after the committee's ledgered, non-binding testimony (M4). Passed
         motions then take effect, each as its own edition.
         """
-        boundary = len(self.charter_book.sittings()) + self.charter_book.deferrals() + 1
+        boundary = self.charter_book.boundaries() + 1
         self.cadence.boundary(boundary, window=self.window.index, now_ns=self.clock.now_ns,
                               tick_interval_ns=self.tick_clock)
         agenda = self.charter_book.agenda()

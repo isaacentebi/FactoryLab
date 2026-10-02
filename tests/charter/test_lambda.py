@@ -135,6 +135,9 @@ def test_prices_wait_for_the_boundary_and_later_proposals_win(monkeypatch):
     # in proposal order, so the later proposal's price stands.
     activate_after_backstop(rt, activated=2)
     assert rt.charter.edition == 3
-    assert rt.charter_book.activated_amendment(2).id == first.id
+    # The book keeps the latest activation; every earlier one is in the diary.
+    assert rt.charter_book.activated_amendment(3).id == second.id
+    assert [(i["edition"], i["amendment_id"]) for i in rt.ledger._recovery_items()
+            if i["kind"] == "charter.activate"] == [(2, first.id), (3, second.id)]
     assert rt.controller.price("well_formed_rate") == 0.9
     assert rt.charter_book.pending() == []
