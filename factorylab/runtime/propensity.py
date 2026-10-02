@@ -393,6 +393,10 @@ VAULT_OPERATIONS = frozenset({"create", "deposit", "withdraw"})
 #: The prefix of an opaque alias for an identifier outside the published vocabulary.
 ALIAS = "other"
 _BANDS = frozenset({name for _, name in SIZE_BANDS} | {SIZE_BAND_MAX})
+#: The published domain of a judged label's operand: a score in [0, 1] at one decimal,
+#: spelled as ``action_label`` spells it ("0.0" … "1.0"). Enumerated, so membership is
+#: the whole check: no text, no non-finite and no out-of-range number is in it.
+_ONE_DECIMAL = frozenset(f"{tenth / 10:.1f}" for tenth in range(11))
 
 
 def _published_part(part: str, markets: frozenset[str]) -> bool:
@@ -400,7 +404,7 @@ def _published_part(part: str, markets: frozenset[str]) -> bool:
         return True
     head, _, rest = part.partition(":")
     if head in ("verdict", "conformity"):
-        return bool(rest) and canonical_label(part) == part
+        return rest in _ONE_DECIMAL
     if head in ("buy", "sell"):
         coin, _, band = rest.rpartition(":")
         return band in _BANDS and coin in markets

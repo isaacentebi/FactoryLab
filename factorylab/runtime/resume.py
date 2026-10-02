@@ -1064,6 +1064,10 @@ class Checkpoint(dict):
 
     diary: str | None = None
     origin: Path | None = None
+    #: The kill record of the world this checkpoint came from (``witness.Lineage``):
+    #: carried beside the mapping, so an in-memory checkpoint of a killed world cannot
+    #: revive it, with no process-wide memory of kills.
+    lineage: object | None = None
 
 
 def runtime_state(rt) -> Checkpoint:
@@ -1137,6 +1141,7 @@ def runtime_state(rt) -> Checkpoint:
     # The diary this state descends from, beside the mapping and never in it.
     state.diary = rt.diary_id or rt.ledger.diary_id
     state.origin = rt.ledger.path
+    state.lineage = getattr(getattr(rt, "kill_witness", None), "lineage", None)
     return state
 
 
@@ -1335,8 +1340,8 @@ def restore_runtime(rt, state: dict) -> None:
                           code="facilitator_mismatch")
     # A checkpoint cannot revive a killed runtime. The runtime restored into may
     # already be final (its own Termination, or a Terminated event in its ledger),
-    # or the identity the checkpoint names may be recorded as killed in this
-    # process or in the local witness beside the diary. Either way nothing is
+    # or the identity the checkpoint names may be recorded as killed on the
+    # checkpoint's lineage or in the local witness beside the diary. Either way nothing is
     # restored; the world stays dead (runtime/witness.py).
     if rt.termination.final or rt.ledger.identity()["terminated"]:
         raise ResumeError("the runtime is final; a checkpoint cannot revive it",
@@ -1347,13 +1352,15 @@ def restore_runtime(rt, state: dict) -> None:
     # diary lives (Checkpoint.origin); a ledgered one, read back as a plain
     # mapping, is bound by the file this runtime resumes. The kill record is read
     # from the witness file beside that diary, whichever of the two named it, and
-    # from this runtime's own diary; process memory is the third source, not the
-    # one relied on (a twin restored in memory has no diary path of its own).
+    # from this runtime's own diary; the lineage the checkpoint carries is the third
+    # source, and the one a twin restored in memory relies on (it has no diary path).
     diary = getattr(state, "diary", None) or (
         rt.ledger.diary_id if rt.ledger.path is not None else None)
     witnessed = rt.ledger.path if rt.ledger.path is not None else getattr(state, "origin", None)
+    lineage = getattr(state, "lineage", None)
     if killed(world=rt.m.name, launch_nonce=saved_runtime.get("launch_nonce"),
-              diary=diary, ledger_path=witnessed, remote=False) is not None:
+              diary=diary, ledger_path=witnessed, remote=False,
+              lineage=lineage) is not None:
         raise ResumeError("the checkpoint names a killed identity", code="identity_killed")
     # The witness requirement is part of the launch identity, so it is checked
     # here and not against the environment alone: a world that launched under a
@@ -1397,6 +1404,10 @@ def restore_runtime(rt, state: dict) -> None:
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.
     rt.launch_nonce = saved_runtime.get("launch_nonce")
+    if lineage is not None and getattr(rt, "kill_witness", None) is not None:
+        # The restored runtime continues the checkpoint's world: one lineage, so a
+        # kill of either is named on every later checkpoint of both.
+        rt.kill_witness.lineage = lineage
     # Both identities were checked above, before any assignment. A checkpoint
     # written before release identity (or before the facilitator pin) carries
     # none; it keeps its historical Launch (nothing to replay) and, once

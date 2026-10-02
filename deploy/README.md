@@ -326,7 +326,7 @@ code `witness_unavailable` (exit 1, a `failed_resume` item in the diary, the
 restarts with backoff and asks again, so a receiver outage pauses the world
 rather than reviving a copy while the one record that could name its death is
 out of reach. A checkpoint restored into a runtime that is already final, or
-one whose identity this process or the local witness records as killed, is
+one whose lineage (carried on an in-memory checkpoint) or local witness records as killed, is
 refused the same way (`restore_runtime`, `identity_killed`);
 `Termination.kill` stays irreversible on the object.
 

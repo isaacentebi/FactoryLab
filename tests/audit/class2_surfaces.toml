@@ -551,6 +551,7 @@ sources = [
   "factorylab/runtime/winddown.py::WindDownExecutor._lookup",
   "factorylab/runtime/winddown.py::WindDownExecutor._reconcile",
   "factorylab/runtime/witness.py::kill_line",
+  "factorylab/runtime/witness.py::killed",
   "factorylab/runtime/worlds.py::AssemblySeed.__post_init__",
   "factorylab/runtime/worlds.py::WorldManifest._validate_endowment",
   "factorylab/runtime/worlds.py::WorldManifest._validate_evaluator_population",

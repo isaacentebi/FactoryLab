@@ -75,7 +75,6 @@ def prohibit_network_and_key_reads(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect_ex", deny)
     monkeypatch.setattr(socket, "create_connection", deny)
     monkeypatch.delenv(witness.URL_ENV, raising=False)
-    monkeypatch.setattr(witness, "_killed_here", set())
 
 
 class Evidence:

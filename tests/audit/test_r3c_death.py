@@ -54,9 +54,8 @@ NONCE = "a" * 32
 
 @pytest.fixture(autouse=True)
 def _fresh_witness(monkeypatch):
-    """No receiver, no inherited note, no remembered kill: each test witnesses its own."""
+    """No receiver: each test witnesses its own kill (notes and kills are per world)."""
     monkeypatch.delenv(witness.URL_ENV, raising=False)
-    monkeypatch.setattr(witness, "_killed_here", set())
 
 
 class Diary:
@@ -425,7 +424,6 @@ def test_renaming_the_diary_does_not_revive_a_killed_identity(tmp_path, monkeypa
         Termination(ledger=ledger, bus=Bus(ledger),
                     witness=witness.KillWitness()).kill("explicit_kill:operator")
         nonce = ledger.identity()["launch_nonce"]
-    monkeypatch.setattr(witness, "_killed_here", set())  # only the files may answer
 
     renamed = tmp_path / "earlier" / "not-w.jsonl"
     (tmp_path / "earlier" / path.name).rename(renamed)
@@ -517,7 +515,6 @@ def test_a_refused_restore_leaves_every_runtime_field_exactly_as_it_was(monkeypa
     _unchanged(twin, before)
 
     # A release that is not the one the world launched under: refused just as early.
-    monkeypatch.setattr(witness, "_killed_here", set())
     other = _twin(m, state)
     other.release_digest = "0" * 64
     before = _fields(other)
