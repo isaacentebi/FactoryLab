@@ -499,5 +499,9 @@ def test_completed_charter_history_does_not_accumulate(ledger):
     assert book.activated_amendment(21).id == "m-1-18"
     with pytest.raises(ValueError, match="already has a committee"):
         book.seat(book.boundaries(), eligible(), random.Random(0))
+    # Boundaries are held in order: a number past the next one is refused too, so no
+    # boundary can be held twice however the caller numbers them.
+    with pytest.raises(ValueError, match="next governance boundary"):
+        book.seat(book.boundaries() + 2, eligible(), random.Random(0))
     activations = [i for i in evidence(ledger) if i["kind"] == "charter.activate"]
     assert [i["edition"] for i in activations] == list(range(2, 22))

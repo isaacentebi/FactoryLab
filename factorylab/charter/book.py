@@ -193,13 +193,17 @@ class CharterBook:
         population with fewer eligible assemblies than ``quorum`` seats no one:
         the deferral is ledgered and every motion waits. The seating entry seals
         the alias-to-assembly mapping and states the draw's stratum coverage.
+        Boundaries are numbered in order from 1: any other number is refused, so the
+        count of boundaries held is the whole record of which ones were.
         """
         from factorylab.charter.committee import coverage
 
         if type(boundary) is not int or boundary < 0:
             raise ValueError("boundary must be a nonnegative integer")
-        if boundary <= self.boundaries():
-            raise ValueError("this boundary already has a committee")
+        if boundary != self.boundaries() + 1:
+            raise ValueError("this boundary already has a committee"
+                             if boundary <= self.boundaries()
+                             else "boundary must be the next governance boundary")
         self._close_decided()
         if type(quorum) is not int or quorum < 1:
             raise ValueError("quorum must be a positive integer")

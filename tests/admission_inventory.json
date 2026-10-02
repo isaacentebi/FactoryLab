@@ -26856,7 +26856,7 @@
   ],
   "enforcement": {
     "factorylab/charter/amendment.py": "828696c113a848938a4f6facde6e1301d5c896a6b627801986d2ed4e4eccb858",
-    "factorylab/charter/book.py": "086805fcb2c277608311dae848af76f5e72e252aeba06658f870a50acd2913b6",
+    "factorylab/charter/book.py": "4d7cd0a4b33a2b2a27497684e5c56adf323ab7c4506bcb41c0803ae2edb9c11a",
     "factorylab/charter/charter.py": "28469dd3d73c10b9197b42f3d87437ec6130af583ed00d6a0666142a67777218",
     "factorylab/charter/holdout.py": "d5b52335eab7c31bbdf75ae13beeef1da5b6f0068ce953192b44b84f38c809dc",
     "factorylab/charter/measurement.py": "cddaab174fa8a0cdb9025926f636c3935a388bf0f12a06c8b62e0b209a085c61",
