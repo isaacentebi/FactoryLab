@@ -15,6 +15,7 @@ from factorylab.runtime.resume import (
     ResumeError,
     checkpoint_state,
     decode,
+    durable_state,
     encode,
     resume_runtime,
     resume_world,
@@ -284,7 +285,8 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
     with pytest.raises(PermissionError):
         _ = restored.ledger.key_store.key
     restored.stats.resumes = 0  # compare the entire checkpoint schema, not just the summary
-    assert runtime_state(restored) == runtime_state(rt)
+    # A diary resume is its own runtime and lineage; every durable byte is the same.
+    assert durable_state(runtime_state(restored)) == durable_state(runtime_state(rt))
     restored.stats.resumes = 1
     assert restored.run()["ledger_verify"]
 

@@ -19,7 +19,13 @@ from factorylab.cortex.sandbox import jail_available
 from factorylab.kernel.ledger import canonical
 from factorylab.runtime.capital_loop import default_lock_dir as operator_default_lock_dir
 from factorylab.runtime.loop import Runtime, run_world
-from factorylab.runtime.resume import restore_runtime, runtime_state
+from factorylab.runtime.resume import (
+    LINEAGE_KEY,
+    durable_state,
+    restore_runtime,
+    runtime_state,
+)
+from factorylab.runtime.witness import Lineage
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
@@ -132,10 +138,16 @@ class ScriptedRun:
         return Path(directory) / self.ledger_path.name
 
     def runtime(self, manifest):
-        """Return an independent in-memory runtime restored without replaying any event."""
+        """Return an independent in-memory runtime restored without replaying any event.
+
+        The cached state crossed a process as bytes, so it carries no live lineage
+        (``resume.durable_state``). The run that wrote it ended alive in the worker that
+        cached it and nothing can kill it now, so the restore is handed a fresh lineage
+        of its own: a test fixture's attestation, which no production path makes.
+        """
         state = self._field("state")
         rt = Runtime(manifest, ledger_path=None, **state["config"])
-        restore_runtime(rt, state)
+        restore_runtime(rt, {**state, LINEAGE_KEY: Lineage()})
         return rt
 
 
@@ -179,7 +191,9 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode):
                 finally:
                     rt.ledger.append = append
                     rt._ledger_lock.close()
-                result = dict(summary=summary, entries=entries, state=runtime_state(rt))
+                # The durable checkpoint: its live lineage is not bytes (``runtime``).
+                result = dict(summary=summary, entries=entries,
+                              state=durable_state(runtime_state(rt)))
             fields = {name: pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
                       for name, value in result.items()}
             temporary = result_path.with_suffix(".tmp")

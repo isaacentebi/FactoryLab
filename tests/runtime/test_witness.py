@@ -388,7 +388,7 @@ def test_kills_accumulate_nothing_global_and_a_killed_checkpoint_still_refuses()
     assert not [n for n, v in vars(witness).items()
                 if not n.startswith("__") and isinstance(v, set | list | dict)]
     assert a.kill_witness.lineage is not b.kill_witness.lineage
-    assert state_a.lineage is a.kill_witness.lineage
+    assert state_a["lineage"] is a.kill_witness.lineage
     assert a.kill_witness.lineage.killed and b.kill_witness.lineage.killed
     twin = Runtime(m, ledger_path=None, **state_a["config"])
     with pytest.raises(ResumeError) as refused:
@@ -399,10 +399,52 @@ def test_kills_accumulate_nothing_global_and_a_killed_checkpoint_still_refuses()
                 router_gamma=.1)
     c.run()
     state_c = runtime_state(c)
-    assert not state_c.lineage.killed  # another world's kills are not this lineage's
+    assert not state_c["lineage"].killed  # another world's kills are not this lineage's
     heir = Runtime(m, ledger_path=None, **state_c["config"])
     restore_runtime(heir, state_c)
     assert heir.kill_witness.lineage is c.kill_witness.lineage
     heir.termination.kill("explicit_kill:operator")
     with pytest.raises(ResumeError):
         restore_runtime(Runtime(m, ledger_path=None, **state_c["config"]), state_c)
+
+
+def _killed_after_checkpoint(copy_of):
+    """A memory-only world checkpointed, the checkpoint copied by ``copy_of``, then killed."""
+    m = load_manifest("scripted")
+    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1)
+    rt.run()
+    saved = copy_of(runtime_state(rt))
+    rt.termination.kill("explicit_kill:operator")
+    return m, saved
+
+
+@pytest.mark.parametrize("copy_of", [
+    __import__("copy").deepcopy, __import__("copy").copy, lambda s: s.copy(), dict],
+    ids=["deepcopy", "copy", "dict.copy", "dict"])
+def test_no_copy_of_a_killed_worlds_checkpoint_restores(copy_of):
+    """Sol on bb146b74: every copy of a checkpoint carries the one live death record."""
+    m, saved = _killed_after_checkpoint(copy_of)
+    twin = Runtime(m, ledger_path=None, **saved["config"])
+    with pytest.raises(ResumeError) as refused:
+        restore_runtime(twin, saved)
+    assert refused.value.code == "identity_killed"
+
+
+def test_a_serialised_memory_checkpoint_cannot_be_restored():
+    """Fail closed: a memory checkpoint that lost its lineage (serialised and reloaded,
+    or a lineage of the wrong type) is refused; a disk world resumes through its diary."""
+    import pickle
+
+    from factorylab.runtime.resume import durable_state
+
+    m, saved = _killed_after_checkpoint(lambda s: s)
+    reloaded = json.loads(json.dumps(durable_state(saved)))
+    for state in (reloaded, {**reloaded, "lineage": object()}, {**reloaded, "lineage": True}):
+        twin = Runtime(m, ledger_path=None, **saved["config"])
+        with pytest.raises(ResumeError) as refused:
+            restore_runtime(twin, state)
+        assert refused.value.code == "lineage_missing"
+    # A lineage is live state: it does not pickle, so no pickle detaches a fresh one.
+    with pytest.raises(TypeError):
+        pickle.dumps(saved)

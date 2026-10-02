@@ -1064,10 +1064,17 @@ class Checkpoint(dict):
 
     diary: str | None = None
     origin: Path | None = None
-    #: The kill record of the world this checkpoint came from (``witness.Lineage``):
-    #: carried beside the mapping, so an in-memory checkpoint of a killed world cannot
-    #: revive it, with no process-wide memory of kills.
-    lineage: object | None = None
+
+
+#: The key under which an in-memory checkpoint carries its world's kill record
+#: (``witness.Lineage``). Inside the mapping, so every copy of it, shallow or deep,
+#: carries the same live record; never written to a diary (``durable_state``).
+LINEAGE_KEY = "lineage"
+
+
+def durable_state(state: dict) -> dict:
+    """The checkpoint as a diary stores it: everything but its live lineage."""
+    return {k: v for k, v in state.items() if k != LINEAGE_KEY}
 
 
 def runtime_state(rt) -> Checkpoint:
@@ -1141,7 +1148,9 @@ def runtime_state(rt) -> Checkpoint:
     # The diary this state descends from, beside the mapping and never in it.
     state.diary = rt.diary_id or rt.ledger.diary_id
     state.origin = rt.ledger.path
-    state.lineage = getattr(getattr(rt, "kill_witness", None), "lineage", None)
+    lineage = getattr(getattr(rt, "kill_witness", None), "lineage", None)
+    if lineage is not None:
+        state[LINEAGE_KEY] = lineage
     return state
 
 
@@ -1279,8 +1288,14 @@ def _migrate_fill_cursor(saved, running) -> dict:
     return migrated
 
 
-def restore_runtime(rt, state: dict) -> None:
+def restore_runtime(rt, state: dict, *, from_diary: bool = False) -> None:
     """Restore only authenticated matching-format state, rebinding dependencies to this process.
+
+    ``from_diary`` is true only for a checkpoint read back from a diary
+    (``_resume_runtime``), whose kill the witness files and receiver answer for. Any
+    other checkpoint is an in-memory one and must carry its world's live lineage
+    (``LINEAGE_KEY``); one without it, or with anything else there, is refused
+    (``lineage_missing``): fail closed, so no copy or reload detaches a death.
 
     Transactional (edition 3, R3-C). Every identity constraint — snapshot format
     and manifest hash, both adapters, the venue account, the release digest, the
@@ -1357,7 +1372,12 @@ def restore_runtime(rt, state: dict) -> None:
     diary = getattr(state, "diary", None) or (
         rt.ledger.diary_id if rt.ledger.path is not None else None)
     witnessed = rt.ledger.path if rt.ledger.path is not None else getattr(state, "origin", None)
-    lineage = getattr(state, "lineage", None)
+    from factorylab.runtime.witness import Lineage
+
+    lineage = None if from_diary else state.get(LINEAGE_KEY)
+    if not from_diary and not isinstance(lineage, Lineage):
+        raise ResumeError("an in-memory checkpoint carries no lineage of its world",
+                          code="lineage_missing")
     if killed(world=rt.m.name, launch_nonce=saved_runtime.get("launch_nonce"),
               diary=diary, ledger_path=witnessed, remote=False,
               lineage=lineage) is not None:
@@ -1783,7 +1803,7 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     running_digest = getattr(rt, "release_digest", None)
     running_facilitator = getattr(rt, "facilitator_url", None)
     try:
-        restore_runtime(rt, state)
+        restore_runtime(rt, state, from_diary=True)
     except ResumeError as exc:
         if exc.code == "release_mismatch":
             # The refusal is the world's own evidence: which release launched it and

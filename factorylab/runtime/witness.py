@@ -90,10 +90,23 @@ class Lineage:
     to be witnessed in. The record is owned by the lineage and carried on its
     checkpoints (``Checkpoint.lineage``), never held by the process (no global mutable
     state; s05 #2). A deterministic twin of the world is another lineage.
+
+    Every copy of a lineage is the lineage itself (``copy``, ``deepcopy``), so every
+    copy of a checkpoint shares the one live record, and it does not serialise: a
+    reloaded copy would be a fresh record that never saw the kill.
     """
 
     def __init__(self) -> None:
         self.killed = False
+
+    def __copy__(self) -> Lineage:
+        return self
+
+    def __deepcopy__(self, memo: dict) -> Lineage:
+        return self
+
+    def __reduce__(self):
+        raise TypeError("a lineage is live state and is never serialised")
 
 
 def witness_path(ledger_path: str | os.PathLike[str]) -> Path:
