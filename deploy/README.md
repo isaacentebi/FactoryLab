@@ -193,8 +193,9 @@ is a 16 MiB tmpfs. The ledger's existing
 resume and wake. No new viewing key is generated. Wake never releases the public
 seal. Do not use `postmortem`, `report`, summaries or key inspection as a live view.
 The web server has a separate dynamic user and no access to the key files or runs.
-Keep `www` exclusively for `wake.html`, `wake.json` and the `returns-<window>.json`
-pages the wake writes beside them; never symlink private files into it.
+Keep `www` exclusively for `wake.html`, `wake.json`, the `returns-<window>.json`
+pages and the `.wake/` generations they point into, all written by the wake; never
+symlink private files into it.
 
 ## Rehearse, start once, verify, leave it alone
 
@@ -635,10 +636,15 @@ to role totals (`producer`, `evaluator`, `meta`, `antagonist`, `noop`, `other`).
 Registered assemblies join their declared role; unknown identities join `other`.
 In these five views no assembly ids, model bindings, positions or entry prices are
 published. Incomplete input or
-verification failure retries once after 100 ms; a second failure replaces all
-ledger-derived fields with `"unavailable"` and exits 1. Optional account failures
+verification failure retries once after 100 ms; a second failure publishes nothing,
+leaves the previous publication served, and exits 1. Optional account failures
 mark only their unavailable fields. There is no exception text in the artifacts.
-Each output file is atomically replaced; the pair is not a transactional bundle.
+Every page, `wake.json` and `wake.html` of one run are one generation: written into a
+fresh directory under `www/.wake/`, then published together by replacing the one
+symlink `www/.wake/current`, through which every public name points. A run that fails
+before that switch leaves the previous generation served whole. The current and the
+previous generation are kept; a page whose bytes did not change is a hard link to the
+previous generation's copy.
 
 #### The observatory sections (A17, widened)
 

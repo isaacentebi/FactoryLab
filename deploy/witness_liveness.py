@@ -20,8 +20,9 @@ from them and no ``exited`` line from us.
 Idempotent across republishes: the state file is rewritten only after the
 witness line was appended, so an hour with no change emits nothing and a
 failed append is retried on the next publish. An unreadable wake, or a status
-outside the closed vocabulary (the wake writes ``unavailable`` when its
-verification fails), changes nothing. Nothing here reads the ledger or a key.
+outside the closed vocabulary, changes nothing; a wake whose verification fails
+publishes nothing, so the previous status stands. Nothing here reads the ledger or
+a key.
 """
 
 from __future__ import annotations

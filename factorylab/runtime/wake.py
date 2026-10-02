@@ -63,6 +63,8 @@ MAX_ROWS = 200
 #: The page carries the latest returns; every older row lives in its window's page file.
 RETURNS_ROWS = 500
 RETURNS_PAGE = "returns-{window}.json"
+#: Where the wake keeps its generations, beside the public names that point into them.
+GENERATIONS = ".wake"
 #: The most balance points ``wallet_series`` publishes; the diary keeps every one.
 SERIES_POINTS = 2_000
 ROLES = ("producer", "evaluator", "meta", "antagonist", "adversary")
@@ -1156,45 +1158,108 @@ def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.slee
     return _collect_wake(path, now_ns=now_ns, sleep=sleep, returns=returns)
 
 
-class _Pages:
-    """Each window's page file, staged beside the wake and moved into place only when
-    the whole collection succeeds, so a failed read publishes no page of it."""
+class _Generation:
+    """One whole publication, built beside the last and switched in at once.
+
+    Every page, ``wake.json`` and ``wake.html`` of one collection are written into a
+    fresh directory under ``.wake/``; ``.wake/current`` names it, and each public name
+    in the wake directory is a symlink through ``.wake/current``. Publishing is one
+    ``os.replace`` of that pointer, so a reader is served one generation or the one
+    before, never a mixture, and a generation that fails before the switch leaves the
+    one before served exactly as it was. Guarantees at most two generations on disk:
+    the current and the previous; a page whose bytes did not change is a hard link to
+    the previous generation's copy, not a second copy.
+    """
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
+        self.root = directory / GENERATIONS
+        self.root.mkdir(exist_ok=True)
+        os.chmod(self.root, 0o755)  # the web server's user reads it
+        current = self.root / "current"
+        self.previous = self.root / os.readlink(current) if current.is_symlink() else None
+        # A name of its own, never reused: the clock and this process (mkdir refuses a
+        # collision rather than sharing a directory).
+        self.dir = self.root / f"g-{time.time_ns()}-{os.getpid()}"
+        os.mkdir(self.dir, 0o755)
+        os.chmod(self.dir, 0o755)
         self.world: str | None = None
-        self.staging: Path | None = None
+        self.names: list[str] = []
+        self.published = False
 
     def reset(self, world: str) -> None:
+        """Start the generation again, empty, for one collection of ``world``."""
         self.discard()
         self.world = world
-        self.staging = Path(tempfile.mkdtemp(prefix=".wake-pages-", dir=self.directory))
-
-    def __call__(self, window: int, rows: list[dict]) -> None:
-        """Stage ``window``'s page; a page whose bytes have not changed is left alone."""
-        name = RETURNS_PAGE.format(window=window)
-        body = json.dumps({"world": self.world, "window": window, "rows": rows},
-                          indent=2) + "\n"
-        try:
-            if (self.directory / name).read_text() == body:
-                return
-        except OSError:
-            pass
-        _publish(self.staging, name, body)
-
-    def commit(self) -> None:
-        for staged in sorted(self.staging.iterdir()):
-            os.replace(staged, self.directory / staged.name)
-        self.discard()
 
     def discard(self) -> None:
-        if self.staging is not None:
-            shutil.rmtree(self.staging, ignore_errors=True)
-            self.staging = None
+        for path in self.dir.iterdir():
+            path.unlink()
+        self.names = []
+
+    def commit(self) -> None:
+        """The collection is whole; nothing is public until ``publish``."""
+
+    def __call__(self, window: int, rows: list[dict]) -> None:
+        self.write(RETURNS_PAGE.format(window=window),
+                   json.dumps({"world": self.world, "window": window, "rows": rows},
+                              indent=2) + "\n")
+
+    def write(self, name: str, body: str) -> None:
+        kept = self.previous / name if self.previous is not None else None
+        try:
+            same = kept is not None and kept.read_text() == body
+        except OSError:
+            same = False
+        if same:
+            os.link(kept, self.dir / name)
+        else:
+            _publish(self.dir, name, body)
+        self.names.append(name)
+
+    def publish(self) -> None:
+        """Switch the wake to this generation, then point every public name through it.
+
+        Every public name is checked first: one the wake cannot point (a directory,
+        anything but a symlink or a plain file) refuses the generation before the
+        switch, with the previous one still served.
+        """
+        for name in self.names:
+            path = self.directory / name
+            if (path.exists() or path.is_symlink()) and not (path.is_symlink()
+                                                              or path.is_file()):
+                raise OSError(f"{name} in the wake directory is not the wake's to replace")
+        _point(self.root / "current", Path(self.dir.name))
+        self.published = True
+        through = Path(GENERATIONS) / "current"
+        for name in self.names:
+            path = self.directory / name
+            if not (path.is_symlink() and Path(os.readlink(path)) == through / name):
+                _point(path, through / name)
+        keep = {self.dir.name, *([self.previous.name] if self.previous else [])}
+        for path in self.root.iterdir():
+            if not path.is_symlink() and path.name not in keep:
+                shutil.rmtree(path, ignore_errors=True)
+
+    def abandon(self) -> None:
+        if not self.published:
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def _point(path: Path, target: Path) -> None:
+    """Make ``path`` a symlink to ``target`` in one ``os.replace``."""
+    temporary = path.parent / f".wake-link-{os.getpid()}-{path.name}"
+    temporary.unlink(missing_ok=True)
+    os.symlink(target, temporary)
+    try:
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep,
-                  returns: int = RETURNS_ROWS, pages: _Pages | None = None) -> dict:
+                  returns: int = RETURNS_ROWS, pages: _Generation | None = None) -> dict:
     """The wake document; every return's window page goes to ``pages`` when given.
 
     The returns are a second pass, newest first (``_Returns``), so the pages are
@@ -1385,13 +1450,19 @@ def write_wake(path: str | Path, out: str | Path, *, returns: int = RETURNS_ROWS
 
     The page carries the latest ``returns`` rows; every return is also written to
     its window's ``returns-<window>.json`` beside ``wake.json``, so the page stays
-    bounded while nothing said is lost. A page file whose bytes have not changed
-    is left alone, and no page is written from a collection that failed.
+    bounded while nothing said is lost. All of them are one generation
+    (``_Generation``), published at once only after its last byte is written; a
+    collection that fails publishes nothing and leaves the previous generation served.
     """
     directory = Path(out)
     directory.mkdir(parents=True, exist_ok=True)
-    data = _collect_wake(path, returns=returns, pages=_Pages(directory))
-    for name, body in (("wake.json", json.dumps(data, indent=2) + "\n"),
-                       ("wake.html", render_wake(data))):
-        _publish(directory, name, body)
+    generation = _Generation(directory)
+    try:
+        data = _collect_wake(path, returns=returns, pages=generation)
+        if data["wallet_series"] != UNAVAILABLE:
+            generation.write("wake.json", json.dumps(data, indent=2) + "\n")
+            generation.write("wake.html", render_wake(data))
+            generation.publish()
+    finally:
+        generation.abandon()
     return data

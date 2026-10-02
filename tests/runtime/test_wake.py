@@ -51,8 +51,9 @@ def test_sealed_item_text_never_appears(world, tmp_path):
     writer.append({"kind": "private", "prompt": marker, "verdict": marker, "diary": marker})
     out = tmp_path / "public"
     assert main(["wake", "--ledger", str(world), "--out", str(out)]) == 0
-    for path in out.iterdir():
-        assert "SECRET_PROMPT_VERDICT_DIARY" not in path.read_text()
+    for path in out.rglob("*"):  # the public names and every generation behind them
+        if path.is_file():
+            assert "SECRET_PROMPT_VERDICT_DIARY" not in path.read_text()
     malicious = dict.fromkeys(VIEWS, {"counts": {marker: 1}})
     malicious["wallet_series"] = {"series": []}
     assert "<script>" not in render_wake(malicious)
@@ -485,3 +486,60 @@ def test_the_published_balance_series_is_bounded_and_keeps_every_drawdown(tmp_pa
         ledger.append({"kind": "wallet.drip", "amount": 1, "balance_after": n, "ts": n})
     assert collect_wake(short)["wallet_series"] == {
         "series": [{"ts": n, "balance": n} for n in range(10)], "observations": 10}
+
+
+def _published(out: Path) -> dict[str, str]:
+    """What a reader of ``out`` is served: every top-level name, followed to its bytes."""
+    return {path.name: path.read_text() for path in sorted(out.iterdir())
+            if not path.name.startswith(".") and path.is_file()}
+
+
+def _wake_diary(path: Path, count: int, *, malformed: bool = False) -> None:
+    _returns_diary(path, count)
+    if malformed:
+        manifest = load_manifest("scripted")
+        writer = Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))
+        # Authenticated, but not a charter: the final projection cannot read it.
+        writer.append({"kind": "wake.public", "window": 99, "charter": "not a charter"})
+
+
+@pytest.mark.parametrize("failure", ["obstructed page", "malformed charter"])
+def test_a_failed_publication_leaves_the_previous_generation_whole(tmp_path, failure):
+    """A wake publishes a whole generation or nothing: the pages, ``wake.json`` and
+    ``wake.html`` of one collection, switched in at once. A page the next generation
+    cannot place, or a projection that fails after every page was written, leaves the
+    previous generation served exactly as it was."""
+    out = tmp_path / "www"
+    first = tmp_path / "first" / "world.jsonl"
+    first.parent.mkdir()
+    _wake_diary(first, 40)
+    write_wake(first, out, returns=10)
+    before = _published(out)
+    assert json.loads(before["wake.json"])["returns"]["total"] == 40
+    assert {"returns-0.json", "returns-3.json"} <= set(before)
+    second = tmp_path / "second" / "world.jsonl"
+    second.parent.mkdir()
+    _wake_diary(second, 60, malformed=failure == "malformed charter")
+    if failure == "obstructed page":
+        (out / "returns-2.json").unlink()
+        (out / "returns-2.json").mkdir()
+        before.pop("returns-2.json")
+        with pytest.raises(OSError):
+            write_wake(second, out, returns=10)
+    else:
+        assert write_wake(second, out, returns=10)["world"] == UNAVAILABLE
+    assert _published(out) == before
+    generations = [p for p in (out / ".wake").iterdir() if not p.is_symlink()]
+    assert len(generations) == 1
+
+
+def test_only_the_current_and_previous_generations_are_kept(tmp_path):
+    out = tmp_path / "www"
+    for count in (20, 30, 40, 50):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        _wake_diary(path, count)
+        write_wake(path, out, returns=5)
+        assert json.loads((out / "wake.json").read_text())["returns"]["total"] == count
+        assert json.loads((out / f"returns-{count // 10 - 1}.json").read_text())["rows"]
+    assert len([p for p in (out / ".wake").iterdir() if not p.is_symlink()]) == 2
