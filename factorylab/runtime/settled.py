@@ -418,9 +418,11 @@ class SettledMixin:
             for handle in handles:
                 book.pop(handle, None)
         folded = self.released_intents
+        retired: list[str] = []
         for client_id in [c for c, intent in self.order_intents.items()
                           if intent.get("handle") in gone]:
             intent = self.order_intents.pop(client_id)
+            retired.append(client_id)
             folded["intents"] = folded.get("intents", 0) + 1
             status = (intent.get("result") or {}).get("status")
             folded[f"status:{status}"] = folded.get(f"status:{status}", 0) + 1
@@ -428,9 +430,18 @@ class SettledMixin:
         # transaction stays claimed, so no later write can bind it again.
         vault = getattr(self, "vault_intents", None)
         for client_id in [c for c, i in (vault or {}).items() if i.get("handle") in gone]:
+            retired.append(client_id)
             transaction = vault.pop(client_id)["result"].get("hash")
             if transaction:
                 self.vault_released_hashes.append([transaction, self.clock.now_ns])
+        # Chapter II §II.b, memory is physics: the venue adapter's acknowledgement of a
+        # write leaves when its durable intent does, and not before, so it grows with
+        # the writes still answerable rather than with every write ever made. Local
+        # memory only, never an external call: it bypasses the journal.
+        forget = getattr(getattr(self.exchange, "target", self.exchange),
+                         "retire_client_ids", None)
+        if retired and forget is not None:
+            forget(retired)
         surface = getattr(self, "polymarket", None)
         if surface is not None:
             dropped = {c for c, i in surface.intents.items() if i.get("handle") in gone}

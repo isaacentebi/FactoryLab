@@ -1100,11 +1100,11 @@ class Treasury:
         if (self.state and self.state["status"] == "submitted" and self.state["reference"]
                 and "pending" not in self.state and (not self.state["principal_moved"]
                                                      or self._shadowed(self.state))):
-            # A clean poll found no evidence. If the rail says the step can no longer
-            # execute -- an authorization past its expiry, a withdrawal nonce outside
-            # the venue's window -- the transfer is over and its slot is free: a stuck
-            # transfer used to block every later transfer forever. A hybrid top-up
-            # that expired after its shadow leg paid strands recoverably instead.
+            # A clean poll found no evidence. If the rail proves the step can no longer
+            # execute and never did -- an authorization finalized chain shows expired
+            # unused -- the transfer is over and its slot is free. A hybrid top-up that
+            # expired after its shadow leg paid strands recoverably instead. Age alone
+            # proves no such thing, so a rail answers nothing on it.
             expired = getattr(self.rail, "expired", None)
             step = self.state["steps"][self.state["index"]]
             reason = expired(step, deepcopy(self.state), now_ns) if expired else None

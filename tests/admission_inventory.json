@@ -26883,11 +26883,11 @@
     "factorylab/settlement/vocabulary.py": "2805fe20978480c467e7eebb3ea2b758c711654e83a618d8678475c6c5eab4a8",
     "factorylab/world/connector.py": "226ee503dcae74737ca857082d5341972e7397281ed2730a754483a6247999a8",
     "factorylab/world/evm.py": "2ba9bba6877e3bd40d7cf487f7feda5526ec6c565b54c3b284b64fbfa8b10360",
-    "factorylab/world/exchange.py": "4797e673e43e013529562824cae73bde1eb315267f81f6c8bca568a900739845",
+    "factorylab/world/exchange.py": "bdb27627dd76d077cb3d5f180a669c0e31026fb97c64901dfcaaafd6f68ba708",
     "factorylab/world/polymarket_clob.py": "47ed32f0a05a0a651b12cc4e31bd7584e66c88ea68aa51b7ce5c049eee3eeebe",
     "factorylab/world/tape.py": "4f311b900b9d2e74b29a87e7b33763b22ddf740e118f8307f267e8b90576e81e",
     "factorylab/world/treasury.py": "68e172bc767a6fef31ddd9e8404fd3486444838867abfe65f589ca0dbb68dcf4",
-    "factorylab/world/treasury_rails.py": "3bf9d4ca6b608029666bae14a9f003ed25ad113abce3bb51762e7c5bfc897a4a",
+    "factorylab/world/treasury_rails.py": "f11d4ea87cd519ab5ea07196154d11938a1300df4551b0feed1540b880baf09f",
     "factorylab/world/venue_tools.py": "7f1eb7bb77158c373d879a0e9342bbe83c882f8e2c6ad30cd26c873bd43ad118"
   }
 }

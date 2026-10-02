@@ -9,6 +9,7 @@ the rest delivered; a page that fails leaves the watermark where it was.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -143,3 +144,23 @@ def test_the_watermark_does_not_pass_fills_not_yet_read(monkeypatch):
     assert len(fills) == FILLS_PAGE + 2
     assert cursor.propagation_bound_ns == 10_009 * NS_PER_MS
     assert cursor.through_ns is None  # no independent baseline/fee evidence
+
+
+@pytest.mark.parametrize("order", ["small-first", "large-first"])
+def test_contradictory_duplicate_fill_identity_is_unavailable(order):
+    """Chapter II §III.b: realized consequence is a measured fact, so one execution
+    identity reported with two different economic terms is no measurement at all. The
+    read fails whole, in either order, and the cursor stays where it was."""
+    small = {**_row(1, 1), "hash": "0xabc", "fee": "0.1", "closedPnl": "0"}
+    large = {**small, "fee": "10", "closedPnl": "500"}
+    rows = [small, large] if order == "small-first" else [large, small]
+    venue = _venue(lambda user, start: rows)
+    with pytest.raises(VenueUnavailable, match="contradict"):
+        venue.fills(0)
+    cursor = FillCursor(Ledger(), start_ns=0, measured=True)
+    with pytest.raises(VenueUnavailable):
+        cursor.poll(venue, strict=True, now_ns=10 * NS_PER_MS)
+    assert cursor.since_ns == 0 and cursor.through_ns is None and not cursor.seen
+    # An identical repeat of one execution is the same fact, kept once.
+    rows[:] = [small, dict(small)]
+    assert [(f.fee, f.realized) for f in venue.fills(0)] == [(Decimal("0.1"), Decimal("0"))]

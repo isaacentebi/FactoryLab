@@ -17,7 +17,10 @@ No network here: the venue is a double and the diary is a list.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from decimal import Decimal
+
+import pytest
 
 from factorylab.runtime.winddown import (
     OP,
@@ -121,3 +124,33 @@ def test_a_partial_fill_is_judged_against_the_size_the_attempt_asked_for():
     assert [call[3] for call in venue.closes()] == [_attempt(0), _attempt(1)]
     assert venue.size == Decimal("0")
     assert report["residual"]["positions"] == []
+
+
+@pytest.mark.parametrize("where", ["position", "balance", "vault"])
+def test_live_nan_position_prevents_flat_winddown(where):
+    """An unreadable quantity is exposure of unknown size: the wind-down names it and
+    reports UNKNOWN, never FLAT, whatever reader let it through."""
+    from factorylab.runtime.winddown import UNKNOWN
+    from factorylab.world.exchange import SpotBalance
+
+    class Malformed(Venue):
+        def account(self):
+            state = super().account()
+            if where == "position":
+                return replace(state, positions=(Position("BTC", Decimal("NaN"),
+                                                          Decimal("100")),))
+            if where == "balance":
+                return replace(state, spot_balances=(
+                    SpotBalance("HYPE", Decimal("NaN"), Decimal("NaN")),))
+            return state
+
+        def vault_equities(self):
+            rows = [{"vault": "0xv", "equity_usd": "NaN"}] if where == "vault" else []
+            return {"positions": rows}
+
+    report = WindDownExecutor(Malformed(size=Decimal("0")), Diary(), launch_nonce=NONCE).run()
+    assert report["exposure_state"] == UNKNOWN
+    named = {"position": report["residual"]["positions"],
+             "balance": report["residual"]["balances"],
+             "vault": report["residual"].get("vaults")}[where]
+    assert named and "NaN" in str(named)

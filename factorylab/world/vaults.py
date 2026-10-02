@@ -229,8 +229,10 @@ def ledger_rows(page: Any) -> list[dict]:
                               ("commission", "commission"), ("closing_cost", "closingCost"),
                               ("basis", "basis"), ("net", "netWithdrawnUsd")):
                 if wire in delta:
+                    # Every amount a vault row states is a magnitude: a negative fee or
+                    # payout is no measurement, and a row carrying one is unread.
                     value = _decimal_or_none(delta[wire])
-                    if value is None:
+                    if value is None or value < 0:
                         raise ValueError(wire)
                     item[key] = value
         except (KeyError, TypeError, ValueError, AttributeError):
@@ -307,15 +309,24 @@ def match_intent(rows: list[dict], operation: str, args: dict, account: str | No
         return {"status": "uncertain",
                 "error": f"{len(found)} unclaimed matching venue rows for {peers} "
                          "unbound writes confirm nothing"}
+    # A transaction whose rows of one kind disagree, or that repays this account two
+    # different commissions, states no amount at all (Chapter II §III.b: consequence
+    # is measured, never chosen by response order). Identical repeats are one fact; a
+    # contradiction leaves the write's amounts unbooked.
+    if any(r["hash"] == row["hash"] and r["type"] == row["type"] and r != row for r in rows):
+        return {"status": "uncertain", "error": "contradictory venue rows for one transaction"}
     result = {"status": "ok", "vault": row["vault"], "usd": str(usd), "hash": row["hash"]}
     if operation == "venue.vault_create" and "fee" in row:
         result["fee_usd"] = str(row["fee"])
     if operation == "venue.vault_withdraw":
-        rebate = sum((r.get("usd") or Decimal(0) for r in rows
-                      if r["type"] == "vaultLeaderCommission" and r["hash"] == row["hash"]
-                      and r.get("user") in (None, me)), Decimal(0))
+        repaid = {r.get("usd") or Decimal(0) for r in rows
+                  if r["type"] == "vaultLeaderCommission" and r["hash"] == row["hash"]
+                  and r.get("user") in (None, me)}
+        if len(repaid) > 1:
+            return {"status": "uncertain",
+                    "error": "contradictory commission rows for one withdrawal"}
         result.update({key: str(row[key]) for key in ("net", "basis", "commission")
                        if key in row})
-        result["commission_rebate"] = str(rebate)
+        result["commission_rebate"] = str(max(repaid, default=Decimal(0)))  # at most one
     return result
 

@@ -269,13 +269,17 @@ class OpenRouterProvider:
         wire = parse_completion(
             self._post_completion(payload, req.timeout_s), error=OpenRouterError
         )
+        # The wallet moves only when money moves: a reply that names no bill is not
+        # evidence of a price, so it books nothing final here. The sent request may
+        # have been billed; the meter books it provisionally and settles it from the
+        # key's own balance.
         cost = wire.usage.get("cost")
-        cost_micro = None
-        if cost is not None:
-            try:
-                cost_micro = nonnegative_usd_micro(cost, rounding="ceil")
-            except ValueError:
-                raise OpenRouterError(None, "Invalid reported cost") from None
+        if cost is None:
+            raise OpenRouterError(None, "Provider bill unavailable")
+        try:
+            cost_micro = nonnegative_usd_micro(cost, rounding="ceil")
+        except ValueError:
+            raise OpenRouterError(None, "Invalid reported cost") from None
         raw = {}
         if wire.request_id is not None:
             raw["request_id"] = wire.request_id

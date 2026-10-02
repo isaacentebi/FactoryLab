@@ -861,32 +861,28 @@ class LiveRail(ClassTransferRail):
             raise RailError("venue rejected withdrawal")
 
     #: Hyperliquid accepts an action only while its nonce is within about two days of
-    #: the venue's clock. A withdrawal whose nonce is older than this and that no
-    #: ledger update shows can never execute.
+    #: the venue's clock: a ledger row executed later than this cannot be the signed
+    #: action's. Its age alone never abandons a withdrawal or a shadow send (see
+    #: ``expired``).
     WITHDRAWAL_NONCE_WINDOW_MS = 3 * 86_400_000
 
     def expired(self, step: str, state: dict, now_ns: int) -> str | None:
         """Why a submitted step can no longer execute, or ``None`` while it still could.
 
-        Only steps whose principal has not left are answered: the Venice top-up's
-        EIP-3009 authorization and the venue withdrawal's signed action. The
-        treasury abandons such a step only after a clean poll found no evidence.
-        A top-up is judged on finalized Base alone (``_authorization_expired``), never
-        on ``now_ns``: a runtime clock ahead of the chain, or a virtual one, used to
-        abandon a real authorization that could still settle.
+        Only the Venice top-up's EIP-3009 authorization is answered, on finalized Base
+        alone (``_authorization_expired``), never on ``now_ns``: a runtime clock ahead
+        of the chain, or a virtual one, used to abandon a real authorization that could
+        still settle. Finalized Base proves both that it can no longer settle and that
+        it never did. A venue action's nonce age proves only the first: the venue may
+        have executed it inside its window and show the debit late, so a withdrawal or
+        a shadow send is never abandoned by age (the wallet moves only when money
+        moves); it waits, held, for the venue's own ledger row.
         """
-        reference = state.get("reference") or {}
         if step == "venice_top_up":
             try:
                 return self._authorization_expired(state)
             except Exception:  # noqa: BLE001 - an unreadable chain proves nothing expired
                 return None
-        if step == "withdraw_burn":
-            nonce = reference.get("nonce", state.get("nonce"))
-            if nonce is None:
-                return None
-            if now_ns // 1_000_000 > int(nonce) + self.WITHDRAWAL_NONCE_WINDOW_MS:
-                return "withdrawal nonce expired unexecuted"
         return None
 
     def _authorization_expired(self, state: dict) -> str | None:
@@ -1118,7 +1114,8 @@ class LiveRail(ClassTransferRail):
                     "confirmed": True, "received_micro": amount,
                     "fee_micro": 0, "wallet_fee_micro": 0, "principal_moved": False,
                     "route_data": {"prepared_burn": burn},
-                    "evidence": {"network": ref["network"], "tx_hash": ref["tx_hash"],
+                    "evidence": {"network": ref["network"],
+                                 "tx_hash": mined["transactionHash"],
                                  "block_hash": mined["blockHash"],
                                  "confirmation": "provisional approval; gas deferred to burn"},
                 }
@@ -1126,6 +1123,10 @@ class LiveRail(ClassTransferRail):
         receipt = chain.receipt(ref)
         if receipt is None:
             return None
+        # A replaced transaction settles under whichever of its hashes the chain mined
+        # (``EVM.receipt``): the wallet moves only when money moves, and the money
+        # moved under that identity, never under a submitted hash that will not mine.
+        mined_hash = receipt["transactionHash"]
         gas = receipt["gas_fee_wei"]
         result = {
             "confirmed": receipt["success"],
@@ -1137,7 +1138,7 @@ class LiveRail(ClassTransferRail):
             "principal_moved": step in ("burn_base", "deposit_core"),
             "evidence": {
                 "network": ref["network"],
-                "tx_hash": ref["tx_hash"],
+                "tx_hash": mined_hash,
                 "block_hash": receipt["blockHash"],
                 "gas_fee_wei": gas,
                 "gas_symbol": ref["gas_symbol"],
@@ -1152,7 +1153,7 @@ class LiveRail(ClassTransferRail):
             result["fee_micro"] += gas_micro(approval_gas, approval["gas_usd"])
             result["gas_fee_wei"] += approval_gas
             result["evidence"]["approval"] = {
-                "tx_hash": approval["tx_hash"], "block_hash": settled["blockHash"],
+                "tx_hash": settled["transactionHash"], "block_hash": settled["blockHash"],
                 "gas_fee_wei": approval_gas, "gas_usd": approval["gas_usd"],
                 "success": settled["success"], "confirmation": "finalized",
             }
@@ -1175,7 +1176,7 @@ class LiveRail(ClassTransferRail):
                 min_finality=2000,
             )
             result["route_data"] = {
-                "burn": {"tx_hash": ref["tx_hash"], "message": "0x" + message.hex()}
+                "burn": {"tx_hash": mined_hash, "message": "0x" + message.hex()}
             }
         elif step.startswith("mint_"):
             fee = ref["cctp_fee_micro"]
@@ -1225,7 +1226,7 @@ class LiveRail(ClassTransferRail):
             "fee_micro": forwarded["fee_micro"] + gas_micro(gas, ref["gas_usd"]),
             "gas_fee_wei": gas,
             "evidence": {**forwarded["evidence"], "reverted_fallback": {
-                "tx_hash": ref["tx_hash"], "block_hash": reverted["blockHash"],
+                "tx_hash": reverted["transactionHash"], "block_hash": reverted["blockHash"],
                 "gas_fee_wei": gas, "gas_symbol": ref["gas_symbol"], "gas_usd": ref["gas_usd"]}},
         }
 
@@ -1252,7 +1253,8 @@ class LiveRail(ClassTransferRail):
         credited = core_amount // 100
         matching = [log for log in chain.logs(self.core, topics, ref["start_block"])
                     if decode_log(log, ["uint64", "uint32"]) == (core_amount, 0)]
-        if len(matching) != 1 or matching[0]["transactionHash"].lower() != ref["tx_hash"].lower():
+        if (len(matching) != 1
+                or matching[0]["transactionHash"].lower() != receipt["transactionHash"].lower()):
             raise RailError("ambiguous CoreDepositWallet forwarding correlation")
         block = chain.call("eth_getBlockByNumber", [receipt["blockNumber"], False])
         since = int(block["timestamp"], 16) * 1000
@@ -1540,10 +1542,10 @@ class HybridRail(LiveRail):
         after which the signed action can never execute. A row that names its nonce must
         name ours. A row that names none is matched on sender, sink and exact amount alone,
         even when it executes late: that is safe because the treasury runs one transfer at
-        a time and frees the slot only once a shadow send confirmed, was refused outright,
-        or outlived its nonce window, so no other conversion's send to the sink can land
-        after this nonce. The one thing that can is an operator sending exactly the tranche
-        to the sink by hand, which the runbook forbids. Two candidates confirm nothing, and
+        a time and frees the slot only once a shadow send confirmed or was refused
+        outright, so no other conversion's send to the sink can land after this nonce.
+        The one thing that can is an operator sending exactly the tranche to the sink
+        by hand, which the runbook forbids. Two candidates confirm nothing, and
         a fee stalls the transfer publicly instead of booking money the tranche never had.
         """
         ref, amount = state["reference"], state["amount_micro"]
@@ -1591,13 +1593,3 @@ class HybridRail(LiveRail):
                 "principal_moved": True, "evidence": evidence,
                 "route_data": {"shadow": {"sink": self.sink, "micro": amount,
                                           "venue_ledger_hash": row["hash"]}}}
-
-    def expired(self, step: str, state: dict, now_ns: int) -> str | None:
-        if step == "shadow_send":
-            nonce = (state.get("reference") or {}).get("nonce", state.get("nonce"))
-            if nonce is not None and now_ns // 1_000_000 > int(nonce) + (
-                    self.WITHDRAWAL_NONCE_WINDOW_MS):
-                return "shadow send nonce expired unexecuted"
-            return None
-        # The top-up (on finalized Base) and the CCTP steps are LiveRail's own rules.
-        return super().expired(step, state, now_ns)

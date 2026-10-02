@@ -286,6 +286,26 @@ def test_settling_an_uncertain_bill_refunds_the_seat_what_it_paid(ledger, clock)
     assert book._refund_uncertain("wallet-99", 10, "settle_uncertain") == 0
 
 
+def test_uncertain_refund_to_retired_seat_stays_in_commons(ledger, clock):
+    """Retirement is final: an over-charged ceiling settled after the seat that paid it
+    retired creates no entitlement for it; the refund stays in the pool, ledgered."""
+    wallet = Wallet(1_000, ledger, clock_ns=clock)
+    book = BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.6")
+    book.genesis(["a", "b"])  # 300 each, 400 unallocated
+    seat = SeatWallet(wallet, book, "a")
+    reservation = seat.reserve(200, "h", "model:m")
+    seat.commit_uncertain(reservation)
+    assert book.retire("a", "retired") == 100
+    assert seat.settle_uncertain(reservation.id, 30) == 170
+    assert wallet.balance == 970 and book.entitlement("a") == 0
+    assert book.state()["entitlements"]["a"] == 0 and "a" in book.state()["retired"]
+    assert book.unallocated() == 670 and invariant(book, wallet)
+    assert book.state()["uncertain"] == {}
+    item = next(i for i in budget_items(ledger) if i["op"] == "retired_credit_to_commons")
+    assert item["assembly_id"] == "a" and item["amount"] == 170
+    assert item["source"] == "settle_uncertain"
+
+
 # --- lineages (GPT-6 second reading, P2-07): replication never buys subsidy ---------
 
 
