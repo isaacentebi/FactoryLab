@@ -1255,7 +1255,11 @@ class _Generation:
                               indent=2) + "\n")
 
     def write(self, name: str, body: str) -> None:
-        kept = self.previous / name if self.previous is not None else None
+        # wake.json is always written afresh: its mtime is the publication time the
+        # liveness witness ages (deploy/witness_liveness.py), and a link would carry
+        # the previous publication's time forward.
+        kept = (self.previous / name
+                if self.previous is not None and name != "wake.json" else None)
         try:
             same = kept is not None and kept.read_text() == body
         except OSError:

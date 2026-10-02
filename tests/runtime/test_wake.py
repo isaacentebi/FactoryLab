@@ -539,6 +539,21 @@ def test_a_failed_publication_leaves_the_previous_generation_whole(tmp_path, fai
     assert len(generations) == 1
 
 
+def test_an_unchanged_wake_json_is_published_with_a_fresh_mtime(tmp_path):
+    """The liveness witness ages wake.json by its mtime, so a publication whose bytes
+    did not change must still carry this publication's time, never the last one's."""
+    path = tmp_path / "w" / "world.jsonl"
+    path.parent.mkdir()
+    _wake_diary(path, 20)
+    out = tmp_path / "www"
+    write_wake(path, out, returns=5)
+    first = (out / "wake.json").stat().st_mtime_ns
+    old = first - 3 * 3600 * 10**9
+    os.utime(out / "wake.json", ns=(old, old))
+    write_wake(path, out, returns=5)
+    assert (out / "wake.json").stat().st_mtime_ns > old
+
+
 def test_only_the_current_and_previous_generations_are_kept(tmp_path):
     out = tmp_path / "www"
     for count in (20, 30, 40, 50):
