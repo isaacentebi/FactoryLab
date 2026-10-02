@@ -524,3 +524,39 @@ def test_a_parked_transfer_is_published_in_the_wake():
     pots = rt.wallet.pots
     rt.wallet.pots = lambda: {**pots(), "parked": [row]}
     assert public_window_item(rt, window=1, event=rt.n)["pots"]["parked_transfers"] == [row]
+
+
+@pytest.mark.parametrize("step", ["withdraw_burn", "shadow_send"])
+def test_late_evidence_for_a_parked_action_is_booked_from_that_read(step):
+    """The read that found a parked action's late evidence is the evidence: it is booked
+    from it, so an outage on the next read neither takes the slot nor resends the
+    lapsed nonce. A transfer that was ever parked is never sent again at that step."""
+    day_ns, minute_ns = 86_400 * 10**9, 60 * 10**9
+    ledger, wallet, _ = setup()
+    rail = _UnresolvedVenueAction(wallet, step)
+    rail.reserve = 50_000_000
+    direction = "to_venice" if step == "shadow_send" else "to_reserve"
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=2_000_000)
+    assert treasury.transfer(direction, "5", handle="a", now_ns=1)["status"] == "submitted"
+    stuck = treasury.state["id"]
+    treasury.tick(4 * day_ns)
+    assert [p["transfer_id"] for p in treasury.pots()["parked"]] == [stuck]
+    reads = {"n": 0}
+    poll = rail.poll
+
+    def late_then_outage(current, state):
+        if current == step:
+            reads["n"] += 1
+            if reads["n"] > 1:
+                raise ConnectionError("venue unavailable")
+            return FakeRail.poll(rail, current, state)
+        return poll(current, state)
+
+    rail.poll = late_then_outage
+    now = 5 * day_ns
+    for k in range(4):
+        treasury.tick(now + k * minute_ns + k)
+    assert [s for s in rail.sent if s == (step, stuck)] == [(step, stuck)]  # sent once
+    assert treasury.pots()["parked"] == []
+    assert not treasury.pots()["pending"]  # the transfer finished; nothing holds the slot
+    assert treasury.state["id"] == stuck and treasury.state["status"] == "confirmed"

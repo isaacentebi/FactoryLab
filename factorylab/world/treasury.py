@@ -779,14 +779,19 @@ class Treasury:
         except Exception:
             self._write("pending", transfer_id=state["id"], reason="submission outcome unknown")
 
-    def reconcile(self, now_ns: int) -> list[dict]:
-        """Advance at most one receipt-confirmed step per tick; never replace an ambiguous nonce."""
+    def reconcile(self, now_ns: int, *, observed: dict | None = None) -> list[dict]:
+        """Advance at most one receipt-confirmed step per tick; never replace an ambiguous nonce.
+
+        ``observed`` is evidence already read for the current step this tick, booked
+        as read instead of reading again (``_unpark``).
+        """
         state = self.state
         if not state or state["status"] != "submitted":
             return []
         step = state["steps"][state["index"]]
         try:
-            outcome = self.rail.poll(step, {**deepcopy(state), "gas_spent": dict(self.gas_spent)})
+            outcome = observed if observed is not None else self.rail.poll(
+                step, {**deepcopy(state), "gas_spent": dict(self.gas_spent)})
         except Exception as exc:
             self._stall(step, "poll", exc, now_ns)
             return []
@@ -1102,13 +1107,17 @@ class Treasury:
         self.state = {**state, "status": "parked", "reason": reason, "parked_ns": now_ns}
         self.principal_hold = self.fee_hold = None
 
-    def _unpark(self, now_ns: int) -> bool:
-        """Return the oldest parked action whose venue now shows evidence to the slot.
+    def _unpark(self, now_ns: int) -> list[dict] | None:
+        """Book the oldest parked action whose venue now shows evidence, from that read.
 
-        Guarantees nothing is booked here: the action re-enters with its own holds
-        and its original reference, and the next reconciliation books what the
-        evidence states. One whose venue still shows nothing, or whose read fails,
-        stays parked.
+        Guarantees the evidence read is the evidence booked: the action re-enters the
+        slot with its own holds and original reference only for the booking of that
+        one outcome, and leaves the parked list only if the booking moved it (a
+        confirmed step, or a failure the venue stated). A booking that refuses the
+        evidence returns it to the parked list unchanged, so a parked action is never
+        left in the slot at its lapsed step and never sent again. Returns what the
+        booking completed, or None when nothing was booked. One whose venue still
+        shows nothing, or whose read fails, stays parked.
         """
         for entry in self.parked:
             state = entry["state"]
@@ -1120,12 +1129,20 @@ class Treasury:
                 continue
             if outcome is None:
                 continue
-            self.parked.remove(entry)
             self.principal_hold, self.fee_hold = entry["principal_hold"], entry["fee_hold"]
             self.state = {**state, "last_send_ns": now_ns}
-            self._write("unparked", transfer_id=state["id"], state=self.state, ts=now_ns)
-            return True
-        return False
+            completed = self.reconcile(now_ns, observed=outcome)
+            if self.state["status"] == "submitted" and self.state["index"] == state["index"]:
+                # The evidence was refused (its fee outside the reservation, say): the
+                # action goes back exactly as it was parked, its money still held.
+                self.state = {**state, "status": "parked", "reason": entry["reason"],
+                              "parked_ns": entry["parked_ns"]}
+                self.principal_hold = self.fee_hold = None
+                continue
+            self.parked.remove(entry)
+            self._write("unparked", transfer_id=state["id"], ts=now_ns)
+            return completed
+        return None
 
     def _fees_remaining(self) -> int:
         """The fee this transfer may still need held: none for a fee-free direction.
@@ -1154,8 +1171,10 @@ class Treasury:
         # that credits it (``verify_receipts``, from the runtime), exactly once.
         for receipt_id in list(self.income.get("claims", {})):
             self.verify_receipt(receipt_id)
-        if self.parked and not self._blocking() and self._unpark(now_ns):
-            return self.reconcile(now_ns)
+        if self.parked and not self._blocking():
+            completed = self._unpark(now_ns)
+            if completed is not None:
+                return completed
         if self.stranded and not self._blocking():
             self._recover(now_ns)
             return []

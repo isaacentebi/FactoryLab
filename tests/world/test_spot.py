@@ -317,3 +317,19 @@ def test_a_reply_without_its_list_is_never_a_fresh_empty_account(side, reply):
     ex._last_account = None
     with pytest.raises(VenueUnavailable, match='malformed'):
         ex.account()
+
+
+@pytest.mark.parametrize('prior', [True, False])
+def test_a_requested_spot_read_answered_with_nothing_is_unavailable(prior):
+    """A world that trades spot asks for the spot account every read: ``None`` back is
+    not an account without spot, it is no answer (it once published 272 as 50)."""
+    ex, _ = live()
+    first = ex.account()
+    if not prior:
+        ex._last_account = None
+    ex._info.spot_user_state = lambda _: None
+    if prior:
+        assert ex.account() == replace(first, stale=True)
+    else:
+        with pytest.raises(VenueUnavailable, match='malformed'):
+            ex.account()

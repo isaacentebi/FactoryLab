@@ -271,7 +271,7 @@ def _wire_list(reply: Any, key: str) -> list:
 
 
 def _account_from_wire(st: Any, dex_states: dict, spot: Any, mids: Any,
-                       spot_marks: dict, observed_at: int
+                       spot_marks: dict, observed_at: int, *, spot_requested: bool = False
                        ) -> tuple[AccountState, dict[str, Decimal], dict]:
     """Guarantees a whole account from one read, or ``VenueUnavailable``.
 
@@ -279,6 +279,8 @@ def _account_from_wire(st: Any, dex_states: dict, spot: Any, mids: Any,
     that becomes equity, cash, margin, a position or a balance is present and finite,
     or the read is unavailable as a whole; nothing is published from part of it.
     Returns the account, the leverage in effect per position, and each dex's summary.
+    A spot account that was requested must be a well-formed reply; only one that was
+    not requested is absent.
     """
     try:
         summary = st["marginSummary"]
@@ -306,7 +308,7 @@ def _account_from_wire(st: Any, dex_states: dict, spot: Any, mids: Any,
         balances = []
         unpriced: list[str] = []
         spot_value = Decimal(0)
-        if spot is not None:
+        if spot_requested:
             for row in _wire_list(spot, "balances"):
                 total = _finite(row["total"])
                 if not isinstance(row["coin"], str) or not row["coin"]:
@@ -1825,9 +1827,12 @@ class HyperliquidExchange:
                                      self._info.spot_user_state(self._address))
                 mids = self._guarded("spot_mids", self._info.all_mids)
             observed_at = time.time_ns()
+            # A world that trades spot asked for the spot account: whatever came back
+            # is that account, ``None`` included, and is read as one.
+            requested = bool(getattr(self, "spot_pairs", ()))
             account, in_effect, summaries = _account_from_wire(
-                st, dex_states, spot, mids, self._spot_marks if spot is not None else {},
-                observed_at)
+                st, dex_states, spot, mids, self._spot_marks if requested else {},
+                observed_at, spot_requested=requested)
         except VenueUnavailable:
             # Half an account is not an account: perps and spot fall back together,
             # so a spot endpoint outage returns the last complete snapshot. Its
