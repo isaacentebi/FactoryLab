@@ -604,6 +604,22 @@ class Ledger:
             raise PermissionError("open the ledger read-only to iterate its items")
         return self._iter_items()
 
+    def items_newest_first(self) -> Iterator[dict]:
+        """Yield every item up to this ledger's own boundary, newest first, one at a time.
+
+        The same items as ``items()`` in the reverse order, under the same rule: a
+        writable disk ledger refuses, and a reader's memory is bounded by the largest
+        single item. A fold that joins an item to later ones (a return to the verdicts
+        about it) can then hold only what is still being joined, never the diary.
+        """
+        if self.__path is not None and not self.__read_only:
+            raise PermissionError("open the ledger read-only to iterate its items")
+        if self.__path is None:
+            return (json.loads(self.__keys._decrypt(token))
+                    for token in reversed(self.__tokens[:self.__count]))
+        return (json.loads(self.__keys._decrypt(self._token(line)))
+                for line in self._reverse_lines() if json.loads(line).keys() == {"item"})
+
     def decision_id(self, seq: int) -> str:
         """Return, once, the handle ordinal for a new append or an authenticated replay-tail
         item.

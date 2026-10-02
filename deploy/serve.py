@@ -70,11 +70,24 @@ def load_catalogue(ledger_path: Path, liveness: Liveness | None = None):
     from factorylab.runtime.wake import _open_snapshot
 
     ledger, manifest = _open_snapshot(ledger_path)
-    items = list(ledger.items())
+    # One streaming pass that keeps what the three folds read: the newest version of
+    # each service, the Launch event and any record of death. Materializing the diary
+    # made every refresh as large as the world's whole history (essay II.II.b,
+    # "memory").
+    services: dict = {}
+    facts: list[dict] = []
+    for item in ledger.items():
+        for service_id, service in services_from_items((item,)).items():
+            current = services.get(service_id)
+            if current is None or service.version >= current.version:
+                services[service_id] = service
+        event = item.get("event") if item.get("kind") == "event" else None
+        if (item.get("kind") == "kill.production" or isinstance(event, dict)
+                and event.get("kind") in ("Launch", "Terminated")):
+            facts.append(item)
     if liveness is not None:
-        liveness.observe(items)
-    return (services_from_items(items), manifest.treasury.reserve_address,
-            facilitator_from_items(items))
+        liveness.observe(facts)
+    return services, manifest.treasury.reserve_address, facilitator_from_items(facts)
 
 
 def build_seller(services, pay_to: str, facilitator: str, spool_path,

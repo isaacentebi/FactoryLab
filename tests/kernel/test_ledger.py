@@ -287,3 +287,23 @@ def test_completed_disk_history_does_not_accumulate_in_memory(tmp_path, clock,
     chosen = propensity_factory().chosen
     assert ledger.aggregate("spend_by_capability") == {"spend": {chosen: 32}}
     assert ledger.aggregate("action_frequencies") == {"counts": {chosen: 32}}
+
+
+def test_newest_first_reads_the_frozen_boundary_and_refuses_a_writer(tmp_path, clock):
+    """``items_newest_first`` is ``items()`` reversed, under the same rule: a writable
+    disk ledger refuses, and a read-only one stops at the boundary it opened at."""
+    path = tmp_path / "ledger.jsonl"
+    writer = Ledger(path, manifest={"world": "reverse"}, clock_ns=clock,
+                    key_path=str(path) + ".key")
+    for number in range(5):
+        writer.append({"kind": "n", "number": number})
+    with pytest.raises(PermissionError):
+        writer.items_newest_first()
+    reader = Ledger.open_read_only(path, manifest={"world": "reverse"})
+    writer.append({"kind": "n", "number": 5})
+    assert [i["number"] for i in reader.items_newest_first()] == [4, 3, 2, 1, 0]
+    assert list(reader.items_newest_first()) == list(reader.items())[::-1]
+    memory = Ledger(clock_ns=clock)
+    memory.append({"kind": "n", "number": 0})
+    memory.append({"kind": "n", "number": 1})
+    assert [i["number"] for i in memory.items_newest_first()] == [1, 0]

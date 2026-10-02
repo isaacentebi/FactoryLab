@@ -18,6 +18,7 @@ from factorylab.runtime.wake import (
     _venue,
     collect_wake,
     render_wake,
+    write_wake,
 )
 from factorylab.runtime.worlds import load_manifest
 
@@ -319,3 +320,130 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
     # The pin that kept the sidecars' bytes through the copy is gone.
     assert not (root / "runs/.backup-pin").exists()
     assert (root / "runs/funded.jsonl").read_bytes() == original + b'{"item":'
+
+
+def _returns_diary(path: Path, count: int) -> None:
+    """``count`` decisions, each with one 4 KiB return, a price window every ten, and a
+    verdict on each return three windows after it, past its decision's settlement."""
+    manifest = load_manifest("scripted")
+    ledger = Ledger(path, manifest=json.loads(manifest.canonical_json()),
+                    key_path=str(path) + ".key", clock_ns=lambda: 1)
+    late = []
+    for n in range(count):
+        handle = f"decision-{n}"
+        ledger.append({"kind": "decision.open", "handle": handle, "channel": "verdict",
+                       "deadline_ns": 5, "propensity": {"chosen": "seed-decider"}})
+        ledger.append({"kind": "invocation", "handle": handle, "assembly_id": "seed-decider",
+                       "role": "producer", "outputs": {"action": "hold",
+                                                       "rationale": f"{n:06d}" + "x" * 4096}})
+        ledger.append({"kind": "decision.settle", "latency_ns": 1, "return": {"handle": handle,
+                                                             "channel": "verdict"}})
+        late.append(handle)
+        if n % 10 == 9:
+            ledger.append({"kind": "price.window", "window": n // 10})
+            for about in late[:-30]:
+                ledger.append({"kind": "event", "event": {
+                    "kind": "Verdict", "ts_ns": 1,
+                    "payload": {"about_handle": about, "evaluator_handle": "judge",
+                                "verdict": 1.0, "rationale": "late"}}})
+            late = late[-30:]
+
+
+@pytest.mark.gate
+def test_the_wake_holds_outstanding_returns_not_every_return(tmp_path):
+    """s09: the wake's memory follows the returns still being joined, not every return
+    the world ever made (essay II.II.b, "memory"; AGENTS rule 12). Ten times the history
+    leaves the peak where it was; the totals, the latest rows and every page still hold
+    every return with the verdicts that landed windows after it."""
+    import tracemalloc
+
+    peaks = []
+    for count in (100, 1000):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        _returns_diary(path, count)
+        if not peaks:  # the first read's one-time costs (manifests, imports) are not history
+            write_wake(path, tmp_path / "warm", returns=10)
+        tracemalloc.start()
+        data = write_wake(path, path.parent / "www", returns=10)
+        peaks.append(tracemalloc.get_traced_memory()[1])
+        tracemalloc.stop()
+        assert data["returns"]["total"] == count
+        rows = data["returns"]["rows"]
+        assert [row["handle"] for row in rows] == [f"decision-{n}"
+                                                   for n in range(count - 10, count)]
+        page = json.loads((path.parent / "www" / "returns-3.json").read_text())
+        assert len(page["rows"]) == 10
+        assert all(row["verdicts"] and row["verdicts"][0]["rationale"] == "late"
+                   for row in page["rows"])
+    assert peaks[1] - peaks[0] < 1_000_000, peaks
+
+
+def test_a_return_joins_what_was_said_about_it_read_newest_first():
+    """Each tool call or verdict joins the latest row of its handle written before it,
+    or the first row when it precedes them all; each window's page gets its rows in
+    ledger order, once, and only after nothing older can still name them."""
+    from factorylab.runtime.wake import _Returns
+
+    def call(n):
+        return {"kind": "tool.call", "handle": "h", "tool": f"t{n}"}
+
+    def verdict(about, n):
+        return {"kind": "event", "event": {"kind": "Verdict", "payload": {
+            "about_handle": about, "verdict": n}}}
+
+    def row(handle):
+        return {"kind": "invocation", "handle": handle, "outputs": {}}
+
+    diary = [{"kind": "decision.open", "handle": "h"}, call(0), verdict("h", 0), row("h"),
+             call(1), {"kind": "decision.open", "handle": "g"}, row("g"),
+             {"kind": "price.window", "window": 0}, verdict("h", 1), row("h"), verdict("h", 2),
+             verdict("g", 3), verdict("none", 4)]
+    pages = []
+    folded = _Returns(1, lambda window, rows: pages.append((window, rows)))
+    for item in reversed(diary):
+        folded.feed(item)
+    section = folded.result()
+    assert section["total"] == 3 and [r["handle"] for r in section["rows"]] == ["h"]
+    assert [(w, [(r["handle"], [c["tool"] for c in r["tool_calls"]],
+                  [v["verdict"] for v in r["verdicts"]]) for r in rows]) for w, rows in pages] \
+        == [(1, [("h", [], [2])]), (0, [("h", ["t0", "t1"], [0, 1]), ("g", [], [3])])]
+    assert section["pages"]["windows"] == [{"window": 0, "rows": 2}, {"window": 1, "rows": 1}]
+
+
+def test_the_seller_catalogue_reads_the_diary_without_holding_it(tmp_path):
+    """s09: ``deploy/serve.py`` re-reads the diary every refresh; it keeps the newest
+    version of each service, the Launch event and any death, never the diary."""
+    import importlib.util
+    import tracemalloc
+
+    spec = importlib.util.spec_from_file_location("serve", DEPLOY / "serve.py")
+    serve = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(serve)
+    manifest = load_manifest("scripted")
+    peaks = []
+    for count in (50, 500):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        ledger = Ledger(path, manifest=json.loads(manifest.canonical_json()),
+                        key_path=str(path) + ".key", clock_ns=lambda: 1)
+        ledger.append({"kind": "event", "event": {"kind": "Launch", "ts_ns": 1, "payload": {
+            "facilitator_url": "https://facilitator.example"}}})
+        for version in (1, 2):
+            ledger.append({"kind": "service.registered", "id": "oracle", "program_id": "p",
+                           "description": f"v{version}", "args_schema": {}, "code": "",
+                           "timeout_s": 1, "handle": "h", "price_micro": 10 * version,
+                           "version": version})
+        for n in range(count):
+            ledger.append({"kind": "tool.call", "handle": f"decision-{n}",
+                           "args": {"text": f"{n:06d}" + "x" * 4096}})
+        if not peaks:  # the first read's one-time costs are not history
+            serve.load_catalogue(path)
+        liveness = serve.Liveness(max_age_s=60)
+        tracemalloc.start()
+        services, _reserve_address, facilitator = serve.load_catalogue(path, liveness)
+        peaks.append(tracemalloc.get_traced_memory()[1])
+        tracemalloc.stop()
+        assert services["oracle"].price_micro == 20 and services["oracle"].version == 2
+        assert facilitator == "https://facilitator.example" and liveness()
+    assert peaks[1] - peaks[0] < 500_000, peaks

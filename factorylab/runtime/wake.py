@@ -26,6 +26,7 @@ import hashlib
 import html
 import json
 import os
+import shutil
 import stat
 import tempfile
 import time
@@ -257,13 +258,6 @@ class _Observatory:
         # so the compact catalogue's claim about size is checkable on the page.
         self.section_bytes: Counter = Counter()
         self.section_prompts = 0
-        # Every return in ledger order, its row reachable by handle so the tool calls
-        # that preceded it and the verdicts that follow it attach to the same row.
-        self.returns: list[dict] = []
-        self.returns_by_handle: dict[str, dict] = {}
-        self.tool_calls_by_handle: dict[str, list[dict]] = {}
-        self.verdicts_by_handle: dict[str, list[dict]] = {}
-        self.meta_verdicts_by_handle: dict[str, list[dict]] = {}
 
     def feed(self, item: dict) -> None:
         """Read one authenticated item; unknown and sealed kinds are simply not read."""
@@ -298,18 +292,6 @@ class _Observatory:
         elif kind == "ForecastSettled" and isinstance(payload, dict):
             self.open_forecasts.pop(str(payload.get("handle")), None)
             self._delivered("forecast", "settled")
-        elif kind == "Verdict" and isinstance(payload, dict):
-            self._verdict(self.verdicts_by_handle, "verdicts", payload.get("about_handle"), {
-                "ts_ns": event.get("ts_ns"), "by": payload.get("evaluator_handle"),
-                "verdict": payload.get("verdict"), "payoff": payload.get("payoff"),
-                "rationale": payload.get("rationale"),
-            })
-        elif kind == "MetaVerdict" and isinstance(payload, dict):
-            self._verdict(self.meta_verdicts_by_handle, "meta_verdicts", payload.get("about"), {
-                "ts_ns": event.get("ts_ns"), "by": payload.get("by"),
-                "judge": payload.get("evaluator_handle"), "tier": payload.get("tier"),
-                "score": payload.get("score"), "rationale": payload.get("rationale"),
-            })
         if kind != "Registered" or not isinstance(payload, dict):
             return
         self.registered = [*self.registered, {
@@ -521,18 +503,6 @@ class _Observatory:
         self.invocations.setdefault(_day(item.get("ts", 0)), Counter())[
             role if role in ROLES else "other"
         ] += 1
-        handle = str(item.get("handle"))
-        row = {
-            "window": self.current_window, "ts_ns": item.get("ts"), "handle": handle,
-            "seat": item.get("assembly_id"), "role": role, "model": item.get("served_by"),
-            "status": item.get("status"), "stop_reason": item.get("stop_reason"),
-            "cost_micro": item.get("cost"), "outputs": _outputs(item.get("outputs")),
-            "tool_calls": self.tool_calls_by_handle.pop(handle, []),
-            "verdicts": self.verdicts_by_handle.pop(handle, []),
-            "meta_verdicts": self.meta_verdicts_by_handle.pop(handle, []),
-        }
-        self.returns.append(row)
-        self.returns_by_handle[handle] = row
         sections = item.get("sections")
         if isinstance(sections, dict):
             self.section_prompts += 1
@@ -558,52 +528,6 @@ class _Observatory:
                           "total_bytes": self.section_bytes[name]}
                          for name in sorted(self.section_bytes)] if prompts else [],
         }
-
-    # --- every return, linked to what was said about it -------------------------
-
-    def _verdict(self, pending: dict[str, list[dict]], field: str, about, verdict: dict) -> None:
-        row = self.returns_by_handle.get(str(about))
-        if row is not None:
-            row[field].append(verdict)
-        else:
-            pending.setdefault(str(about), []).append(verdict)
-
-    def _on_tool_call(self, item: dict) -> None:
-        # Ledgered while the return is still being composed, before its invocation
-        # row exists: the args as logged (bodies already stripped), the outcome the
-        # tool reported, and what the call cost.
-        handle = str(item.get("handle"))
-        call = {"ts_ns": item.get("ts"), "tool": item.get("tool"), "args": item.get("args"),
-                "outcome": item.get("outcome"), "ok": item.get("ok"),
-                "cost_micro": item.get("cost")}
-        row = self.returns_by_handle.get(handle)
-        if row is not None:
-            row["tool_calls"].append(call)
-        else:
-            self.tool_calls_by_handle.setdefault(handle, []).append(call)
-
-    def _returns(self, limit: int) -> dict:
-        """The latest rows for the page, and where every older row is published."""
-        per_window = Counter(row["window"] for row in self.returns)
-        windows = sorted(per_window)
-        return {
-            "limit": limit, "total": len(self.returns),
-            "rows": self.returns[-limit:] if limit > 0 else [],
-            "pages": {
-                "file": RETURNS_PAGE,
-                "first_window": windows[0] if windows else None,
-                "last_window": windows[-1] if windows else None,
-                "windows": [{"window": window, "rows": per_window[window]}
-                            for window in windows[-MAX_ROWS:]],
-            },
-        }
-
-    def pages(self) -> dict[int, list[dict]]:
-        """Every return grouped by the price window it landed in."""
-        grouped: dict[int, list[dict]] = {}
-        for row in self.returns:
-            grouped.setdefault(row["window"], []).append(row)
-        return grouped
 
     def _transfer(self, item: dict, status: str, direction, amount) -> None:
         self.transfers = [*self.transfers, {
@@ -750,8 +674,7 @@ class _Observatory:
                 "exposure": self.exposure,
                 "retired_credits_to_commons": self.retired_credits}
 
-    def result(self, manifest, *, now_ns: int | None = None,
-               returns: int = RETURNS_ROWS) -> dict:
+    def result(self, manifest, *, now_ns: int | None = None) -> dict:
         """Return the widened sections.
 
         Before the first window closes there is no published world block yet, so
@@ -815,7 +738,162 @@ class _Observatory:
             "liveness": self._liveness(),
             "entitlements": _fold_entitlements(latest.get("entitlements")),
             "prompt_sections": self._prompt_sections(),
-            "returns": self._returns(returns),
+        }
+
+
+class _Returns:
+    """Every return, joined to its tool calls and the verdicts about it, read newest first.
+
+    A verdict can land many windows after the return it judges, even after that
+    decision settled, so a fold in ledger order cannot know when a row is final and
+    would hold every row the world ever wrote. Read newest first, every item about a
+    return comes before the return itself, and the decision's opening comes after it:
+    nothing about that handle is left to read. A window's page is written once every
+    row in it has passed its opening, and is then dropped, so what is held is the
+    returns still being joined, never the diary (essay II.II.b, "memory"; AGENTS
+    rule 12: the control apparatus is not slower than its environment).
+
+    Guarantees the rows of the forward fold this replaced: a row's window is the
+    price window open when it was written, and an item about a handle joins the
+    latest row of that handle written before it, or its first row when it precedes
+    them all, in ledger order. ``emit(window, rows)`` receives each window's rows in
+    ledger order, once.
+    """
+
+    def __init__(self, limit: int, emit) -> None:
+        self.limit = limit
+        self.emit = emit
+        self.total = 0
+        self.latest: list[dict] = []          # the newest ``limit`` rows, newest first
+        self.unplaced: list[dict] = []        # rows since the last window close read
+        self.held: dict[int, list[dict]] = {}  # window -> rows not yet written, newest first
+        self.unfinished: dict[int, int] = {}  # window -> rows whose opening is unread
+        self.rows_of: dict[str, list[dict]] = {}  # handle -> its rows read so far
+        self.later: dict[str, dict[str, list]] = {}  # handle -> items after its rows
+        self.open_rows: set[int] = set()      # ids of rows whose opening is unread
+        self.per_window: dict[int, int] = {}  # the newest MAX_ROWS windows with rows
+        self.first_window: int | None = None
+        self.last_window: int | None = None
+
+    def _later(self, handle, field: str, entry: dict) -> None:
+        self.later.setdefault(str(handle), {"tool_calls": [], "verdicts": [],
+                                            "meta_verdicts": []})[field].append(entry)
+
+    def feed(self, item: dict) -> None:
+        """Read one authenticated item, newer than none of those already read."""
+        kind = item.get("kind")
+        if kind == "invocation":
+            self._row(item)
+        elif kind == "tool.call":
+            # Ledgered while the return is still being composed, before its invocation
+            # row exists: the args as logged (bodies already stripped), the outcome
+            # the tool reported, and what the call cost.
+            self._later(item.get("handle"), "tool_calls", {
+                "ts_ns": item.get("ts"), "tool": item.get("tool"), "args": item.get("args"),
+                "outcome": item.get("outcome"), "ok": item.get("ok"),
+                "cost_micro": item.get("cost")})
+        elif kind == "event":
+            event = item.get("event", {})
+            payload = event.get("payload", {})
+            if not isinstance(payload, dict):
+                return
+            if event.get("kind") == "Verdict":
+                self._later(payload.get("about_handle"), "verdicts", {
+                    "ts_ns": event.get("ts_ns"), "by": payload.get("evaluator_handle"),
+                    "verdict": payload.get("verdict"), "payoff": payload.get("payoff"),
+                    "rationale": payload.get("rationale")})
+            elif event.get("kind") == "MetaVerdict":
+                self._later(payload.get("about"), "meta_verdicts", {
+                    "ts_ns": event.get("ts_ns"), "by": payload.get("by"),
+                    "judge": payload.get("evaluator_handle"), "tier": payload.get("tier"),
+                    "score": payload.get("score"), "rationale": payload.get("rationale")})
+        elif kind == "decision.open":
+            self._finish(str(item.get("handle")))
+        elif kind == "price.window":
+            # The rows read since are those written after this close: the window it
+            # opened (``_Observatory._on_price_window``).
+            index = item.get("window")
+            if type(index) is int:
+                self._place(index + 1)
+
+    def _row(self, item: dict) -> None:
+        handle = str(item.get("handle"))
+        after = self.later.pop(handle, {})
+        row = {
+            "window": None, "ts_ns": item.get("ts"), "handle": handle,
+            "seat": item.get("assembly_id"), "role": item.get("role"),
+            "model": item.get("served_by"), "status": item.get("status"),
+            "stop_reason": item.get("stop_reason"), "cost_micro": item.get("cost"),
+            "outputs": _outputs(item.get("outputs")),
+            **{field: after.get(field, [])[::-1]
+               for field in ("tool_calls", "verdicts", "meta_verdicts")},
+        }
+        self.total += 1
+        if len(self.latest) < self.limit:
+            self.latest.append(row)
+        self.rows_of.setdefault(handle, []).append(row)
+        self.open_rows.add(id(row))
+        self.unplaced.append(row)
+
+    def _finish(self, handle: str) -> None:
+        """Nothing older than this item names ``handle``: its rows are final."""
+        before = self.later.pop(handle, None)
+        rows = self.rows_of.pop(handle, [])
+        if rows and before:
+            first = rows[-1]
+            for field, entries in before.items():
+                first[field] = entries[::-1] + first[field]
+        for row in rows:
+            self.open_rows.discard(id(row))
+            if row["window"] is not None:
+                self.unfinished[row["window"]] -= 1
+        self._write_ready()
+
+    def _place(self, window: int) -> None:
+        rows, self.unplaced = self.unplaced, []
+        if not rows:
+            return
+        for row in rows:
+            row["window"] = window
+        self.held.setdefault(window, []).extend(rows)
+        self.unfinished[window] = (self.unfinished.get(window, 0)
+                                   + sum(id(row) in self.open_rows for row in rows))
+        self._write_ready()
+
+    def _write_ready(self) -> None:
+        for window in [w for w in self.held if not self.unfinished.get(w)]:
+            rows = self.held.pop(window)
+            self.unfinished.pop(window, None)
+            self.emit(window, rows[::-1])
+            self.per_window[window] = self.per_window.get(window, 0) + len(rows)
+            if len(self.per_window) > MAX_ROWS:
+                del self.per_window[min(self.per_window)]
+            self.first_window = window if self.first_window is None else min(
+                self.first_window, window)
+            self.last_window = window if self.last_window is None else max(
+                self.last_window, window)
+
+    def result(self) -> dict:
+        """The latest rows for the page, and where every older row is published.
+
+        Called once the oldest item is read: what is still held was written in the
+        first window, or names a handle whose opening the diary does not hold.
+        """
+        self._place(0)
+        for handle in list(self.rows_of):
+            self._finish(handle)
+        self.later.clear()
+        windows = sorted(self.per_window)
+        return {
+            "limit": self.limit, "total": self.total,
+            "rows": self.latest[::-1] if self.limit > 0 else [],
+            "pages": {
+                "file": RETURNS_PAGE,
+                "first_window": self.first_window,
+                "last_window": self.last_window,
+                "windows": [{"window": window, "rows": self.per_window[window]}
+                            for window in windows],
+            },
         }
 
 
@@ -1003,19 +1081,61 @@ def _reserve() -> dict:
 def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep,
                  returns: int = RETURNS_ROWS) -> dict:
     """Exactly the allowlist escapes; a failed chain is retried once, never partially shown."""
-    return _collect_wake(path, now_ns=now_ns, sleep=sleep, returns=returns)[0]
+    return _collect_wake(path, now_ns=now_ns, sleep=sleep, returns=returns)
+
+
+class _Pages:
+    """Each window's page file, staged beside the wake and moved into place only when
+    the whole collection succeeds, so a failed read publishes no page of it."""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.world: str | None = None
+        self.staging: Path | None = None
+
+    def reset(self, world: str) -> None:
+        self.discard()
+        self.world = world
+        self.staging = Path(tempfile.mkdtemp(prefix=".wake-pages-", dir=self.directory))
+
+    def __call__(self, window: int, rows: list[dict]) -> None:
+        """Stage ``window``'s page; a page whose bytes have not changed is left alone."""
+        name = RETURNS_PAGE.format(window=window)
+        body = json.dumps({"world": self.world, "window": window, "rows": rows},
+                          indent=2) + "\n"
+        try:
+            if (self.directory / name).read_text() == body:
+                return
+        except OSError:
+            pass
+        _publish(self.staging, name, body)
+
+    def commit(self) -> None:
+        for staged in sorted(self.staging.iterdir()):
+            os.replace(staged, self.directory / staged.name)
+        self.discard()
+
+    def discard(self) -> None:
+        if self.staging is not None:
+            shutil.rmtree(self.staging, ignore_errors=True)
+            self.staging = None
 
 
 def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep,
-                  returns: int = RETURNS_ROWS) -> tuple[dict, dict[int, list[dict]]]:
-    """The wake document and every return grouped by window, for the page files."""
+                  returns: int = RETURNS_ROWS, pages: _Pages | None = None) -> dict:
+    """The wake document; every return's window page goes to ``pages`` when given.
+
+    The returns are a second pass, newest first (``_Returns``), so the pages are
+    written as each window's rows become final and never all held at once.
+    """
     result = dict.fromkeys((*VIEWS, *SECTIONS, "world", "manifest_hash", "uptime_ns",
                             "last_event_time_ns"), UNAVAILABLE)
     manifest = None
-    pages: dict[int, list[dict]] = {}
     for attempt in range(2):
         try:
             ledger, candidate = _open_snapshot(Path(path))
+            if pages is not None:
+                pages.reset(candidate.name)
             observatory = _Observatory()
             aggregates = ledger.public_aggregates(candidate, observatory)
             live = candidate.exchange.kind != "fake"
@@ -1025,14 +1145,20 @@ def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sle
             # keeps: wall time while it lives, event time once it does not.
             as_of = (time.time_ns() if now_ns is None else now_ns) if live and not (
                 observatory.terminated_ns is not None) else timing["last_event_time_ns"]
-            result.update(aggregates,
-                          **observatory.result(candidate, now_ns=as_of, returns=returns),
-                          **timing, world=candidate.name,
+            folded = _Returns(returns, pages if pages is not None else lambda *_: None)
+            for item in ledger.items_newest_first():
+                folded.feed(item)
+            section = folded.result()
+            if pages is not None:
+                pages.commit()
+            result.update(aggregates, **observatory.result(candidate, now_ns=as_of),
+                          returns=section, **timing, world=candidate.name,
                           manifest_hash=candidate.manifest_hash())
             manifest = candidate
-            pages = observatory.pages()
             break
         except (LedgerIntegrityError, InvalidToken, OSError, ValueError, KeyError, TypeError):
+            if pages is not None:
+                pages.discard()
             if attempt == 0:
                 sleep(0.1)
     # An account is published only when this world owns it. A key in the
@@ -1052,7 +1178,7 @@ def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sle
             "usdc_micro": UNAVAILABLE,
             "venice_micro": UNAVAILABLE,
         }
-    return result, pages
+    return result
 
 
 def _chart(wallet) -> str:
@@ -1188,22 +1314,12 @@ def write_wake(path: str | Path, out: str | Path, *, returns: int = RETURNS_ROWS
     The page carries the latest ``returns`` rows; every return is also written to
     its window's ``returns-<window>.json`` beside ``wake.json``, so the page stays
     bounded while nothing said is lost. A page file whose bytes have not changed
-    is left alone.
+    is left alone, and no page is written from a collection that failed.
     """
-    data, pages = _collect_wake(path, returns=returns)
     directory = Path(out)
     directory.mkdir(parents=True, exist_ok=True)
+    data = _collect_wake(path, returns=returns, pages=_Pages(directory))
     for name, body in (("wake.json", json.dumps(data, indent=2) + "\n"),
                        ("wake.html", render_wake(data))):
-        _publish(directory, name, body)
-    for window, rows in sorted(pages.items()):
-        name = RETURNS_PAGE.format(window=window)
-        body = json.dumps({"world": data.get("world"), "window": window, "rows": rows},
-                          indent=2) + "\n"
-        try:
-            if (directory / name).read_text() == body:
-                continue
-        except OSError:
-            pass
         _publish(directory, name, body)
     return data
