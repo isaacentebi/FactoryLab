@@ -160,7 +160,7 @@ def journaled_references(items: list[dict]) -> tuple[list[dict], list[dict]]:
     A top-up reference counts once it was journaled toward a signature
     (``treasury.submitted`` or ``treasury.step_submitted``) or kept as superseded; one
     only prepared was never signed. A shadow send is pending when the last journaled
-    state of its transfer is still submitted at the shadow step.
+    state of its transfer is still submitted, or parked unresolved, at the shadow step.
     """
     top_ups: dict[str, dict] = {}
     last: dict[str, dict] = {}
@@ -182,7 +182,8 @@ def journaled_references(items: list[dict]) -> tuple[list[dict], list[dict]]:
                 or (s.get("reference") or {}).get("sink"),
                 "amount_micro": s.get("amount_micro")}
                for tid, s in last.items()
-               if s.get("status") == "submitted" and _state_step(s) == "shadow_send"]
+               if s.get("status") in ("submitted", "parked")
+               and _state_step(s) == "shadow_send"]
     return list(top_ups.values()), shadows
 
 

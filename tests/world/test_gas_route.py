@@ -343,7 +343,8 @@ def test_a_reverted_fallback_mint_confirms_the_forwarder_delivery_instead_of_str
            "fee_ceiling_micro": gas_micro(10**13, "3000") + 200_000}
     state["reference"] = ref
     rail.base.receipt = lambda reference, *, finalized=True: {
-        "success": False, "gas_fee_wei": 5 * 10**12, "blockHash": "0xrevert"}
+        "success": False, "gas_fee_wei": 5 * 10**12, "blockHash": "0xrevert",
+        "transactionHash": reference["tx_hash"]}
     # Nobody delivered the message: the revert is the plain failure it always was.
     result = rail.poll("mint_base", state)
     assert result["confirmed"] is False and result["reason"] == "on-chain transaction reverted"

@@ -247,7 +247,7 @@ def deposit_case():
         "0x" + word_address(rail.venue_address).hex(),
     ], "data": "0x" + encode(["uint64", "uint32"], [10**9, 0]).hex()}
     receipt = {"success": True, "gas_fee_wei": 10**12, "logs": [log],
-               "blockHash": "0xblock", "blockNumber": "0x64"}
+               "transactionHash": ref["tx_hash"], "blockHash": "0xblock", "blockNumber": "0x64"}
     row = {"time": 1_000_450, "hash": "0xhypercore", "delta": {
         "type": "send", "user": rail.core.lower(), "destination": rail.venue_address.lower(),
         "sourceDex": "spot", "destinationDex": "", "token": "USDC", "amount": "10.0",
@@ -328,6 +328,7 @@ def provisional_approval_case():
         if finalized and not observed["approval_final" if approving else "burn_final"]:
             return None
         return {"success": True, "blockHash": "0xblock", "blockNumber": "0x64",
+                "transactionHash": reference["tx_hash"],
                 "gas_fee_wei": (1 if approving else 2) * 10**12}
 
     rail.base.receipt = receipt
@@ -380,3 +381,67 @@ def test_changed_nonce_keeps_the_approval_pending_instead_of_replacing_it():
     burn["tx"]["nonce"] = 3
     with pytest.raises(Pending, match="nonce changed"):
         rail.poll("approve_base", state)
+
+
+def _mined_only(chain, mined_hash, receipt):
+    """The chain mined ``mined_hash`` alone; the real ``EVM.receipt`` finds it among a
+    replaced reference's hashes, exactly as it does live."""
+    from factorylab.world.evm import EVM
+
+    chain.proof = lambda tx_hash, *, finalized=True: (
+        deepcopy(receipt) if tx_hash == mined_hash else None)
+    chain.receipt = lambda reference, *, finalized=True: EVM.receipt(
+        chain, reference, finalized=finalized)
+
+
+def test_replaced_burn_books_actual_mined_hash_and_mints():
+    """The wallet moves only when money moves: a replaced burn whose original mined is
+    settled, and attested by Circle, under the mined hash, never the unmined one."""
+    rail = setup()
+    old, new = "0x" + "0a" * 32, "0x" + "0b" * 32
+    ref = {"chain_key": "base", "gas_usd": "3000", "gas_symbol": "ETH",
+           "network": "eip155:84532", "tx_hash": new, "replaces": [old],
+           "sender": rail.reserve_address, "tx": {"to": "0x" + "33" * 20, "nonce": 4},
+           "gas_ceiling_wei": 3 * 10**12, "cctp_max_fee_micro": 100_000}
+    _mined_only(rail.base, old, {
+        "transactionHash": old, "from": rail.reserve_address, "to": ref["tx"]["to"],
+        "gasUsed": hex(10**6), "effectiveGasPrice": hex(10**6), "l1Fee": "0x0",
+        "status": "0x1", "blockHash": "0xblock", "blockNumber": "0x64", "logs": []})
+    rail.cctp = SimpleNamespace(message=lambda *a, **k: b"message")
+    result = rail.poll("burn_base", {"reference": ref, "received_micro": 10_000_000})
+    assert result["confirmed"] and result["principal_moved"]
+    assert result["evidence"]["tx_hash"] == old
+    burn = result["route_data"]["burn"]
+    assert burn["tx_hash"] == old
+    # Circle indexes the burn under the hash that mined; the attestation is asked for it.
+    asked = []
+
+    def iris(method, url, body, headers):
+        asked.append(url)
+        return SimpleNamespace(status=404, body={})
+
+    from factorylab.world.cctp import CCTP
+
+    cctp = CCTP.__new__(CCTP)
+    cctp.url, cctp.transport = "https://iris.test", iris
+    cctp.validate_pair = lambda source, destination: None
+    with pytest.raises(Pending):
+        cctp.attestation(rail.hyper, rail.base, {**burn, "message": "0x00"})
+    assert asked and asked[0].endswith("transactionHash=" + old)
+
+
+def test_replaced_deposit_correlates_the_mined_hash():
+    rail, state, _ = deposit_case()
+    old, new = "0x" + "0c" * 32, "0x" + "0d" * 32
+    ref = {**state["reference"], "tx_hash": new, "replaces": [old],
+           "sender": rail.reserve_address, "tx": {"to": rail.hyper.chain.usdc},
+           "gas_ceiling_wei": 10**13}
+    receipt = rail.hyper.proved
+    receipt["logs"][0]["transactionHash"] = old
+    rail.hyper.log_rows = [receipt["logs"][0]]
+    _mined_only(rail.hyper, old, {
+        **receipt, "transactionHash": old, "from": rail.reserve_address,
+        "to": rail.hyper.chain.usdc, "gasUsed": hex(10**6), "effectiveGasPrice": hex(10**6),
+        "status": "0x1"})
+    result = rail.poll("deposit_core", {**state, "reference": ref})
+    assert result["confirmed"] and result["evidence"]["tx_hash"] == old

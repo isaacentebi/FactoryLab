@@ -471,7 +471,9 @@ class VaultMixin:
         # The cursor stays inclusive: the venue reports milliseconds, so a row indexed
         # late in the newest row's millisecond must still be read on the next poll.
         # Rows already processed at that millisecond are remembered by identity.
-        newest = max(r["ts_ns"] for r in rows)
+        # An unread row whose time could not be read states 0: it never moves the
+        # cursor back.
+        newest = max(self.vault_ledger_cursor_ns, *(r["ts_ns"] for r in rows))
         self.vault_ledger_seen = sorted(
             {r["hash"] for r in rows if r["ts_ns"] == newest}
             | (set(self.vault_ledger_seen) if newest == self.vault_ledger_cursor_ns else set()))

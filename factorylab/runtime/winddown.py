@@ -552,11 +552,15 @@ class WindDownExecutor:
         read_vaults = getattr(self.exchange, "vault_equities", None)
         if read_vaults is not None:
             try:
+                positions = read_vaults()["positions"]
                 residual["vaults"] = [
-                    {"vault": str(p["vault"]), "equity_usd": str(p["equity_usd"]),
+                    {"vault": str(p["vault"]), "equity_usd": str(p.get("equity_usd")),
                      "locked_until_ns": p.get("locked_until_ns")}
-                    for p in read_vaults()["positions"]
-                    if _decimal(p.get("equity_usd"))]
+                    for p in positions if _decimal(p.get("equity_usd")) != 0]
+                # An unreadable quantity is exposure of unknown size, never zero.
+                unreadable = [*unreadable, *(
+                    ("vault_equities", f"InvalidQuantity:{p.get('vault')}")
+                    for p in positions if _decimal(p.get("equity_usd")) is None)]
             except Exception as exc:  # noqa: BLE001
                 unreadable = [*unreadable, ("vault_equities", type(exc).__name__)]
         residual["resting"] = [{"order_id": str(o.get("order_id")), "coin": str(o.get("coin"))}
@@ -564,7 +568,13 @@ class WindDownExecutor:
         if account is not None:
             for position in getattr(account, "positions", ()) or ():
                 size = _decimal(getattr(position, "size", None))
-                if size:
+                if size is None:
+                    # An unreadable size is exposure of unknown size, never zero.
+                    coin = str(getattr(position, "coin", ""))
+                    residual["positions"].append(
+                        {"coin": coin, "size": str(getattr(position, "size", None))})
+                    unreadable = [*unreadable, ("account", f"InvalidQuantity:{coin}")]
+                elif size:
                     coin = str(getattr(position, "coin", ""))
                     value = self._value_micro(coin, coin, abs(size), mids)
                     if (value is not None
@@ -578,7 +588,12 @@ class WindDownExecutor:
             for balance in getattr(account, "spot_balances", ()) or ():
                 base = str(getattr(balance, "coin", ""))
                 total = _decimal(getattr(balance, "total", None))
-                if base == "USDC" or total is None or total <= 0:
+                if total is None:
+                    residual["balances"].append({"coin": f"{base}/USDC", "size": str(
+                        getattr(balance, "total", None)), "value_micro": None})
+                    unreadable = [*unreadable, ("account", f"InvalidQuantity:{base}")]
+                    continue
+                if base == "USDC" or total <= 0:
                     continue
                 pair = f"{base}/USDC"
                 value = self._value_micro(pair, base, total, mids)

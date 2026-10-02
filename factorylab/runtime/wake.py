@@ -154,6 +154,9 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
         "pots": {"venue": pots.get("venue"), "reserve": pots.get("reserve"),
                  "venice": pots.get("sellers", {}).get("venice"), "seed": pots.get("seed"),
                  "complete": pots.get("complete"),
+                 # Venue actions with no evidence past the venue's nonce window: their
+                 # money held, each with when it parked, so a long wait is visible.
+                 "parked_transfers": pots.get("parked") or [],
                  # The endowment (C1) and the pause between its releases (C2).
                  "locked_micro": rt.wallet.locked, "unlocked_micro": rt.wallet.unlocked,
                  "next_release_ns": rt.wallet.next_release_ns,

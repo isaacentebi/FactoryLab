@@ -83,7 +83,7 @@ def test_complete_payload_usage_and_cost_rounding(completion, req):
     assert type(response.cost_micro) is int
 
 
-@pytest.mark.parametrize("cost, expected", [(0, 0), (0.000012, 12), (0.0000001, 1), (None, None)])
+@pytest.mark.parametrize("cost, expected", [(0, 0), (0.000012, 12), (0.0000001, 1)])
 def test_reported_cost_boundaries(completion, req, cost, expected):
     completion["usage"]["cost"] = cost
     response = OpenRouterProvider(transport=FakeTransport([completion])).complete(req)
@@ -498,3 +498,33 @@ def test_a_manifest_session_id_wins_over_the_derived_one(completion):
                        extra_body={"qwen/qwen3.8-flash": {"session_id": "manifest-own"}}
                        ).complete(_cached_request("qwen/qwen3.8-flash", "YOU\nx"))
     assert transport.calls[0][2]["session_id"] == "manifest-own"
+
+
+def test_missing_provider_bill_uses_balance_settlement(completion, req):
+    """The wallet moves only when money moves: a completion that names no bill is booked
+    provisionally and settled from the key's own balance, never at catalogue price."""
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.wallet import Wallet
+    from factorylab.world.metering import BillSettlement
+
+    del completion["usage"]["cost"]
+    remaining = {"usd": "1.000000"}
+
+    def transport(method, path, json):
+        if path == "/key":
+            return {"data": {"limit_remaining": remaining["usd"]}}
+        remaining["usd"] = "0.999995"  # the provider really spent 5 micro-USD
+        return completion
+
+    provider = OpenRouterProvider(transport=transport)
+    wallet = Wallet(10_000, Ledger())
+    settlement = BillSettlement(provider.balance_of)
+    model = MeteredModel(provider, PriceTable({req.model_id: TokenPrice(1, 5)}),
+                         Meter(wallet), settlement=settlement)
+    settlement.refresh(req.model_id)
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(req, handle="unbilled")
+    assert "bill unavailable" in str(info.value.cause)
+    assert info.value.cost == 5
+    assert wallet.balance == 10_000 - 5 and wallet.uncertain_bills == {}
+    assert wallet.check_conservation()

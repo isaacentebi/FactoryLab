@@ -551,6 +551,11 @@ class BudgetBook:
         if seat is None:
             return 0
         refund = max(0, min(released, own, self.unallocated()))
+        if seat in self.__retired:
+            # Retirement is final at this layer (``_to_commons``): the refund stays in
+            # the pool rather than becoming an entitlement no live seat can see.
+            self._to_commons(seat, refund, reason, source="settle_uncertain")
+            return 0
         after = self.__gross.get(seat, 0) + refund
         self._log("settle_uncertain", assembly_id=seat, amount=refund, released=released,
                   own=own, reason=reason, reservation_id=reservation_id,

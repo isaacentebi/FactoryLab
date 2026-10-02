@@ -134,20 +134,37 @@ def test_cost_reads_top_level_usd_not_usage_cost(completion, req, reported, expe
 
 
 @pytest.mark.parametrize("reported", [None, "missing"])
-def test_missing_cost_uses_catalogue_and_records_estimate(completion, catalogue, req, reported):
+def test_missing_provider_bill_stays_uncertain_not_catalogue_priced(completion, req, reported):
+    """The wallet moves only when money moves: a completion naming no bill is booked
+    provisionally at its ceiling and settled from Venice's balance, never at a
+    catalogue estimate."""
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.wallet import Wallet
+    from factorylab.world.metering import BillingUncertain, BillSettlement, Meter, MeteredModel
+    from factorylab.world.models import PriceTable, TokenPrice
+
     if reported == "missing":
         del completion["cost"]
     else:
         completion["cost"]["usd"] = None
-    fake = FakeTransport([completion, catalogue, completion])
+    fake = FakeTransport([completion, completion])
     provider = VeniceProvider(transport=fake)
-    for _ in range(2):
-        response = provider.complete(req)
-        assert response.cost_micro == 9
-        assert response.raw["cost_source"] == "table"
-        assert response.raw["price_model_id"] == "venice:test-flash"
-        assert response.raw["cost_scope"] == "tokens_only"
-    assert [call[0] for call in fake.calls] == ["POST", "GET", "POST"]
+    with pytest.raises(VeniceError, match="bill unavailable") as info:
+        provider.complete(req)
+    assert info.value.sent is True
+    balance = {"micro": 1_000_000}
+    wallet = Wallet(10_000, Ledger())
+    settlement = BillSettlement(lambda _m: balance["micro"])
+    model = MeteredModel(provider, PriceTable({req.model_id: TokenPrice(1, 5)}),
+                         Meter(wallet), settlement=settlement)
+    settlement.refresh(req.model_id)
+    balance["micro"] -= 4  # what Venice really took
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(req, handle="unbilled")
+    assert "bill unavailable" in str(info.value.cause)
+    assert info.value.cost == 4 and wallet.balance == 10_000 - 4
+    assert wallet.uncertain_bills == {} and wallet.check_conservation()
+    assert [call[0] for call in fake.calls] == ["POST", "POST"]
 
 
 @pytest.mark.parametrize("cost", ["-1", "NaN", "Infinity", "not-money", True])

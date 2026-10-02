@@ -357,3 +357,206 @@ def test_an_old_checkpoint_without_a_pending_record_restores():
         "step": "to_reserve", "phase": "poll", "reason": "RPC call rejected or unavailable",
         "attempts": 1, "since_ns": 3, "since_window": 0, "since_tick": 0,
         "reference": None}
+
+
+@pytest.mark.parametrize("step", ["withdraw_burn", "shadow_send"])
+def test_expired_withdrawal_retains_hold_for_late_ledger_debit(step):
+    """The wallet moves only when money moves. A nonce past the venue's window proves the
+    signed action can no longer execute, not that it never did: a venue ledger that
+    shows its debit late still books the fee and carries the transfer forward."""
+    from factorylab.world.treasury_rails import HybridRail
+
+    day_ns = 86_400 * 10**9
+    ledger, wallet, _ = setup()
+
+    class LateLedger(FakeRail):
+        """A venue that executed the withdrawal at once but whose history shows it late."""
+
+        revealed = False
+        polls = 0
+
+        def plan(self, direction):
+            return (step, "mint_base")
+
+        def prepare(self, current, state, gas_spent):
+            return {"network": "scripted", "nonce": state["nonce"]}
+
+        def poll(self, current, state):
+            self.polls += 1
+            if current == step and not self.revealed:
+                return None  # the venue's history is empty, for now
+            return super().poll(current, state)
+
+        def expired(self, current, state, now_ns):
+            return HybridRail.expired(HybridRail.__new__(HybridRail), current, state, now_ns)
+
+    rail = LateLedger(wallet, fee_micro=1_000_000)
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=2_000_000)
+    assert treasury.transfer("to_reserve", "5", handle="a", now_ns=1)["status"] == "submitted"
+    held = wallet.available
+    assert held == 100_000_000 - 5_000_000 - 2_000_000
+    treasury.tick(4 * day_ns)  # past the venue's nonce window, history still empty
+    assert treasury.state["status"] == "submitted" and treasury.state["index"] == 0
+    assert wallet.available == held  # the hold stays: nothing proved the money stayed
+    rail.revealed = True
+    polls = rail.polls
+    treasury.tick(4 * day_ns + 1)
+    assert rail.polls > polls
+    assert treasury.state["index"] == 1 and treasury.state["fees_micro"] == 1_000_000
+    assert wallet.balance == 100_000_000 - 1_000_000 and wallet.check_conservation()
+
+
+class _UnresolvedVenueAction(FakeRail):
+    """A venue whose first-step action shows no evidence until ``revealed`` names its
+    transfer; its expiry and lapse rules are the live hybrid rail's own."""
+
+    def __init__(self, wallet, first_step):
+        super().__init__(wallet, fee_micro=1_000_000)
+        self.first_step, self.revealed, self.sent = first_step, set(), []
+
+    def plan(self, direction):
+        return (self.first_step, "mint_base")
+
+    def prepare(self, step, state, gas_spent):
+        return {"network": "scripted", "nonce": state["nonce"], "transfer": state["id"]}
+
+    def send(self, step, reference):
+        self.sent.append((step, reference["transfer"]))
+
+    def poll(self, step, state):
+        if step == self.first_step and state["id"] not in self.revealed:
+            return None
+        return super().poll(step, state)
+
+    def expired(self, step, state, now_ns):
+        from factorylab.world.treasury_rails import HybridRail
+
+        return HybridRail.expired(HybridRail.__new__(HybridRail), step, state, now_ns)
+
+    def lapsed(self, step, state, now_ns):
+        from factorylab.world.treasury_rails import HybridRail
+
+        return HybridRail.lapsed(HybridRail.__new__(HybridRail), step, state, now_ns)
+
+
+def test_an_unresolved_withdrawal_holds_its_own_money_and_blocks_nothing_else():
+    """A withdrawal the venue never shows keeps its own principal and fee held, forever
+    if need be; once its nonce can no longer execute it is parked, public, and every
+    transfer that touches other money runs. Its late debit is still booked."""
+    day_ns = 86_400 * 10**9
+    ledger, wallet, _ = setup()
+    rail = _UnresolvedVenueAction(wallet, "withdraw_burn")
+    rail.reserve = 50_000_000
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=2_000_000)
+    assert treasury.transfer("to_reserve", "5", handle="a", now_ns=1)["status"] == "submitted"
+    stuck = treasury.state["id"]
+    held = wallet.available
+    assert held == 100_000_000 - 7_000_000
+    treasury.tick(day_ns)
+    assert treasury.transfer("to_reserve", "5", handle="b", now_ns=day_ns)["status"] == (
+        "refused")  # inside its nonce window it could still execute: it keeps the slot
+    treasury.tick(10_000 * day_ns)
+    pots = treasury.pots()
+    assert not pots["pending"] and not pots["complete"]
+    [parked] = pots["parked"]
+    assert (parked["transfer_id"], parked["step"], parked["held_micro"]) == (
+        stuck, "withdraw_burn", 7_000_000)
+    assert parked["parked_ns"] == 10_000 * day_ns and parked["reason"]
+    assert wallet.available == held  # its own money stays held: nothing is abandoned
+    # A restart keeps it parked, with its holds.
+    restored = Treasury(ledger, wallet, rail, fee_ceiling_micro=2_000_000)
+    restored.restore(treasury.snapshot())
+    assert restored.pots()["parked"] == pots["parked"]
+    sends = len(rail.sent)
+    restored.tick(10_000 * day_ns + 10**12)
+    assert len(rail.sent) == sends  # a lapsed action is never sent again
+    # Other money moves: every later transfer runs and confirms beside it.
+    for n, direction in enumerate(("to_reserve", "to_venue", "to_reserve")):
+        now = 10_001 * day_ns + n
+        result = restored.transfer(direction, "5", handle=f"later-{n}", now_ns=now)
+        assert result["status"] == "submitted", result
+        rail.revealed.add(result["transfer_id"])
+        restored.tick(now + 1)
+        restored.tick(now + 2)
+        assert restored.state["status"] == "confirmed"
+    assert [p["transfer_id"] for p in restored.pots()["parked"]] == [stuck]
+    # The venue finally shows the stuck debit: it is booked and carried forward.
+    rail.revealed.add(stuck)
+    restored.tick(10_002 * day_ns)
+    assert restored.pots()["parked"] == []
+    assert restored.state["id"] == stuck and restored.state["index"] == 1
+    assert restored.state["fees_micro"] == 1_000_000 and wallet.check_conservation()
+
+
+def test_a_parked_shadow_send_blocks_only_another_venice_conversion():
+    """A shadow send matches rows naming no nonce on sender, sink and amount, so a second
+    conversion beside an unresolved one could be mistaken for it: that, and only that,
+    waits."""
+    from factorylab.world.treasury import FakeHybridRail
+
+    day_ns = 86_400 * 10**9
+    ledger, wallet, _ = setup()
+    rail = _UnresolvedVenueAction(wallet, "shadow_send")
+    rail.plan = lambda direction: (("shadow_send", "venice_top_up") if direction == "to_venice"
+                                   else ("withdraw_burn", "mint_base"))
+    rail.reserve = 50_000_000
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=2_000_000)
+    assert treasury.transfer("to_venice", "5", handle="a", now_ns=1)["status"] == "submitted"
+    treasury.tick(4 * day_ns)
+    assert [p["step"] for p in treasury.pots()["parked"]] == ["shadow_send"]
+    refused = treasury.transfer("to_venice", "5", handle="b", now_ns=4 * day_ns)
+    assert refused["status"] == "refused" and "shadow" in refused["error"]
+    assert treasury.transfer("to_reserve", "5", handle="c",
+                             now_ns=4 * day_ns)["status"] == "submitted"
+    assert not hasattr(FakeHybridRail, "lapsed")  # a scripted rail never parks
+
+
+def test_a_parked_transfer_is_published_in_the_wake():
+    """A transfer waiting past the venue's nonce window is visible where the population
+    and the liveness check read the pots: the wake's public window item."""
+    from factorylab.runtime.wake import public_window_item
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    assert public_window_item(rt, window=1, event=rt.n)["pots"]["parked_transfers"] == []
+    row = {"transfer_id": "treasury-0", "direction": "to_reserve", "step": "withdraw_burn",
+           "held_micro": 7, "nonce": 1, "parked_ns": 5, "reason": "outcome unknown"}
+    pots = rt.wallet.pots
+    rt.wallet.pots = lambda: {**pots(), "parked": [row]}
+    assert public_window_item(rt, window=1, event=rt.n)["pots"]["parked_transfers"] == [row]
+
+
+@pytest.mark.parametrize("step", ["withdraw_burn", "shadow_send"])
+def test_late_evidence_for_a_parked_action_is_booked_from_that_read(step):
+    """The read that found a parked action's late evidence is the evidence: it is booked
+    from it, so an outage on the next read neither takes the slot nor resends the
+    lapsed nonce. A transfer that was ever parked is never sent again at that step."""
+    day_ns, minute_ns = 86_400 * 10**9, 60 * 10**9
+    ledger, wallet, _ = setup()
+    rail = _UnresolvedVenueAction(wallet, step)
+    rail.reserve = 50_000_000
+    direction = "to_venice" if step == "shadow_send" else "to_reserve"
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=2_000_000)
+    assert treasury.transfer(direction, "5", handle="a", now_ns=1)["status"] == "submitted"
+    stuck = treasury.state["id"]
+    treasury.tick(4 * day_ns)
+    assert [p["transfer_id"] for p in treasury.pots()["parked"]] == [stuck]
+    reads = {"n": 0}
+    poll = rail.poll
+
+    def late_then_outage(current, state):
+        if current == step:
+            reads["n"] += 1
+            if reads["n"] > 1:
+                raise ConnectionError("venue unavailable")
+            return FakeRail.poll(rail, current, state)
+        return poll(current, state)
+
+    rail.poll = late_then_outage
+    now = 5 * day_ns
+    for k in range(4):
+        treasury.tick(now + k * minute_ns + k)
+    assert [s for s in rail.sent if s == (step, stuck)] == [(step, stuck)]  # sent once
+    assert treasury.pots()["parked"] == []
+    assert not treasury.pots()["pending"]  # the transfer finished; nothing holds the slot
+    assert treasury.state["id"] == stuck and treasury.state["status"] == "confirmed"
