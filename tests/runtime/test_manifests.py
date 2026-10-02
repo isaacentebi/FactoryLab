@@ -491,9 +491,11 @@ def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
 
 
 def test_the_edition8_launch_world_is_edition7_reseated_and_nothing_else():
-    """The owner's roster decision of 2 October 2026: no Gemini and no Claude seat, GPT-6.1
-    Sol on meta-audit alone, every other seat on GPT-6 Luna, Qwen 3.8 Flash or DeepSeek
-    v4.1 Flash. Every physics, evaluation, charter and timing value is edition 7's;
+    """The owner's roster decisions of 2 October 2026: no Gemini, no Claude, no Sol and no
+    Qwen seat; every seat on GPT-6 Luna, Mistral Small 3.2 or DeepSeek v4.1 Flash,
+    meta-audit on Luna. GPT-6.1 Sol, GPT-6 Sol and Qwen 3.8 Flash are off the menu. The
+    constructor and opportunity lenses are removed (audit s03 #1), and no other seat's
+    state changes. Every physics, evaluation, charter and timing value is edition 7's;
     Polymarket reads stay on and its live order rail off."""
     from dataclasses import replace
 
@@ -501,17 +503,33 @@ def test_the_edition8_launch_world_is_edition7_reseated_and_nothing_else():
 
     launch, breadth = load_manifest("edition8-launch"), load_manifest("edition7-breadth-testnet")
     seats = {a.id: a.model_id for a in launch.assemblies}
-    assert [s for s, m in seats.items() if m == "openai/gpt-6.1-sol"] == ["meta-audit"]
-    assert set(seats.values()) - {"openai/gpt-6.1-sol"} <= {
-        "openai/gpt-6-luna", "qwen/qwen3.8-flash", "deepseek/deepseek-v4.1-flash"}
-    assert {model_family(m) for m in seats.values()} == {"gpt", "qwen", "deepseek"}
-    assert not {m.id for m in launch.models} & {"google/gemini-3.8-flash",
-                                               "anthropic/claude-sonnet-5.5"}
+    mistral = "mistralai/mistral-small-3.2-24b-instruct"
+    assert set(seats.values()) == {"openai/gpt-6-luna", mistral, "deepseek/deepseek-v4.1-flash"}
+    assert seats["meta-audit"] == "openai/gpt-6-luna"
+    # Mistral Small holds every seat Qwen 3.8 Flash held in edition 7's re-seating.
+    assert [s for s, m in seats.items() if m == mistral] == [
+        "constructor", "judge-fidelity", "judge-mechanics", "meta-countercase",
+        "antagonist-core"]
+    assert {model_family(m) for m in seats.values()} == {"gpt", "mistral", "deepseek"}
+    evaluators = {a.model_id for a in launch.assemblies if a.role in ("evaluator", "meta")}
+    assert {model_family(m) for m in evaluators} == {"gpt", "mistral", "deepseek"}
+    menu = {m.id: m for m in launch.models}
+    assert not set(menu) & {"google/gemini-3.8-flash", "anthropic/claude-sonnet-5.5",
+                            "openai/gpt-6.1-sol", "openai/gpt-6-sol", "qwen/qwen3.8-flash"}
+    assert menu[mistral].contract == "json_object" and not menu[mistral].reasoning
     assert all(m.training_cutoff for m in launch.models)
     assert launch.polymarket.enabled and not launch.polymarket.orders
     assert [a.id for a in launch.assemblies] == [a.id for a in breadth.assemblies]
-    assert all(replace(a, model_id="") == replace(b, model_id="")
-               for a, b in zip(launch.assemblies, breadth.assemblies, strict=True))
+    unlensed = {"constructor", "opportunity"}
+    for a, b in zip(launch.assemblies, breadth.assemblies, strict=True):
+        if a.id in unlensed:
+            # The lens alone is gone; the questions and commitments stay empty.
+            assert "lens" in b.initial_state
+            assert a.initial_state == {k: v for k, v in b.initial_state.items()
+                                       if k != "lens"} == {"open_questions": [],
+                                                           "active_commitments": []}
+            a, b = replace(a, initial_state={}), replace(b, initial_state={})
+        assert replace(a, model_id="") == replace(b, model_id=""), a.id
     assert replace(launch, name="", models=(), assemblies=()) == replace(
         breadth, name="", models=(), assemblies=())
 

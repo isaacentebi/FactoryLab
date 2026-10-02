@@ -1,7 +1,7 @@
 # DRAFT: Edition 8 launch world. NOT RATIFIED; FOR RE-RATIFICATION.
 #
 # A copy of worlds/edition7-breadth-testnet.toml (Hyperliquid breadth, web, Polymarket
-# reads) with two changes and no others; every physics, evaluation, charter and timing
+# reads) with three changes and no others; every physics, evaluation, charter and timing
 # value is edition 7's:
 #
 #  1. Polymarket as #177 merged it (docs/manifest.md, "Event markets", "Live orders"):
@@ -9,33 +9,52 @@
 #     forecast predicates. The live order rail stays off (`orders` is false): the
 #     owner funds its wallet later, and only the world named `funded` may sign orders.
 #
-#  2. The seed roster (the owner's decision of 2 October 2026): no Gemini and no Claude
-#     seat. GPT-6.1 Sol holds exactly one seat, meta-audit, at GPT-6 Sol's price; every
-#     other seat is on GPT-6 Luna, Qwen 3.8 Flash or DeepSeek v4.1 Flash. The seed
-#     roster is the architect's one model choice, made on cost, latency and conformance
-#     to the I/O contract, never on what seats decide (AGENTS.md, rule 2):
+#  2. The seed roster (the owner's decisions of 2 October 2026): no Gemini, no Claude
+#     and no Sol or Qwen seat. Every seat is on GPT-6 Luna, Mistral Small 3.2 or
+#     DeepSeek v4.1 Flash. The seed roster is the architect's one model choice, made on cost, latency
+#     and conformance to the I/O contract, never on what seats decide (AGENTS.md, rule 2):
 #       - cost: at a 20k-token input and 1k output, a DeepSeek call costs about $0.001,
-#         a Luna call $0.0025 and a Qwen call $0.0035 at list price; Sol is 20 times
-#         Luna, so it holds the one low-frequency seat;
-#       - latency: Luna measured fastest (p90 3.8 s over seat-only brackets, 2026-09-28),
-#         Qwen next (p90 8.1 s); DeepSeek is unmeasured on its new contract;
-#       - conformance: Luna answered 16 of 16 real seat requests kernel-valid, Qwen 4.9%
-#         malformed (within the 5% bar). DeepSeek was 10.3% malformed on json_schema in
+#         a Mistral Small call $0.002 and a Luna call $0.0025 at list price; the paid
+#         calibration of 2 October 2026 measured Mistral Small at a p50 of 990 micro-USD
+#         a call (p95 1,565) over 21 seat trees. GPT-6.1 Sol, at 20
+#         times Luna, was first seated on meta-audit alone; the owner removed it when
+#         that one seat projected about ten times the rest of the roster combined, and
+#         meta-audit went to Luna. GPT-6.1 Sol and GPT-6 Sol leave the menu; edition
+#         7's GPT-5.6 Sol entry stays on it, seated nowhere, for model proposals;
+#       - latency: Luna measured fastest (p90 3.8 s over seat-only brackets, 2026-09-28);
+#         Mistral Small p50 3.8 s, max 9.4 s, in that calibration, served by four
+#         providers (DeepInfra, Mistral, Parasail, Venice); DeepSeek is unmeasured on its
+#         new contract. Qwen 3.8 Flash held five seats until that day: its one upstream
+#         (Alibaba) answered HTTP 429 "temporarily rate-limited upstream" to 6 of 7 paid
+#         calls, twice, hours apart, so it left the roster and the menu;
+#       - conformance: Luna answered 16 of 16 real seat requests kernel-valid. Mistral
+#         Small, on the default json_object contract, completed 100% of its 21 calibration
+#         trees, 100% well-formed, every refusal correct; the alternatives measured the
+#         same day were Nemotron 3.5 Lightning (71% well-formed), MiMo v2.6 Flash (90%,
+#         52 s max latency) and Qwen3 235B A22B 2507 (90%). DeepSeek was 10.3% malformed
+#         on json_schema in
 #         the first real-model run and now carries the strict wire contract (#176); its
 #         conformance on it is for the paid calibration probe to measure before launch,
 #         so it holds the seats the load-time invariants need of a third family (a
 #         judge and a meta) and one producer, and the adversary goes to Luna.
 #     The invariants (docs/manifest.md, "The evaluator population") fix the shape: with
-#     three families (gpt, qwen, deepseek) and multi_judge_count = 2, every family must
+#     three families (gpt, mistral, deepseek) and multi_judge_count = 2, every family must
 #     judge so each producer's return finds two judges off its own; the metas span the
 #     three families, so every (judge, producer) chain has a meta on neither. Seats:
 #       gpt      GPT-6 Luna: empirical, opportunity, antagonist, judge-base-rate,
-#                judge-adversary; GPT-6.1 Sol: meta-audit
-#       qwen     Qwen 3.8 Flash: constructor, antagonist-core, judge-fidelity,
+#                judge-adversary, meta-audit
+#       mistral  Mistral Small 3.2: constructor, antagonist-core, judge-fidelity,
 #                judge-mechanics, meta-countercase
 #       deepseek DeepSeek v4.1 Flash: mechanism, judge-consequence, meta-calibration
 #     Six producers (antagonists included) and eight evaluators: producers stay the
 #     minority, and three families serve the evaluator tier.
+#
+#  3. Two seeded lenses removed (audit s03 #1; AGENTS.md rule 1, "no default tells a seat
+#     what is good"): the constructor's ("reusable capability may be a valuable use of
+#     resources") valued an action class, and the opportunity seat's ("the value of any
+#     use of resources depends on its best available alternative") stated a valuation
+#     rule. Neither is a belief about an observable condition, so both seats start with
+#     empty questions and commitments and no lens. The seat ids are unchanged.
 #
 # THE CHARTER AND THE ROSTER ARE NOT PINNED. The roster digest hashes the seats, so a
 # new roster needs a new ratification: before any funded launch the population must
@@ -210,33 +229,19 @@ output_usd_per_mtok = "10.00"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
-# R2 substitutes the two Venice routes with the exact current OpenRouter catalogue ids.
-# Prices were read from OpenRouter on 19 September 2026. require_parameters prevents a
-# fallback provider from silently ignoring the declared reasoning controls.
-# Seated 2026-09-28 on judge-fidelity as well as antagonist-core. GLM-5.3-Flash held that
-# seat first, but its measured latency on 8 real seat requests that day (53 s mean, one
-# call at 313 s) would stall a world that ticks every 10 s on synchronous invocations
-# (Codex review of #170; essay II.IV.c: the control apparatus may not be slower than its
-# environment). Qwen is its own family, so the judges of producer returns still span three
-# families (gemini, qwen, gpt) and each return finds two off its author's. The first
-# real-model run (live-20260928-084241-s1) measured it on antagonist-core: 4.9% of 123
-# replies malformed, within the 5% bar. Its latency, read from the wall-clock readings
-# around each provider.complete in that diary: mean 6.0 s, p90 8.1 s (max 10.1 s) over the
-# 27 calls with no other I/O in the bracket; over all 127 brackets, which also hold venue
-# and treasury polling, mean 7.9 s and p90 15.2 s (GPT-6 Luna seats read p90 3.8 s and
-# 9.1 s the same two ways).
+# The third family from 2 October 2026 (the owner's decision; header, item 2): Mistral
+# Small 3.2, on five seats. OpenRouter list price read 2026-10-02
+# (https://openrouter.ai/api/v1/models): $0.09375 in, $0.25 out. It takes no reasoning
+# parameter, so it carries no reasoning key; it keeps the default json_object contract,
+# the one its paid calibration measured (100% well-formed over 21 seat trees).
 [[models]]
-id = "qwen/qwen3.8-flash"
-# first public availability (upper bound on training data, no dated official release was found): https://openrouter.ai/api/v1/models (public listing, `created`, read 2026-09-27)
-training_cutoff = "2026-08-26"
+id = "mistralai/mistral-small-3.2-24b-instruct"
+# first public availability (upper bound on training data; Mistral-Small-3.2-24B-Instruct-2506): https://openrouter.ai/api/v1/models (public listing, `created` 2025-06-20, read 2026-10-02)
+training_cutoff = "2025-06-20"
 provider = "openrouter"
-input_usd_per_mtok = "0.15"
-output_usd_per_mtok = "0.47"
-reasoning = { enabled = false }
+input_usd_per_mtok = "0.09375"
+output_usd_per_mtok = "0.25"
 extra_body = { provider = { require_parameters = true } }
-# Chapter II §I.a I/O conformance: 2026-09-27 host refusal of json_schema:
-# When the schema contains the fields "patternProperties" or "propertyNames", the type should not be "object".
-contract = "json_object"
 
 # The nine seats of GPT-6 §10.3, on the kernel's seed system prompt (see the header).
 # Each lens is seeded once into `initial_state` as {lens, open_questions,
@@ -251,35 +256,6 @@ training_cutoff = "2026-05-18"
 provider = "openrouter"
 input_usd_per_mtok = "0.10"
 output_usd_per_mtok = "0.50"
-reasoning = { effort = "low" }
-extra_body = { provider = { require_parameters = true } }
-
-# The one frontier seat: tier-3 meta-audit, which grades the metas and fires a handful of
-# times per few hundred ticks, so frontier judgement where it has the most leverage.
-[[models]]
-id = "openai/gpt-6-sol"
-# Published knowledge cutoff: https://developers.openai.com/api/docs/models/gpt-6-sol
-training_cutoff = "2026-04-20"
-provider = "openrouter"
-input_usd_per_mtok = "2.00"
-output_usd_per_mtok = "10.00"
-reasoning = { effort = "low" }
-extra_body = { provider = { require_parameters = true } }
-
-# The one frontier seat from 2 October 2026 (the owner's roster decision): meta-audit,
-# at GPT-6 Sol's price. OpenRouter list price read 2026-10-02
-# (https://openrouter.ai/api/v1/models): $2 in, $10 out. An OpenAI-hosted route, so it
-# keeps the default contract: OpenAI refuses a schema whose root is a union, and strict
-# mode (docs/manifest.md, `models[].contract`). Its reasoning effort is low, the least
-# its host accepts ("none" and "minimal" are refused).
-[[models]]
-id = "openai/gpt-6.1-sol"
-# Published knowledge cutoff "Apr 30, 2026":
-# https://developers.openai.com/api/docs/models/gpt-6.1-sol (read 2026-10-02)
-training_cutoff = "2026-04-30"
-provider = "openrouter"
-input_usd_per_mtok = "2.00"
-output_usd_per_mtok = "10.00"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
@@ -391,14 +367,14 @@ initial_state = { lens = "Your starting prior is that an observed pattern is wea
 [[assemblies]]
 id = "constructor"
 role = "producer"
-model_id = "qwen/qwen3.8-flash"
+model_id = "mistralai/mistral-small-3.2-24b-instruct"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
 cadence_floor = 1
-initial_state = { lens = "Your starting prior is that reusable capability may be a valuable use of resources.", open_questions = [], active_commitments = [] }
+initial_state = { open_questions = [], active_commitments = [] }
 
-# The fourth producer; the same cheap route, a different lens.
+# The fourth producer; the same cheap route, no seeded lens (header, item 3).
 [[assemblies]]
 id = "opportunity"
 role = "producer"
@@ -406,7 +382,7 @@ model_id = "openai/gpt-6-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
-initial_state = { lens = "Your starting prior is that the value of any use of resources depends on its best available alternative.", open_questions = [], active_commitments = [] }
+initial_state = { open_questions = [], active_commitments = [] }
 
 # One independently routed evaluator per substantive return. Edition 8: the deepseek
 # judge, so every family judges and each return finds two judges off its author's.
@@ -423,7 +399,7 @@ initial_state = { lens = "Your starting prior is that an outcome is noisy eviden
 [[assemblies]]
 id = "judge-fidelity"
 role = "evaluator"
-model_id = "qwen/qwen3.8-flash"
+model_id = "mistralai/mistral-small-3.2-24b-instruct"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -434,7 +410,7 @@ initial_state = { lens = "Your starting prior is that a favourable measurement c
 [[assemblies]]
 id = "judge-mechanics"
 role = "evaluator"
-model_id = "qwen/qwen3.8-flash"
+model_id = "mistralai/mistral-small-3.2-24b-instruct"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -464,7 +440,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator skill i
 [[assemblies]]
 id = "meta-countercase"
 role = "meta"
-model_id = "qwen/qwen3.8-flash"
+model_id = "mistralai/mistral-small-3.2-24b-instruct"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -476,7 +452,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator compete
 [[assemblies]]
 id = "meta-audit"
 role = "meta"
-model_id = "openai/gpt-6.1-sol"
+model_id = "openai/gpt-6-luna"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -510,7 +486,7 @@ initial_state = { lens = "Your starting prior is that a judge can approve work w
 [[assemblies]]
 id = "antagonist-core"
 role = "antagonist"
-model_id = "qwen/qwen3.8-flash"
+model_id = "mistralai/mistral-small-3.2-24b-instruct"
 accepts = ["Tick"]
 max_tokens = "provider"
 effort = "low"
@@ -540,8 +516,8 @@ max_forecasts_per_verdict = 2
 verdict_timeout_events = 20
 min_coverage = 0.5
 # A novelty trial is a child's whole endowment. Sized from the meter's reservation ceiling
-# for the cheapest seat on this menu (qwen/qwen3.8-flash at 2,500 tokens) on the largest
-# request edition 2 measured, with the same headroom edition 2 chose.
+# for the cheapest seat on edition 7's menu (qwen/qwen3.8-flash at 2,500 tokens) on the
+# largest request edition 2 measured, with the same headroom edition 2 chose.
 trial_amount_usd = "0.05"
 forecast_horizon_events = 10
 adversarial_share = 0.15

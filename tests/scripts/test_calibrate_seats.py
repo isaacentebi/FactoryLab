@@ -73,7 +73,7 @@ def test_budget_guard_refuses_over_cap_calls(manifest):
     assert partial["budget"]["spent_micro"] == partial["wallet_spent_micro"]
 
 
-@pytest.mark.gate  # a calibration world per candidate: four runtimes
+@pytest.mark.gate  # a calibration world per candidate: three runtimes
 def test_the_launch_world_calibrates_offline_for_every_seated_model():
     """The harness runs offline against the edition 8 launch world: its venue selectors
     on a builder dex and spot (``xyz:*``, ``*/USDC``) name no scripted market and are
@@ -81,8 +81,8 @@ def test_the_launch_world_calibrates_offline_for_every_seated_model():
     provider-native seat resolves its own candidate's window. Every tree completes
     and none is refused by a seat's grant."""
     launch = load_manifest("worlds/edition8-launch.toml")
-    candidates = ["deepseek/deepseek-v4.1-flash", "openai/gpt-6.1-sol",
-                  "openai/gpt-6-luna", "qwen/qwen3.8-flash"]
+    candidates = ["deepseek/deepseek-v4.1-flash", "openai/gpt-6-luna",
+                  "mistralai/mistral-small-3.2-24b-instruct"]
     report = calibrate(launch, candidates, provider=CalibrationProvider(), repeats=1,
                        seed=0, budget_micro=None, long_context_bytes=20_000)
     for candidate in candidates:

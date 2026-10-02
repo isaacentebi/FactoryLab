@@ -2755,26 +2755,6 @@
    "status": "untriaged"
   },
   {
-   "id": "7384eb4c8752",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "EVAL",
-   "path": "edition8-launch/request/produce/you/working_state.state.lens",
-   "quote": "your starting prior is that reusable capability may be a valuable use of resources.",
-   "design_ref": "B1-7",
-   "status": "untriaged"
-  },
-  {
-   "id": "17825b912789",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "EVAL",
-   "path": "edition8-launch/request/produce/you/working_state.state.lens",
-   "quote": "your starting prior is that the value of any use of resources depends on its best available alternative.",
-   "design_ref": "B3 (opportunity lens; Astra M-1)",
-   "status": "untriaged"
-  },
-  {
    "id": "40c32717ee90",
    "world": "edition8-launch",
    "surface": "rendered",
@@ -3052,26 +3032,6 @@
    "path": "edition8-launch/request/produce/you/outcomes.preview_semantics",
    "quote": "use outcome.get on an outcome_id to deliver one before acknowledging it",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "9b8b7d7e4e4f",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "EVAL",
-   "path": "edition8-launch/genesis/constructor/lens",
-   "quote": "your starting prior is that reusable capability may be a valuable use of resources.",
-   "design_ref": "B1-7",
-   "status": "untriaged"
-  },
-  {
-   "id": "165fe6eedd8c",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "EVAL",
-   "path": "edition8-launch/genesis/opportunity/lens",
-   "quote": "your starting prior is that the value of any use of resources depends on its best available alternative.",
-   "design_ref": "B3 (opportunity lens; Astra M-1)",
    "status": "untriaged"
   },
   {
