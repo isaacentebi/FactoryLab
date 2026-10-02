@@ -25,6 +25,8 @@ TRANSFER_BLOCKED = "a previous transfer is still pending or stranded"
 # Hybrid mode's absolute bound, and the rule that one owed top-up blocks the next.
 VENICE_TOTAL_EXHAUSTED = "treasury.max_venice_total_usd exhausted"
 HYBRID_STRANDED = "a hybrid Venice conversion is stranded; recover or resolve it first"
+SHADOW_UNRESOLVED = ("a parked shadow send is unresolved; another Venice conversion could be "
+                     "mistaken for it")
 # A hybrid top-up may not take the real reserve below the manifest's on-chain floor.
 RESERVE_FLOOR = "mainnet reserve would fall below treasury.venice_reserve_floor_usd"
 # The debit landed but the credit Venice shows does not account for the tranche: the
@@ -196,6 +198,9 @@ class Treasury:
         self.principal_hold = self.fee_hold = None
         # Recoverable forwarded strands, oldest first, each with its own principal hold.
         self.stranded: list[dict] = []
+        # Venue actions past the venue's nonce window with no evidence either way,
+        # oldest first, each with its own principal and fee holds (``_park``).
+        self.parked: list[dict] = []
         self._pots = {"venue": None, "reserve": None, "seed": None, "sellers": {}}
         self.income = _fresh_income()
         # Receipts the wake host's seller wrote for paid calls it served; the runtime,
@@ -239,6 +244,17 @@ class Treasury:
         stall = (self.state or {}).get("pending") if pending else None
         result["pending_reason"] = stall["reason"] if stall else None
         result["pending_since"] = stall["since_ns"] if stall else None
+        # Venue actions that can no longer execute and may have: their own money held,
+        # re-checked whenever the slot is free, and named here with when they parked so
+        # a long wait is visible (the wake publishes this list).
+        result["parked"] = [
+            {"transfer_id": entry["state"]["id"], "direction": entry["state"]["direction"],
+             "step": entry["state"]["steps"][entry["state"]["index"]],
+             "held_micro": sum(hold.amount for hold in (entry["principal_hold"],
+                                                        entry["fee_hold"]) if hold),
+             "nonce": entry["state"]["nonce"], "parked_ns": entry["parked_ns"],
+             "reason": entry["reason"]}
+            for entry in self.parked]
         # Parked forwarded strands: burned principal still held, claimable and re-checked.
         result["stranded"] = [
             {"transfer_id": entry["state"]["id"],
@@ -247,7 +263,9 @@ class Treasury:
             for entry in self.stranded]
         values = [result[k] for k in ("venue", "reserve", "seed")]
         values.extend(result["sellers"].values())
-        result["complete"] = not pending and all(type(v) is int for v in values)
+        # Money a parked action may have moved is in no observed pot: no total.
+        result["complete"] = (not pending and not self.parked
+                              and all(type(v) is int for v in values))
         result["total_micro"] = sum(values) if result["complete"] else None
         result.update({k: self.income[k] for k in INCOME_CLASSES})
         result["claimed_micro"] = self.income.get("claimed_micro", 0)
@@ -586,6 +604,10 @@ class Treasury:
                     # A paid shadow leg whose top-up is still owed is a conversion in
                     # progress: another one must not start beside it.
                     raise RailError(HYBRID_STRANDED)
+                if any(entry["state"]["direction"] == "to_venice" for entry in self.parked):
+                    # A shadow row naming no nonce is matched on sender, sink and the
+                    # fixed tranche: a second conversion's row could be taken for it.
+                    raise RailError(SHADOW_UNRESOLVED)
                 if self._venice_total_exhausted(amount):
                     raise RailError(VENICE_TOTAL_EXHAUSTED)
             if self._blocking():
@@ -676,7 +698,8 @@ class Treasury:
         cap = self.max_venice_total_micro
         if cap is None:
             return False
-        owed = sum(entry["state"]["direction"] == "to_venice" for entry in self.stranded)
+        owed = sum(entry["state"]["direction"] == "to_venice"
+                   for entry in (*self.stranded, *self.parked))
         state = self.state
         if state and state["status"] == "submitted" and state["direction"] == "to_venice":
             owed += 1
@@ -1057,6 +1080,53 @@ class Treasury:
         self._reserve_fees()
         self._prepare_next(now_ns, ref)
 
+    def _park(self, reason: str, now_ns: int) -> None:
+        """Move a lapsed venue action out of the slot, its own holds kept with it.
+
+        The wallet moves only when money moves: an action the venue can no longer
+        execute but may already have executed (a debit shown late) keeps its principal
+        and fee held, and is never sent again or abandoned. It blocks only what
+        conflicts with it. Hyperliquid nonces are millisecond times, not a sequence
+        (any nonce inside the venue's window above its smallest recent one is
+        accepted), and a withdrawal's ledger row names its own nonce, so later
+        transfers on other money are independent of it; a later Venice conversion
+        is not (``SHADOW_UNRESOLVED``).
+        """
+        state = self.state
+        self.parked.append({"state": deepcopy(state), "principal_hold": self.principal_hold,
+                            "fee_hold": self.fee_hold, "reason": reason, "parked_ns": now_ns})
+        self._write("parked", transfer_id=state["id"], reason=reason, ts=now_ns,
+                    state={**state, "status": "parked"},
+                    principal_hold_id=self.principal_hold.id if self.principal_hold else None,
+                    fee_hold_id=self.fee_hold.id if self.fee_hold else None)
+        self.state = {**state, "status": "parked", "reason": reason, "parked_ns": now_ns}
+        self.principal_hold = self.fee_hold = None
+
+    def _unpark(self, now_ns: int) -> bool:
+        """Return the oldest parked action whose venue now shows evidence to the slot.
+
+        Guarantees nothing is booked here: the action re-enters with its own holds
+        and its original reference, and the next reconciliation books what the
+        evidence states. One whose venue still shows nothing, or whose read fails,
+        stays parked.
+        """
+        for entry in self.parked:
+            state = entry["state"]
+            step = state["steps"][state["index"]]
+            try:
+                outcome = self.rail.poll(step, {**deepcopy(state),
+                                                "gas_spent": dict(self.gas_spent)})
+            except Exception:  # noqa: BLE001 - an unread venue proves nothing either way
+                continue
+            if outcome is None:
+                continue
+            self.parked.remove(entry)
+            self.principal_hold, self.fee_hold = entry["principal_hold"], entry["fee_hold"]
+            self.state = {**state, "last_send_ns": now_ns}
+            self._write("unparked", transfer_id=state["id"], state=self.state, ts=now_ns)
+            return True
+        return False
+
     def _fees_remaining(self) -> int:
         """The fee this transfer may still need held: none for a fee-free direction.
 
@@ -1084,6 +1154,8 @@ class Treasury:
         # that credits it (``verify_receipts``, from the runtime), exactly once.
         for receipt_id in list(self.income.get("claims", {})):
             self.verify_receipt(receipt_id)
+        if self.parked and not self._blocking() and self._unpark(now_ns):
+            return self.reconcile(now_ns)
         if self.stranded and not self._blocking():
             self._recover(now_ns)
             return []
@@ -1110,6 +1182,13 @@ class Treasury:
             reason = expired(step, deepcopy(self.state), now_ns) if expired else None
             if reason:
                 return [*result, self._fail(reason, now_ns)]
+            # A venue action past the venue's nonce window can no longer execute, but
+            # may have: it keeps its own money held and leaves the slot (``_park``).
+            lapsed = getattr(self.rail, "lapsed", None)
+            reason = lapsed(step, deepcopy(self.state), now_ns) if lapsed else None
+            if reason:
+                self._park(reason, now_ns)
+                return result
         if (
             self.state
             and self.state["status"] == "submitted"
@@ -1197,6 +1276,12 @@ class Treasury:
                               "principal_hold_id": entry["principal_hold"].id
                               if entry["principal_hold"] else None}
                              for entry in self.stranded],
+                "parked": [{"state": entry["state"], "reason": entry["reason"],
+                            "parked_ns": entry["parked_ns"],
+                            "principal_hold_id": entry["principal_hold"].id
+                            if entry["principal_hold"] else None,
+                            "fee_hold_id": entry["fee_hold"].id if entry["fee_hold"] else None}
+                           for entry in self.parked],
                 "rail_name": self.rail.name,
                 "fake_reserve": self.rail.reserve if self.rail.name in SCRIPTED_RAILS else None,
                 "fake_venice": self.rail.venice if self.rail.name in SCRIPTED_RAILS else None,
@@ -1231,8 +1316,18 @@ class Treasury:
             hold_id = entry["principal_hold_id"]
             hold = self.wallet._reservation_for_resume(hold_id) if hold_id else None
             self.stranded.append({"state": entry["state"], "principal_hold": hold})
+        self.parked = []
+        for entry in saved.get("parked", []):  # checkpoints predate parked actions
+            held = {key: self.wallet._reservation_for_resume(entry[key]) if entry[key] else None
+                    for key in ("principal_hold_id", "fee_hold_id")}
+            self.parked.append({"state": entry["state"], "reason": entry["reason"],
+                                "parked_ns": entry["parked_ns"],
+                                "principal_hold": held["principal_hold_id"],
+                                "fee_hold": held["fee_hold_id"]})
         holds = [(self.principal_hold, "treasury:principal"), (self.fee_hold, "treasury:fees")]
         holds.extend((entry["principal_hold"], "treasury:principal") for entry in self.stranded)
+        holds.extend((entry["principal_hold"], "treasury:principal") for entry in self.parked)
+        holds.extend((entry["fee_hold"], "treasury:fees") for entry in self.parked)
         for hold, reason in holds:
             if hold is not None and hold.reason != reason:
                 raise RailError("saved treasury hold belongs to another purpose")

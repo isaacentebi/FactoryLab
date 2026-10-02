@@ -44,7 +44,7 @@ The other order could leave real USDC spent against a testnet leg that never pay
 | --- | --- | --- |
 | Preflight (tranche not $5, window cap spent, absolute cap would be exceeded, a hybrid strand still owed, venue withdrawable short, mainnet reserve short or below its floor, sink `missing`, agent key, `VENICE_API_KEY` set) | `treasury.refused` with the reason | Nothing held, nothing signed |
 | Venue rejects the shadow send (first attempt) | `treasury.failed`, `stranded_micro` 0 | Hold released; no authorization exists; nothing real spent |
-| Shadow send outcome unknown | `treasury.pending` | Same signed action at the same nonce is resent (a venue nonce executes once); confirms on the ledger row, even a late one. Its age never fails it: a nonce past the venue's window proves the action can no longer execute, not that it never did, so the hold stays and the slot stays taken until the venue's ledger shows the row |
+| Shadow send outcome unknown | `treasury.pending` | Same signed action at the same nonce is resent (a venue nonce executes once); confirms on the ledger row, even a late one. Its age never fails it: a nonce past the venue's window proves the action can no longer execute, not that it never did. It is then parked (`treasury.parked`, the pots' and wake's `parked` list) with its holds kept and re-read whenever the slot is free; only a new Venice conversion waits for it |
 | Shadow row charges a fee | `treasury.pending` "shadow send charged a fee; the conversion needs an operator" | Stalls publicly; the preflight's `missing`-sink refusal exists to prevent it |
 | Top-up cannot be prepared after the shadow paid (no quote, reserve at its floor, payee differs, a cap reached) | `treasury.pending` each attempt, then `treasury.failed` status `stranded`, `recoverable`, reason `Venice top-up not prepared within treasury.forward_wait_windows` | Hold stays; no new `to_venice` may start beside it; when the slot is free a tick re-prepares the top-up (`treasury.recovered`), within the absolute and window caps. The shadow leg is never re-sent |
 | Top-up submission outcome unknown | `treasury.pending` "submission outcome unknown" | **Never resubmitted.** The step is poll-only: it confirms on the `AuthorizationUsed` debit, or strands recoverably only when a **finalized** Base block is past its `validBefore` and the receipt scan covered every block up to it with no debit. The runtime clock is never consulted. Recovery first polls the superseded authorization (a late debit is booked and nothing new is signed), then prepares a *new* authorization, counted against the caps. A kill during the submission resumes as unknown too (the journal refuses to replay a poll-only send) |
@@ -767,6 +767,6 @@ should be watched: if its shadow never confirms, compare the venue's
 
 The shadow leg has no expiry: neither the runtime clock nor the venue's nonce window
 abandons it, because a late ledger row is still the money that moved. A shadow send
-the venue truly never executed keeps its hold and the transfer slot until an operator
-acts; that wait is public in the treasury's `pending` pot flag. The pinned
+the venue truly never executed stays parked with its hold until an operator acts; the
+wait is public in the wake's `parked_transfers`, with when it parked. The pinned
 payee and the credit check rely on Venice's recorded quote shape and balance endpoint.

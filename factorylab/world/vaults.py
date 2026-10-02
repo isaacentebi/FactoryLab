@@ -246,6 +246,14 @@ def ledger_rows(page: Any) -> list[dict]:
     return rows
 
 
+def _identified(tx: str) -> bool:
+    """A row's transaction hash names one transaction: present and not all zeroes."""
+    try:
+        return int(tx, 16) != 0
+    except (TypeError, ValueError):
+        return bool(tx)
+
+
 def own_withdraw_hashes(rows: list[dict], account: str | None) -> set[str]:
     """The transactions of this account's own vault withdrawals.
 
@@ -315,6 +323,12 @@ def match_intent(rows: list[dict], operation: str, args: dict, account: str | No
     # contradiction leaves the write's amounts unbooked.
     if any(r["hash"] == row["hash"] and r["type"] == row["type"] and r != row for r in rows):
         return {"status": "uncertain", "error": "contradictory venue rows for one transaction"}
+    # A row the boundary could not read is missing evidence. One that names this
+    # transaction, or names none (it could be this transaction's), leaves its
+    # settlement unresolved: dropped evidence never moves booked money.
+    if any(r["type"] == UNPARSED and (r["hash"] == row["hash"] or not _identified(r["hash"]))
+           for r in rows):
+        return {"status": "uncertain", "error": "an unread venue row may belong to this write"}
     result = {"status": "ok", "vault": row["vault"], "usd": str(usd), "hash": row["hash"]}
     if operation == "venue.vault_create" and "fee" in row:
         result["fee_usd"] = str(row["fee"])

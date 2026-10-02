@@ -258,6 +258,18 @@ def _finite(value: Any) -> Decimal:
     return number
 
 
+def _wire_list(reply: Any, key: str) -> list:
+    """The list a venue reply holds under ``key``, or ValueError.
+
+    An absent or ill-typed list says nothing about what is held; it is never read as
+    an empty one (Chapter II §II.b: the account is read, never assumed).
+    """
+    rows = reply[key] if isinstance(reply, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"{key} is not a list")
+    return rows
+
+
 def _account_from_wire(st: Any, dex_states: dict, spot: Any, mids: Any,
                        spot_marks: dict, observed_at: int
                        ) -> tuple[AccountState, dict[str, Decimal], dict]:
@@ -273,7 +285,7 @@ def _account_from_wire(st: Any, dex_states: dict, spot: Any, mids: Any,
         positions: list[Position] = []
         in_effect: dict[str, Decimal] = {}
         for state in (st, *dex_states.values()):
-            for ap in state.get("assetPositions", []):
+            for ap in _wire_list(state, "assetPositions"):
                 p = ap["position"]
                 size = _finite(p["szi"])
                 if size == 0:
@@ -295,7 +307,7 @@ def _account_from_wire(st: Any, dex_states: dict, spot: Any, mids: Any,
         unpriced: list[str] = []
         spot_value = Decimal(0)
         if spot is not None:
-            for row in spot.get("balances", []):
+            for row in _wire_list(spot, "balances"):
                 total = _finite(row["total"])
                 if not isinstance(row["coin"], str) or not row["coin"]:
                     raise ValueError("balance names no coin")
@@ -2260,23 +2272,18 @@ class HyperliquidExchange:
         """Forget the acknowledgements of identities the runtime has durably retired.
 
         Chapter II §II.b, memory is physics: what is remembered per write lives as long
-        as the write can still be asked about. Guarantees only a named identity is
-        forgotten, and never one whose outcome is uncertain: an uncertain order,
-        cancel or vault write keeps its entry, so repeating it reconciles and never
-        submits twice. The runtime names an identity only when its durable intent
-        leaves with its released decision, after which nothing submits it again.
+        as the write can still be asked about. Guarantees exactly the named identities
+        are forgotten, from the order, cancel and vault caches alike. The caller names
+        an identity only once its own durable record reads it terminal and that record
+        leaves with its released decision: nothing submits it again, and this cache's
+        own ``uncertain`` entry, written before the outcome was read back, is obsolete.
+        A genuinely uncertain identity is never named, so repeating it still reconciles.
         """
         retired = list(dict.fromkeys(client_ids))
         for name in ("_client_results", "_cancel_results", "_vault_results"):
             results = self.__dict__.get(name)
-            if not results:
-                continue
-            for client_id in retired:
-                result = results.get(client_id)
-                status = getattr(result, "status", None) or (
-                    result.get("status") if isinstance(result, dict) else None)
-                if result is not None and status != "uncertain":
-                    del results[client_id]
+            for client_id in retired if results else ():
+                results.pop(client_id, None)
 
     def _submit(self, client_id: str, submit) -> OrderResult:
         """Submit once per identity; a lost or malformed acknowledgement requires lookup."""
@@ -2567,7 +2574,7 @@ class HyperliquidExchange:
         Paginated and failing closed exactly like ``funding_payments``: a stalled
         full page raises rather than silently skipping its tail.
         """
-        from factorylab.world.vaults import ledger_rows
+        from factorylab.world.vaults import UNPARSED, ledger_rows
 
         if type(since_ns) is not int or since_ns < 0:
             raise ValueError("since_ns must be nonnegative integer nanoseconds")
@@ -2581,7 +2588,9 @@ class HyperliquidExchange:
             if not isinstance(page, list):
                 raise ValueError("invalid non-funding ledger response")
             for row in ledger_rows(page):
-                if row["ts_ns"] >= since_ns:
+                # An unread row is kept whatever time it states: its time may be what
+                # could not be read, and the venue returned it for this window.
+                if row["ts_ns"] >= since_ns or row["type"] == UNPARSED:
                     key = (row["hash"], row["type"], row["vault"], str(row.get("usd")),
                            str(row.get("requested")))
                     if key in rows and rows[key] != row:

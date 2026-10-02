@@ -639,3 +639,27 @@ def test_live_vault_conflicting_commission_rows_remain_unbooked():
     found = match_intent(rt.exchange.vault_ledger(0), "venue.vault_withdraw",
                          {"vault": vault, "usd": "100"}, me)
     assert found["status"] == "ok" and found["commission_rebate"] == "1"
+
+
+@pytest.mark.parametrize("repaid", [["-1"], ["1", "-1"], ["NaN"]])
+def test_an_unreadable_row_of_a_withdrawal_leaves_its_settlement_unresolved(repaid):
+    """A row the boundary could not read that belongs to the withdrawal's transaction is
+    missing evidence: the settlement stays unresolved and named, never booked as if
+    the row had not been sent (a dropped commission row once booked +1,000,000)."""
+    rt = _runtime(_exchange(WireLedger))
+    _, vault = _create(rt)
+    ms = rt.clock.now_ns // 1_000_000
+    _wire(rt, ms, "0xc1", type="vaultCreate", vault=vault, usdc="1000", fee="10000")
+    rt._reconcile_orders()
+    out = _decision(rt)
+    assert _call(rt, out, "venue.vault_withdraw", vault=vault, usd="100")["status"] == "ok"
+    me = rt.exchange._address
+    _wire(rt, ms + 1, "0xw1", type="vaultWithdraw", vault=vault, user=me,
+          requestedUsd="100", netWithdrawnUsd="99", basis="98", commission="1",
+          closingCost="0")
+    for amount in repaid:
+        _wire(rt, ms + 1, "0xw1", type="vaultLeaderCommission", user=me, usdc=amount)
+    for _ in range(6):
+        rt._reconcile_orders()
+    assert _vault_effects(rt, "vault_withdraw") == []
+    assert [i["client_id"] for i in _items(rt, "vault.unbooked")] == [f"{out}:tool:0"]

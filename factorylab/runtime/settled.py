@@ -422,22 +422,26 @@ class SettledMixin:
         for client_id in [c for c, intent in self.order_intents.items()
                           if intent.get("handle") in gone]:
             intent = self.order_intents.pop(client_id)
-            retired.append(client_id)
-            folded["intents"] = folded.get("intents", 0) + 1
             status = (intent.get("result") or {}).get("status")
+            if status != "uncertain":
+                retired.append(client_id)
+            folded["intents"] = folded.get("intents", 0) + 1
             folded[f"status:{status}"] = folded.get(f"status:{status}", 0) + 1
         # Terminal venue writes (``_live_venue_books``): a vault write's venue
         # transaction stays claimed, so no later write can bind it again.
         vault = getattr(self, "vault_intents", None)
         for client_id in [c for c, i in (vault or {}).items() if i.get("handle") in gone]:
-            retired.append(client_id)
+            if vault[client_id]["result"].get("status") != "uncertain":
+                retired.append(client_id)
             transaction = vault.pop(client_id)["result"].get("hash")
             if transaction:
                 self.vault_released_hashes.append([transaction, self.clock.now_ns])
         # Chapter II §II.b, memory is physics: the venue adapter's acknowledgement of a
-        # write leaves when its durable intent does, and not before, so it grows with
-        # the writes still answerable rather than with every write ever made. Local
-        # memory only, never an external call: it bypasses the journal.
+        # write leaves when its durable intent does, read back terminal, and not
+        # before, so it grows with the writes still answerable rather than with every
+        # write ever made. A write released while still uncertain (given up) stays
+        # remembered there, so it is never sent again. Local memory only, never an
+        # external call: it bypasses the journal.
         forget = getattr(getattr(self.exchange, "target", self.exchange),
                          "retire_client_ids", None)
         if retired and forget is not None:

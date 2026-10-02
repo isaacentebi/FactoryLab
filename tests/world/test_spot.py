@@ -79,7 +79,7 @@ def live():
     ex._info = SimpleNamespace(
         all_mids=lambda: {'BTC': '100', '@7': '101'},
         user_state=lambda _: {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
-                              'withdrawable': '40'},
+                              'withdrawable': '40', 'assetPositions': []},
         spot_user_state=lambda _: {'balances': [
             {'coin': 'USDC', 'total': '20', 'hold': '3'},
             {'coin': 'BTC', 'total': '2', 'hold': '0'}]},
@@ -279,12 +279,41 @@ def test_released_orders_retire_adapter_acknowledgements():
         assert ex.vault_transfer('0xv', True, D(1), client_id=f'h{n}:tool:2')['status'] == 'ok'
     ex._exchange.market_open = ex._exchange.order = lambda *a, **k: (_ for _ in ()).throw(
         ConnectionError('acknowledgement lost'))
-    uncertain = ex.place(Order('BTC', True, D(1), client_id='live:tool:0'))
-    assert uncertain.status == 'uncertain'
+    for client_id in ('live:tool:0', 'late:tool:0'):
+        assert ex.place(Order('BTC', True, D(1), client_id=client_id)).status == 'uncertain'
+    # The runtime later read 'late' back terminal and released its decision: its
+    # obsolete uncertain entry leaves with it. 'live' is still genuinely uncertain.
     ex.retire_client_ids([f'h{n}:tool:{s}' for n in range(50) for s in range(3)]
-                         + ['live:tool:0'])
+                         + ['late:tool:0'])
     assert ex._client_results.keys() == {'live:tool:0'}
     assert ex._cancel_results == {} and ex._vault_results == {}
     sent = len(calls)
     assert ex.place(Order('BTC', True, D(1), client_id='live:tool:0')).status == 'uncertain'
     assert len(calls) == sent  # an uncertain identity is reconciled, never resent
+
+
+@pytest.mark.parametrize('side, reply', [
+    ('spot', {}), ('spot', {'balances': {}}), ('spot', {'balances': ''}),
+    ('spot', {'balances': None}), ('spot', []),
+    ('perp', {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
+              'withdrawable': '40'}),
+    ('perp', {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
+              'withdrawable': '40', 'assetPositions': {}}),
+    ('perp', {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
+              'withdrawable': '40', 'assetPositions': ''}),
+])
+def test_a_reply_without_its_list_is_never_a_fresh_empty_account(side, reply):
+    """A spot reply without a well-formed ``balances`` list, or a perps reply without a
+    well-formed ``assetPositions`` list, says nothing about what is held: it is
+    unavailable, never a fresh account that holds nothing (a wind-down read it as flat)."""
+    ex, _ = live()
+    first = ex.account()
+    assert first.spot_balances and not first.stale
+    if side == 'spot':
+        ex._info.spot_user_state = lambda _: reply
+    else:
+        ex._info.user_state = lambda _: reply
+    assert ex.account() == replace(first, stale=True)
+    ex._last_account = None
+    with pytest.raises(VenueUnavailable, match='malformed'):
+        ex.account()

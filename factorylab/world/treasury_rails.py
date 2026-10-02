@@ -885,6 +885,21 @@ class LiveRail(ClassTransferRail):
                 return None
         return None
 
+    def lapsed(self, step: str, state: dict, now_ns: int) -> str | None:
+        """Why a submitted venue action can no longer execute, though it may have.
+
+        A withdrawal or a shadow send whose nonce is older than the venue's window can
+        never execute again; that is no evidence it never did. The treasury parks it,
+        its money held, rather than failing it (``Treasury._park``). ``None`` while
+        it still could execute, and for every other step.
+        """
+        if step not in ("withdraw_burn", "shadow_send"):
+            return None
+        nonce = (state.get("reference") or {}).get("nonce", state.get("nonce"))
+        if nonce is None or now_ns // 1_000_000 <= int(nonce) + self.WITHDRAWAL_NONCE_WINDOW_MS:
+            return None
+        return "venue nonce window passed without evidence; outcome unknown, money held"
+
     def _authorization_expired(self, state: dict) -> str | None:
         """Guarantees a top-up authorization is abandoned only when it can never settle.
 

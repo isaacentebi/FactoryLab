@@ -379,7 +379,11 @@ def test_released_venue_writes_retire_their_adapter_acknowledgements():
         "h2:tool:0": {"handle": "h2", "result": {"status": "uncertain"}},
     }
     rt.vault_intents = {"h1:tool:1": {"handle": "h1", "result": {"status": "ok"},
-                                      "settled": True}}
+                                      "settled": True},
+                        "h1:tool:2": {"handle": "h1", "result": {"status": "uncertain"},
+                                      "unresolved": True}}
     rt._drop_released(["h1"])
+    # Only identities the runtime durably read back terminal: a vault write given up
+    # while uncertain stays remembered by the adapter, so it is never sent again.
     assert sorted(retired) == ["h1:tool:0", "h1:tool:1"]
     assert set(rt.order_intents) == {"h2:tool:0"}
