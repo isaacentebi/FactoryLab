@@ -552,3 +552,114 @@ def test_a_vault_amount_finer_than_a_micro_usd_is_refused_by_the_venue_adapter_t
     assert exact_micro("1.000001") == 1_000_001 and exact_micro("1.0000009") is None
     ex = _exchange()
     assert "finer" in ex.vault_transfer("0x" + "2" * 40, True, Decimal("1.0000009"))["error"]
+
+
+class WireLedger(LiveLike):
+    """A fake venue whose acknowledgements are a live one's bare ``ok`` and whose vault
+    rows are read from ``page``, a live wire page, by the live adapter's own ledger and
+    lookup, so every row passes the boundary parser a live world uses."""
+
+    mode = "bare"
+    _address = "0x" + "ae".rjust(40, "0")
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.page = []
+        self._info = SimpleNamespace(user_non_funding_ledger_updates=lambda user, start: [
+            row for row in self.page if row["time"] >= start])
+
+    def _guarded(self, name, call):
+        return call()
+
+    def vault_create(self, *args, **kwargs):
+        result = super().vault_create(*args, **kwargs)
+        if result["status"] != "ok":
+            return result
+        return {"status": "ok", "vault": result["vault"], "usd": result["usd"]}
+
+    def vault_ledger(self, since_ns):
+        from factorylab.world.exchange import HyperliquidExchange
+
+        return HyperliquidExchange.vault_ledger(self, since_ns)
+
+    def vault_lookup(self, client_id, **kwargs):
+        from factorylab.world.exchange import HyperliquidExchange
+
+        return HyperliquidExchange.vault_lookup(self, client_id, **kwargs)
+
+
+def _wire(rt, ms, tx, **delta):
+    rt.exchange.page.append({"time": ms, "hash": tx, "delta": delta})
+
+
+def _vault_effects(rt, prefix):
+    return [i for i in _items(rt, "venue.settled") if i["reference"].startswith(prefix)]
+
+
+def test_live_vault_negative_fee_books_no_profit():
+    """Chapter II §III.b: a creation fee the venue reports as negative is no measured
+    consequence. The custody move stays booked; the fee is withheld, never profit."""
+    rt = _runtime(_exchange(WireLedger))
+    handle, vault = _create(rt)
+    ms = rt.clock.now_ns // 1_000_000
+    _wire(rt, ms, "0xc1", type="vaultCreate", vault=vault, usdc="1000", fee="-1")
+    for _ in range(6):
+        rt._reconcile_orders()
+    assert _vault_effects(rt, "vault_fee") == []
+    custody = [(i["from"], i["to"], i["micro"]) for i in _items(rt, "vault.custody")]
+    assert custody == [("venue_perps", "venue_vaults", 1_000_000_000)]
+    assert [i["client_id"] for i in _items(rt, "vault.unbooked")] == [f"{handle}:tool:0"]
+
+
+def test_live_vault_conflicting_commission_rows_remain_unbooked():
+    """Two commission rows in one withdrawal's transaction that disagree on the amount
+    repaid are no measurement of it: no rebate and no P&L are booked from them."""
+    rt = _runtime(_exchange(WireLedger))
+    _, vault = _create(rt)
+    ms = rt.clock.now_ns // 1_000_000
+    _wire(rt, ms, "0xc1", type="vaultCreate", vault=vault, usdc="1000", fee="10000")
+    rt._reconcile_orders()
+    out = _decision(rt)
+    assert _call(rt, out, "venue.vault_withdraw", vault=vault, usd="100")["status"] == "ok"
+    me = rt.exchange._address
+    _wire(rt, ms + 1, "0xw1", type="vaultWithdraw", vault=vault, user=me,
+          requestedUsd="100", netWithdrawnUsd="99", basis="98", commission="1",
+          closingCost="0")
+    _wire(rt, ms + 1, "0xw1", type="vaultLeaderCommission", user=me, usdc="1")
+    _wire(rt, ms + 1, "0xw1", type="vaultLeaderCommission", user=me, usdc="2")
+    for _ in range(6):
+        rt._reconcile_orders()
+    assert _vault_effects(rt, "vault_withdraw") == []
+    assert [i["client_id"] for i in _items(rt, "vault.unbooked")] == [f"{out}:tool:0"]
+    # An identical repeat of the one commission row is the same fact, counted once.
+    rt.exchange.page = [row for row in rt.exchange.page if row["delta"].get("usdc") != "2"]
+    rt.exchange.page.append(dict(rt.exchange.page[-1]))
+    from factorylab.world.vaults import match_intent
+
+    found = match_intent(rt.exchange.vault_ledger(0), "venue.vault_withdraw",
+                         {"vault": vault, "usd": "100"}, me)
+    assert found["status"] == "ok" and found["commission_rebate"] == "1"
+
+
+@pytest.mark.parametrize("repaid", [["-1"], ["1", "-1"], ["NaN"]])
+def test_an_unreadable_row_of_a_withdrawal_leaves_its_settlement_unresolved(repaid):
+    """A row the boundary could not read that belongs to the withdrawal's transaction is
+    missing evidence: the settlement stays unresolved and named, never booked as if
+    the row had not been sent (a dropped commission row once booked +1,000,000)."""
+    rt = _runtime(_exchange(WireLedger))
+    _, vault = _create(rt)
+    ms = rt.clock.now_ns // 1_000_000
+    _wire(rt, ms, "0xc1", type="vaultCreate", vault=vault, usdc="1000", fee="10000")
+    rt._reconcile_orders()
+    out = _decision(rt)
+    assert _call(rt, out, "venue.vault_withdraw", vault=vault, usd="100")["status"] == "ok"
+    me = rt.exchange._address
+    _wire(rt, ms + 1, "0xw1", type="vaultWithdraw", vault=vault, user=me,
+          requestedUsd="100", netWithdrawnUsd="99", basis="98", commission="1",
+          closingCost="0")
+    for amount in repaid:
+        _wire(rt, ms + 1, "0xw1", type="vaultLeaderCommission", user=me, usdc=amount)
+    for _ in range(6):
+        rt._reconcile_orders()
+    assert _vault_effects(rt, "vault_withdraw") == []
+    assert [i["client_id"] for i in _items(rt, "vault.unbooked")] == [f"{out}:tool:0"]

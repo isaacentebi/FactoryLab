@@ -1066,6 +1066,17 @@ class Checkpoint(dict):
     origin: Path | None = None
 
 
+#: The key under which an in-memory checkpoint carries its world's kill record
+#: (``witness.Lineage``). Inside the mapping, so every copy of it, shallow or deep,
+#: carries the same live record; never written to a diary (``durable_state``).
+LINEAGE_KEY = "lineage"
+
+
+def durable_state(state: dict) -> dict:
+    """The checkpoint as a diary stores it: everything but its live lineage."""
+    return {k: v for k, v in state.items() if k != LINEAGE_KEY}
+
+
 def runtime_state(rt) -> Checkpoint:
     """Retain learning, FIFO lots, private memory and exact source cursors in one checkpoint."""
     rt._ensure_connector_tool()
@@ -1137,6 +1148,9 @@ def runtime_state(rt) -> Checkpoint:
     # The diary this state descends from, beside the mapping and never in it.
     state.diary = rt.diary_id or rt.ledger.diary_id
     state.origin = rt.ledger.path
+    lineage = getattr(getattr(rt, "kill_witness", None), "lineage", None)
+    if lineage is not None:
+        state[LINEAGE_KEY] = lineage
     return state
 
 
@@ -1274,8 +1288,14 @@ def _migrate_fill_cursor(saved, running) -> dict:
     return migrated
 
 
-def restore_runtime(rt, state: dict) -> None:
+def restore_runtime(rt, state: dict, *, from_diary: bool = False) -> None:
     """Restore only authenticated matching-format state, rebinding dependencies to this process.
+
+    ``from_diary`` is true only for a checkpoint read back from a diary
+    (``_resume_runtime``), whose kill the witness files and receiver answer for. Any
+    other checkpoint is an in-memory one and must carry its world's live lineage
+    (``LINEAGE_KEY``); one without it, or with anything else there, is refused
+    (``lineage_missing``): fail closed, so no copy or reload detaches a death.
 
     Transactional (edition 3, R3-C). Every identity constraint — snapshot format
     and manifest hash, both adapters, the venue account, the release digest, the
@@ -1335,8 +1355,8 @@ def restore_runtime(rt, state: dict) -> None:
                           code="facilitator_mismatch")
     # A checkpoint cannot revive a killed runtime. The runtime restored into may
     # already be final (its own Termination, or a Terminated event in its ledger),
-    # or the identity the checkpoint names may be recorded as killed in this
-    # process or in the local witness beside the diary. Either way nothing is
+    # or the identity the checkpoint names may be recorded as killed on the
+    # checkpoint's lineage or in the local witness beside the diary. Either way nothing is
     # restored; the world stays dead (runtime/witness.py).
     if rt.termination.final or rt.ledger.identity()["terminated"]:
         raise ResumeError("the runtime is final; a checkpoint cannot revive it",
@@ -1347,13 +1367,20 @@ def restore_runtime(rt, state: dict) -> None:
     # diary lives (Checkpoint.origin); a ledgered one, read back as a plain
     # mapping, is bound by the file this runtime resumes. The kill record is read
     # from the witness file beside that diary, whichever of the two named it, and
-    # from this runtime's own diary; process memory is the third source, not the
-    # one relied on (a twin restored in memory has no diary path of its own).
+    # from this runtime's own diary; the lineage the checkpoint carries is the third
+    # source, and the one a twin restored in memory relies on (it has no diary path).
     diary = getattr(state, "diary", None) or (
         rt.ledger.diary_id if rt.ledger.path is not None else None)
     witnessed = rt.ledger.path if rt.ledger.path is not None else getattr(state, "origin", None)
+    from factorylab.runtime.witness import Lineage
+
+    lineage = None if from_diary else state.get(LINEAGE_KEY)
+    if not from_diary and not isinstance(lineage, Lineage):
+        raise ResumeError("an in-memory checkpoint carries no lineage of its world",
+                          code="lineage_missing")
     if killed(world=rt.m.name, launch_nonce=saved_runtime.get("launch_nonce"),
-              diary=diary, ledger_path=witnessed, remote=False) is not None:
+              diary=diary, ledger_path=witnessed, remote=False,
+              lineage=lineage) is not None:
         raise ResumeError("the checkpoint names a killed identity", code="identity_killed")
     # The witness requirement is part of the launch identity, so it is checked
     # here and not against the environment alone: a world that launched under a
@@ -1397,6 +1424,10 @@ def restore_runtime(rt, state: dict) -> None:
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.
     rt.launch_nonce = saved_runtime.get("launch_nonce")
+    if lineage is not None and getattr(rt, "kill_witness", None) is not None:
+        # The restored runtime continues the checkpoint's world: one lineage, so a
+        # kill of either is named on every later checkpoint of both.
+        rt.kill_witness.lineage = lineage
     # Both identities were checked above, before any assignment. A checkpoint
     # written before release identity (or before the facilitator pin) carries
     # none; it keeps its historical Launch (nothing to replay) and, once
@@ -1474,6 +1505,7 @@ def restore_runtime(rt, state: dict) -> None:
                 # Older checkpoints predate decision release (wave 17b): none released.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
+    _bounded_charter_book(rt.charter_book)
     # The recorded run sealed every release this checkpoint shows the moment it was
     # durable; the resumed one does the same, so the tail collects exactly what the
     # recording collected.
@@ -1693,6 +1725,22 @@ def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, ex
         raise
 
 
+def _bounded_charter_book(book) -> None:
+    """A checkpoint written while the charter book kept its history restores to what the
+    book keeps now (essay II.II.b, "memory"): the edition in force, the latest
+    activation, and counts of sittings and deferrals. Its decided motions leave at
+    the next boundary, as every decided motion does."""
+    prefix = "_CharterBook__"
+    for field in ("sittings", "deferrals"):
+        value = getattr(book, prefix + field)
+        if not isinstance(value, int):
+            setattr(book, prefix + field, len(value))
+    setattr(book, prefix + "editions", list(getattr(book, prefix + "editions"))[-1:])
+    activations = getattr(book, prefix + "activations")
+    setattr(book, prefix + "activations",
+            {edition: activations[edition] for edition in sorted(activations)[-1:]})
+
+
 def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,
                     now_ns, lock, before_replay=None):
     """Authenticate, restore, replay and reconcile before admitting another world event."""
@@ -1772,7 +1820,7 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     running_digest = getattr(rt, "release_digest", None)
     running_facilitator = getattr(rt, "facilitator_url", None)
     try:
-        restore_runtime(rt, state)
+        restore_runtime(rt, state, from_diary=True)
     except ResumeError as exc:
         if exc.code == "release_mismatch":
             # The refusal is the world's own evidence: which release launched it and

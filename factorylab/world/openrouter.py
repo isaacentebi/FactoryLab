@@ -7,6 +7,7 @@ import json
 import os
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
+from decimal import Decimal
 from typing import Any
 from urllib import error, request
 
@@ -166,7 +167,9 @@ class OpenRouterProvider:
             body = response.read().decode("utf-8", errors="replace")
             if not 200 <= response.status < 300:
                 raise OpenRouterError(response.status, self._redact(body))
-            return json.loads(body)
+            # Wire numbers are read as Decimal, never float: a cost or an allowance is
+            # money, and money is never a float (AGENTS engineering rules; s01 #3).
+            return json.loads(body, parse_float=Decimal)
 
     def _post_completion(self, payload: dict, timeout_s: float | None) -> dict:
         """One completion POST under its caller's deadline, restored afterwards."""
@@ -269,13 +272,17 @@ class OpenRouterProvider:
         wire = parse_completion(
             self._post_completion(payload, req.timeout_s), error=OpenRouterError
         )
+        # The wallet moves only when money moves: a reply that names no bill is not
+        # evidence of a price, so it books nothing final here. The sent request may
+        # have been billed; the meter books it provisionally and settles it from the
+        # key's own balance.
         cost = wire.usage.get("cost")
-        cost_micro = None
-        if cost is not None:
-            try:
-                cost_micro = nonnegative_usd_micro(cost, rounding="ceil")
-            except ValueError:
-                raise OpenRouterError(None, "Invalid reported cost") from None
+        if cost is None:
+            raise OpenRouterError(None, "Provider bill unavailable")
+        try:
+            cost_micro = nonnegative_usd_micro(cost, rounding="ceil")
+        except ValueError:
+            raise OpenRouterError(None, "Invalid reported cost") from None
         raw = {}
         if wire.request_id is not None:
             raw["request_id"] = wire.request_id

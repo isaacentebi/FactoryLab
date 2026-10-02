@@ -62,7 +62,7 @@ from factorylab.runtime.live import LiveClock, Reconciler, wall_paced
 from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
 from factorylab.runtime.published import refuse_to_run
-from factorylab.runtime.resume import decode, encode, runtime_state
+from factorylab.runtime.resume import decode, durable_state, encode, runtime_state
 from factorylab.runtime.routing import (
     JUDGING_SHAPES,
     ContractQueue,
@@ -715,7 +715,7 @@ class Runtime(
                 # (allow_nan=False) and walks every dict and list at least as deep as
                 # ``_finite_json``, so the state it encodes is one ``_finite_json``
                 # accepts, and one it refuses is refused here as before.
-                data = canonical(state)
+                data = canonical(durable_state(state))
             except (ValueError, OverflowError, RecursionError):
                 raise
             except Exception:
@@ -724,7 +724,7 @@ class Runtime(
                 # before any other encoding error surfaces, as it always was.
                 from factorylab.cortex.assembly import _finite_json
 
-                _finite_json(state)
+                _finite_json(durable_state(state))
                 raise
         except (ValueError, OverflowError, RecursionError):
             self.ledger.append({"kind": "snapshot.refused", "boundary": boundary, "n": self.n,
@@ -1639,7 +1639,7 @@ class Runtime(
             "charter": self._charter_text(),
             "predicates": [
                 {"predicate": p.id, "description": p.description, "params": list(p.param_schema)}
-                for p in self.predicates.all()
+                for p in self.predicates.forecastable()
             ],
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),

@@ -288,11 +288,15 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "finite positive amount exactly representable as integer micro-USD.",
                 "pending": "A current submitted transfer or a nonrecoverable stranded transfer "
                 "blocks a new transfer. Parked recoverable strands do not generally block; "
-                "a shadow-paid hybrid strand still blocks a new Venice top-up.",
+                "a shadow-paid hybrid strand still blocks a new Venice top-up. A withdrawal "
+                "or shadow send past the venue's nonce window with no ledger evidence is "
+                "parked with its principal and fee held; it blocks no transfer, except that "
+                "a parked shadow send blocks a new Venice top-up.",
                 "venice": "A Venice top-up equals top_up_micro and fits the remaining window "
                 "allowance. Where a lifetime cap exists, prior authorized micro-USD plus "
-                "top_up_micro for each stranded Venice transfer and any submitted current "
-                "Venice transfer plus the new amount fits max_venice_total_micro. Every "
+                "top_up_micro for each stranded or parked Venice transfer and any "
+                "submitted current Venice transfer plus the new amount fits "
+                "max_venice_total_micro. Every "
                 "authorization, reauthorization included, counts toward lifetime use.",
                 "fees": "Principal plus the whole transfer fee ceiling fits available wallet "
                 "authority; fee_free_directions reserve no fee budget. Prepared fee ceiling "

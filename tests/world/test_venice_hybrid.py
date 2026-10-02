@@ -551,7 +551,9 @@ def test_the_shadow_leg_confirms_only_on_its_own_venue_ledger_row(monkeypatch):
     with pytest.raises(RailError, match="fee"):
         rail.poll("shadow_send", state)
     assert rail.expired("shadow_send", state, 1_700_000_000_000 * 1_000_000) is None
-    assert rail.expired("shadow_send", state, (1_700_000_000_000 + 4 * 86_400_000) * 1_000_000)
+    # Age alone never abandons a shadow send: it may have executed and show late.
+    assert rail.expired(
+        "shadow_send", state, (1_700_000_000_000 + 4 * 86_400_000) * 1_000_000) is None
 
 
 def test_the_top_up_is_proven_on_base_mainnet_not_on_the_testnet_reserve_chain(monkeypatch):

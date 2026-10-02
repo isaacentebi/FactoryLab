@@ -460,7 +460,8 @@ def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch
     ], prompts)
     ret = rt._invoke("seed-decider", req, "producer")
     assert ret.status == "ok" and len(prompts) == 2
-    assert "Return the final answer" in prompts[1]
+    # The closing round is told nothing; its limits are its schema and the ledger row.
+    assert '"tool_results"' in prompts[1] and '"continuation"' not in prompts[1]
     assert rows(rt, "tool.rounds_exhausted")[0]["priced"] is False
 
 

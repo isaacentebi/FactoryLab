@@ -157,3 +157,31 @@ def test_budget_dormant_is_a_pause_between_releases_never_a_death(ledger, clock)
     assert termination.check(wallet, clock.now + 50) == "balance_zero"
     with pytest.raises(ValueError):
         termination.check(wallet, clock.now, cheapest_seat_micro=-1)
+
+
+def test_witness_is_scoped_to_its_world():
+    """No global mutable state (AGENTS engineering rules; s01 #4): each world's kill
+    calls the witness that world was built with, with its own ledger, and no other."""
+    seen = []
+    worlds = []
+    for name in ("a", "b"):
+        ledger = Ledger()
+        worlds.append((ledger, Termination(
+            ledger=ledger, bus=Bus(ledger),
+            witness=lambda led, reason, name=name: seen.append((name, led, reason)))))
+    (ledger_a, a), (_ledger_b, b) = worlds
+    a.kill("explicit_kill:operator")
+    assert seen == [("a", ledger_a, "explicit_kill:operator")]
+    # A world built without a witness is final all the same and calls nobody's.
+    ledger = Ledger()
+    Termination(ledger=ledger, bus=Bus(ledger)).kill("explicit_kill:operator")
+    assert len(seen) == 1
+    # A witness that raises never raises into the kill.
+    def broken(_ledger, _reason):
+        raise RuntimeError("witness down")
+    ledger = Ledger()
+    term = Termination(ledger=ledger, bus=Bus(ledger), witness=broken)
+    term.kill("explicit_kill:operator")
+    assert term.final
+    import factorylab.kernel.termination as module
+    assert not hasattr(module, "bind_witness") and not hasattr(module, "_witness")

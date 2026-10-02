@@ -495,19 +495,22 @@ class RouterState:
 class _KeyedLearner:
     """Adapter so a SnapshotLearner can be driven through Router.route.
 
-    The runtime sets ``current_key`` before routing; ``distribution`` records
-    the snapshot under that key. Updates go through ``inner.update_for``.
+    The runtime sets ``current_key`` and ``current_ordinal`` (its event number)
+    before routing; ``distribution`` records the snapshot under that key, issued at
+    that ordinal. Updates go through ``inner.update_for``.
     """
 
     def __init__(self, inner: Any) -> None:
         self.inner = inner
         self.id = inner.id
         self.current_key: str | None = None
+        self.current_ordinal: int | None = None
 
     def distribution(self, feasible):
         if self.current_key is None:
             return self.inner.distribution(feasible)
-        return self.inner.distribution_for(self.current_key, feasible)
+        return self.inner.distribution_for(self.current_key, feasible,
+                                           ordinal=self.current_ordinal)
 
     def update(self, feedback) -> None:
         raise TypeError("use inner.update_for(key, feedback)")
@@ -523,6 +526,7 @@ class _KeyedLearner:
             "algorithm": "KeyedLearner",
             "inner": self.inner.state(),
             "current_key": self.current_key,
+            "current_ordinal": self.current_ordinal,
         }
 
     @classmethod
@@ -532,6 +536,7 @@ class _KeyedLearner:
 
         learner = cls(SnapshotLearner.restore(state["inner"]))
         learner.current_key = state["current_key"]
+        learner.current_ordinal = state.get("current_ordinal")
         return learner
 
 
@@ -1215,6 +1220,7 @@ class RoutingMixin:
                + (":emission" if phase == "emission" else ""))
         if isinstance(state.learner, _KeyedLearner):
             state.learner.current_key = key
+            state.learner.current_ordinal = self.n
         universe = self._universe_for(kind, ev)
         # Essay II.IV: a shared foundation model is a forcing function, and II.III.b
         # forbids the producer and evaluator classes to collude. A seat that judges

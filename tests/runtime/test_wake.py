@@ -18,6 +18,7 @@ from factorylab.runtime.wake import (
     _venue,
     collect_wake,
     render_wake,
+    write_wake,
 )
 from factorylab.runtime.worlds import load_manifest
 
@@ -50,8 +51,9 @@ def test_sealed_item_text_never_appears(world, tmp_path):
     writer.append({"kind": "private", "prompt": marker, "verdict": marker, "diary": marker})
     out = tmp_path / "public"
     assert main(["wake", "--ledger", str(world), "--out", str(out)]) == 0
-    for path in out.iterdir():
-        assert "SECRET_PROMPT_VERDICT_DIARY" not in path.read_text()
+    for path in out.rglob("*"):  # the public names and every generation behind them
+        if path.is_file():
+            assert "SECRET_PROMPT_VERDICT_DIARY" not in path.read_text()
     malicious = dict.fromkeys(VIEWS, {"counts": {marker: 1}})
     malicious["wallet_series"] = {"series": []}
     assert "<script>" not in render_wake(malicious)
@@ -70,7 +72,7 @@ def test_aggregate_verification_failure_discards_all_partial_views(world, monkey
 
     monkeypatch.setattr(Ledger, "aggregate", fail)
     result = collect_wake(world, sleep=sleeps.append)
-    assert calls.count("wallet_series") == 2 and sleeps == [0.1]
+    assert calls.count("spend_by_capability") == 2 and sleeps == [0.1]
     assert set(result.values()) == {UNAVAILABLE}
 
 
@@ -186,7 +188,7 @@ def test_untrusted_snapshot_never_emits_aggregates(tmp_path, damage, scripted_ru
     ("exited", "1", "resume", "failed_resume"),
     ("killed", "KILL", "resume", "failed_resume"),
     ("exited", "0", "resume", None),
-    ("exited", "1", "run", None),
+    ("exited", "1", "run", "failed_run"),
 ])
 @pytest.mark.parametrize("reason", [None, "manifest_mismatch", "not a reason code"])
 def test_alert_posts_only_allowed_json_line(tmp_path, code, status, mode, event, reason):
@@ -281,6 +283,12 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
                       'shutil.copyfile(sys.argv[2], os.environ["CAPTURE"])\n')
     age.chmod(0o700)
     rclone.chmod(0o700)
+    # Room to stage beside the world, whatever this host's own disk holds (the space
+    # guard itself is tests/runtime/test_unattended_ops.py's).
+    df = bin_path / "df"
+    df.write_text("#!/bin/bash\nprintf 'Filesystem 1024-blocks Used Available Capacity "
+                  "Mounted on\\n/dev/vda1 80000000 1 60000000 1%% /\\n'\n")
+    df.chmod(0o700)
     script = (DEPLOY / "backup.sh").read_text().replace("/srv/factorylab", str(root))
     capture = tmp_path / "captured.tar"
     proc = subprocess.run(["bash", "-c", script], capture_output=True, env={
@@ -319,3 +327,342 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
     # The pin that kept the sidecars' bytes through the copy is gone.
     assert not (root / "runs/.backup-pin").exists()
     assert (root / "runs/funded.jsonl").read_bytes() == original + b'{"item":'
+
+
+def _returns_diary(path: Path, count: int) -> None:
+    """``count`` decisions, each with one 4 KiB return, a price window every ten, and a
+    verdict on each return three windows after it, past its decision's settlement."""
+    manifest = load_manifest("scripted")
+    ledger = Ledger(path, manifest=json.loads(manifest.canonical_json()),
+                    key_path=str(path) + ".key", clock_ns=lambda: 1)
+    late = []
+    for n in range(count):
+        handle = f"decision-{n}"
+        ledger.append({"kind": "decision.open", "handle": handle, "channel": "verdict",
+                       "deadline_ns": 5, "propensity": {"chosen": "seed-decider"}})
+        ledger.append({"kind": "invocation", "handle": handle, "assembly_id": "seed-decider",
+                       "role": "producer", "outputs": {"action": "hold",
+                                                       "rationale": f"{n:06d}" + "x" * 4096}})
+        ledger.append({"kind": "decision.settle", "latency_ns": 1, "return": {"handle": handle,
+                                                             "channel": "verdict"}})
+        late.append(handle)
+        if n % 10 == 9:
+            ledger.append({"kind": "price.window", "window": n // 10})
+            for about in late[:-30]:
+                ledger.append({"kind": "event", "event": {
+                    "kind": "Verdict", "ts_ns": 1,
+                    "payload": {"about_handle": about, "evaluator_handle": "judge",
+                                "verdict": 1.0, "rationale": "late"}}})
+            late = late[-30:]
+
+
+@pytest.mark.gate
+def test_the_wake_holds_outstanding_returns_not_every_return(tmp_path):
+    """s09: the wake's memory follows the returns still being joined, not every return
+    the world ever made (essay II.II.b, "memory"; AGENTS rule 12). Ten times the history
+    leaves the peak where it was; the totals, the latest rows and every page still hold
+    every return with the verdicts that landed windows after it."""
+    import tracemalloc
+
+    peaks = []
+    for count in (100, 1000):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        _returns_diary(path, count)
+        if not peaks:  # the first read's one-time costs (manifests, imports) are not history
+            write_wake(path, tmp_path / "warm", returns=10)
+        tracemalloc.start()
+        data = write_wake(path, path.parent / "www", returns=10)
+        peaks.append(tracemalloc.get_traced_memory()[1])
+        tracemalloc.stop()
+        assert data["returns"]["total"] == count
+        rows = data["returns"]["rows"]
+        assert [row["handle"] for row in rows] == [f"decision-{n}"
+                                                   for n in range(count - 10, count)]
+        page = json.loads((path.parent / "www" / "returns-3.json").read_text())
+        assert len(page["rows"]) == 10
+        assert all(row["verdicts"] and row["verdicts"][0]["rationale"] == "late"
+                   for row in page["rows"])
+    assert peaks[1] - peaks[0] < 1_000_000, peaks
+
+
+def test_a_return_joins_what_was_said_about_it_read_newest_first():
+    """Each tool call or verdict joins the latest row of its handle written before it,
+    or the first row when it precedes them all; each window's page gets its rows in
+    ledger order, once, and only after nothing older can still name them."""
+    from factorylab.runtime.wake import _Returns
+
+    def call(n):
+        return {"kind": "tool.call", "handle": "h", "tool": f"t{n}"}
+
+    def verdict(about, n):
+        return {"kind": "event", "event": {"kind": "Verdict", "payload": {
+            "about_handle": about, "verdict": n}}}
+
+    def row(handle):
+        return {"kind": "invocation", "handle": handle, "outputs": {}}
+
+    diary = [{"kind": "decision.open", "handle": "h"}, call(0), verdict("h", 0), row("h"),
+             call(1), {"kind": "decision.open", "handle": "g"}, row("g"),
+             {"kind": "price.window", "window": 0}, verdict("h", 1), row("h"), verdict("h", 2),
+             verdict("g", 3), verdict("none", 4)]
+    pages = []
+    folded = _Returns(1, lambda window, rows: pages.append((window, rows)))
+    for item in reversed(diary):
+        folded.feed(item)
+    section = folded.result()
+    assert section["total"] == 3 and [r["handle"] for r in section["rows"]] == ["h"]
+    assert [(w, [(r["handle"], [c["tool"] for c in r["tool_calls"]],
+                  [v["verdict"] for v in r["verdicts"]]) for r in rows]) for w, rows in pages] \
+        == [(1, [("h", [], [2])]), (0, [("h", ["t0", "t1"], [0, 1]), ("g", [], [3])])]
+    assert section["pages"]["windows"] == [{"window": 0, "rows": 2}, {"window": 1, "rows": 1}]
+
+
+def test_the_seller_catalogue_reads_the_diary_without_holding_it(tmp_path):
+    """s09: ``deploy/serve.py`` re-reads the diary every refresh; it keeps the newest
+    version of each service, the Launch event and any death, never the diary."""
+    import importlib.util
+    import tracemalloc
+
+    spec = importlib.util.spec_from_file_location("serve", DEPLOY / "serve.py")
+    serve = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(serve)
+    manifest = load_manifest("scripted")
+    peaks = []
+    for count in (50, 500):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        ledger = Ledger(path, manifest=json.loads(manifest.canonical_json()),
+                        key_path=str(path) + ".key", clock_ns=lambda: 1)
+        ledger.append({"kind": "event", "event": {"kind": "Launch", "ts_ns": 1, "payload": {
+            "facilitator_url": "https://facilitator.example"}}})
+        for version in (1, 2):
+            ledger.append({"kind": "service.registered", "id": "oracle", "program_id": "p",
+                           "description": f"v{version}", "args_schema": {}, "code": "",
+                           "timeout_s": 1, "handle": "h", "price_micro": 10 * version,
+                           "version": version})
+        for n in range(count):
+            ledger.append({"kind": "tool.call", "handle": f"decision-{n}",
+                           "args": {"text": f"{n:06d}" + "x" * 4096}})
+        if not peaks:  # the first read's one-time costs are not history
+            serve.load_catalogue(path)
+        liveness = serve.Liveness(max_age_s=60)
+        tracemalloc.start()
+        services, _reserve_address, facilitator = serve.load_catalogue(path, liveness)
+        peaks.append(tracemalloc.get_traced_memory()[1])
+        tracemalloc.stop()
+        assert services["oracle"].price_micro == 20 and services["oracle"].version == 2
+        assert facilitator == "https://facilitator.example" and liveness()
+    assert peaks[1] - peaks[0] < 500_000, peaks
+
+
+def test_the_published_balance_series_is_bounded_and_keeps_every_drawdown(tmp_path):
+    """The wake publishes at most ``SERIES_POINTS`` balance points however long the
+    world lives (essay II.II.b, "memory"; the full series stays in the diary): the
+    first, the last, and each bucket's first, last, lowest and highest, so a drawdown
+    is never smoothed away. A short series is published exactly."""
+    from factorylab.runtime.wake import SERIES_POINTS
+
+    manifest = load_manifest("scripted")
+    for count in (2_500, 8_000):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        ledger = Ledger(path, manifest=json.loads(manifest.canonical_json()),
+                        key_path=str(path) + ".key", clock_ns=lambda: 1)
+        balances = [1_000_000 + (n * 7919) % 1000 for n in range(count)]
+        balances[count // 3] = 5  # the drawdown
+        balances[2 * count // 3] = 9_000_000  # the peak
+        for n, balance in enumerate(balances):
+            ledger.append({"kind": "wallet.drip", "amount": 1, "balance_after": balance,
+                           "ts": 1_000 + n})
+        series = collect_wake(path)["wallet_series"]
+        points = series["series"]
+        assert series["observations"] == count
+        assert len(points) <= SERIES_POINTS
+        assert points[0] == {"ts": 1_000, "balance": balances[0]}
+        assert points[-1] == {"ts": 1_000 + count - 1, "balance": balances[-1]}
+        assert {"ts": 1_000 + count // 3, "balance": 5} in points
+        assert {"ts": 1_000 + 2 * count // 3, "balance": 9_000_000} in points
+        assert [p["ts"] for p in points] == sorted({p["ts"] for p in points})
+    short = tmp_path / "short" / "world.jsonl"
+    short.parent.mkdir()
+    ledger = Ledger(short, manifest=json.loads(manifest.canonical_json()),
+                    key_path=str(short) + ".key", clock_ns=lambda: 1)
+    for n in range(10):
+        ledger.append({"kind": "wallet.drip", "amount": 1, "balance_after": n, "ts": n})
+    assert collect_wake(short)["wallet_series"] == {
+        "series": [{"ts": n, "balance": n} for n in range(10)], "observations": 10}
+
+
+def _published(out: Path) -> dict[str, str]:
+    """What a reader of ``out`` is served: every top-level name, followed to its bytes."""
+    return {path.name: path.read_text() for path in sorted(out.iterdir())
+            if not path.name.startswith(".") and path.is_file()}
+
+
+def _wake_diary(path: Path, count: int, *, malformed: bool = False) -> None:
+    _returns_diary(path, count)
+    if malformed:
+        manifest = load_manifest("scripted")
+        writer = Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))
+        # Authenticated, but not a charter: the final projection cannot read it.
+        writer.append({"kind": "wake.public", "window": 99, "charter": "not a charter"})
+
+
+@pytest.mark.parametrize("failure", ["obstructed page", "malformed charter"])
+def test_a_failed_publication_leaves_the_previous_generation_whole(tmp_path, failure):
+    """A wake publishes a whole generation or nothing: the pages, ``wake.json`` and
+    ``wake.html`` of one collection, switched in at once. A page the next generation
+    cannot place, or a projection that fails after every page was written, leaves the
+    previous generation served exactly as it was."""
+    out = tmp_path / "www"
+    first = tmp_path / "first" / "world.jsonl"
+    first.parent.mkdir()
+    _wake_diary(first, 40)
+    write_wake(first, out, returns=10)
+    before = _published(out)
+    assert json.loads(before["wake.json"])["returns"]["total"] == 40
+    assert {"returns-0.json", "returns-3.json"} <= set(before)
+    second = tmp_path / "second" / "world.jsonl"
+    second.parent.mkdir()
+    _wake_diary(second, 60, malformed=failure == "malformed charter")
+    if failure == "obstructed page":
+        (out / "returns-2.json").unlink()
+        (out / "returns-2.json").mkdir()
+        before.pop("returns-2.json")
+        with pytest.raises(OSError):
+            write_wake(second, out, returns=10)
+    else:
+        assert write_wake(second, out, returns=10)["world"] == UNAVAILABLE
+    assert _published(out) == before
+    generations = [p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]
+    assert len(generations) == 1
+
+
+def test_an_unchanged_wake_json_is_published_with_a_fresh_mtime(tmp_path):
+    """The liveness witness ages wake.json by its mtime, so a publication whose bytes
+    did not change must still carry this publication's time, never the last one's."""
+    path = tmp_path / "w" / "world.jsonl"
+    path.parent.mkdir()
+    _wake_diary(path, 20)
+    out = tmp_path / "www"
+    write_wake(path, out, returns=5)
+    first = (out / "wake.json").stat().st_mtime_ns
+    old = first - 3 * 3600 * 10**9
+    os.utime(out / "wake.json", ns=(old, old))
+    write_wake(path, out, returns=5)
+    assert (out / "wake.json").stat().st_mtime_ns > old
+
+
+def test_only_the_current_and_previous_generations_are_kept(tmp_path):
+    out = tmp_path / "www"
+    for count in (20, 30, 40, 50):
+        path = tmp_path / f"w{count}" / "world.jsonl"
+        path.parent.mkdir()
+        _wake_diary(path, count)
+        write_wake(path, out, returns=5)
+        assert json.loads((out / "wake.json").read_text())["returns"]["total"] == count
+        assert json.loads((out / f"returns-{count // 10 - 1}.json").read_text())["rows"]
+    assert len([p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]) == 2
+
+
+def _diary_of(tmp_path: Path, name: str, count: int) -> Path:
+    path = tmp_path / name / "world.jsonl"
+    path.parent.mkdir()
+    _wake_diary(path, count)
+    return path
+
+
+def test_a_link_that_cannot_be_placed_aborts_before_the_switch(tmp_path):
+    """Every public name the next generation needs is placed first; the switch of
+    ``current`` is the last step. A link that cannot be placed (here a new window's
+    page, its temporary name obstructed) leaves the previous generation served."""
+    import os
+
+    out = tmp_path / "www"
+    write_wake(_diary_of(tmp_path, "first", 20), out, returns=10)
+    before = _published(out)
+    assert "returns-2.json" not in before
+    (out / f".wake-link-{os.getpid()}-returns-2.json").mkdir()
+    with pytest.raises(OSError):
+        write_wake(_diary_of(tmp_path, "second", 40), out, returns=10)
+    assert _published(out) == before
+    assert len([p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]) == 1
+
+
+def test_migrating_from_plain_files_is_whole_or_aborts_cleanly(tmp_path):
+    """A wake directory of plain files (the layout before generations) moves to the
+    generation layout without ever serving a mixture: a failure part way through
+    leaves every public name serving the old bytes, and the next run completes it."""
+    import os
+    import shutil
+
+    published = tmp_path / "published"
+    write_wake(_diary_of(tmp_path, "first", 20), published, returns=10)
+    out = tmp_path / "www"
+    out.mkdir()
+    for name, body in _published(published).items():
+        (out / name).write_text(body)  # plain files, as the old wake wrote them
+    before = _published(out)
+    obstruction = out / f".wake-link-{os.getpid()}-wake.html"
+    obstruction.mkdir()
+    with pytest.raises(OSError):
+        write_wake(_diary_of(tmp_path, "second", 40), out, returns=10)
+    assert _published(out) == before
+    shutil.rmtree(obstruction)
+    data = write_wake(_diary_of(tmp_path, "third", 40), out, returns=10)
+    assert data["returns"]["total"] == 40
+    assert all((out / name).is_symlink() for name in _published(out))
+    assert json.loads((out / "wake.json").read_text())["returns"]["total"] == 40
+
+
+def test_publishers_exclude_each_other_and_never_remove_the_current_generation(tmp_path):
+    """One publisher at a time (a lock in ``.wake/``): a second refuses rather than
+    build beside the first. Cleanup keeps what ``current`` names when it looks, read
+    under the lock, never what the publisher remembered."""
+    import fcntl
+    import os
+    import shutil
+
+    out = tmp_path / "www"
+    write_wake(_diary_of(tmp_path, "first", 20), out, returns=10)
+    before = _published(out)
+    fd = os.open(out / ".wake" / "lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with pytest.raises(BlockingIOError):
+            write_wake(_diary_of(tmp_path, "second", 30), out, returns=10)
+    finally:
+        os.close(fd)
+    assert _published(out) == before
+    assert len([p for p in (out / ".wake").iterdir() if p.name.startswith("g-")]) == 1
+    # Another publisher's switch since this one looked: what ``current`` names stays.
+    current = out / ".wake" / "current"
+    other = out / ".wake" / "g-other"
+    shutil.copytree(out / ".wake" / os.readlink(current), other)
+    os.replace(current, out / ".wake" / "old-current")
+    os.symlink("g-other", current)
+    os.unlink(out / ".wake" / "old-current")
+    write_wake(_diary_of(tmp_path, "third", 30), out, returns=10)
+    write_wake(_diary_of(tmp_path, "fourth", 40), out, returns=10)
+    assert json.loads((out / "wake.json").read_text())["returns"]["total"] == 40
+    assert (out / ".wake" / os.readlink(current)).is_dir()
+
+
+def test_the_cli_refuses_while_another_wake_publishes(tmp_path, capsys):
+    """A second publisher exits 1 with the refusal code and publishes nothing."""
+    import fcntl
+    import os
+
+    path = _diary_of(tmp_path, "first", 20)
+    out = tmp_path / "www"
+    assert main(["wake", "--ledger", str(path), "--out", str(out)]) == 0
+    before = _published(out)
+    fd = os.open(out / ".wake" / "lock", os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        assert main(["wake", "--ledger", str(path), "--out", str(out)]) == 1
+    finally:
+        os.close(fd)
+    assert "wake_unavailable" in capsys.readouterr().err
+    assert _published(out) == before

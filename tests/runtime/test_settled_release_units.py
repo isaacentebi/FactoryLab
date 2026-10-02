@@ -364,3 +364,26 @@ def test_what_wave_16_still_owes_a_decision_pins_it(book):
                                     "test-router", "state"))
     getattr(rt, book)[handle] = {"held": True} if book != "raw_scores" else 0.4
     assert handle in rt._live_references()["named"]
+
+
+def test_released_venue_writes_retire_their_adapter_acknowledgements():
+    """The adapter forgets a decision's write identities exactly when the runtime's
+    durable intents for them leave with the decision, never before."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    retired = []
+    rt.exchange.target.retire_client_ids = retired.extend
+    rt.order_intents = {
+        "h1:tool:0": {"handle": "h1", "result": {"status": "filled"}},
+        "h2:tool:0": {"handle": "h2", "result": {"status": "uncertain"}},
+    }
+    rt.vault_intents = {"h1:tool:1": {"handle": "h1", "result": {"status": "ok"},
+                                      "settled": True},
+                        "h1:tool:2": {"handle": "h1", "result": {"status": "uncertain"},
+                                      "unresolved": True}}
+    rt._drop_released(["h1"])
+    # Only identities the runtime durably read back terminal: a vault write given up
+    # while uncertain stays remembered by the adapter, so it is never sent again.
+    assert sorted(retired) == ["h1:tool:0", "h1:tool:1"]
+    assert set(rt.order_intents) == {"h2:tool:0"}

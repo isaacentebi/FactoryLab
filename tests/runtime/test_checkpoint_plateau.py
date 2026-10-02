@@ -46,7 +46,7 @@ import pytest
 
 from factorylab.kernel.ledger import canonical
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.resume import runtime_state
+from factorylab.runtime.resume import durable_state, runtime_state
 from factorylab.runtime.worlds import load_manifest
 
 EVENTS = 5_000
@@ -192,7 +192,7 @@ def test_the_checkpoint_plateaus_between_1500_and_5000_events():
         if written and rt.ticks_consumed >= FROM:
             # The state the checkpoint just wrote: nothing changed since but the held
             # venue reads a checkpoint never carries.
-            state = runtime_state(rt)
+            state = durable_state(runtime_state(rt))  # the bytes the diary carries
             world = len(canonical(state["fake_exchange"])) if state["fake_exchange"] else 0
             retained = len(rt.queue.retained())
             completed = (sum(rt.queue.released_counts().values()) + retained

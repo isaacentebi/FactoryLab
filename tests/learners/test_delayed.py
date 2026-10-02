@@ -40,7 +40,7 @@ def test_immediate_ordered_delivery_matches_synchronous(kind):
     for index in range(60):
         support = (actions, ("c", "a"), ("b",))[index % 3]
         p = synchronous.distribution(support)
-        assert delayed.distribution_for(str(index), support) == p
+        assert delayed.distribution_for(str(index), support, ordinal=index) == p
         chosen = rng.choices(support, weights=list(p.values()))[0]
         losses = {a: rng.random() for a in actions}
         feedback = (
@@ -69,7 +69,7 @@ def test_investment_trap_at_5000_seed_zero_separates_delivery_from_adaptation():
     rng = Random(0)
     for index, opponent in enumerate(sequence):
         losses = game.loss_vector(opponent)
-        p = immediate.distribution_for(str(index), game.actions)
+        p = immediate.distribution_for(str(index), game.actions, ordinal=index)
         chosen = rng.choices(game.actions, weights=list(p.values()))[0]
         immediate_history.append(Round(losses, p, chosen))
         immediate.update_for(str(index), FullInfoFeedback(losses))
@@ -130,7 +130,7 @@ def test_handle_lifecycle_plain_update_and_state(reduction):
     assert learner.state()["inner"] == inner.state()
     assert not learner.state()["snapshots"]
 
-    returned = learner.distribution_for("round", actions)
+    returned = learner.distribution_for("round", actions, ordinal=0)
     before = learner.state()
     assert before["snapshots"]
     saved = before
@@ -144,15 +144,19 @@ def test_handle_lifecycle_plain_update_and_state(reduction):
     returned["a"] = -1
     assert learner.state() == before
     with pytest.raises(KeyError):
-        learner.distribution_for("round", ("b",))
+        learner.distribution_for("round", ("b",), ordinal=0)
+    with pytest.raises(KeyError):  # outstanding: no later ordinal reopens it either
+        learner.distribution_for("round", ("b",), ordinal=1)
     assert learner.state() == before
-    learner.distribution_for("second", ("b",))
+    learner.distribution_for("second", ("b",), ordinal=1)
     learner.update_for("round", feedback)
     assert set(learner.state()["snapshots"]) == {"second"}
     with pytest.raises(KeyError):
         learner.update_for("round", feedback)
     with pytest.raises(KeyError):
-        learner.distribution_for("round", actions)
+        learner.distribution_for("round", actions, ordinal=0)
+    with pytest.raises(KeyError):
+        learner.distribution_for("second", actions, ordinal=1)
     learner.update_for("second", feedback)
     assert learner.state()["inner"] == inner.state()
     assert not learner.state()["snapshots"]
@@ -174,7 +178,7 @@ def test_plain_distribution_delegates_without_snapshot():
 def test_invalid_feedback_keeps_snapshot_for_retry():
     inner = BlumMansour(lambda a: Hedge(a, 0.2), ("a", "b"))
     learner = SnapshotLearner(inner)
-    learner.distribution_for("old", inner.actions)
+    learner.distribution_for("old", inner.actions, ordinal=0)
     before = learner.state()
     with pytest.raises(ValueError):
         learner.update_for("old", FullInfoFeedback({"a": 1}))
@@ -229,10 +233,10 @@ def test_full_info_updates_use_old_p_with_interleaved_rounds_and_supports():
 
     inner = BlumMansour(factory, ("a", "b", "c"))
     learner = SnapshotLearner(inner)
-    old_p = learner.distribution_for("old", ("c", "a"))
-    learner.distribution_for("fast", inner.actions)
+    old_p = learner.distribution_for("old", ("c", "a"), ordinal=0)
+    learner.distribution_for("fast", inner.actions, ordinal=1)
     learner.update_for("fast", FullInfoFeedback({"a": 1, "b": 0, "c": 0.2}))
-    new_p = learner.distribution_for("new", inner.actions)
+    new_p = learner.distribution_for("new", inner.actions, ordinal=2)
     assert new_p["a"] != old_p["a"]
     losses = {"a": 0.3, "b": 1, "c": 0.8}
     learner.update_for("old", FullInfoFeedback(losses))
@@ -267,7 +271,7 @@ def test_shuffled_bandit_feedback_uses_frozen_master_policy_and_all_base_rows():
     for index in range(30):
         support = (inner.actions, ("c", "a"), ("b", "c"))[index % 3]
         rows = [base.distribution(support) for base in bases]
-        p = learner.distribution_for(str(index), support)
+        p = learner.distribution_for(str(index), support, ordinal=index)
         chosen = rng.choices(support, weights=list(p.values()))[0]
         rounds.append((p, rows, BanditFeedback(chosen, rng.random(), p[chosen])))
     order = list(range(len(rounds)))
@@ -303,9 +307,9 @@ def test_simulator_opens_every_round_before_any_feedback():
     events = []
 
     class Traced(SnapshotLearner):
-        def distribution_for(self, handle, feasible):
+        def distribution_for(self, handle, feasible, *, ordinal):
             events.append(("open", handle))
-            return super().distribution_for(handle, feasible)
+            return super().distribution_for(handle, feasible, ordinal=ordinal)
 
         def update_for(self, handle, feedback):
             events.append(("update", handle))
@@ -338,3 +342,28 @@ def test_empty_simulation_and_invalid_opponent_leave_state_unchanged():
     with pytest.raises(ValueError):
         simulate_delayed(game, learner, ["Top", "invalid"], delay_permutation=[0, 1])
     assert learner.state() == before
+
+
+def test_completed_rounds_leave_bounded_state():
+    """Two cohorts of a thousand rounds, each opened and closed, leave the learner's
+    state the same size (essay II.II.b, "memory"): it keeps the outstanding rounds
+    and the issuance mark, never a tombstone per round. A spent round still cannot be
+    reopened, before or after a restore."""
+    from factorylab.learners.base import state_bytes
+
+    actions = ("a", "b", "NOOP")
+    learner = SnapshotLearner(BlumMansour(lambda a: Hedge(a, 0.2), actions), id="core")
+    sizes = []
+    for cohort in range(2):
+        for n in range(1000 * cohort, 1000 * (cohort + 1)):
+            learner.distribution_for(f"core:{n}", actions, ordinal=n)
+            learner.discard_for(f"core:{n}")
+        sizes.append(len(state_bytes(learner.state())))
+    # Only the mark's digits grow: logarithmic in the rounds, not linear.
+    assert sizes[1] - sizes[0] <= 2
+    restored = SnapshotLearner.restore(learner.state())
+    for spent in (learner, restored):
+        for n in (0, 999, 1999):
+            with pytest.raises(KeyError):
+                spent.distribution_for(f"core:{n}", actions, ordinal=n)
+    restored.distribution_for("core:2000", actions, ordinal=2000)

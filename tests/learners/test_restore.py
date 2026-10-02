@@ -62,7 +62,8 @@ def test_snapshot_restore_rebinds_old_rounds_and_preserves_spent_handles(bandit)
     actions = ("z", "a", "b")
     inner = BlumMansour(lambda a: EXP3(a, .3) if bandit else Hedge(a, .3), actions)
     learner = SnapshotLearner(inner, id="delayed-id")
-    policies = {h: learner.distribution_for(h, menu)
+    ordinals = {"spent": 0, "older": 1, "newer": 1}
+    policies = {h: learner.distribution_for(h, menu, ordinal=ordinals[h])
                 for h, menu in (("spent", actions), ("older", ("b", "z")), ("newer", actions))}
 
     def feedback(handle):
@@ -80,7 +81,7 @@ def test_snapshot_restore_rebinds_old_rounds_and_preserves_spent_handles(bandit)
     assert restored.id == "delayed-id" and not restored.state()["snapshots"]
     for handle in policies:
         with pytest.raises(KeyError):
-            restored.distribution_for(handle, actions)
+            restored.distribution_for(handle, actions, ordinal=ordinals[handle])
         with pytest.raises(KeyError):
             restored.update_for(handle, feedback(handle))
 

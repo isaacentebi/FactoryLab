@@ -549,7 +549,8 @@ def _cmd_kill(args: argparse.Namespace) -> int:
         with LedgerLock(args.ledger):
             manifest = load_manifest(args.world)
             ledger = Ledger.reopen(args.ledger, manifest=json.loads(manifest.canonical_json()))
-            termination = Termination(ledger=ledger, bus=Bus(ledger))
+            kill_witness = witness.KillWitness()
+            termination = Termination(ledger=ledger, bus=Bus(ledger), witness=kill_witness)
             owed = bool(manifest.kill.wind_down)
             report = {"attempted": False, "orders": 0, "operations": 0,
                       "production_state": KILLED, "exposure_state": UNKNOWN,
@@ -562,12 +563,12 @@ def _cmd_kill(args: argparse.Namespace) -> int:
                 ledger.append({"kind": "kill.production", "production_state": KILLED,
                                "reason": "explicit_kill:operator"})
                 if owed:
-                    witness.note_wind_down(wind_down=True, orders=0,
-                                           exposure_state=UNKNOWN)
-                    witness.record_production_kill(ledger, "explicit_kill:operator")
+                    kill_witness.note_wind_down(wind_down=True, orders=0,
+                                                exposure_state=UNKNOWN)
+                    kill_witness.production_kill(ledger, "explicit_kill:operator")
                     report = _kill_wind_down(manifest, ledger, wind_down, args.ledger)
             finally:
-                witness.note_wind_down(
+                kill_witness.note_wind_down(
                     wind_down=owed, orders=report.get("orders", 0),
                     exposure_state=report.get("exposure_state", UNKNOWN),
                     operations=report.get("operations", report.get("orders", 0)),
@@ -771,7 +772,13 @@ def _cmd_wake(args: argparse.Namespace) -> int:
     """Publish only the sealed wake; failed verification replaces stale data with unavailable."""
     from factorylab.runtime.wake import UNAVAILABLE, write_wake
 
-    data = write_wake(args.ledger, args.out, returns=args.returns)
+    try:
+        data = write_wake(args.ledger, args.out, returns=args.returns)
+    except OSError:
+        # Another publisher holds the wake, or a public name is not the wake's to
+        # replace: nothing was published and the previous generation is still served.
+        refuse("wake", Reason.WAKE_UNAVAILABLE)
+        return 1
     if data["wallet_series"] == UNAVAILABLE:
         refuse("wake", Reason.WAKE_UNAVAILABLE)
         return 1

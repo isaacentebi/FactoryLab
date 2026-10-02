@@ -109,8 +109,8 @@ def test_credit_reaches_the_executors_handle_only_after_its_requester_settles(mo
     assert rt.queue.history(req.handle)[0].score == pytest.approx(0.4)  # untouched
     row = [i for i in rt.ledger._recovery_items() if i["kind"] == "composed.settled"]
     assert [(r["handle"], r["verdict"], r["credit"]) for r in row] == [(child, 0.8, 0.4)]
-    item = rt.outcomes.get("helper-a", child, delivered=False)
-    assert "composed_settled" in json.dumps(item) and req.handle not in json.dumps(item)
+    # The child learns through its queue settlement alone: no inbox receipt (s04 #2).
+    assert all(i.get("kind") != "composed_settled" for i in _inbox(rt, "helper-a"))
     # The request router that drew it learns from it.
     rt._deliver_returns()
     state = rt.routers[request_router_key("ProducerReturn")][0]
@@ -423,3 +423,34 @@ def test_a_hold_survives_a_checkpoint_mid_window(monkeypatch):
     _close_window(restored, author)
     (settled,) = restored.queue.history(author)
     assert settled.score == pytest.approx(0.6)
+
+
+def _inbox(rt, seat):
+    return [rt.outcomes.body(r["sha"])["outcome"] for r in rt.outcomes.items.get(seat, [])]
+
+
+def test_composition_has_no_auxiliary_score_receipts(monkeypatch):
+    """Chapter II §I.b, AGENTS rules 4 and 5: the reward is a thin score delivered to
+    the decision's handle through the queue; no inbox receipt carries another seat's
+    score or the components of one (s04 #2). The sealed ledger keeps the diagnostics."""
+    rt = lists_nothing(make_runtime())
+    _only(rt, monkeypatch)
+    req = _decision(rt, "seed-decider")
+    child = _child(rt, req)["handle"]
+    _verdicts(rt, child, 0.8)
+    _verdicts(rt, req.handle, 0.4)
+    assert rt.queue.history(child)[0].score == pytest.approx(0.6)
+    rows = [i for i in rt.ledger._recovery_items() if i["kind"] == "composed.settled"]
+    assert [(r["verdict"], r["credit"]) for r in rows] == [(0.8, 0.4)]
+    for item in _inbox(rt, "helper-a"):
+        assert item.get("kind") != "composed_settled" and "requester_score" not in item
+    # A builder whose registering decision is pending without a hold (a judge's or a
+    # ballot's registration) is credited nothing through its inbox either.
+    rt2, author = _tool_world(monkeypatch)
+    rt2.tool_holds.pop(author)
+    caller = _decision(rt2, "seed-decider").handle
+    _call(rt2, "seed-decider", caller)
+    _verdicts(rt2, caller, 0.4)
+    applied = [i for i in rt2.ledger._recovery_items() if i["kind"] == "credit.tool"]
+    assert [(i["applied"], i["credit"]) for i in applied] == [("unheld", 0.4)]
+    assert all(item.get("kind") != "tool_use_credit" for item in _inbox(rt2, "seed-observer"))

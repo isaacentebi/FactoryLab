@@ -403,6 +403,10 @@ class Request:
     # are public): the entries of ``world.scoring`` for this request's kind, verbatim.
     # Rendered as its own SCORING section; None renders nothing.
     settlement: dict[str, str] | None = None
+    # Whether this request is a continuation of a call already made (``continuation``).
+    # Never rendered: it is the kernel's own mark, so a continuation cannot claim a
+    # first call's routing bridge whatever its inputs say.
+    continued: bool = False
 
     def __post_init__(self) -> None:
         if not self.handle:
@@ -423,13 +427,13 @@ class Request:
     def continuation(self, *, inputs: dict[str, Any], cost_ceiling: Money) -> Request:
         """The same request again, after its tool calls and children answered.
 
-        Guarantees the continuation is this request with two fields changed and
-        nothing else lost: the second call is the billed one that produces the
-        final answer, so anything the first call was shown — the PROPENSITY block
-        above all — it is shown too. Rebuilding the request field by field is how
-        that silently stops being true.
+        Guarantees the continuation is this request with two fields changed, marked
+        ``continued``, and nothing else lost: the second call is the billed one that
+        produces the final answer, so anything the first call was shown — the
+        PROPENSITY block above all — it is shown too. Rebuilding the request field by
+        field is how that silently stops being true.
         """
-        return replace(self, inputs=inputs, cost_ceiling=cost_ceiling)
+        return replace(self, inputs=inputs, cost_ceiling=cost_ceiling, continued=True)
 
     def _world(self) -> dict[str, Any]:
         """Return operating facts without adding them to frozen grading inputs."""

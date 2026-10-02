@@ -38,6 +38,30 @@ class PaymentOutcomeUnknown(X402Error):
     """A submitted authorization may have settled; its provisional debit requires reconciliation."""
 
 
+def settlement_receipt(headers, payer: str) -> dict:
+    """Return the seller's settlement receipt, or raise ``PaymentOutcomeUnknown``.
+
+    Guarantees: a returned receipt reports success on Base, names this payer when it
+    names one, and carries a nonempty transaction reference. An HTTP status alone is
+    never settlement evidence: the wallet moves only when money moves, and a signed
+    authorization the seller has not shown settled stays provisional.
+    """
+    header = _header(headers, "payment-response", "x-payment-response")
+    if header is None:
+        raise PaymentOutcomeUnknown("Payment submitted; seller returned no settlement")
+    try:
+        receipt = _decode(header)
+    except X402Error:
+        raise PaymentOutcomeUnknown("Seller receipt does not confirm settlement") from None
+    transaction = receipt.get("transaction")
+    if (receipt.get("success") is not True
+            or receipt.get("network", BASE_NETWORK) != BASE_NETWORK
+            or str(receipt.get("payer", payer)).lower() != payer.lower()
+            or not isinstance(transaction, str) or not transaction):
+        raise PaymentOutcomeUnknown("Seller receipt does not confirm settlement")
+    return receipt
+
+
 def metered_data(meter, handle: str, ceiling: int, execute, record) -> tuple[dict, int]:
     """Data costs debit before return; unknown payments remain provisional and reconcilable."""
     reserve_before = None
@@ -366,16 +390,7 @@ class X402Provider:
                 record({"kind": "x402.submitted", "amount_micro": quote.amount_micro})
             try:
                 response = transport(origin, path, signature)
-                header = _header(response.headers, "payment-response", "x-payment-response")
-                if header is not None:
-                    receipt = _decode(header)
-                    if (receipt.get("success") is not True
-                            or receipt.get("network", BASE_NETWORK) != BASE_NETWORK
-                            or str(receipt.get("payer", client.address)).lower()
-                            != client.address.lower()):
-                        raise ValueError("invalid payment receipt")
-                elif not 200 <= response.status < 300:
-                    raise ValueError("payment outcome unavailable")
+                settlement_receipt(response.headers, client.address)
             except Exception:
                 raise PaymentOutcomeUnknown("Data payment outcome is unknown") from None
             cost = quote.amount_micro
@@ -540,19 +555,7 @@ class X402Provider:
         raised here happens after the authorization was sent."""
         response = _request(self._transport, "POST", url, payload,
                             {"PAYMENT-SIGNATURE": encoded}, timeout=req.timeout_s)
-        settlement = None
-        header = _header(response.headers, "payment-response", "x-payment-response")
-        if header is not None:
-            settlement = _decode(header)
-            if (
-                settlement.get("network", BASE_NETWORK) != BASE_NETWORK
-                or settlement.get("success") is not True
-                or str(settlement.get("payer", client.address)).lower()
-                != client.address.lower()
-            ):
-                raise PaymentOutcomeUnknown("Seller receipt does not confirm settlement")
-        if not 200 <= response.status < 300 and settlement is None:
-            raise PaymentOutcomeUnknown("Payment submitted; seller returned no settlement")
+        settlement = settlement_receipt(response.headers, client.address)
         return self._response(req, response, quote, settlement, record)
 
     def _response(self, req: ModelRequest, response: HTTPResponse, quote, settlement,

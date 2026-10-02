@@ -455,3 +455,24 @@ def test_release_state_survives_a_checkpoint(queue, open_decision):
              if k not in ("closed_ns", "tombstones", "compacted", "compacted_ranges")}
     twin._restore_state(older)
     assert twin.tombstones() == [] and twin.released_counts() == {}
+
+
+def test_successor_mapping_cannot_be_replaced(queue):
+    """Kernel invariant: a retired actor's successor is fixed once registered (s01 #5)."""
+    queue.register_successor("a", "b", {"outcome": "reward"})
+    before = queue.state()
+    with pytest.raises(ValueError, match="immutable"):
+        queue.register_successor("a", "c", {"outcome": "changed"})
+    assert queue.state() == before
+
+
+def test_successor_cycles_are_rejected(queue):
+    """Kernel invariant: succession is acyclic, self-succession included (s01 #5)."""
+    with pytest.raises(ValueError, match="cycle"):
+        queue.register_successor("a", "a", {"outcome": "outcome"})
+    queue.register_successor("a", "b", {"outcome": "outcome"})
+    queue.register_successor("b", "c", {"outcome": "outcome"})
+    before = queue.state()
+    with pytest.raises(ValueError, match="cycle"):
+        queue.register_successor("c", "a", {"outcome": "outcome"})
+    assert queue.state() == before

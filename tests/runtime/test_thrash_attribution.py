@@ -275,3 +275,25 @@ def test_a_movement_across_a_gap_is_movement():
     assert immune.thrash_roles(rt, windows) == ["evaluator"]
     windows[2]["profile"]["card:moving"] = 0.9  # inside again: no movement
     assert immune.thrash_roles(rt, windows) == []
+
+
+def test_retired_metric_caches_hold_only_the_edition_in_force():
+    """Charter revision may continue for the world's life (essay II.IV.a): a retired
+    card's meaning and an old edition's unparsed-prose marks are history, which the
+    diary holds, so two cohorts of one-card editions leave the caches the size of the
+    one card in force."""
+    rt = make_runtime()
+    sizes = []
+    for cohort in range(2):
+        for n in range(100):
+            unread = replace(_card(f"c{cohort}-{n}", "well_formed_rate", "evaluator"),
+                             acceptable_region="roughly stable")
+            kept = _card("kept", "well_formed_rate", "evaluator")
+            rt.charter = replace(rt.charter, edition=rt.charter.edition + 1,
+                                 cards=(kept, unread))
+            rt._drop_cards({"kept", unread.id}, f"edition:{rt.charter.edition}")
+            rt._derive_regions()
+        sizes.append((len(rt.card_meanings), len(rt.unparsed_logged)))
+    assert sizes == [(2, 1), (2, 1)]
+    assert set(rt.card_meanings) == {"kept", "c1-99"}
+    assert rt.unparsed_logged == {("c1-99", rt.charter.edition)}

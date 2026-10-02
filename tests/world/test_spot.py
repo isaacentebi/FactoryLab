@@ -79,7 +79,7 @@ def live():
     ex._info = SimpleNamespace(
         all_mids=lambda: {'BTC': '100', '@7': '101'},
         user_state=lambda _: {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
-                              'withdrawable': '40'},
+                              'withdrawable': '40', 'assetPositions': []},
         spot_user_state=lambda _: {'balances': [
             {'coin': 'USDC', 'total': '20', 'hold': '3'},
             {'coin': 'BTC', 'total': '2', 'hold': '0'}]},
@@ -229,3 +229,107 @@ def test_spot_outage_returns_the_last_complete_account():
     assert fallback == replace(first, stale=True) and ex.account_fallbacks == 1
     assert fallback.observed_at_ns == first.observed_at_ns
     assert ex.account().spot_balances == first.spot_balances
+
+
+@pytest.mark.parametrize('bad', [
+    {'marginSummary': {}},
+    {'marginSummary': {'accountValue': 'NaN', 'totalMarginUsed': '0'}, 'withdrawable': '40'},
+    {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'}, 'withdrawable': '40',
+     'assetPositions': [{'position': {'coin': 'BTC', 'szi': 'NaN', 'entryPx': '100'}}]},
+    {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'}, 'withdrawable': '40',
+     'assetPositions': [{'position': {'coin': 'BTC', 'szi': '1', 'entryPx': 'Infinity'}}]},
+    {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'}, 'withdrawable': 'x'},
+], ids=['empty-summary', 'nan-value', 'nan-size', 'infinite-entry', 'bad-withdrawable'])
+def test_malformed_account_cannot_crash_equity_observation(bad):
+    """Chapter II §II.b: the venue's account is physics the kernel reads, never guesses.
+    A malformed reply is an unavailable one: with no earlier snapshot it raises the
+    unavailable error every reader handles; with one, that snapshot answers, stale; and
+    nothing of the malformed reply is published."""
+    from factorylab.runtime.venue import VenueMixin
+
+    ex, _ = live()
+    good = ex._info.user_state
+    ex._info.user_state = lambda _: bad
+    with pytest.raises(VenueUnavailable, match='malformed'):
+        ex.account()
+    assert ex._last_account is None and '_dex_summaries' not in ex.__dict__
+    assert VenueMixin._equity_micro(SimpleNamespace(exchange=ex)) is None
+    ex._info.user_state = good
+    first = ex.account()
+    leverage = dict(ex.__dict__['_position_leverage'])
+    ex._info.user_state = lambda _: bad
+    assert ex.account() == replace(first, stale=True)
+    assert ex.__dict__['_position_leverage'] == leverage
+    assert VenueMixin._equity_micro(SimpleNamespace(exchange=ex)) is None
+
+
+def test_released_orders_retire_adapter_acknowledgements():
+    """Chapter II §II.b, memory is physics: the adapter keeps an acknowledgement only
+    while its identity can still be asked about. Retired identities leave; an active
+    uncertain one stays, and repeating it never submits twice."""
+    ex, calls = live()
+    ex._info.query_order_by_cloid = lambda *_: {'status': 'unknownOid'}
+    ex._exchange.cancel = lambda *_: {'status': 'ok', 'response': {'data': {
+        'statuses': ['success']}}}
+    ex._exchange.vault_usd_transfer = lambda *_: {'status': 'ok', 'response': {
+        'type': 'default'}}
+    for n in range(50):
+        assert ex.place(Order('BTC', True, D(1), client_id=f'h{n}:tool:0')).status == 'filled'
+        assert ex.cancel('8', coin='BTC', client_id=f'h{n}:tool:1')['status'] == 'cancelled'
+        assert ex.vault_transfer('0xv', True, D(1), client_id=f'h{n}:tool:2')['status'] == 'ok'
+    ex._exchange.market_open = ex._exchange.order = lambda *a, **k: (_ for _ in ()).throw(
+        ConnectionError('acknowledgement lost'))
+    for client_id in ('live:tool:0', 'late:tool:0'):
+        assert ex.place(Order('BTC', True, D(1), client_id=client_id)).status == 'uncertain'
+    # The runtime later read 'late' back terminal and released its decision: its
+    # obsolete uncertain entry leaves with it. 'live' is still genuinely uncertain.
+    ex.retire_client_ids([f'h{n}:tool:{s}' for n in range(50) for s in range(3)]
+                         + ['late:tool:0'])
+    assert ex._client_results.keys() == {'live:tool:0'}
+    assert ex._cancel_results == {} and ex._vault_results == {}
+    sent = len(calls)
+    assert ex.place(Order('BTC', True, D(1), client_id='live:tool:0')).status == 'uncertain'
+    assert len(calls) == sent  # an uncertain identity is reconciled, never resent
+
+
+@pytest.mark.parametrize('side, reply', [
+    ('spot', {}), ('spot', {'balances': {}}), ('spot', {'balances': ''}),
+    ('spot', {'balances': None}), ('spot', []),
+    ('perp', {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
+              'withdrawable': '40'}),
+    ('perp', {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
+              'withdrawable': '40', 'assetPositions': {}}),
+    ('perp', {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},
+              'withdrawable': '40', 'assetPositions': ''}),
+])
+def test_a_reply_without_its_list_is_never_a_fresh_empty_account(side, reply):
+    """A spot reply without a well-formed ``balances`` list, or a perps reply without a
+    well-formed ``assetPositions`` list, says nothing about what is held: it is
+    unavailable, never a fresh account that holds nothing (a wind-down read it as flat)."""
+    ex, _ = live()
+    first = ex.account()
+    assert first.spot_balances and not first.stale
+    if side == 'spot':
+        ex._info.spot_user_state = lambda _: reply
+    else:
+        ex._info.user_state = lambda _: reply
+    assert ex.account() == replace(first, stale=True)
+    ex._last_account = None
+    with pytest.raises(VenueUnavailable, match='malformed'):
+        ex.account()
+
+
+@pytest.mark.parametrize('prior', [True, False])
+def test_a_requested_spot_read_answered_with_nothing_is_unavailable(prior):
+    """A world that trades spot asks for the spot account every read: ``None`` back is
+    not an account without spot, it is no answer (it once published 272 as 50)."""
+    ex, _ = live()
+    first = ex.account()
+    if not prior:
+        ex._last_account = None
+    ex._info.spot_user_state = lambda _: None
+    if prior:
+        assert ex.account() == replace(first, stale=True)
+    else:
+        with pytest.raises(VenueUnavailable, match='malformed'):
+            ex.account()

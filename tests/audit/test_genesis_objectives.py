@@ -33,14 +33,22 @@ INITIAL_KEYS = frozenset({"lens", "open_questions", "active_commitments"})
 #: reward contract, which is physics.
 ID_TERMS = ("constructor", "builder", "trader", "opportunity", "mechanism", "empirical",
             "fidelity", "calibration", "consequence", "base-rate", "countercase", "audit")
-#: The worlds that carry edition 6's roster: edition 6's own, and the edition 7 breadth
-#: draft, a copy of the edition 6 rehearsal that changes only its market universe.
-EDITION6 = ("edition6-capital-loop", "edition6-testnet-rehearsal", "edition7-breadth-testnet")
+#: The worlds that carry edition 6's roster: edition 6's own, the edition 7 breadth
+#: draft, a copy of the edition 6 rehearsal that changes only its market universe, and
+#: the edition 8 launch draft, edition 7 re-seated on other models (its seat ids and
+#: lenses are edition 6's).
+EDITION6 = ("edition6-capital-loop", "edition6-testnet-rehearsal", "edition7-breadth-testnet",
+            "edition8-launch")
 
 
-def _edition6_xfail(reason):
+#: The edition 6 roster worlds that still carry its constructor and opportunity lenses.
+#: Edition 8 removed both (audit s03 #1), so item 3 is an ordinary assertion there.
+EDITION6_LENSES = tuple(w for w in EDITION6 if w != "edition8-launch")
+
+
+def _edition6_xfail(reason, worlds=EDITION6):
     mark = pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)
-    return [pytest.param(w, marks=mark) if w in EDITION6 else w for w in WORLDS]
+    return [pytest.param(w, marks=mark) if w in worlds else w for w in WORLDS]
 
 
 @pytest.mark.parametrize("world", WORLDS)
@@ -62,7 +70,8 @@ def test_item2_genesis_state_is_a_lens_with_no_seeded_agenda(world):
 @pytest.mark.parametrize("world", _edition6_xfail(
     "Q-G5: the constructor lens values an action class ('a valuable use of resources') and "
     "the opportunity lens states a valuation rule ('its best available alternative'); the "
-    "recommendation is option (a), delete both, or (b), an epistemic rival pair"))
+    "recommendation is option (a), delete both, or (b), an epistemic rival pair",
+    worlds=EDITION6_LENSES))
 def test_item3_every_lens_is_one_declarative_belief_with_no_lexicon_finding(world):
     for spec in load_manifest(world).assemblies:
         lens = spec.initial_state.get("lens")

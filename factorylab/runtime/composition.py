@@ -26,6 +26,7 @@ from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.learners.router import Sample
 from factorylab.runtime.clockwork import deadline_ticks
 from factorylab.runtime.feedback import composed_reward
+from factorylab.runtime.propensity import neutral_projection
 from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import (
     CH_VERDICT,
@@ -74,7 +75,7 @@ class CompositionMixin:
         its router neutrally, and a later settlement could train nothing (§I.b:
         reward must find "the exact decision (and the exact propensity) that
         produced it"). Any other registering decision (a judge's, a ballot's) is
-        not held, and its tool's uses reach the builder's inbox only.
+        not held, and its tool's uses credit no decision (they are ledgered).
         """
         try:
             decision = self.queue.get(handle)
@@ -134,6 +135,7 @@ class CompositionMixin:
         if isinstance(state.learner, _KeyedLearner):
             snapshot = f"{state.learner.id}:{self.n}:{parent_handle}:{self.stats.decisions}"
             state.learner.current_key = snapshot
+            state.learner.current_ordinal = self.n
 
         def feasible(action_id: str) -> tuple[bool, str]:
             if action_id in offered:
@@ -263,11 +265,15 @@ class CompositionMixin:
         schema = (with_counterfactual(item.outcome_schema)
                   if any(self._return_shape(spec, k) in self.PRODUCING_SHAPES
                          for k in spec.emits) else item.outcome_schema)
+        # The requester's declaration travels author-neutral (§I.b, ``neutral_projection``);
+        # its sealed record above keeps the original identifiers.
+        shown, shown_chosen = (neutral_projection(item.propensity, item.chosen,
+                                                  self._propensity_markets())
+                               if forwarded else (None, None))
         req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
                       {}, schema, parent.deadline_ns, ceiling, parent.handle,
                       "a JSON object satisfying the outcome schema", channel, parent.handle,
-                      propensity=dict(item.propensity) if forwarded else None,
-                      propensity_chosen=item.chosen if forwarded else None)
+                      propensity=shown, propensity_chosen=shown_chosen)
         ret = self._run_child(parent, item, handle, target, sample, req)
         if item.target != "self":
             self._compose(parent.handle, handle, action_id, target, ret)
@@ -379,7 +385,7 @@ class CompositionMixin:
         uninformed score is 0.75, is on another scale and credits nothing. Each use
         adds the score, once, to the hold of the decision that registered the tool
         while that hold is open (``_hold_for_tool_use``); a tool whose registering
-        decision is not held credits its builder's inbox only. Nothing is counted
+        decision is not held credits no decision, and is ledgered. Nothing is counted
         twice: a child's credit closes once, and a decision's tool uses are consumed
         by its one settlement.
         """
@@ -405,14 +411,13 @@ class CompositionMixin:
                 applied = "unheld"  # a judge's or a ballot's registration
             else:
                 applied = "late"
-            seq = self.ledger.append({
+            # Sealed diagnostics only: an unheld builder is credited nothing, because a
+            # score reaches a seat only through its own decision's queue settlement
+            # (Chapter II §I.b, the thin reward channel; s04 #2).
+            self.ledger.append({
                 "kind": "credit.tool", "tool": tool_id, "builder": builder,
                 "registered_by": tool.provenance, "caller_handle": handle, "calls": calls,
                 "credit": score, "applied": applied, "ts": self.clock.now_ns})
-            if applied == "unheld":
-                self.outcomes.append(builder, handle=tool.provenance, evidence=seq, outcome={
-                    "kind": "tool_use_credit", "tool": tool_id, "calls": calls,
-                    "credit": round(score, 6)})
 
     def _settle_composed(self) -> None:
         """Settle every held decision whose signals are in (``composed_reward``).
@@ -484,13 +489,3 @@ class CompositionMixin:
                 sampling_ref=pend.verdicts[0][0] if pend.verdicts else None, cards="producer")
             if pend.verdicts:
                 self.stats.verdicts += 1
-            owner = self.handle_to_assembly.get(pend.handle)
-            if credited and owner in self.assemblies:
-                # The seat's own inbox, under its own handle: the credits its decision
-                # carried and what it settled on. No requester or caller is named.
-                self.outcomes.append(owner, handle=pend.handle, outcome={
-                    "kind": "composed_settled",
-                    "requester_score": None if pend.credit is None else round(pend.credit, 6),
-                    "tool_use_score": None if use is None else round(use, 6),
-                    "verdict": None if verdict is None else round(verdict, 6),
-                    "reward": round(reward, 6)})

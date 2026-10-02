@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -70,11 +69,24 @@ def load_catalogue(ledger_path: Path, liveness: Liveness | None = None):
     from factorylab.runtime.wake import _open_snapshot
 
     ledger, manifest = _open_snapshot(ledger_path)
-    items = list(ledger.items())
+    # One streaming pass that keeps what the three folds read: the newest version of
+    # each service, the Launch event and any record of death. Materializing the diary
+    # made every refresh as large as the world's whole history (essay II.II.b,
+    # "memory").
+    services: dict = {}
+    facts: list[dict] = []
+    for item in ledger.items():
+        for service_id, service in services_from_items((item,)).items():
+            current = services.get(service_id)
+            if current is None or service.version >= current.version:
+                services[service_id] = service
+        event = item.get("event") if item.get("kind") == "event" else None
+        if (item.get("kind") == "kill.production" or isinstance(event, dict)
+                and event.get("kind") in ("Launch", "Terminated")):
+            facts.append(item)
     if liveness is not None:
-        liveness.observe(items)
-    return (services_from_items(items), manifest.treasury.reserve_address,
-            facilitator_from_items(items))
+        liveness.observe(facts)
+    return services, manifest.treasury.reserve_address, facilitator_from_items(facts)
 
 
 def build_seller(services, pay_to: str, facilitator: str, spool_path,
@@ -85,6 +97,27 @@ def build_seller(services, pay_to: str, facilitator: str, spool_path,
     return Seller(services, pay_to=pay_to, runner=default_runner(),
                   earn=spool_earn(IncomeSpool(spool_path), pay_to=pay_to),
                   facilitator=facilitator, live=live)
+
+
+def serve_and_refresh(server, refresh, interval_s: float, *, clock=time.monotonic) -> None:
+    """Serve requests and re-read the catalogue on this one thread, forever.
+
+    Guarantees the refresh runs on the serving thread (no background thread: AGENTS
+    engineering rules), at the first request boundary at or after each deadline
+    ``interval_s`` apart: the server waits for a request no longer than the time left
+    to the next refresh. A refresh that raises leaves the previous catalogue standing.
+    Returns only by an exception from the server (``KeyboardInterrupt`` included).
+    """
+    next_refresh = clock() + interval_s
+    while True:
+        server.timeout = max(0.0, next_refresh - clock())
+        server.handle_request()
+        if clock() >= next_refresh:
+            try:
+                refresh()
+            except Exception:  # noqa: BLE001 - the previous catalogue stands
+                pass
+            next_refresh = clock() + interval_s
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,17 +153,10 @@ def main(argv: list[str] | None = None) -> int:
     seller = build_seller(services, pay_to, facilitator, args.spool, live=liveness)
     server = serve(seller, host=args.bind, port=args.port)
 
-    def refresh() -> None:
-        while True:
-            time.sleep(max(1.0, args.refresh))
-            try:
-                seller.refresh(load_catalogue(ledger_path, liveness)[0])
-            except Exception:
-                pass  # the previous catalogue stands until the ledger reads again
-
-    threading.Thread(target=refresh, daemon=True).start()
     try:
-        server.serve_forever()
+        serve_and_refresh(
+            server, lambda: seller.refresh(load_catalogue(ledger_path, liveness)[0]),
+            max(1.0, args.refresh))
     except KeyboardInterrupt:
         pass
     finally:

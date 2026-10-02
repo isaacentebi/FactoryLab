@@ -12,7 +12,7 @@ from typing import Any
 from urllib import error
 
 from factorylab.kernel.money import nonnegative_usd_micro
-from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openai_wire import (
     CALL_EXPIRED,
     dispatched,
@@ -139,9 +139,8 @@ class VeniceError(Exception):
 class VeniceProvider:
     """Completions make one billed POST; only connection-failed GETs retry once.
 
-    ``raw.cost_source`` is ``reported`` for cost.usd, or ``table`` for a catalogue
-    estimate. Both yield integer ``cost_micro`` so existing metering charges the
-    amount; its generic populated-cost flag does not distinguish these sources.
+    ``cost_micro`` is Venice's own reported ``cost.usd``; a completion without one
+    raises a billing-uncertain ``VeniceError`` rather than returning an estimate.
     """
 
     name = "venice"
@@ -167,7 +166,6 @@ class VeniceProvider:
         self._reasoning_models = frozenset(reasoning_models)
         self._reasoning_config = deepcopy(dict(reasoning_config or {}))
         self._web_config = deepcopy(dict(web_config or {}))
-        self._prices: dict[str, TokenPrice] = {}
         # The model ids whose manifest ``contract`` is ``json_schema`` (Chapter II §II.b).
         self._schema_models = frozenset(schema_models)
         # The model ids whose ``contract`` is ``json_schema_strict`` (``strict_schema``).
@@ -332,15 +330,12 @@ class VeniceProvider:
         try:
             serving_id = "venice:" + (wire.model or wire_id).removeprefix("venice:")
             reported = (response.get("cost") or {}).get("usd")
-            if reported is not None:
-                cost = nonnegative_usd_micro(reported, rounding="ceil")
-                raw["cost_source"] = "reported"
-            else:
-                if serving_id not in self._prices:
-                    self.catalogue()
-                price_id = serving_id if serving_id in self._prices else "venice:" + wire_id
-                cost = self._prices[price_id].cost(wire.input_tokens, wire.output_tokens)
-                raw.update(cost_source="table", price_model_id=price_id, cost_scope="tokens_only")
+            if reported is None:
+                # The wallet moves only when money moves: a reply that names no bill
+                # books nothing final; the meter settles it from Venice's own balance.
+                raise VeniceError(None, "Provider bill unavailable")
+            cost = nonnegative_usd_micro(reported, rounding="ceil")
+            raw["cost_source"] = "reported"
             if wire.request_id is not None:
                 raw["request_id"] = wire.request_id
             if wire.reasoning_tokens is not None:
@@ -375,7 +370,7 @@ class VeniceProvider:
         except VeniceError:
             raise
         except Exception:
-            raise VeniceError(None, "Invalid completion, cost or catalogue price") from None
+            raise VeniceError(None, "Invalid completion or cost") from None
 
     def catalogue(self) -> list[CatalogueEntry]:
         """Text model ids are namespaced and fractional per-Mtok prices stay exact."""
@@ -405,7 +400,6 @@ class VeniceProvider:
                         max_completion_tokens=_positive_int(spec.get("maxCompletionTokens")),
                     )
                 )
-            self._prices = {entry.id: entry.price() for entry in entries}
             return entries
         except Exception:
             raise VeniceError(None, "Invalid catalogue") from None

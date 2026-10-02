@@ -822,7 +822,7 @@ class TestFix12NoTransferBlocksForever:
         assert treasury.transfer("to_reserve", "10", handle="c",
                                  now_ns=6 * hour)["status"] == "submitted"
 
-    def test_the_live_rail_knows_when_a_top_up_or_a_withdrawal_can_no_longer_execute(self):
+    def test_the_live_rail_never_abandons_a_top_up_or_a_withdrawal_by_age(self):
         from factorylab.world.treasury_rails import LiveRail
 
         rail = LiveRail.__new__(LiveRail)
@@ -835,7 +835,9 @@ class TestFix12NoTransferBlocksForever:
         day_ms = 86_400_000
         withdraw = {"reference": {"nonce": 10 * day_ms}, "nonce": 10 * day_ms}
         assert rail.expired("withdraw_burn", withdraw, 11 * day_ms * 10**6) is None
-        assert rail.expired("withdraw_burn", withdraw, 14 * day_ms * 10**6)
+        # Past the venue's nonce window the action can no longer execute, but it may
+        # have executed inside it and show late: age alone never abandons it.
+        assert rail.expired("withdraw_burn", withdraw, 14 * day_ms * 10**6) is None
         assert rail.expired("mint_base", withdraw, 99 * day_ms * 10**6) is None
 
     def test_prepared_evm_transactions_carry_gas_price_headroom(self):

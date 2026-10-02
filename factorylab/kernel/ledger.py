@@ -11,7 +11,6 @@ import os
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
-from copy import deepcopy
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from time import time_ns
@@ -21,6 +20,11 @@ from cryptography.fernet import Fernet, InvalidToken
 
 if TYPE_CHECKING:
     from factorylab.kernel.termination import Termination
+
+
+#: The items that move the compute wallet's balance: one ``wallet_series`` point each.
+WALLET_SERIES_KINDS = ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle",
+                       "wallet.settle_uncertain")
 
 
 class LedgerIntegrityError(RuntimeError):
@@ -369,8 +373,12 @@ class Ledger:
 
     @staticmethod
     def _empty_index() -> dict:
-        return {"choices": {}, "wallet_series": [], "spend": {}, "invocations": {},
-                "actions": {}, "latency_count": 0, "latency_total": 0,
+        # Counters and flags only: nothing here gains an entry per item or per
+        # decision, so the resident index and the head that persists it stay the size
+        # of the world's names, never of its history (essay II.II.b, "memory"). The
+        # wallet series and spend by capability are history; ``aggregate`` reads them
+        # from the diary when asked.
+        return {"invocations": {}, "actions": {}, "latency_count": 0, "latency_total": 0,
                 "latency_min": None, "latency_max": None,
                 "first_tick": None, "last_event": None, "launch": False, "terminated": False,
                 "launch_nonce": None, "release_digest": None, "facilitator_url": None}
@@ -379,16 +387,13 @@ class Ledger:
     def _copy_index(index: dict) -> dict:
         """Return an index detached from its original: indexing one never reaches the other.
 
-        ``_index_item`` only ever appends to ``wallet_series`` and assigns into the
-        four counter maps, so fresh containers for those are the whole of detachment.
-        The observations inside them are written once and never edited, and the one
-        public view of them, ``aggregate``, deep-copies what it hands out.
+        ``_index_item`` only ever assigns into the two counter maps, so fresh
+        containers for those are the whole of detachment. Guarantees only the keys of
+        ``_empty_index`` are kept: a head persisted when the index also held history
+        (the wallet series, a choice per decision) sheds it here.
         """
-        copied = dict(index)
-        series = index.get("wallet_series")
-        if type(series) is list:
-            copied["wallet_series"] = list(series)
-        for name in ("choices", "spend", "invocations", "actions"):
+        copied = {key: index[key] for key in Ledger._empty_index() if key in index}
+        for name in ("invocations", "actions"):
             counter = index.get(name)
             if type(counter) is dict:
                 copied[name] = dict(counter)
@@ -397,19 +402,9 @@ class Ledger:
     @staticmethod
     def _index_item(index: dict, item: dict) -> None:
         kind = item.get("kind")
-        if kind in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle",
-                    "wallet.settle_uncertain"):
-            index["wallet_series"].append({"ts": item["ts"], "balance": item["balance_after"]})
         if kind == "decision.open":
             choice = item["propensity"]["chosen"]
-            index["choices"][item["handle"]] = choice
             index["actions"][choice] = index["actions"].get(choice, 0) + 1
-        if kind in ("wallet.commit", "wallet.settle_uncertain"):
-            # An uncertain bill is committed at its ceiling; its settlement returns the
-            # over-charge, so spend is the commit less that refund, never the ceiling.
-            choice = index["choices"].get(item["handle"], item["reason"])
-            sign = -1 if kind == "wallet.settle_uncertain" else 1
-            index["spend"][choice] = index["spend"].get(choice, 0) + sign * item["amount"]
         if kind == "invocation":
             name = item["assembly_id"]
             index["invocations"][name] = index["invocations"].get(name, 0) + 1
@@ -614,9 +609,32 @@ class Ledger:
             raise PermissionError("open the ledger read-only to iterate its items")
         return self._iter_items()
 
+    def items_newest_first(self) -> Iterator[dict]:
+        """Yield every item up to this ledger's own boundary, newest first, one at a time.
+
+        The same items as ``items()`` in the reverse order, under the same rule: a
+        writable disk ledger refuses, and a reader's memory is bounded by the largest
+        single item. A fold that joins an item to later ones (a return to the verdicts
+        about it) can then hold only what is still being joined, never the diary.
+        """
+        if self.__path is not None and not self.__read_only:
+            raise PermissionError("open the ledger read-only to iterate its items")
+        if self.__path is None:
+            return (json.loads(self.__keys._decrypt(token))
+                    for token in reversed(self.__tokens[:self.__count]))
+        return (json.loads(self.__keys._decrypt(self._token(line)))
+                for line in self._reverse_lines() if json.loads(line).keys() == {"item"})
+
     def decision_id(self, seq: int) -> str:
-        """Return the handle ordinal for a new append or an authenticated replay-tail item."""
-        return self.__decision_ids[seq]
+        """Return, once, the handle ordinal for a new append or an authenticated replay-tail
+        item.
+
+        Guarantees each ``decision.handle`` item's ordinal is handed out at most once and
+        then forgotten: its one reader (``DecisionQueue.open``) takes it right after the
+        append, so this map holds the replay tail not yet replayed, never every handle
+        the world opened (essay II.II.b, "memory"). A second ask raises KeyError.
+        """
+        return self.__decision_ids.pop(seq)
 
     def event_times(self) -> dict:
         """Only verified event boundaries and launch/finality flags leave the kernel index."""
@@ -974,16 +992,16 @@ class Ledger:
             raise ValueError("inverted aggregate interval")
         if not self.verify():
             raise LedgerIntegrityError("ledger verification failed")
-        if not params:
+        if not params and view in ("invocations_by_assembly", "action_frequencies",
+                                   "settlement_latency"):
             index = self.__index
-            if view == "wallet_series":
-                return {"series": deepcopy(index["wallet_series"])}
-            if view in ("spend_by_capability", "invocations_by_assembly", "action_frequencies"):
-                key = {"spend_by_capability": "spend", "invocations_by_assembly": "invocations",
-                       "action_frequencies": "actions"}[view]
-                return {"spend" if key == "spend" else "counts": dict(sorted(index[key].items()))}
+            if view != "settlement_latency":
+                key = "invocations" if view == "invocations_by_assembly" else "actions"
+                return {"counts": dict(sorted(index[key].items()))}
             return {"count": index["latency_count"], "total_ns": index["latency_total"],
                     "min_ns": index["latency_min"], "max_ns": index["latency_max"]}
+        # The series and the spend are history, read from the diary one item at a time
+        # rather than kept resident for the world's life (essay II.II.b, "memory").
         selected = (item for item in self._iter_items()
                     if item["ts"] >= since and (until is None or item["ts"] < until))
         if view == "wallet_series":
@@ -991,23 +1009,46 @@ class Ledger:
                 "series": [
                     {"ts": item["ts"], "balance": item["balance_after"]}
                     for item in selected
-                    if item.get("kind")
-                    in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle",
-                        "wallet.settle_uncertain")
+                    if item.get("kind") in WALLET_SERIES_KINDS
                 ]
             }
         if view == "spend_by_capability":
-            choices = {
-                item["handle"]: item["propensity"]["chosen"]
-                for item in self._iter_items()
-                if item.get("kind") == "decision.open"
-            }
+            # One pass: a bill is spend of the action its decision chose, which opened
+            # before it, or of its reason when no decision names its handle. An
+            # uncertain bill is committed at its ceiling; its settlement returns the
+            # over-charge, so spend is the commit less that refund, never the ceiling.
+            # A bill's capability is fixed when it is reserved; what is held is the
+            # decisions not yet settled (``choices``) and the bills not yet resolved
+            # (``bills``), never every decision (essay II.II.b, "memory").
+            choices: dict[str, str] = {}
+            bills: dict[str, str] = {}
+            uncertain: set[str] = set()
             amounts: Counter = Counter()
-            for item in selected:
-                if item.get("kind") in ("wallet.commit", "wallet.settle_uncertain"):
-                    capability = choices.get(item["handle"], item["reason"])
-                    sign = -1 if item["kind"] == "wallet.settle_uncertain" else 1
-                    amounts[capability] += sign * item["amount"]
+            for item in self._iter_items():
+                kind = item.get("kind")
+                if kind == "decision.open":
+                    choices[item["handle"]] = item["propensity"]["chosen"]
+                elif kind == "decision.settle":
+                    # A settled outcome is final: its decision reserves nothing more.
+                    choices.pop((item.get("return") or {}).get("handle"), None)
+                elif kind == "wallet.reserve":
+                    bills[item["reservation_id"]] = choices.get(item["handle"], item["reason"])
+                elif kind == "metering.uncertain":
+                    uncertain.add(item["reservation_id"])
+                elif kind == "wallet.release":
+                    bills.pop(item.get("reservation_id"), None)
+                elif kind in ("wallet.commit", "wallet.settle_uncertain"):
+                    rid = item.get("reservation_id")
+                    capability = (bills.get(rid) if rid in bills
+                                  else choices.get(item["handle"], item["reason"]))
+                    # A provisional commit stays held until its settlement; any other
+                    # resolution is the bill's last.
+                    if kind == "wallet.settle_uncertain" or rid not in uncertain:
+                        bills.pop(rid, None)
+                        uncertain.discard(rid)
+                    if item["ts"] >= since and (until is None or item["ts"] < until):
+                        sign = -1 if kind == "wallet.settle_uncertain" else 1
+                        amounts[capability] += sign * item["amount"]
             return {"spend": dict(sorted(amounts.items()))}
         if view == "invocations_by_assembly":
             counts = Counter(

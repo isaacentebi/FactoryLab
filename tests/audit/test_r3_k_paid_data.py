@@ -9,7 +9,7 @@ from factorylab.world.connector import ConnectorProxy, ConnectorResponse
 from factorylab.world.market import PaymentOutcomeUnknown, X402Provider
 from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items, recording_journal
-from tests.world.test_market import TEST_KEY, SellerHTTP
+from tests.world.test_market import TEST_KEY, SellerHTTP, encoded
 
 # Every signature here goes through the production chokepoint, with a real
 # ReserveGuard in this test's temporary lock directory (tests/conftest.py).
@@ -21,7 +21,8 @@ class DataTransport:
     def __init__(self, amount=1734, paid=None):
         self.seller = SellerHTTP(amount=amount)
         self.calls = []
-        self.paid = paid or ConnectorResponse(200, b"paid fact")
+        self.paid = paid or ConnectorResponse(200, b"paid fact", {"PAYMENT-RESPONSE": encoded({
+            "success": True, "network": "eip155:8453", "transaction": "0xsettlement"})})
 
     def __call__(self, origin, path, signature=None):
         self.calls.append((origin, path, signature))

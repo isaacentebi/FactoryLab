@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import random
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
@@ -235,6 +236,118 @@ def _venue_fill_id(row: dict) -> str:
     """Hyperliquid's identity of one execution, its transaction hash and trade id: what
     a page reread at its boundary millisecond is deduplicated by (``fills``)."""
     return f"{row.get('hash', '')}:{row['tid']}"
+
+
+#: Every field of a venue fill row that ``fills`` turns into money or inventory.
+_FILL_TERMS = ("oid", "coin", "side", "sz", "px", "fee", "feeToken", "closedPnl", "time",
+              "liquidation", "crossed")
+
+
+def _fill_terms(row: Any) -> tuple:
+    """The economic terms of one fill row, exactly as the venue wrote them."""
+    return tuple(row.get(key) for key in _FILL_TERMS) if isinstance(row, dict) else (row,)
+
+
+def _finite(value: Any) -> Decimal:
+    """A venue amount as an exact finite Decimal, or ValueError."""
+    if isinstance(value, bool):
+        raise ValueError("a boolean is not an amount")
+    number = Decimal(str(value))
+    if not number.is_finite():
+        raise ValueError("amount must be finite")
+    return number
+
+
+def _wire_list(reply: Any, key: str) -> list:
+    """The list a venue reply holds under ``key``, or ValueError.
+
+    An absent or ill-typed list says nothing about what is held; it is never read as
+    an empty one (Chapter II §II.b: the account is read, never assumed).
+    """
+    rows = reply[key] if isinstance(reply, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"{key} is not a list")
+    return rows
+
+
+def _account_from_wire(st: Any, dex_states: dict, spot: Any, mids: Any,
+                       spot_marks: dict, observed_at: int, *, spot_requested: bool = False
+                       ) -> tuple[AccountState, dict[str, Decimal], dict]:
+    """Guarantees a whole account from one read, or ``VenueUnavailable``.
+
+    Chapter II §II.b: the account is physics read from the custodian. Every field
+    that becomes equity, cash, margin, a position or a balance is present and finite,
+    or the read is unavailable as a whole; nothing is published from part of it.
+    Returns the account, the leverage in effect per position, and each dex's summary.
+    A spot account that was requested must be a well-formed reply; only one that was
+    not requested is absent.
+    """
+    try:
+        summary = st["marginSummary"]
+        positions: list[Position] = []
+        in_effect: dict[str, Decimal] = {}
+        for state in (st, *dex_states.values()):
+            for ap in _wire_list(state, "assetPositions"):
+                p = ap["position"]
+                size = _finite(p["szi"])
+                if size == 0:
+                    continue
+                if not isinstance(p["coin"], str) or not p["coin"]:
+                    raise ValueError("position names no coin")
+                entry = _finite(p["entryPx"]) if p.get("entryPx") else Decimal(0)
+                positions.append(Position(p["coin"], size, entry))
+                leverage = _position_leverage(p.get("leverage"))
+                if leverage is not None:
+                    in_effect[p["coin"]] = leverage
+        dex_summaries = {dex: state["marginSummary"] for dex, state in dex_states.items()}
+        dex_value = sum((_finite(row["accountValue"]) for row in dex_summaries.values()),
+                        Decimal(0))
+        dex_margin = sum((_finite(row["totalMarginUsed"]) for row in dex_summaries.values()),
+                         Decimal(0))
+        dex_raw = [row.get("totalRawUsd") for row in dex_summaries.values()]
+        balances = []
+        unpriced: list[str] = []
+        spot_value = Decimal(0)
+        if spot_requested:
+            for row in _wire_list(spot, "balances"):
+                total = _finite(row["total"])
+                if not isinstance(row["coin"], str) or not row["coin"]:
+                    raise ValueError("balance names no coin")
+                balances.append(SpotBalance(row["coin"], total,
+                                            total - _finite(row.get("hold", "0"))))
+                if row["coin"] == "USDC":
+                    spot_value += total
+                elif total:
+                    symbol = spot_marks.get(row["coin"])
+                    try:
+                        mark = Decimal(str(mids[symbol]))
+                    except (KeyError, TypeError, ArithmeticError, ValueError):
+                        mark = None
+                    if mark is None or not mark.is_finite() or mark <= 0:
+                        unpriced.append(str(row["coin"]))
+                        continue
+                    spot_value += total * mark
+        raw_usd = (None if summary.get("totalRawUsd") is None
+                   or any(value is None for value in dex_raw)
+                   else _finite(summary["totalRawUsd"]) + sum(
+                       (_finite(value) for value in dex_raw), Decimal(0)))
+        perps = _finite(summary["accountValue"]) + dex_value
+        account = AccountState(
+            # Every perp clearinghouse this adapter reads (the first dex and each named
+            # HIP-3 dex) is perps equity; the spot book is not.
+            equity_usd=perps + spot_value,
+            perps_equity_usd=perps,
+            cash_usd=_finite(st.get("withdrawable", summary["accountValue"])),
+            positions=tuple(positions),
+            margin_used_usd=_finite(summary["totalMarginUsed"]) + dex_margin,
+            spot_balances=tuple(balances),
+            observed_at_ns=observed_at,
+            unpriced=tuple(unpriced),
+            reconciliation_cash_usd=raw_usd,
+        )
+    except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError) as exc:
+        raise VenueUnavailable("malformed account response") from exc
+    return account, in_effect, {"": summary, **dex_summaries}
 
 
 @dataclass
@@ -1713,78 +1826,29 @@ class HyperliquidExchange:
                 spot = self._guarded("spot_user_state", lambda:
                                      self._info.spot_user_state(self._address))
                 mids = self._guarded("spot_mids", self._info.all_mids)
+            observed_at = time.time_ns()
+            # A world that trades spot asked for the spot account: whatever came back
+            # is that account, ``None`` included, and is read as one.
+            requested = bool(getattr(self, "spot_pairs", ()))
+            account, in_effect, summaries = _account_from_wire(
+                st, dex_states, spot, mids, self._spot_marks if requested else {},
+                observed_at, spot_requested=requested)
         except VenueUnavailable:
             # Half an account is not an account: perps and spot fall back together,
             # so a spot endpoint outage returns the last complete snapshot. Its
             # observation time is not refreshed: a stale account is stale, and the
-            # collateral check refuses to open new risk on it.
+            # collateral check refuses to open new risk on it. A malformed reply is
+            # an unavailable one, and nothing of it is published.
             if self._last_account is None:
                 raise
             self.account_fallbacks = getattr(self, "account_fallbacks", 0) + 1
             return replace(self._last_account, stale=True)
-        summary = st["marginSummary"]
-        positions: list[Position] = []
-        in_effect: dict[str, Decimal] = {}
-        for state in (st, *dex_states.values()):
-            for ap in state.get("assetPositions", []):
-                p = ap["position"]
-                size = Decimal(str(p["szi"]))
-                if size == 0:
-                    continue
-                entry = Decimal(str(p["entryPx"])) if p.get("entryPx") else Decimal(0)
-                positions.append(Position(p["coin"], size, entry))
-                leverage = _position_leverage(p.get("leverage"))
-                if leverage is not None:
-                    in_effect[p["coin"]] = leverage
         # The leverage the venue reports in effect for each open position, as read.
         self.__dict__["_position_leverage"] = in_effect
         # Each HIP-3 dex's own margin summary: the pool its perps are margined against.
-        dex_summaries = {dex: state["marginSummary"] for dex, state in dex_states.items()}
-        self.__dict__["_dex_summaries"] = {"": summary, **dex_summaries}
-        dex_value = sum((Decimal(str(row["accountValue"])) for row in dex_summaries.values()),
-                        Decimal(0))
-        dex_margin = sum((Decimal(str(row["totalMarginUsed"]))
-                          for row in dex_summaries.values()), Decimal(0))
-        dex_raw = [row.get("totalRawUsd") for row in dex_summaries.values()]
-        balances = []
-        unpriced: list[str] = []
-        spot_value = Decimal(0)
-        if spot is not None:
-            for row in spot.get("balances", []):
-                total = Decimal(str(row["total"]))
-                balances.append(SpotBalance(row["coin"], total,
-                                            total - Decimal(str(row.get("hold", "0")))))
-                if row["coin"] == "USDC":
-                    spot_value += total
-                elif total:
-                    symbol = self._spot_marks.get(row["coin"])
-                    try:
-                        mark = Decimal(str(mids[symbol]))
-                    except (KeyError, TypeError, ArithmeticError, ValueError):
-                        mark = None
-                    if mark is None or not mark.is_finite() or mark <= 0:
-                        unpriced.append(str(row["coin"]))
-                        continue
-                    spot_value += total * mark
-        observed_at = time.time_ns()
+        self.__dict__["_dex_summaries"] = summaries
         self.__dict__["_last_account_ns"] = observed_at
-        raw_usd = (None if summary.get("totalRawUsd") is None
-                   or any(value is None for value in dex_raw)
-                   else Decimal(str(summary["totalRawUsd"])) + sum(
-                       (Decimal(str(value)) for value in dex_raw), Decimal(0)))
-        self._last_account = AccountState(
-            # Every perp clearinghouse this adapter reads (the first dex and each named
-            # HIP-3 dex) is perps equity; the spot book is not.
-            equity_usd=Decimal(str(summary["accountValue"])) + dex_value + spot_value,
-            perps_equity_usd=Decimal(str(summary["accountValue"])) + dex_value,
-            cash_usd=Decimal(str(st.get("withdrawable", summary["accountValue"]))),
-            positions=tuple(positions),
-            margin_used_usd=Decimal(str(summary["totalMarginUsed"])) + dex_margin,
-            spot_balances=tuple(balances),
-            observed_at_ns=observed_at,
-            unpriced=tuple(unpriced),
-            reconciliation_cash_usd=raw_usd,
-        )
+        self._last_account = account
         return self._last_account
 
     def collateral_view(self, coin: str, market: str = "perp") -> dict:
@@ -1960,6 +2024,10 @@ class HyperliquidExchange:
                     continue
                 key = (("tid", _venue_fill_id(f)) if f.get("tid") is not None else
                        tuple(sorted((k, str(v)) for k, v in f.items())))
+                if key in rows and _fill_terms(rows[key]) != _fill_terms(f):
+                    # Chapter II §III.b: one execution reported with two sets of terms
+                    # is no measurement; neither may settle by response order.
+                    raise VenueUnavailable("contradictory fills share one execution identity")
                 rows[key] = f
                 try:
                     stamps.append(int(f["time"]))
@@ -2204,6 +2272,23 @@ class HyperliquidExchange:
             return OrderResult(order_id, "uncertain", Decimal(0), None,
                                f"lookup exception: {type(exc).__name__}")
         return OrderResult(order_id, "uncertain", Decimal(0), None, "unrecognized order status")
+
+    def retire_client_ids(self, client_ids: Iterable[str]) -> None:
+        """Forget the acknowledgements of identities the runtime has durably retired.
+
+        Chapter II §II.b, memory is physics: what is remembered per write lives as long
+        as the write can still be asked about. Guarantees exactly the named identities
+        are forgotten, from the order, cancel and vault caches alike. The caller names
+        an identity only once its own durable record reads it terminal and that record
+        leaves with its released decision: nothing submits it again, and this cache's
+        own ``uncertain`` entry, written before the outcome was read back, is obsolete.
+        A genuinely uncertain identity is never named, so repeating it still reconciles.
+        """
+        retired = list(dict.fromkeys(client_ids))
+        for name in ("_client_results", "_cancel_results", "_vault_results"):
+            results = self.__dict__.get(name)
+            for client_id in retired if results else ():
+                results.pop(client_id, None)
 
     def _submit(self, client_id: str, submit) -> OrderResult:
         """Submit once per identity; a lost or malformed acknowledgement requires lookup."""
@@ -2494,7 +2579,7 @@ class HyperliquidExchange:
         Paginated and failing closed exactly like ``funding_payments``: a stalled
         full page raises rather than silently skipping its tail.
         """
-        from factorylab.world.vaults import ledger_rows
+        from factorylab.world.vaults import UNPARSED, ledger_rows
 
         if type(since_ns) is not int or since_ns < 0:
             raise ValueError("since_ns must be nonnegative integer nanoseconds")
@@ -2508,9 +2593,16 @@ class HyperliquidExchange:
             if not isinstance(page, list):
                 raise ValueError("invalid non-funding ledger response")
             for row in ledger_rows(page):
-                if row["ts_ns"] >= since_ns:
-                    rows[(row["hash"], row["type"], row["vault"], str(row.get("usd")),
-                          str(row.get("requested")))] = row
+                # An unread row is kept whatever time it states: its time may be what
+                # could not be read, and the venue returned it for this window.
+                if row["ts_ns"] >= since_ns or row["type"] == UNPARSED:
+                    key = (row["hash"], row["type"], row["vault"], str(row.get("usd")),
+                           str(row.get("requested")))
+                    if key in rows and rows[key] != row:
+                        # One row reported with two sets of amounts is no measurement;
+                        # neither may settle by response order (Chapter II §III.b).
+                        raise ValueError("contradictory vault rows share one identity")
+                    rows[key] = row
             if len(page) < 500:
                 break
             latest = max((int(r.get("time", 0)) for r in page), default=start)

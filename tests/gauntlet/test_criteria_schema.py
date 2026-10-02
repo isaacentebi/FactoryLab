@@ -178,8 +178,6 @@ def test_the_criteria_read_real_rows_without_error():
 #: not ledger rows, each with its reason.
 NOT_SCORES = {
     "outcome.undeliverable": "its `consequence` names what could not be delivered (text)",
-    "composed_settled": "a seat's inbox item (outcomes.append), not a ledger row; its "
-                        "values are the composed.settled row's, which S4 bounds",
 }
 #: Reward-bearing kinds no run captured here, each with its reason.
 UNCAPTURED = {

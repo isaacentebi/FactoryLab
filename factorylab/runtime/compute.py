@@ -5,7 +5,6 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
-import math
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
@@ -27,7 +26,6 @@ from factorylab.cortex.request import (
 from factorylab.kernel.artifacts import PRIVATE_REFUSAL
 from factorylab.kernel.budget import SeatWallet
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.reasons import Reason
@@ -235,11 +233,12 @@ class ArtifactListing:
         self.by_sha: dict[str, list[tuple]] = {}
         self.by_owner: dict[str, list[tuple]] = {}  # each sorted
         # sha -> its place in the archive index's insertion order: relative order only,
-        # identical between a live run and a rebuild from the checkpointed index. A
-        # collected hash keeps its number (``gone``) so a cursor naming it still has a
-        # place; put again, it enters at the end of the index and is numbered anew.
+        # identical between a live run and a rebuild from the checkpointed index. Only
+        # indexed hashes are numbered, so this holds the live archive and never its
+        # history (essay II.II.b, "memory"): a collected hash loses its number, a
+        # cursor naming it resumes from the first row at its time (``rows_after``),
+        # exactly as after a resume, and put again it is numbered anew at the end.
         self.order: dict[str, int] = {}
-        self.gone: set[str] = set()
         self.next_order = 0
 
     def sync(self) -> None:
@@ -252,7 +251,7 @@ class ArtifactListing:
         if epoch != self.epoch:
             self.epoch = epoch
             self.order = {sha: n for n, sha in enumerate(store.index)}
-            self.gone, self.next_order = set(), len(self.order)
+            self.next_order = len(self.order)
             self._rebuild(row for sha in list(store.index) for row in self._rows_for_sha(sha))
             return
         self._number(changed)
@@ -271,10 +270,9 @@ class ArtifactListing:
         """
         index = self.store.index
         for sha in changed:
-            if sha not in index and sha in self.order:
-                self.gone.add(sha)
-        entered = {sha for sha in changed
-                   if sha in index and (sha not in self.order or sha in self.gone)}
+            if sha not in index:
+                self.order.pop(sha, None)
+        entered = {sha for sha in changed if sha in index and sha not in self.order}
         tail = []
         for sha in reversed(index):
             if len(tail) == len(entered):
@@ -283,7 +281,6 @@ class ArtifactListing:
                 tail.append(sha)
         for sha in reversed(tail):
             self.order[sha] = self.next_order
-            self.gone.discard(sha)
             self.next_order += 1
 
     def rows_for(self, owner: str) -> list[dict[str, Any]]:
@@ -292,10 +289,10 @@ class ArtifactListing:
     def rows_after(self, owner: str, ns: int, sha: str) -> list[dict[str, Any]]:
         """``owner``'s rows after the listing position of the row ``(ns, sha)``.
 
-        Guarantees the same answer whether or not that row is still listed: a hash
-        the listing has numbered keeps its place, and a hash it never numbered (one
-        collected before a resume) resumes from the first row at ``ns``, so paging
-        may repeat a row it already returned but never skips one.
+        Guarantees paging never skips a row: a hash still in the archive keeps its
+        place, and a hash the listing does not number (one collected, before or after
+        a resume) resumes from the first row at ``ns``, so paging may repeat a row it
+        already returned but never skips one.
         """
         place = self.order.get(sha)
         cut = (-ns, place, float("inf")) if place is not None else (-ns, -1)
@@ -2142,7 +2139,7 @@ class ComputeMixin:
             ceiling = None
         cover = self.budget.cover(seat, self._novelty_protection(req.handle, reason))
         if (ceiling is not None and cover > 0 and ceiling > cover
-                and req.parent_handle is None and "continuation" not in req.inputs):
+                and req.parent_handle is None and not req.continued):
             backed = self.budget.bridge(seat, req.handle, ceiling - cover, "routing estimate")
             if backed:
                 self.entitlement_bridges[req.handle] = backed
@@ -2334,9 +2331,9 @@ class ComputeMixin:
         granted = True  # the first continuation always happens: results must be read
         outside_text = False
         answered: set[str] = set()  # lookups this decision has already been answered
-        final_note = ("Return the final answer; this request's continuation has been "
-                      "consumed. Further tool calls and requests are refused.")
-        minimum_inputs = {**req.inputs, "continuation": final_note,
+        # A continuation's limits are its schema (``closing``, ``granted_round``), which
+        # the kernel enforces; no prose restates them (AGENTS rules 1 and 3).
+        minimum_inputs = {**req.inputs,
                           "context_notice": "Tool bodies were not loaded: insufficient budget."}
         minimum_answer = closing().continuation(inputs=minimum_inputs,
                                                 cost_ceiling=req.cost_ceiling)
@@ -2505,9 +2502,8 @@ class ComputeMixin:
             # The continuation is the same request, and it is the billed call
             # that produces the final verdict — so everything the first call was
             # shown, the PROPENSITY block included, rides along unchanged.
-            note = final_note
             follow_inputs = {**req.inputs, "tool_results": results,
-                             "seen_tool_results": seen_results, "continuation": note}
+                             "seen_tool_results": seen_results}
             follow = closing().continuation(inputs=follow_inputs, cost_ceiling=remaining)
             final_quote = self._call_reserve(assembly, follow)
             if final_quote is not None and final_quote > remaining:
@@ -2546,15 +2542,8 @@ class ComputeMixin:
                                         "remaining": remaining, "reserve": reserve,
                                         "ts": self.clock.now_ns})
             if granted:
-                note = (
-                    "You may call population tools again to parse what you retrieved, then "
-                    "return the final answer. Requests are refused."
-                    if outside_text else
-                    "You may call tools again to use what you retrieved, then return the "
-                    "final answer. Requests are refused."
-                )
                 follow = granted_round().continuation(
-                    inputs={**follow_inputs, "continuation": note}, cost_ceiling=remaining)
+                    inputs=follow_inputs, cost_ceiling=remaining)
             if isinstance(assembly, Assembly):
                 # The invocation's usage is the final provider call's usage. Keep
                 # the diagnostic identity aligned with that same continuation.
@@ -2598,7 +2587,7 @@ class ComputeMixin:
                 # The new private head is part of the next paid prompt. Reprice
                 # the minimum answer before another tool dispatch can spend from
                 # the same decision's remaining cover.
-                minimum_inputs = {**req.inputs, "continuation": final_note,
+                minimum_inputs = {**req.inputs,
                                   "context_notice": "Tool bodies were not loaded: "
                                                     "insufficient budget."}
                 minimum_answer = closing().continuation(
@@ -2905,40 +2894,6 @@ class ComputeMixin:
                 "note": "drawn by the kernel from your registered learner's current policy; "
                         "p is its probability there"}
 
-    def _followed_recommendation(self, action_id: str, req: Request, taken: tuple[str, ...],
-                                 state_hash: str) -> PropensityRecord | None:
-        """The learner's own record when the seat took the action its learner drew, or None.
-
-        Guarantees that a seat that did what its learner recommended is recorded at
-        the learner's probability, over the learner's whole policy, so the round it
-        opens is on-policy (R4: "if the seat obeys, record the learner's p"). The
-        policy must still be the one the draw was disclosed from; when it is not,
-        or the seat did something else, ``None``, and the seat's own declaration
-        stands.
-        """
-        shown = req.inputs.get("your_action_policy") if isinstance(req.inputs, dict) else None
-        if not isinstance(shown, dict) or shown.get("recommended") not in taken:
-            return None
-        recommended = shown["recommended"]
-        policy = self._learner_policy(action_id)
-        if policy is None or round(policy.get(recommended, 0.0), 6) != shown.get("p"):
-            self.ledger.append({"kind": "propensity.recommendation_stale",
-                                "handle": req.handle, "assembly_id": action_id,
-                                "recommended": recommended, "ts": self.clock.now_ns})
-            return None
-        actions = tuple(a for a in policy if policy[a] > 0)
-        total = math.fsum(policy[a] for a in actions)
-        try:
-            record = PropensityRecord(
-                actions, tuple(policy[a] / total for a in actions), recommended, 0,
-                self._assembly_learner_id(action_id), state_hash, source="declared")
-        except (ValueError, TypeError):
-            return None
-        self.ledger.append({"kind": "propensity.learner", "handle": req.handle,
-                            "assembly_id": action_id, "recommended": recommended,
-                            "p": policy[recommended], "ts": self.clock.now_ns})
-        return record
-
     def _note_to_owner(self, handle: str, kind: str, **facts: Any) -> None:
         """Address one fact about a decision to its owner's inbox, and to no one else."""
         owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
@@ -3006,17 +2961,14 @@ class ComputeMixin:
             hashlib.sha256(state_bytes(learner.state())).hexdigest()
             if learner is not None else "declared"
         )
-        # R4: a seat that took the action its learner drew is recorded at the
-        # learner's probability; otherwise its own declaration stands.
-        record, reason = self._followed_recommendation(
-            action_id, req, (label, taken_class), state_hash), None
-        if record is None:
-            declared = ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None
-            record, reason = declared_record(
-                label, declared,
-                learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
-                taken_class=taken_class,
-            )
+        # The seat's own declaration stands, always (§I.b: "an agent's own accounting").
+        # Matching the learner's draw is not evidence the draw produced the action.
+        declared = ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None
+        record, reason = declared_record(
+            label, declared,
+            learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
+            taken_class=taken_class,
+        )
         try:
             self.queue.record_propensity(req.handle, record)
         except (KeyError, ValueError):
@@ -3057,7 +3009,7 @@ class ComputeMixin:
         total = sum(executed.values())
         executed = {a: p / total for a, p in executed.items()}
         try:
-            learner.distribution_for(handle, support)
+            learner.distribution_for(handle, support, ordinal=self.n)
             learner.record_executed(handle, executed)
         except (KeyError, ValueError, RuntimeError, TypeError) as exc:
             self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
@@ -3197,4 +3149,11 @@ class ComputeMixin:
             record = self.queue.declared_propensity(handle)
         except KeyError:
             return None
-        return None if record is None else as_public(record)
+        return None if record is None else as_public(record, self._propensity_markets())
+
+    def _propensity_markets(self) -> frozenset[str]:
+        """The coins a published action label may name, spelled as labels spell them."""
+        exchange = getattr(self, "exchange", None)
+        return frozenset(str(coin).upper() for coin in (
+            *(getattr(exchange, "coins", None) or ()),
+            *(getattr(exchange, "spot_pairs", None) or ())))

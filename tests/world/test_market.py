@@ -292,3 +292,44 @@ def test_untrusted_settlement_receipt_cannot_claim_success(receipt):
     with pytest.raises(PaymentOutcomeUnknown):
         provider(fake).complete(ModelRequest(MODEL, "", ()))
     assert len(fake.payments) == 1
+
+
+@pytest.mark.parametrize("receipt", [
+    None,
+    {"success": True},
+    {"success": True, "network": BASE_NETWORK, "transaction": ""},
+    {"success": True, "network": BASE_NETWORK, "transaction": 7},
+], ids=["absent", "no-transaction", "empty-transaction", "non-string-transaction"])
+@pytest.mark.parametrize("path", ["inference", "data"])
+def test_http_success_without_settlement_stays_provisional(path, receipt):
+    """The wallet moves only when money moves: an HTTP 2xx is not settlement evidence.
+    A signed authorization the seller may still settle stays an uncertain bill until
+    a receipt names the transaction that moved it."""
+    from factorylab.world.connector import ConnectorResponse
+
+    headers = {} if receipt is None else {"PAYMENT-RESPONSE": encoded(receipt)}
+    fake = SellerHTTP(amount=17)
+    wallet = Wallet(100, Ledger())
+    if path == "inference":
+        fake.paid_response = HTTPResponse(200, fake.completion, headers)
+        model = X402MeteredModel(
+            provider(fake), PriceTable({MODEL: TokenPrice(0, 0, 2000)}), Meter(wallet),
+            record=lambda _item: None, on_unaffordable=lambda _h: None)
+        with pytest.raises(BillingUncertain) as error:
+            model.complete(ModelRequest(MODEL, "", ()), handle="decision-1")
+        assert error.value.cost == 17
+        assert wallet.balance == 83 and list(wallet.uncertain_bills) == ["wallet-0"]
+        assert len(fake.payments) == 1
+    else:
+        calls = []
+
+        def transport(origin, path, signature=None):
+            calls.append(signature)
+            if signature is None:
+                return ConnectorResponse(402, json.dumps(fake.quote).encode())
+            return ConnectorResponse(200, b"paid fact", headers)
+
+        with pytest.raises(PaymentOutcomeUnknown):
+            provider(fake).fetch_data("https://example.org", "/data", 2000,
+                                      transport=transport)
+        assert len(calls) == 2 and calls[1] is not None

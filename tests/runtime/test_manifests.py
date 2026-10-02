@@ -490,6 +490,56 @@ def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
         manifest_from_dict(raw)
 
 
+def test_the_edition8_launch_world_is_edition7_reseated_and_nothing_else():
+    """The owner's roster decisions of 2 October 2026: no Gemini, Claude, Sol, Qwen 3.8
+    Flash or DeepSeek seat; every seat on GPT-6 Luna, Mistral Small 3.2 or Qwen3 235B A22B
+    2507, meta-audit on Luna. GPT-6.1 Sol, GPT-6 Sol, Qwen 3.8 Flash and DeepSeek v4.1
+    Flash are off the menu. The
+    constructor and opportunity lenses are removed (audit s03 #1), and no other seat's
+    state changes. Every physics, evaluation, charter and timing value is edition 7's;
+    Polymarket reads stay on and its live order rail off."""
+    from dataclasses import replace
+
+    from factorylab.runtime.families import model_family
+
+    launch, breadth = load_manifest("edition8-launch"), load_manifest("edition7-breadth-testnet")
+    seats = {a.id: a.model_id for a in launch.assemblies}
+    mistral, qwen = "mistralai/mistral-small-3.2-24b-instruct", "qwen/qwen3-235b-a22b-2507"
+    assert set(seats.values()) == {"openai/gpt-6-luna", mistral, qwen}
+    assert seats["meta-audit"] == "openai/gpt-6-luna"
+    # Mistral Small holds every seat Qwen 3.8 Flash held in edition 7's re-seating.
+    assert [s for s, m in seats.items() if m == mistral] == [
+        "constructor", "judge-fidelity", "judge-mechanics", "meta-countercase",
+        "antagonist-core"]
+    # Qwen3 235B holds every seat DeepSeek v4.1 Flash held.
+    assert [s for s, m in seats.items() if m == qwen] == [
+        "mechanism", "judge-consequence", "meta-calibration"]
+    assert {model_family(m) for m in seats.values()} == {"gpt", "mistral", "qwen"}
+    evaluators = {a.model_id for a in launch.assemblies if a.role in ("evaluator", "meta")}
+    assert {model_family(m) for m in evaluators} == {"gpt", "mistral", "qwen"}
+    menu = {m.id: m for m in launch.models}
+    assert not set(menu) & {"google/gemini-3.8-flash", "anthropic/claude-sonnet-5.5",
+                            "openai/gpt-6.1-sol", "openai/gpt-6-sol", "qwen/qwen3.8-flash",
+                            "deepseek/deepseek-v4.1-flash"}
+    for added in (mistral, qwen):
+        assert menu[added].contract == "json_object" and not menu[added].reasoning
+    assert all(m.training_cutoff for m in launch.models)
+    assert launch.polymarket.enabled and not launch.polymarket.orders
+    assert [a.id for a in launch.assemblies] == [a.id for a in breadth.assemblies]
+    unlensed = {"constructor", "opportunity"}
+    for a, b in zip(launch.assemblies, breadth.assemblies, strict=True):
+        if a.id in unlensed:
+            # The lens alone is gone; the questions and commitments stay empty.
+            assert "lens" in b.initial_state
+            assert a.initial_state == {k: v for k, v in b.initial_state.items()
+                                       if k != "lens"} == {"open_questions": [],
+                                                           "active_commitments": []}
+            a, b = replace(a, initial_state={}), replace(b, initial_state={})
+        assert replace(a, model_id="") == replace(b, model_id=""), a.id
+    assert replace(launch, name="", models=(), assemblies=()) == replace(
+        breadth, name="", models=(), assemblies=())
+
+
 def test_the_edition6_worlds_carry_the_schema_on_the_probed_routes_alone():
     # Chapter II §I.a I/O conformance: DeepSeek left json_schema after the first live
     # rehearsal; Qwen after the 2026-09-27 host schema refusal; MiniMax after the

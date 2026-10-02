@@ -16466,7 +16466,7 @@
         "predicate",
         "forecast_lookup"
       ],
-      "value": "A registered forecast predicate must resolve in the current predicate book and its params must satisfy that predicate's declared parameters; failure is scoped to that forecast item.",
+      "value": "A forecast names a seed or world predicate that resolves in the current predicate book, and its params must satisfy that predicate's declared parameters; a registered predicate is refused as a forecast and serves charter holdouts; failure is scoped to that forecast item.",
       "enforced": [
         67,
         68,
@@ -24828,7 +24828,7 @@
         "rules",
         "pending"
       ],
-      "value": "A current submitted transfer or a nonrecoverable stranded transfer blocks a new transfer. Parked recoverable strands do not generally block; a shadow-paid hybrid strand still blocks a new Venice top-up.",
+      "value": "A current submitted transfer or a nonrecoverable stranded transfer blocks a new transfer. Parked recoverable strands do not generally block; a shadow-paid hybrid strand still blocks a new Venice top-up. A withdrawal or shadow send past the venue's nonce window with no ledger evidence is parked with its principal and fee held; it blocks no transfer, except that a parked shadow send blocks a new Venice top-up.",
       "enforced": [
         185
       ],
@@ -24843,7 +24843,7 @@
         "rules",
         "venice"
       ],
-      "value": "A Venice top-up equals top_up_micro and fits the remaining window allowance. Where a lifetime cap exists, prior authorized micro-USD plus top_up_micro for each stranded Venice transfer and any submitted current Venice transfer plus the new amount fits max_venice_total_micro. Every authorization, reauthorization included, counts toward lifetime use.",
+      "value": "A Venice top-up equals top_up_micro and fits the remaining window allowance. Where a lifetime cap exists, prior authorized micro-USD plus top_up_micro for each stranded or parked Venice transfer and any submitted current Venice transfer plus the new amount fits max_venice_total_micro. Every authorization, reauthorization included, counts toward lifetime use.",
       "enforced": [
         186
       ],
@@ -26856,7 +26856,7 @@
   ],
   "enforcement": {
     "factorylab/charter/amendment.py": "828696c113a848938a4f6facde6e1301d5c896a6b627801986d2ed4e4eccb858",
-    "factorylab/charter/book.py": "f8e3d2b2e01bed055b3d5968ed824508d4136f2432b5a01ffe85cceb660c2ddc",
+    "factorylab/charter/book.py": "4d7cd0a4b33a2b2a27497684e5c56adf323ab7c4506bcb41c0803ae2edb9c11a",
     "factorylab/charter/charter.py": "28469dd3d73c10b9197b42f3d87437ec6130af583ed00d6a0666142a67777218",
     "factorylab/charter/holdout.py": "d5b52335eab7c31bbdf75ae13beeef1da5b6f0068ce953192b44b84f38c809dc",
     "factorylab/charter/measurement.py": "cddaab174fa8a0cdb9025926f636c3935a388bf0f12a06c8b62e0b209a085c61",
@@ -26866,28 +26866,28 @@
     "factorylab/cortex/registration.py": "344ea1b6f7c453dfaffad8b650d4bd907d273c694826b2575e91f188fb43179d",
     "factorylab/cortex/sandbox.py": "c84d3efca72662e1c00c2900f7ae468c3449bd9c53a18bf27b167328cfe7312a",
     "factorylab/cortex/tools.py": "5edbbfce3eb58e6e8974e2ac7e60f588c8a4721ec38e71fdfe4a18cb6dbad004",
-    "factorylab/kernel/money.py": "9e172c8753d812971f2d52aab5b1654e077226c0974adbcf90ae4ca5e47f9b6e",
+    "factorylab/kernel/money.py": "380bd31e218730fe674238106b8eba843f2aeffa91759a61f9db7081f79e4488",
     "factorylab/kernel/registry.py": "7e848639de72db3937110978339005251a001e86bd5684dfda927b99f84a798c",
     "factorylab/kernel/reserve.py": "11373ac82be95c9800c266b4fb5a1dbc035688602a2999c2bad4395c4d098a64",
-    "factorylab/runtime/composition.py": "07901c7e1c6e2ebed31fe7dd009f21e9d2a00dd8a027f0b2b5307af5243627cc",
-    "factorylab/runtime/compute.py": "4c9505ade970688c7fe540b07f110344ac405504294a156ffe3436bfb7e51814",
-    "factorylab/runtime/governance.py": "42640fa271d41d7cfbd395eb22ba84ecc4d18034d6c96189b59c184abe8f32e9",
+    "factorylab/runtime/composition.py": "87c0ddf621ea905b877bcc91eca6f4f9f129817672f38bdd849ffae902e398b3",
+    "factorylab/runtime/compute.py": "3f59d2e68a8b9c16cc8ae2f0c612cf7232d2d23307ecd98342213d9652ef78dc",
+    "factorylab/runtime/governance.py": "cad383fc7e3928869a5de7fe76096f07b6fd85f3de311ebd727b0b46ee7ab759",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
     "factorylab/runtime/polymarket.py": "737e9964f9ee209a7d033c6d1b60448a1770e2d6a8de84a3f816eaf43fcba165",
-    "factorylab/runtime/propensity.py": "488c4992bdb4707ff1f2c64549995c629e8f55909dde38822ce9f5132fc00280",
-    "factorylab/runtime/routing.py": "267b781ce62203279e17544891bf27c654e4c344e46f337528ca52cbb5b091c6",
+    "factorylab/runtime/propensity.py": "7b8f82737fd9195b6a4032f5b084f048a5f0a8d1440cbf805d709dec6b4c5f05",
+    "factorylab/runtime/routing.py": "fb10ece5671ab4920b8eed04787210ebddb0a196aa2f4fb5f94fc1e8a926d2fd",
     "factorylab/runtime/subscriptions.py": "2c096e82698cc03a7f5d7af70942b522b29a00c26611bb2830a0078456d93a6c",
-    "factorylab/runtime/vault.py": "579d47cf327d29454bdccafeda667212bb96cc12900e4e4060957d48592bb8ab",
-    "factorylab/runtime/venue.py": "9e4d4613006bf6f4fa2e7f1c66ca72e2009ef8a2c3d42fc1ee5cb1f52a03a508",
+    "factorylab/runtime/vault.py": "72a0bf98515c0f327e2713565716c6d7988486dca58d7b2afd25040541dd3afc",
+    "factorylab/runtime/venue.py": "805be8606590315bd3a4b9afd20309a71d7e8a41f518dbb31587d679031cea3e",
     "factorylab/runtime/websearch.py": "fa78a58b37bed02a006a9528a7f85b0f5d4ae3e23f31b47e7d1b1120a1ccb7fa",
-    "factorylab/settlement/vocabulary.py": "2805fe20978480c467e7eebb3ea2b758c711654e83a618d8678475c6c5eab4a8",
+    "factorylab/settlement/vocabulary.py": "c40ad5accbcfca8384cc23a4c33def5052a982c8fc483cb17942797cdd976429",
     "factorylab/world/connector.py": "226ee503dcae74737ca857082d5341972e7397281ed2730a754483a6247999a8",
     "factorylab/world/evm.py": "2ba9bba6877e3bd40d7cf487f7feda5526ec6c565b54c3b284b64fbfa8b10360",
-    "factorylab/world/exchange.py": "4797e673e43e013529562824cae73bde1eb315267f81f6c8bca568a900739845",
+    "factorylab/world/exchange.py": "9a835cc008b5f33e9c1d8f0b63be8902a1eef1b0d3ee9e34a0805df4a3c8df2b",
     "factorylab/world/polymarket_clob.py": "47ed32f0a05a0a651b12cc4e31bd7584e66c88ea68aa51b7ce5c049eee3eeebe",
     "factorylab/world/tape.py": "4f311b900b9d2e74b29a87e7b33763b22ddf740e118f8307f267e8b90576e81e",
-    "factorylab/world/treasury.py": "68e172bc767a6fef31ddd9e8404fd3486444838867abfe65f589ca0dbb68dcf4",
-    "factorylab/world/treasury_rails.py": "3bf9d4ca6b608029666bae14a9f003ed25ad113abce3bb51762e7c5bfc897a4a",
+    "factorylab/world/treasury.py": "56b245781d87e40f3c9533bc7b190da412c6c32a1ae68fd24d15ce04eb8cf9c6",
+    "factorylab/world/treasury_rails.py": "c40ccf679b339fbffa58d3050c95cf30c3419f9a286e34e375b9f11b76dead43",
     "factorylab/world/venue_tools.py": "7f1eb7bb77158c373d879a0e9342bbe83c882f8e2c6ad30cd26c873bd43ad118"
   }
 }

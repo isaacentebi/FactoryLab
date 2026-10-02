@@ -529,7 +529,7 @@ def _render_counter(rt) -> None:
     ev = Event("class2-verdict", EventKind.VERDICT, rt.clock.now_ns, {
         "about_handle": "class2-return", "evaluator_handle": "class2-verdict",
         "verdict": 0.5, "rationale": "class2", "producer_outputs": {"answer": "class2"},
-        "propensity": as_public(rt._propensity(sample))}, "kernel")
+        "propensity": as_public(rt._propensity(sample), rt._propensity_markets())}, "kernel")
     channels = rt._return_channels(aid, ev)
     handle = rt.queue.open(actor=lid, event_id=ev.id, propensity=rt._propensity(sample),
                            channel=next(iter(channels.values())), parent_handle=None,
@@ -564,14 +564,20 @@ def builder_of(inputs: dict) -> str | None:
     for it), or ``compute._invoke`` for a continuation."""
     import inspect
 
-    if isinstance(inputs.get("continuation"), str):
-        return "factorylab/runtime/compute.py::_invoke"
+    innermost = True
     for frame in inspect.stack(context=0):
         try:
             rel = Path(frame.filename).resolve().relative_to(ROOT).as_posix()
         except ValueError:
             continue
         key = f"{rel}::{frame.function}"
+        if key == "factorylab/runtime/compute.py::_invoke_compute":
+            # A continuation is marked on the request itself (``Request.continuation``),
+            # never in what the seat reads; only the call being sent is asked.
+            if innermost and getattr(frame.frame.f_locals.get("req"), "continued", False):
+                return "factorylab/runtime/compute.py::_invoke"
+            innermost = False
+            continue
         if key in REQUEST_BUILDERS and key != "factorylab/runtime/compute.py::_invoke":
             return key
     return None

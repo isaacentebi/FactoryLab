@@ -16,7 +16,7 @@ from tests.conftest import make_runtime
 def test_standing_mix_uses_executed_propensity_and_preserves_unbiased_row_estimator():
     inner = BlumMansour(lambda a: EXP3(a, .2), ('a', 'b'))
     learner = SnapshotLearner(inner)
-    p = learner.distribution_for('old', ('a', 'b'))
+    p = learner.distribution_for('old', ('a', 'b'), ordinal=0)
     learner.record_executed('old', {'a': .99, 'b': .01})
     saved = learner.state()
     learner = SnapshotLearner.restore(saved)
@@ -34,7 +34,7 @@ def test_producer_return_router_proposal_then_delayed_epoch_settlement():
     rt._register('population', RouterProposal('ProducerReturn', 'blum_mansour', .2))
     old = rt.routers['ProducerReturn'][0]
     assert isinstance(old.learner, _KeyedLearner)
-    old.learner.current_key = 'old'
+    old.learner.current_key, old.learner.current_ordinal = 'old', rt.n
     sample = old.router.route('ProducerReturn', lambda _: (True, ''), rt.rng,
                               mix=rt._mix_with_standing)
     handle = rt.queue.open(actor=old.learner.id, event_id='p', propensity=rt._propensity(sample),

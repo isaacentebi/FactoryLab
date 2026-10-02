@@ -81,9 +81,11 @@ def governance_admission_schematics(manifest) -> dict:
                          "facts and must produce a boolean without an execution error. Seed "
                          "and kernel predicate ids cannot be redefined.",
             "timeout_s": OBSERVATION_TIMEOUT_S,
-            "forecast_lookup": "A registered forecast predicate must resolve in the current "
-                               "predicate book and its params must satisfy that predicate's "
-                               "declared parameters; failure is scoped to that forecast item.",
+            "forecast_lookup": "A forecast names a seed or world predicate that resolves in "
+                               "the current predicate book, and its params must satisfy that "
+                               "predicate's declared parameters; a registered predicate is "
+                               "refused as a forecast and serves charter holdouts; failure is "
+                               "scoped to that forecast item.",
         },
         "learner": {
             "target": "assembly_id names a registered assembly with no existing own learner.",

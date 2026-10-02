@@ -158,6 +158,7 @@ AGE_RECIPIENT=age1_REPLACE_WITH_PUBLIC_RECIPIENT
 BACKUP_REMOTE=factory-backups:bucket/factorylab
 RCLONE_CONFIG=/srv/factorylab/rclone.conf
 FACTORY_WEBHOOK_URL=https://REPLACE_WITH_RECEIVER
+FACTORY_HEARTBEAT_URL=https://REPLACE_WITH_DEAD_MANS_SWITCH
 FACTORYLAB_WITNESS_URL=https://REPLACE_WITH_WITNESS_RECEIVER
 ```
 
@@ -171,16 +172,40 @@ below). `FACTORYLAB_FACILITATOR_URL` is read once, at launch, and ledgered in
 the `Launch` event; changing it afterwards refuses the resume
 (`facilitator_mismatch`), see "Selling a service".
 
-The receiver accepts precisely one JSON line such as
-`{"world":"funded","event":"terminated"}` or
-`{"world":"funded","event":"failed_resume","reason":"manifest_mismatch"}`. The
-reason is one code from the closed vocabulary below, or `none`; it gets no
-exception text, summary, ledger path, balances, key or model content. HTTPS is
-required; redirects are not followed. Alert delivery is best effort (20-second
-timeout); failure cannot revive a terminated world. systemd loads the env file;
-scripts never source arbitrary shell from it. Test the receiver before launch
-using a synthetic payload, and configure its own retention and uptime before the
-covenant begins.
+The receiver accepts precisely one JSON line,
+`{"world":"funded","event":"<event>","reason":"<code>"}`, for example
+`{"world":"funded","event":"failed_resume","reason":"manifest_mismatch"}`. Events
+are a closed vocabulary (`deploy/alert.sh`):
+
+| event | sent when |
+| --- | --- |
+| `terminated` | the world unit exits 3: the world is dead |
+| `failed_run`, `failed_resume`, `failed_start` | the world unit stopped abnormally during the initial run, a resume, or before either; `reason` is the runtime's code, else systemd's result (`oom_kill`, `exit_code`, `timeout`, ...) |
+| `stopped` | the world unit was stopped in order (`systemctl stop`, a reboot) |
+| `unhealthy`, `unknown` | the hourly health verdict is not healthy; `reason` is its first reason (see "Health and alerts") |
+| `backup_failed`, `wake_failed`, `health_failed` | that unit failed or timed out |
+| `heartbeat` | every six hours; `reason` is the last hourly verdict (`healthy`, `dormant`, `terminated`, `unhealthy`, or `unknown` when no fresh verdict exists) |
+| `test` | `systemctl start factorylab-alert@test.service` or `deploy/alert.sh --test` |
+
+The reason is one code from a closed vocabulary, or `none`; it gets no exception
+text, summary, ledger path, balances, key or model content. HTTPS is required;
+redirects are not followed. Each alert is retried with backoff (five attempts of at
+most 10 seconds each, 2, 4, 8 and 16 seconds apart: inside the world unit's 90-second
+stop timeout); failure cannot revive a terminated world. systemd loads the env file;
+scripts never source arbitrary shell from it. Configure the receiver's own retention
+and uptime, and an alarm on its silence (no `heartbeat` for seven hours), before the
+covenant begins. The body is short enough to read as a push notification: with
+[ntfy](https://ntfy.sh), set `FACTORY_WEBHOOK_URL=https://ntfy.sh/<an unguessable
+topic>` and the phone shows the JSON line itself as the notification text.
+
+`FACTORY_HEARTBEAT_URL` is optional and separate: the ping URL of a dead-man's switch
+([healthchecks.io](https://healthchecks.io) style), a service that alerts the owner
+when pings *stop*. The hourly health check sends it one bare HTTPS GET (no body, same
+rules: never in argv or logs, HTTPS only, retried with backoff) when, and only when,
+its verdict is `healthy`. An unhealthy, unknown, dormant or dead world, a failed
+check and a droplet that is gone all stop the pings alike, so this is the one alarm
+that still fires when no on-box alert can. Configure the service's period as one hour
+with a grace of about an hour.
 
 The CLI loads the usual root key files (never following a symlink; owner and mode
 are checked on the file actually opened). A key file wins over the environment, and
@@ -193,8 +218,9 @@ is a 16 MiB tmpfs. The ledger's existing
 resume and wake. No new viewing key is generated. Wake never releases the public
 seal. Do not use `postmortem`, `report`, summaries or key inspection as a live view.
 The web server has a separate dynamic user and no access to the key files or runs.
-Keep `www` exclusively for `wake.html`, `wake.json` and the `returns-<window>.json`
-pages the wake writes beside them; never symlink private files into it.
+Keep `www` exclusively for `wake.html`, `wake.json`, the `returns-<window>.json`
+pages and the `.wake/` generations they point into, all written by the wake; never
+symlink private files into it.
 
 ## Rehearse, start once, verify, leave it alone
 
@@ -215,8 +241,10 @@ hosting, remote storage and credential lifetimes, then start once:
 ```sh
 systemctl enable --now factorylab.service
 systemctl enable --now factorylab-static.service factorylab-wake.timer factorylab-backup.timer
+systemctl enable --now factorylab-health.timer factorylab-heartbeat.timer
 systemctl start factorylab-wake.service
 systemctl start factorylab-backup.service
+systemctl start factorylab-health.service
 systemctl is-active factorylab.service factorylab-static.service
 systemctl list-timers 'factorylab-*'
 ss -ltn 'sport = :8080'
@@ -326,7 +354,7 @@ code `witness_unavailable` (exit 1, a `failed_resume` item in the diary, the
 restarts with backoff and asks again, so a receiver outage pauses the world
 rather than reviving a copy while the one record that could name its death is
 out of reach. A checkpoint restored into a runtime that is already final, or
-one whose identity this process or the local witness records as killed, is
+one whose lineage (carried on an in-memory checkpoint) or local witness records as killed, is
 refused the same way (`restore_runtime`, `identity_killed`);
 `Termination.kill` stays irreversible on the object.
 
@@ -369,18 +397,20 @@ What the local file cannot survive is an operator who deletes it, or a host that
 is lost with it; `FACTORYLAB_WITNESS_URL` is the guarantee for that case, and
 without it a kill is final only as far as that one file survives. `dormant` is budget dormancy (C2): the runtime ledgers
 each entry and exit, the wake publishes them as `liveness.status` and
-`pots.dormancy`, and the wake unit witnesses the transitions. After every
-publish, `factorylab-wake.service` runs `deploy/witness_liveness.py` as
-`ExecStartPost`; it reads `liveness.status` from `www/wake.json`, compares it
+`pots.dormancy`, and the health unit witnesses the transitions. Every hour,
+`factorylab-health.service` runs `deploy/witness_liveness.py`; it reads
+`liveness.status` from `www/wake.json`, compares it
 with the status it last witnessed (`runs/funded.liveness`, one word, 0600) and
 emits `witness.sh dormant entered` on the way into dormancy and
-`witness.sh dormant exited` on the way back to `alive`. Republishing an unchanged
+`witness.sh dormant exited` on the way back to `alive`. An unchanged
 status emits nothing; the state file is rewritten only after the line was
-appended, so a failed append is retried at the next hourly publish. A dormant
+appended, so a failed append fails the health unit (alerted, `health_failed`)
+and is retried at the next hourly run. A dormant
 world that is killed gets its `kill` line from `start.sh` or the runbook and no
 `exited` line. An unreadable wake, or a status outside `alive`, `dormant` and
-`terminated`, changes nothing. The unit therefore also loads `ops.env` (for
-`FACTORYLAB_WITNESS_URL`) and may write under `runs/`. Nothing in a witness
+`terminated`, witnesses nothing (and is an `unknown` health verdict, alerted). The
+unit therefore also loads `ops.env` (for `FACTORYLAB_WITNESS_URL`) and may write
+under `runs/`. Nothing in a witness
 line is read from the diary: the digest is computed from the checkout and the
 head is the hash of the ledger file's bytes.
 ### Selling a service (edition 2, contract C11)
@@ -624,17 +654,30 @@ Exactly these fields are published: `wallet_series`, `spend_by_capability`,
 `tools`, `observations`, `charter`, `compute`, `pots`, `immune`, `portfolio`,
 `money`, `deliveries`, `commitments`, `cells`, `liveness`, `entitlements`, `returns`,
 `world`, `manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a
-venue key is present and `reserve` when a reserve key is present. The five views originate
-from `Ledger.aggregate`, each verifying the same frozen chain. The three identity-bearing
+venue key is present and `reserve` when a reserve key is present. Four views originate
+from `Ledger.aggregate`, each verifying the same frozen chain; `wallet_series` is folded
+from the same verified stream and is bounded: every balance observation while there are at
+most 2,000, past that the first, last, lowest and highest point of each of at most 500
+equal consecutive buckets, with `observations`, the count the diary holds. The diary keeps
+the whole series. The three identity-bearing
 views (`spend_by_capability`, `invocations_by_assembly`, `action_frequencies`) are projected
 to role totals (`producer`, `evaluator`, `meta`, `antagonist`, `noop`, `other`).
 Registered assemblies join their declared role; unknown identities join `other`.
 In these five views no assembly ids, model bindings, positions or entry prices are
 published. Incomplete input or
-verification failure retries once after 100 ms; a second failure replaces all
-ledger-derived fields with `"unavailable"` and exits 1. Optional account failures
+verification failure retries once after 100 ms; a second failure publishes nothing,
+leaves the previous publication served, and exits 1. Optional account failures
 mark only their unavailable fields. There is no exception text in the artifacts.
-Each output file is atomically replaced; the pair is not a transactional bundle.
+Every page, `wake.json` and `wake.html` of one run are one generation: written into a
+fresh directory under `www/.wake/`, then published together by replacing the one
+symlink `www/.wake/current`, through which every public name points. A run that fails
+before that switch leaves the previous generation served whole: every public link the
+generation needs is placed first, and the switch is the last step. One wake publishes
+at a time (an exclusive lock on `www/.wake/lock`; a second exits 1 having published
+nothing). The current and the previous generation, read from `current` under the lock,
+are kept; a page whose bytes did not change is a hard link to the previous
+generation's copy. A `www` of plain files from before generations is moved into one
+without changing a byte served.
 
 #### The observatory sections (A17, widened)
 
@@ -739,6 +782,20 @@ into a private root-only temporary directory. It pipes tar directly into age;
 no plaintext tar is written. It uploads a dated `.tar.age` through
 [rclone copyto](https://rclone.org/commands/rclone_copyto/) and removes local staging
 on exit. A failed upload fails the backup unit; the next nightly timer runs again.
+Any failure of the backup unit, including a timeout, is alerted (`OnFailure=`,
+`backup_failed`).
+
+The unit runs under `ProtectSystem=strict` with exactly one writable path,
+`ReadWritePaths=/srv/factorylab/runs`: the pin is a set of hard links, and a hard
+link cannot cross mount points even within one filesystem, so the pin must sit in
+the same writable mount as the files it pins. Staging is in the unit's PrivateTmp.
+Before staging anything, `backup.sh` checks the space: twice `runs/` (the plaintext
+copy and its ciphertext coexist) must fit and still leave the larger of 2 GiB and a
+tenth of the filesystem free, or the backup fails with `backup not taken: not enough
+free space` (alerted) rather than taking the space the diary's own writes need. The
+plaintext copy is removed as soon as it is encrypted, so only the ciphertext waits
+out the upload, and the stage is removed on every exit (and with PrivateTmp, by
+systemd, when a timeout kills the script first).
 Only ciphertext goes to the remote. Keep the SHA/manifest and operations config
 in the operator's prelaunch recovery record; provider keys and ledger are in the
 archive, operations credentials are not.
@@ -751,4 +808,118 @@ machine replacement is not automated here, and human disaster recovery after
 launch remains outside the covenant. Prepayment and restart/backup units cannot
 guarantee survival of permanent host loss, exhausted disk, revoked credentials,
 a year beyond prepaid capacity or a hung process that never exits. These are
-explicit limits of this hosting chunk, not claims of durable live acceptance.
+explicit limits of this hosting chunk, not claims of durable live acceptance; the
+health verdict and its alerts make a hung process or a full disk *visible* within
+the hour, they do not repair it.
+
+### Health and alerts
+
+`factorylab-health.service` runs hourly (at half past, after the wake's publish)
+and judges the world from evidence, failing closed: only positive, fresh evidence
+is `healthy`. A missing, unreadable or `unavailable` wake, a publication older than
+two hours, a last event ahead of the clock, or a field the wake could not compute is
+`unknown`. A wake that says `alive` is `healthy` only when:
+
+- the ledger advanced: its last event (`last_event_time_ns`) was at most 20 minutes
+  old when the wake was published (`ledger_stale` otherwise);
+- work succeeded: at least one invocation answered `ok` in the published `returns`
+  rows within two hours of the last event (`provider_failing` when there were only
+  failures or refusals, `no_provider_success` when there was nothing, except in a
+  world younger than two hours);
+- settlements are not overdue: no open decision in `commitments` is past its deadline
+  by more than the longer of its own span and an hour (`settlement_overdue`);
+- the venue read succeeded, when the wake reads the venue: a Hyperliquid world with
+  `hyperliquid.key` on the host (`venue_unreadable`);
+- the data filesystem is below 80% used (`disk_high`; `disk_unknown` if it cannot be
+  measured).
+
+Recorded dormancy (`liveness.status` is `dormant`, ledgered by the runtime) waives
+only the work check: a dormant world routes no paid cognition but still ticks,
+settles and reads its venue. `terminated` is final and is not alive. The verdict
+(`<status> [reasons...]`) is written to `runs/funded.health`; an `unhealthy` or
+`unknown` verdict is sent every hour it persists, with its first reason. The script
+exits 0 (healthy, dormant), 10 (unhealthy), 11 (unknown) or 12 (terminated); the unit
+treats 10-12 as handled, so any other exit is the check itself failing and is alerted
+as `health_failed`. The wake unit alerts its own failures (`wake_failed`). The
+heartbeat timer sends the last verdict every six hours, or `unknown` when the record
+is older than 150 minutes. A `healthy` verdict, and only that, also pings
+`FACTORY_HEARTBEAT_URL` when it is set (the dead-man's switch above). These thresholds suit a live world on wall-clock time; a
+scripted rehearsal's simulated event times read as stale.
+
+## 72-hour unattended run
+
+A checklist for leaving the host alone with the laptop closed. It assumes the
+provisioning above succeeded and the launch gates are met.
+
+**Sizing.** A reference scripted world wrote about 205 KB of diary per 10-second
+tick: about 8.3 GB in 72 hours with 14 seats, and a backup stages twice `runs/` at
+its peak. On a 77 GB disk 14 seats fit; 50 do not comfortably; measure before
+launching more (audit s11).
+
+**The owner places, before launch** (never in user-data, Git or shell history):
+
+1. `/srv/factorylab/openrouter.key`, `hyperliquid.key`, `reserve.key`: `factory:factory`, 0600.
+2. `/srv/factorylab/rclone.conf`: `root:root`, 0600, for a remote with upload and
+   restore verified.
+3. `/srv/factorylab/ops.env`: `root:root`, 0600, with `AGE_RECIPIENT`, `BACKUP_REMOTE`,
+   `RCLONE_CONFIG=/srv/factorylab/rclone.conf`, `FACTORY_WEBHOOK_URL` (HTTPS, reaching
+   a phone or inbox the owner watches) and, recommended, `FACTORYLAB_WITNESS_URL`.
+   Optionally (recommended) `FACTORY_HEARTBEAT_URL`, the ping URL of a dead-man's
+   switch with a one-hour period: it is what alerts the owner if the droplet itself
+   dies.
+4. At the receiver: an alarm when no `heartbeat` has arrived for seven hours (the
+   dead-man's switch does this for you, hourly, when configured).
+
+**Verify the alert path end to end**, on the droplet, before launch:
+
+```sh
+systemctl daemon-reload
+# The alert webhook (FACTORY_WEBHOOK_URL): prints "alert test: delivered".
+systemd-run --wait --pipe --quiet -p User=factory -p EnvironmentFile=/srv/factorylab/ops.env \
+    /bin/bash /srv/factorylab/repo/deploy/alert.sh --test
+# The dead-man's switch (FACTORY_HEARTBEAT_URL): prints "ping test: delivered".
+systemd-run --wait --pipe --quiet -p User=factory -p EnvironmentFile=/srv/factorylab/ops.env \
+    /bin/bash /srv/factorylab/repo/deploy/alert.sh --test-ping
+```
+
+Each blocks until the receiver accepted the request or five attempts failed, and
+exits non-zero otherwise (`not configured`, `refused` for a non-HTTPS URL, `not
+delivered`). Confirm `{"world":"funded","event":"test","reason":"none"}` arrived where
+the owner will see it, and that the dead-man's switch shows a ping. The alert unit the
+failures themselves use can be exercised the same way: `systemctl start
+factorylab-alert@test.service` (silent; its exit status says whether it was delivered).
+Then rehearse one real failure path: `systemctl start factorylab-health.service`
+before any world exists must deliver `{"event":"unknown","reason":"wake_missing"}`.
+
+**Start** with the commands in "Rehearse, start once, verify, leave it alone"
+(the world, the static server, and the wake, backup, health and heartbeat timers),
+then confirm:
+
+```sh
+systemctl is-active factorylab.service
+systemctl list-timers 'factorylab-*'          # wake, backup, health, heartbeat
+systemctl start factorylab-backup.service && echo "backup: uploaded"
+systemctl start factorylab-health.service; cat /srv/factorylab/runs/funded.health
+```
+
+The health record must read `healthy` (or `dormant`) once the first wake has
+published; a first heartbeat arrives within six hours.
+
+**Inspect without touching the world:**
+
+```sh
+systemctl status factorylab.service factorylab-health.service factorylab-backup.service
+systemctl list-timers 'factorylab-*'
+cat /srv/factorylab/runs/funded.health
+df -h /srv/factorylab
+```
+
+and the wake page through the SSH tunnel. The units discard their output by design;
+the alert events and `runs/funded.health` are the operational record.
+
+**Stop.** `systemctl stop factorylab.service` pauses the world (alerted as
+`stopped`; the next start resumes it). Ending the experiment is the kill in "The one
+control: kill". After either, `systemctl disable --now factorylab-health.timer
+factorylab-heartbeat.timer` silences the hourly verdict, which otherwise reports the
+paused world as `unhealthy` (`ledger_stale`) every hour: correctly, since it is not
+running.
