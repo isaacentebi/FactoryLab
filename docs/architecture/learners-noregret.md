@@ -171,8 +171,8 @@ while the floor used the grown `K`; Sol's probe reached an exponent of 1.614.)
 
 Within a grown epoch, each row is EXP3 in FTRL form with a nonincreasing rate. Its regret
 against any arm `j` from `j`'s arrival is at most
-`ln N_T/eta_T + (e − 2)·Σ_t eta_t·E[Σ_a q_a·X_a²] ≤ N_T ln N_T/gamma_k + (e − 2)·gamma_k·H_k`,
-which is Auer's bound with `N_T` in place of `N`. The time-varying rate is published in
+`ln N_T/eta_T + (e − 2)·Σ_t eta_t·E[Σ_a q_a·X_a²] + gamma_k·H_k ≤ N_T ln N_T/gamma_k + (e − 1)·gamma_k·H_k`,
+where the last term is the exploration cost. This is Auer's bound with `N_T` in place of `N`. The time-varying rate is published in
 loss form (Cesa-Bianchi and Lugosi 2006, Theorem 2.3). **The gain form under
 `eta_t·X ≤ 1` and the mean-weight entry term `ln(N_T/N_0) ≤ ln N_T` are our own
 argument.** Lemma 10 and Theorem 11 then apply per epoch unchanged, and Lemma 10's
