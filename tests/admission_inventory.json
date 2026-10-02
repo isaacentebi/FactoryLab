@@ -16966,6 +16966,36 @@
       "published": "factorylab/cortex/admission_governance.py"
     },
     {
+      "id": "governance.router.blum_mansour_kinds",
+      "rule": "router.blum_mansour_kinds",
+      "surface": "governance",
+      "path": [
+        "router",
+        "blum_mansour_kinds"
+      ],
+      "value": [
+        "Tick"
+      ],
+      "enforced": [
+        209
+      ],
+      "published": "factorylab/cortex/admission_governance.py"
+    },
+    {
+      "id": "governance.router.replacement",
+      "rule": "router.replacement",
+      "surface": "governance",
+      "path": [
+        "router",
+        "replacement"
+      ],
+      "value": "add=true, or add=false for a kind with no router, is built at admission. add=false for a kind with routers replaces them only once min_ratio delivery bounds and min_ratio measured periods of the kind's router rounds have passed since its last phase opened (router.deferred until then); a later add=false for the same kind supersedes one still waiting.",
+      "enforced": [
+        210
+      ],
+      "published": "factorylab/cortex/admission_governance.py"
+    },
+    {
       "id": "governance.tool.jail_required",
       "rule": "tool.jail_required",
       "surface": "governance",
@@ -26654,6 +26684,22 @@
       "missing_before": true,
       "published_before": "MISSING",
       "surface": "tools"
+    },
+    {
+      "rule": "Router blum_mansour only on a kind with a per-tick draw bound",
+      "enforced": "factorylab/runtime/governance.py:999 (GovernanceMixin._register); factorylab/runtime/worlds.py:602 (PER_TICK_KINDS)",
+      "published": "factorylab/cortex/admission_governance.py:122",
+      "missing_before": true,
+      "published_before": "MISSING",
+      "surface": "governance"
+    },
+    {
+      "rule": "Router replacement waits for the kind's settle gate; a later one supersedes",
+      "enforced": "factorylab/runtime/governance.py:1019 (GovernanceMixin._register); factorylab/runtime/routing.py:1613 (RoutingMixin._epoch_due); factorylab/runtime/routing.py:1646 (RoutingMixin._open_pending_epochs)",
+      "published": "factorylab/cortex/admission_governance.py:123",
+      "missing_before": true,
+      "published_before": "MISSING",
+      "surface": "governance"
     }
   ],
   "enforcement": {
@@ -26673,11 +26719,11 @@
     "factorylab/kernel/reserve.py": "11373ac82be95c9800c266b4fb5a1dbc035688602a2999c2bad4395c4d098a64",
     "factorylab/runtime/composition.py": "87c0ddf621ea905b877bcc91eca6f4f9f129817672f38bdd849ffae902e398b3",
     "factorylab/runtime/compute.py": "05fcdedc626509d8d41eb988a1d9220f366d96293f78aab93118145faf0d7443",
-    "factorylab/runtime/governance.py": "479938171c91dfd621f9455d1ec90aee7589386ff2d1bf036802909f67be6ff7",
+    "factorylab/runtime/governance.py": "e3110f16031b349d54372e204ee489154fbff19dae191767ff7eddc643078e71",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
     "factorylab/runtime/polymarket.py": "737e9964f9ee209a7d033c6d1b60448a1770e2d6a8de84a3f816eaf43fcba165",
     "factorylab/runtime/propensity.py": "139dafef269a43b83e6b8d9c7da9181711c6ff3976d61bb69348a693e3c2a07b",
-    "factorylab/runtime/routing.py": "168c790d787b83849e4cbf4df44846e08fd31e158b350c7d6f7b2939609e6278",
+    "factorylab/runtime/routing.py": "52e0cd7a0c98e9fa3e9da5582ba180c4bac4addd641ccedfce14c0dc496abdca",
     "factorylab/runtime/subscriptions.py": "2c096e82698cc03a7f5d7af70942b522b29a00c26611bb2830a0078456d93a6c",
     "factorylab/runtime/vault.py": "72a0bf98515c0f327e2713565716c6d7988486dca58d7b2afd25040541dd3afc",
     "factorylab/runtime/venue.py": "805be8606590315bd3a4b9afd20309a71d7e8a41f518dbb31587d679031cea3e",

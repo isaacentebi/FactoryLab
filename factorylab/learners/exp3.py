@@ -12,6 +12,13 @@ synchronous on-policy feedback its expected regret is at most
 (N ln N + 4) sqrt(T) + 3, and the decaying exploration keeps it mean-based
 (Braverman, Mao, Schneider & Weinberg 2018, Thm D.3, adapted to an anytime schedule).
 
+A menu grows in place (§2.5): a new arm's cumulative loss is set so that its weight at
+the next round's rate is the mean weight of the arms already there, and N grows, so
+eta_t stays nonincreasing. Mourtada & Maillard (2017) give the full-information step:
+an arm entering at the mean weight raises the potential by at most ln(1 + 1/N), so
+regret against each arm counts from its arrival with N_T for N. The bandit step is our
+own argument, measured, not published (§2.5).
+
 The estimate is the truthful logged propensity's: a round that played action k with
 probability pi_k and lost l adds l / pi_k to L[k] (on-policy). An off-policy learner
 (one trained on another agent's declared propensities) adds l / (pi_k + beta) with
@@ -83,6 +90,30 @@ class EXP3:
         if self._rounds < 1:
             raise RuntimeError("no round to withdraw")
         self._rounds -= 1
+
+    def add_actions(self, new: Sequence[str]) -> None:
+        """Grow the menu in place without restarting.
+
+        Guarantees the round count and every existing arm's loss are unchanged, and
+        each new arm's weight ``exp(-eta * L)`` at the next round's rate before growth
+        equals the mean weight of the arms already on the menu (learners design §2.5).
+        An empty ``new`` changes nothing; an arm already on the menu raises ValueError
+        and changes nothing.
+        """
+        if not tuple(new):
+            return
+        added = _actions(new)
+        if set(added) & set(self.actions):
+            raise ValueError("an action already on the menu is not new")
+        _gamma, eta = self.rates()
+        low = min(self._losses.values())
+        mean = math.fsum(math.exp(-eta * (v - low)) for v in self._losses.values())
+        mean /= len(self._losses)
+        # The mean of weights at most 1 is in [1/N, 1], so the loss is finite and >= low.
+        start = low - math.log(mean) / eta
+        self.actions = (*self.actions, *added)
+        for action in added:
+            self._losses[action] = start
 
     def estimate(self, feedback: BanditFeedback, eta: float | None = None) -> float:
         """The loss estimate this round adds to its action; raises if it is not finite."""

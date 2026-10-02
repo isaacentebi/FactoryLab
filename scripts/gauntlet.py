@@ -844,6 +844,8 @@ ROUTER_SOURCES: dict[str, tuple[str, ...]] = {
     "router.created": ("learner_id", "replaces[]"),
     "router.retained": ("learner_id",),
     "router.drained": ("learner_id",),
+    # A live router whose menu grew in place (learners design §2.5).
+    "router.grown": ("learner_id",),
     "router.step_rescaled": ("learner_id",),
     # A round that trained nothing: a replaced router's, or a closed core epoch's; or
     # one closed untrained past its delivery deadline.

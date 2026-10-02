@@ -54,24 +54,30 @@ def test_a_retired_routers_return_trains_nothing_and_is_ledgered_orphaned():
     assert len({old.learner.id, fresh.learner.id, again.learner.id}) == 3
 
 
-def test_a_menu_change_opens_a_fresh_phase_under_a_new_identity(monkeypatch):
-    """Learners design §2.5: a new menu is a new phase: a fresh learner of the same
-    class, no weight carried, its coverage bound read from the new menu."""
+def test_a_raised_core_coverage_bound_opens_a_fresh_phase_under_a_new_identity():
+    """Learners design §2.5: a menu grows in place, except where a seat would raise a core
+    menu's coverage bound kappa, which the learner fixes for its life: that is a new
+    phase, a fresh learner of the same class, no weight carried, its kappa read from the
+    new menu."""
+    from dataclasses import replace
+
     from factorylab.learners.blum_mansour import BlumMansour
 
     rt = make_runtime()
     old = rt._build_router("Tick", "blum_mansour")
-    monkeypatch.setattr(rt, "_universe_for", lambda *_: [*old.universe, "new-action"])
+    judge = next(a.spec for a in rt.assemblies.values() if a.spec.role == "evaluator")
+    rt._instantiate(replace(judge, id="new-action", accepts=frozenset({"Tick"})))
+    rt.ticks_consumed = rt.m.timing.min_ratio * rt._delivery_bound()  # the gate is open
     rt._open_epoch("Tick")
     fresh = rt.routers["Tick"][0]
     assert fresh.learner.id != old.learner.id
     inner = fresh.learner.inner.inner
     assert isinstance(inner, BlumMansour) and inner.epoch == 0 and inner.epoch_rounds == 0
-    assert inner.actions == (*old.universe, "new-action")
-    assert fresh.coverage == rt._coverage(fresh.universe)
+    assert set(inner.actions) == {*old.universe, "new-action"}
+    assert fresh.coverage == rt._coverage(fresh.universe) > old.coverage
     assert fresh.epoch == old.epoch + 1 and rt.delivered_seen[fresh.learner.id] == 0
     phase = [i for i in rt.ledger._recovery_items() if i["kind"] == "epoch"][-1]
-    assert phase["cause"] == "menu" and phase["carried"] is False
+    assert phase["cause"] == "coverage" and phase["carried"] is False
     assert any(item["kind"] == "actor.retire" and item["actor"] == old.learner.id
                for item in rt.ledger._recovery_items())
 

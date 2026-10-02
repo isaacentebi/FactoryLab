@@ -35,31 +35,49 @@ def test_executed_propensity_trains_the_core_through_its_fixed_coverage_bound():
     assert not wide.state()['snapshots']
 
 
-def test_producer_return_router_proposal_then_delayed_epoch_settlement():
+def test_core_router_proposal_then_delayed_settlement_across_a_coverage_phase():
+    """A population core router for Tick (a per-tick kind; learners design §2.2) is built
+    once the kind's gate allows a replacement; a round it drew is still pending when a
+    forecast-shaped seat raises the core's coverage bound and, past the gate, opens a
+    phase. Through a resume, the round settles for the kernel and trains nothing."""
     rt = make_runtime()
     rt._manage_reserve_window()
-    rt._register('population', RouterProposal("ProducerReturn", "blum_mansour"))
-    old = rt.routers['ProducerReturn'][0]
-    assert isinstance(old.learner, _KeyedLearner)
+    gate = rt.m.timing.min_ratio * max(rt.clockwork.measured('router:Tick'),
+                                       rt._delivery_bound())
+    rt.ticks_consumed = gate
+    rt._register('population', RouterProposal("Tick", "blum_mansour"))
+    old = rt.routers['Tick'][0]
+    assert isinstance(old.learner, _KeyedLearner) and old.learner.inner.core
+    assert rt.clockwork.opened('epoch:Tick') == gate  # the replacement opened a phase
+    # Drawn shortly before the next phase may open, so it is still in flight then.
+    rt.ticks_consumed = 2 * gate - 10
     old.learner.current_key, old.learner.current_ordinal = 'old', rt.n
-    sample = old.router.route('ProducerReturn', lambda _: (True, ''), rt.rng,
-                              mix=rt._mix_with_standing)
+    sample = old.router.route('Tick', lambda _: (True, ''), rt.rng,
+                              mix=rt._cap_adversarial)
     handle = rt.queue.open(actor=old.learner.id, event_id='p', propensity=rt._propensity(sample),
-                           channel='test', deadline_ns=100, parent_handle=None, cost_ceiling=0)
+                           channel='test', horizon_ticks=50, parent_handle=None,
+                           cost_ceiling=0)
     rt.snapshot_keys[handle] = 'old'
     spec = next(a.spec for a in rt.assemblies.values() if a.spec.role == 'evaluator')
-    rt._instantiate(replace(spec, id='new-judge'))
-    rt._open_epoch('ProducerReturn')
-    assert rt.routers['ProducerReturn'][0].learner.id != old.learner.id
+    rt._instantiate(replace(spec, id='new-judge', accepts=frozenset({'Tick'})))
+    rt._open_epoch('Tick')
+    assert rt.routers['Tick'][0] is old  # the raised bound waits for the gate
+    rt.ticks_consumed += 10
+    rt._open_pending_epochs()
+    assert rt.routers['Tick'][0].learner.id != old.learner.id
     assert old.learner.id in rt.retired_routers
     restored = make_runtime()
     restore_runtime(restored, runtime_state(rt))
     retired = restored.retired_routers[old.learner.id]
-    live = restored.routers['ProducerReturn'][0]
+    live = restored.routers['Tick'][0]
     before = retired.learner.inner.inner.state()
     live_before = live.learner.inner.inner.state()
-    restored.queue.settle(handle, channel='test', score=.9, status=SettleStatus.SETTLED,
+    noop = sample.chosen == 'NOOP'
+    restored.queue.settle(handle, channel='test', score=0. if noop else .9,
+                          status=SettleStatus.INAPPLICABLE if noop else SettleStatus.SETTLED,
                           definition_version='1', sampling_ref=None)
+    restored._deliver_returns()
+    restored.ticks_consumed += 60  # an abstention's credit is due at its cutoff
     restored._deliver_returns()
     assert not retired.learner.inner.state()['snapshots']
     # A replaced router never samples again: its settled round trains nothing, neither

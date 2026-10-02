@@ -22,6 +22,17 @@ feedback takes to arrive. A round from a closed epoch is orphaned: it trains not
 For T >= H_0 and synchronous feedback, max_F E[swap regret_F] <= 8.98 kappa N
 sqrt(T N ln N); E[max_F] and delayed feedback are not claimed.
 
+A menu grows in place (§2.5): a new action gets a uniform new row and, in each old
+row, a column at that row's mean weight; the epoch's gamma (and its row step
+gamma_k / N) stay frozen at the N the epoch opened with, and the next epoch reads the
+grown N. Within a grown epoch Lemma 10's constant loosens by at most
+sqrt(N_end ln N_end / (N_0 ln N_0)); the growing-experts step is our own argument
+(Mourtada & Maillard 2017 for full information), measured, not published.
+
+A quiet draw is withdrawn exactly: withdrawing the round that rolled the epoch, while it
+is the new epoch's only round, restores the closed epoch's position and rows, so its
+outstanding rounds still train.
+
 Every row keeps q_ik >= gamma_k / K, so Q is strictly positive and the stationary
 solve is unique. An off-policy learner (trained on a seat's declared propensities)
 uses X_ik = p_i * r / (pi_k + beta_k), beta_k = gamma_k / (2N): one update moves a
@@ -157,7 +168,14 @@ class BlumMansour:
         self.off_policy = bool(off_policy)
         self.epoch = 0
         self.epoch_rounds = 0
+        # The menu size the current epoch opened with: its gamma and row step are
+        # frozen at it, whatever the menu grows to before the epoch closes.
+        self.epoch_n = len(self.actions)
         self._rows = [dict.fromkeys(self.actions, 0.0) for _ in self.actions]
+        # (epoch, epoch_rounds, rows, epoch_n) before the last open_round rolled the
+        # epoch, kept only until anything else changes the learner: what withdrawing
+        # that round restores.
+        self._rolled: tuple[int, int, list[dict[str, float]], int] | None = None
 
     def horizon(self, epoch: int | None = None) -> int:
         """H_k = H_0 * 2^k opened rounds."""
@@ -170,7 +188,10 @@ class BlumMansour:
         return self.epoch, self._rows
 
     def gamma(self, epoch: int | None = None) -> float:
-        return epoch_gamma(len(self.actions), self.horizon(epoch))
+        """gamma_k of ``epoch`` (default the current one): the current epoch's is frozen
+        at the N it opened with; a later epoch's reads the menu as it is now."""
+        n = self.epoch_n if epoch is None or epoch == self.epoch else len(self.actions)
+        return epoch_gamma(n, self.horizon(epoch))
 
     def _solve(self, support: tuple[str, ...], epoch: int,
                rows: list[dict[str, float]]) -> dict[str, float]:
@@ -196,15 +217,54 @@ class BlumMansour:
         support = _support(feasible, self.actions)
         epoch, rows = self._next()
         p = self._solve(support, epoch, rows)
+        gamma = self.gamma(epoch)
+        self._rolled = None
         if epoch != self.epoch:
+            self._rolled = (self.epoch, self.epoch_rounds, self._rows, self.epoch_n)
             self.epoch, self.epoch_rounds, self._rows = epoch, 0, rows
+            self.epoch_n = len(self.actions)
         self.epoch_rounds += 1
-        return p, CoreRound(epoch, support, tuple(p.items()), self.gamma(epoch))
+        return p, CoreRound(epoch, support, tuple(p.items()), gamma)
 
     def withdraw_round(self, saved: CoreRound) -> None:
-        """Uncount a round that never became a decision (a quiet draw)."""
+        """Uncount a round that never became a decision (a quiet draw).
+
+        Guarantees that withdrawing the round that rolled the epoch, while nothing else
+        has changed the learner since, restores the closed epoch exactly (Sol on
+        #189/#190, P1 4): its outstanding rounds are not orphaned by a draw that
+        never happened.
+        """
         if saved.epoch == self.epoch and self.epoch_rounds > 0:
             self.epoch_rounds -= 1
+            rolled = self._rolled
+            if (not self.epoch_rounds and rolled is not None
+                    and rolled[0] == self.epoch - 1):
+                self.epoch, self.epoch_rounds, self._rows, self.epoch_n = rolled
+        self._rolled = None
+
+    def add_actions(self, new: Sequence[str]) -> None:
+        """Grow the menu in place without restarting the epoch (learners design §2.5).
+
+        Guarantees every old row keeps its log-weights and gains each new action at the
+        row's mean weight, each new action's row is uniform, and the epoch, its count
+        and its gamma are unchanged. An empty ``new`` changes nothing; an action already
+        on the menu raises ValueError and changes nothing.
+        """
+        if not tuple(new):
+            return
+        added = _actions(new)
+        if set(added) & set(self.actions):
+            raise ValueError("an action already on the menu is not new")
+        rows = []
+        for logw in self._rows:
+            high = max(logw.values())
+            mean = high + math.log(
+                math.fsum(math.exp(v - high) for v in logw.values()) / len(logw))
+            rows.append(_center({**logw, **dict.fromkeys(added, mean)}))
+        self.actions = (*self.actions, *added)
+        rows.extend(dict.fromkeys(self.actions, 0.0) for _ in added)
+        self._rows = rows
+        self._rolled = None
 
     def update_round(self, saved: CoreRound, feedback: Feedback) -> None:
         """Train the current rows on a round of the current epoch.
@@ -224,7 +284,8 @@ class BlumMansour:
                 feedback.propensity, executed[k], rel_tol=1e-12, abs_tol=0):
             raise ValueError("feedback must carry the saved round's executed propensity")
         gamma = saved.gamma
-        n = len(self.actions)
+        # The row step gamma_k / N of the round's epoch, frozen at the N it opened with.
+        n = self.epoch_n
         if self.off_policy:
             denominator = feedback.propensity + gamma / (2 * n)
         else:
@@ -238,13 +299,19 @@ class BlumMansour:
             row[k] += gamma / n * x
             updated.append(_center(row))
         self._rows = updated
+        self._rolled = None
 
     def state(self) -> dict:
-        """Parameters, epoch position and every row's exact log-weights."""
+        """Parameters, epoch position, the N it opened with and every row's exact
+        log-weights (and the closed epoch a withdrawal would restore, while kept)."""
+        rolled = {} if self._rolled is None else {"rolled": {
+            "epoch": self._rolled[0], "epoch_rounds": self._rolled[1],
+            "rows": self._rolled[2], "epoch_n": self._rolled[3]}}
         return _state(algorithm="BlumMansour", schedule=SCHEDULE, id=self.id,
                       actions=self.actions, first_epoch=self.first_epoch,
                       coverage=self.coverage, off_policy=self.off_policy,
-                      epoch=self.epoch, epoch_rounds=self.epoch_rounds, rows=self._rows)
+                      epoch=self.epoch, epoch_rounds=self.epoch_rounds,
+                      epoch_n=self.epoch_n, rows=self._rows, **rolled)
 
     @classmethod
     def restore(cls, state: dict) -> "BlumMansour":
@@ -253,19 +320,41 @@ class BlumMansour:
             raise ValueError("learner state from another algorithm or schedule")
         learner = cls(state["actions"], id=state["id"], first_epoch=state["first_epoch"],
                       coverage=state["coverage"], off_policy=state["off_policy"])
-        if learner.first_epoch != state["first_epoch"]:
+        epoch_n = state["epoch_n"]
+        if not _count(epoch_n) or not 1 <= epoch_n <= len(learner.actions):
+            raise ValueError("invalid saved epoch menu size")
+        # H_0 is fixed for life, read at the menu it was built on: a menu grown since
+        # may have raised the least horizon of its N, never the saved H_0.
+        if not _count(state["first_epoch"]) or state["first_epoch"] < 1:
             raise ValueError("invalid saved first epoch")
+        learner.first_epoch = state["first_epoch"]
         epoch, used = state["epoch"], state["epoch_rounds"]
-        for value in (epoch, used):
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError("invalid saved epoch position")
-        rows = state["rows"]
-        if len(rows) != len(learner.actions) or any(
-            set(row) != set(learner.actions)
-            or any(type(v) not in (int, float) or not math.isfinite(v) for v in row.values())
-            for row in rows
-        ):
-            raise ValueError("invalid saved rows")
-        learner.epoch, learner.epoch_rounds = epoch, used
-        learner._rows = [{a: float(row[a]) for a in learner.actions} for row in rows]
+        if not _count(epoch) or not _count(used):
+            raise ValueError("invalid saved epoch position")
+        learner.epoch, learner.epoch_rounds, learner.epoch_n = epoch, used, epoch_n
+        learner._rows = _saved_rows(state["rows"], learner.actions)
+        rolled = state.get("rolled")
+        if rolled is not None:
+            if (not _count(rolled["epoch"]) or rolled["epoch"] != epoch - 1
+                    or not _count(rolled["epoch_rounds"])
+                    or not _count(rolled["epoch_n"])
+                    or not 1 <= rolled["epoch_n"] <= len(learner.actions)):
+                raise ValueError("invalid saved rolled epoch")
+            learner._rolled = (rolled["epoch"], rolled["epoch_rounds"],
+                               _saved_rows(rolled["rows"], learner.actions),
+                               rolled["epoch_n"])
         return learner
+
+
+def _count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _saved_rows(rows: list, actions: tuple[str, ...]) -> list[dict[str, float]]:
+    if len(rows) != len(actions) or any(
+        set(row) != set(actions)
+        or any(type(v) not in (int, float) or not math.isfinite(v) for v in row.values())
+        for row in rows
+    ):
+        raise ValueError("invalid saved rows")
+    return [{a: float(row[a]) for a in actions} for row in rows]

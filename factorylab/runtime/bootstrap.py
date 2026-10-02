@@ -259,8 +259,12 @@ class BootstrapMixin:
         self.card_held: dict[str, dict] = {}
         # Whether a governance tier fits between the slowest loop and the world (T7).
         self.governance_viable = True
-        # event kind -> the tick a grown menu started waiting for its epoch (T6).
+        # event kind -> the tick a coverage-raising core menu started waiting for its
+        # phase (T6; learners design §2.5).
         self.pending_epochs: dict[str, int] = {}
+        # event kind -> the population router replacement waiting for the kind's settle
+        # gate, {"learner", "by", "since_tick"} (learners design §2.5).
+        self.pending_routers: dict[str, dict] = {}
         # Where the treasury caps' own wall-clock windows are counted from (T1, T13).
         self.cap_anchor_ns: int | None = None
         self.clock = SimClock(0) if _journal is None else _journal.clock
@@ -663,6 +667,9 @@ class BootstrapMixin:
         self.retired_routers: dict[str, RouterState] = {}
         for kind in self._routable_kinds():
             self._build_router(kind, self._seed_learner_kind(kind))
+            # Genesis opens each seeded router's first phase: a replacement waits the
+            # settle gate from it, as from any later phase (learners design §2.5).
+            self._phase_opened(kind)
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened tick
         # Exposure decisions whose seat answered status: cannot -> the reason it gave:
         # left ungraded, they settle declined, priced as an abstention (ruling R9).

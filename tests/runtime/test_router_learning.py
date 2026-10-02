@@ -380,9 +380,9 @@ def test_a_pending_core_round_of_a_replaced_router_is_orphaned_through_a_resume(
     rt = _core_runtime()
     old = rt.routers["ProducerReturn"][0]
     handle, _chosen = _live_draw(rt, old)
-    grown = [*old.universe[:-1], "new-judge", NOOP]
-    rt._universe_for = lambda _kind, _ev=None: grown
-    rt._open_epoch("ProducerReturn")
+    # A population replacement past the kind's gate opens a phase (design §2.5); a menu
+    # that grows would grow this learner in place and orphan nothing.
+    rt._activate_router("ProducerReturn", "exp3", add=False, by="population")
     fresh = rt.routers["ProducerReturn"][0]
     assert fresh.learner.id != old.learner.id and old.successor == fresh.learner.id
     restored = _core_runtime()

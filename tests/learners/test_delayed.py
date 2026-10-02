@@ -70,6 +70,24 @@ def test_withdrawn_draw_does_not_advance_t():
             learner.distribution_for("quiet", learner.inner.actions, ordinal=0)
 
 
+def test_a_withdrawn_quiet_draw_at_an_epoch_boundary_rolls_nothing_over():
+    """Sol on #189/#190, P1 4: with H0 = 3, three rounds outstanding, a quiet draw that
+    rolled the epoch and was withdrawn left the position at (1, 0), and the earlier
+    rounds' feedback was orphaned. A withdrawal undoes the draw: (0, 3), and they train."""
+    learner = SnapshotLearner(BlumMansour(("a", "NOOP"), first_epoch=3), id="core")
+    drawn = {h: learner.distribution_for(h, ("a", "NOOP"), ordinal=i)
+             for i, h in enumerate(("r0", "r1", "r2"))}
+    before = learner.inner.state()
+    learner.distribution_for("quiet", ("NOOP",), ordinal=3)
+    learner.withdraw_for("quiet")
+    assert (learner.inner.epoch, learner.inner.epoch_rounds) == (0, 3)
+    assert learner.inner.state() == before
+    for handle, p in drawn.items():
+        assert learner.update_for(handle, BanditFeedback("a", 0.8, p["a"])) is True
+    learner.distribution_for("next", ("a", "NOOP"), ordinal=4)
+    assert learner.inner.epoch == 1  # the next real draw rolls the epoch as before
+
+
 def test_discarded_round_still_counts_as_opened():
     learner = _learner(False)
     learner.distribution_for("r", learner.inner.actions, ordinal=0)

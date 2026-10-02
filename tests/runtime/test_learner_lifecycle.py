@@ -2,8 +2,8 @@
 
 A round is learned, orphaned (its router was replaced, or its core epoch closed),
 withdrawn (a quiet draw) or expired (past its delivery deadline); nothing waits without
-bound, a retirement orphans nothing, a menu that grows waits min_ratio delivery bounds,
-and the world's draw transforms are measured on every draw they move.
+bound, a retirement orphans nothing, a menu that grows grows the live learner and
+orphans nothing, and the world's draw transforms are measured on every draw they move.
 """
 
 from random import Random
@@ -69,11 +69,13 @@ def test_window_outliving_bound_expires_round(monkeypatch):
     assert row["handle"] == handle and row["waited_on"] == "awaiting its window's close"
 
 
-def test_epoch_change_orphans_in_flight_rounds_across_resume(monkeypatch):
-    """An owed abstention of a router a menu phase replaced survives a checkpoint, and at
-    its due tick trains nothing, neither the retired router nor its successor; a quiet
-    draw is withdrawn, never orphaned; a repeated return credits nothing twice."""
+def test_epoch_change_orphans_in_flight_rounds_across_resume():
+    """An owed abstention of a router a replacement's phase retired survives a
+    checkpoint, and at its due tick trains nothing, neither the retired router nor its
+    successor; a repeated return credits nothing twice."""
     rt = make_runtime()
+    rt._manage_reserve_window()
+    rt.ticks_consumed = rt.m.timing.min_ratio * rt._delivery_bound()  # the gate is open
     old = rt.routers["ProducerReturn"][0]
     handle = _noop(rt, old, horizon=50)
     rt.queue.settle(handle, channel="test", score=0.0, status=SettleStatus.INAPPLICABLE,
@@ -81,9 +83,9 @@ def test_epoch_change_orphans_in_flight_rounds_across_resume(monkeypatch):
     old.latency = [20, 1]
     rt._deliver_returns()
     assert handle in rt.noop_credits  # owed, due in 20 ticks
-    grown = [*old.universe[:-1], "new-judge", NOOP]
-    monkeypatch.setattr(rt, "_universe_for", lambda *_a, **_k: list(grown))
-    rt._open_epoch("ProducerReturn")
+    from factorylab.cortex.registration import RouterProposal
+
+    rt._register("population", RouterProposal("ProducerReturn", "exp3"))
     fresh = rt.routers["ProducerReturn"][0]
     assert fresh.learner.id != old.learner.id and old.learner.id in rt.retired_routers
     restored = make_runtime()
@@ -175,34 +177,28 @@ def test_a_transform_that_moves_the_draw_is_measured_on_it():
 
 @pytest.mark.gate
 def test_permitted_menu_churn_keeps_learning(monkeypatch):
-    """Design §2.5, Sol on rev 2: the gate on a growing menu is min_ratio delivery bounds,
-    so however fast the population registers, at least 1 - 1/min_ratio of a router's
-    rounds are learned inside the phase that drew them. The old gate read only the
-    measured round period, which a router whose rounds all orphan never measures: it
-    let a phase open every min_ratio ticks and orphaned every round."""
+    """Design §2.5, revision 4: a menu that grows grows the live learner, so however fast
+    the population registers, no phase opens, nothing in flight is orphaned, and every
+    round the router draws is learned. The phase-per-growth design of revision 3 waited
+    min_ratio delivery bounds between growths and still orphaned up to 1/min_ratio of
+    each phase's rounds; the gate-free one before it orphaned every round."""
     rt = make_runtime()
     kind = "ProducerReturn"
     delay = 20
-    # A shorter delivery bound than the scripted world's longest cutoff, to keep the
-    # run short; the rounds below never wait longer than it.
-    bound = 4 * (delay + 10)
-    monkeypatch.setattr(type(rt), "_delivery_bound", lambda self: bound)
     rng = Random(3)
     grown = list(rt.routers[kind][0].universe)
     pending = []
-    phases = 0
-    drew = set()
-    for t in range(4 * rt.m.timing.min_ratio * rt._delivery_bound() + delay):
+    first = rt.routers[kind][0]
+    ticks = 4 * rt.m.timing.min_ratio * (delay + 10) + delay
+    for t in range(ticks):
         rt.n += 1
         rt.ticks_consumed += 1
         # A new seat asks to join every tick: the most churn the population can attempt.
         grown = [*grown[:-1], f"newcomer-{t}", NOOP]
         monkeypatch.setattr(rt, "_universe_for", lambda *_a, g=list(grown), **_k: g)
-        before = rt.routers[kind][0]
         rt._open_epoch(kind)
-        phases += rt.routers[kind][0] is not before
         state = rt.routers[kind][0]
-        drew.add(state.learner.id)
+        assert state is first and f"newcomer-{t}" in state.universe
         key = f"k{t}"
         state.learner.current_key, state.learner.current_ordinal = key, rt.n
         sample = state.router.route(kind, lambda _a: (True, ""), rng)
@@ -220,14 +216,19 @@ def test_permitted_menu_churn_keeps_learning(monkeypatch):
             rt.queue.settle(done, channel="test", score=score, status=status,
                             definition_version="v", sampling_ref=None)
         rt._deliver_returns()
+    for _ in range(2 * (delay + 10)):  # the last rounds' returns and credits come due
+        rt.ticks_consumed += 1
+        while pending and pending[0][0] <= rt.ticks_consumed:
+            _due, done, chosen = pending.pop(0)
+            status = SettleStatus.INAPPLICABLE if chosen == NOOP else SettleStatus.SETTLED
+            rt.queue.settle(done, channel="test", score=0.0 if chosen == NOOP else 0.7,
+                            status=status, definition_version="v", sampling_ref=None)
+        rt._deliver_returns()
     learned = len(_items(rt, "router.learned"))
-    orphaned = len(_items(rt, "learner.orphaned"))
-    assert phases >= 3
-    assert learned / (learned + orphaned) >= 1 - 1 / rt.m.timing.min_ratio - 0.05
-    learners = {i["learner"] for i in _items(rt, "router.learned")}
-    # Every completed phase that drew learned something (the one still open at the end
-    # may not have heard back yet).
-    assert drew - {rt.routers[kind][0].learner.id} <= learners
+    assert not _items(rt, "learner.orphaned") and not _items(rt, "learner.expired")
+    assert learned == ticks  # the learned fraction is 1
+    assert not _items(rt, "epoch") or all(i["event_kind"] != kind for i in _items(rt, "epoch"))
+    assert len([i for i in _items(rt, "router.grown") if i["event_kind"] == kind]) == ticks
 
 
 @pytest.mark.gate

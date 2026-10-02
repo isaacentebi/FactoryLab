@@ -225,19 +225,23 @@ def test_a_trial_is_protected_for_min_ratio_measured_consequence_periods_in_tick
     assert not rt._unhistoried("newcomer")
 
 
-def test_a_grown_menu_waits_min_ratio_measured_round_periods_for_its_epoch(monkeypatch):
-    """Time audit T6, Codex review of #133: a speed limit on refactoring; a registration
-    joins a routed kind at most once per min_ratio periods of that router's own rounds,
-    and never before min_ratio delivery bounds (learners design §2.5): a round's
-    learning may outlast its measured closure."""
-    rt = make_runtime()
+def test_a_phase_waits_min_ratio_measured_round_periods_and_delivery_bounds():
+    """Time audit T6, Codex review of #133: a speed limit on refactoring. A change that
+    opens a router phase (here a forecast-shaped seat raising the Tick core's coverage
+    bound; learners design §2.5) waits min_ratio periods of that router's own rounds, and
+    never fewer than min_ratio delivery bounds: a round's learning may outlast its
+    measured closure. A seat that keeps the bound grows the menu in place and waits for
+    nothing."""
+    from tests.runtime.test_menu_growth import _core_tick_runtime
+
+    rt = _core_tick_runtime()
     kind = "Tick"
     state = rt.routers[kind][0]
     rt.clockwork.record(f"router:{kind}", 5)
     rt.clockwork.loops[f"epoch:{kind}"] = {"opened": rt.ticks_consumed, "due": 0,
                                            "period": 1.0, "inner": 5, "fires": 1}
-    grown = [*state.universe, "newcomer"]
-    monkeypatch.setattr(rt, "_universe_for", lambda k, ev=None: list(grown))
+    judge = next(a.spec for a in rt.assemblies.values() if a.spec.role == "evaluator")
+    rt._instantiate(replace(judge, id="newcomer", accepts=frozenset({kind})))
     rt._open_epoch(kind)
     assert "newcomer" not in state.universe and kind in rt.pending_epochs
     assert _items(rt, "epoch.deferred")[-1]["inner_ticks"] == 5

@@ -166,22 +166,24 @@ def th2(shared_run, request):
     return shared_run(f"th2-{events}", lambda: P.run(*P.th2(every=3), events=events))
 
 
-def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop(th2):
-    """Not TH-2's detector: the kernel's own speed limit. The population registers a fresh
+def test_th2_a_growing_menu_grows_its_live_router_and_never_outruns_its_loop(th2):
+    """Not TH-2's detector: the kernel's own physics. The population registers a fresh
     judge every third decision; each is admitted (no speed limit is committed on the
-    population), and each growth of the judges' router menu waits ``min_ratio`` measured
-    router periods and ``min_ratio`` delivery bounds (``RoutingMixin._epoch_due``;
-    learners design §2.5), so every lifespan of that loop is at least its correcting
-    loop: no short lifespan exists for TH-2 to read (unsupported). The growth is
-    deferred, never refused."""
+    population), and each grows the judges' live router in place (``router.grown``;
+    learners design §2.5): nothing in flight is orphaned, no phase opens, and the router's
+    configuration loop is never replaced, so no short lifespan exists for TH-2 to read
+    (unsupported). The growth is neither deferred nor refused."""
     result = g.th2_short_lived(th2.events, th2.manifest, loop="router:ProducerReturn")
     assert result.status == g.UNSUPPORTED, result.evidence
     assert result.evidence.get("speed_refusals", 0) == 0
-    assert th2.rows("epoch.deferred")
+    assert not th2.rows("epoch.deferred")
+    grown = [r for r in th2.rows("router.grown") if r["event_kind"] == "ProducerReturn"]
     registered = [r for r in th2.rows("registry.register")
                   if r["contract"]["id"].startswith("molt-judge")]
     refused = [r for r in th2.rows("registration.rejected")]
     assert registered and not refused
+    assert {a for r in grown for a in r["added"]} >= {
+        r["contract"]["id"] for r in registered}
     assert th2.physics.r >= 3
     assert all(row["ratio"] >= th2.physics.r for row in th2.rows("config.lifespan")
                if row["loop"] == "router:ProducerReturn")

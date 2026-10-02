@@ -1462,21 +1462,44 @@ follow-the-regularised-leader form over loss estimates, `gamma_t = min(1, t^(-1/
 and `eta_t = gamma_t / N` at its `t`-th round, never restarted. The core is
 Blum-Mansour SR_MAB with Auer EXP3 rows over doubling epochs, `H_k = H_0 * 2^k`
 rounds at `gamma_k = min(1, sqrt(N ln N / ((e - 1) H_k)))`, its first epoch
-`H_0 = (1 + timing.min_ratio) * h` draws or more (`h` the longest decision cutoff), its
+`H_0` draws or more, `H_0` the delivery bound `L` below at one draw per tick, its
 row gains divided by the menu's fixed coverage bound `kappa` (`router.created`
 states it): `1 / (1 - evaluation.sampling_cap)` with a forecast-shaped evaluator on the
 menu, times `1 / evaluation.adversarial_share` with an adversary on it. Every estimate
-uses the drawn arm's logged propensity as executed. A new menu opens a fresh learner
-under a new identity (`epoch` with `cause: "menu"`); no weight is carried. A menu that
-gains a seat waits until `timing.min_ratio` delivery bounds have passed since the
-router's last phase opened (and `min_ratio` measured round periods, as before), so at
-least `1 - 1/min_ratio` of a phase's rounds are learned inside it; a retirement opens no
-phase: the retired seat is infeasible (`retired`) in the phase in force. With
+uses the drawn arm's logged propensity as executed.
+
+A menu grows in place: a seat registered for a routed kind joins each live router of
+that kind on the spot (`router.grown`, with the router, the seats added, the grown menu,
+its `kappa` and the event `ordinal`), so it is drawable on the next event of its kind,
+inside its novelty trial. The frontier gives the new arm a cumulative loss at which its
+weight, at the next round's rate, is the mean weight of the arms already there, and
+`N` grows, so `eta_t` never rises; the core gives it a uniform new row and, in every old
+row, a column at that row's mean weight, and keeps the current epoch's `gamma_k` and row
+step at the `N` the epoch opened with (the next epoch reads the grown menu). Nothing in
+flight is orphaned, no identity changes and nothing waits. Regret against each arm counts
+from its arrival (Mourtada and Maillard 2017 for full information; the bandit step is
+the design's own argument, measured: docs/architecture/learners-noregret.md §2.5). Two
+changes open a phase, a fresh learner under a new identity with no weight carried: a
+population router replacement (`add = false` for a kind that has routers), and a seat
+whose arrival would raise a core menu's `kappa`, which the core fixes for its life
+(`epoch` with `cause: "coverage"`; a seat that keeps `kappa` still grows the core in
+place meanwhile). Either waits until `timing.min_ratio` delivery bounds and `min_ratio`
+measured round periods have passed since the kind's last phase opened (genesis opens
+the first), so at least `1 - 1/min_ratio` of a phase's rounds are learned inside it: a
+waiting replacement is `router.deferred`, kept across a checkpoint (`pending_routers`),
+superseded by a later replacement of the same kind, and its phase opens at the tick it
+is built; a waiting coverage phase is `epoch.deferred`. A retirement opens no phase: the
+retired seat is infeasible (`retired`) in the phase in force. A population
+`blum_mansour` router is admitted only for a kind with a per-tick draw bound (`Tick`),
+as `evaluation.no_swap_regret_kinds` is. With
 `evaluation.adversarial_share = 0` no adversarial seat is offered (`adversarial share
 0`). A draw the world's transforms moved (the standing mix, the adversarial cap) states
 `transform_tv` on its `compute.route` row: the executed policy's extra regret over the
 learner's own is at most twice it. A round's delivery deadline is its open tick plus
-`(1 + timing.min_ratio)` times its cutoff horizon: an owed abstention credit is due no
+`(1 + timing.min_ratio)` times its cutoff span (its horizon plus that horizon's ratio
+slack, the queue's cutoff), and the delivery bound `L` is the same formula over the
+longest horizon any routed decision can carry: with `min_ratio = 3`, a 200-tick horizon
+is cut off at 267 ticks, so `L` is at least 1,068. An owed abstention credit is due no
 later than its round's cutoff, and a round still unlearned past its deadline (a credit
 whose price window outlasted its period, say) closes untrained as `learner.expired`. A
 seat's declared propensity is recorded as declared, never floored; a seat's own learner
@@ -1532,8 +1555,10 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
   consequence period, of which each window accrues the part its period covers;
   the reserve never holds more than one period's share (`novelty.window` items
   carry `carried`, `accrued` and `cap`). A trial's patience is `min_ratio`
-  measured consequence periods. A grown router menu opens its epoch at most once
-  per `min_ratio` measured periods of that router's rounds (`epoch.deferred`).
+  measured consequence periods. A grown router menu grows its live learner at once
+  (`router.grown`); a router phase (a replacement, or a raised core `kappa`) opens at
+  most once per `min_ratio` measured periods of that router's rounds and `min_ratio`
+  delivery bounds (`router.deferred`, `epoch.deferred`).
 * **Governance**: each activation opens a settling probe (`governance.probe`);
   the time until every read card's score series returns to the band it held
   before, at any level, is its settling time (`governance.settling`), part of the
@@ -4073,8 +4098,7 @@ a woken seat merely because penalties touched only the decisions that acted.
 are worth 0.5; Brier scores (`brier-v1`, `forecast-mean-v1`) 0.75, the coin-flip forecaster's;
 any other definition, and a router that has learned no seat round yet, 0.5. An
 unscored seat round with no record of its own is credited the same value. A replaced
-router's settled rounds train the router that replaced it, stepped at the size of the
-universe they were drawn over when that was larger (`router.step_rescaled`). Each
+router's settled rounds train nothing (`learner.orphaned`). Each
 router's NOOP watch for a window (its draws and lowest NOOP probability) is the
 frontier signal inside the immune organ's one learning-death diagnosis: the immune
 window records `frontier_invocation`, and the diagnosis names the routers whose every

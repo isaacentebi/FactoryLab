@@ -13,7 +13,7 @@ from factorylab.kernel.queue import LearningReturn, SettleStatus
 from factorylab.kernel.wallet import Infeasible
 from factorylab.learners.base import NEUTRAL_REWARD, BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_window
-from factorylab.runtime.clockwork import deadline_ticks, tick_ns, ticks_for
+from factorylab.runtime.clockwork import deadline_ticks, delivery_ticks, tick_ns, ticks_for
 from factorylab.runtime.grounded import (
     ATTEMPTED_DEFINITION,
     FUNDING_PENDING,
@@ -2954,12 +2954,13 @@ class FeedbackMixin:
 
     def _delivery_deadline(self, handle: str) -> int | None:
         """The tick by which a router round must be learned or closed (design §2.6):
-        its open tick plus ``(1 + min_ratio)`` times its own cutoff horizon; None for a
-        round whose open or cutoff tick is unrecorded."""
+        its open tick plus ``(1 + min_ratio)`` times its own cutoff span
+        (``clockwork.delivery_ticks``); None for a round whose open or cutoff tick is
+        unrecorded."""
         opened, cutoff = self.queue.opened_tick(handle), self.queue.deadline_tick(handle)
         if opened is None or cutoff is None:
             return None
-        return opened + (1 + self.m.timing.min_ratio) * max(0, cutoff - opened)
+        return opened + delivery_ticks(max(0, cutoff - opened), self.m.timing.min_ratio)
 
     def _expire_learning(self) -> None:
         """Close, untrained, every router round past its delivery deadline.

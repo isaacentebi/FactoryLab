@@ -726,18 +726,29 @@ class RoutingMixin:
     def _first_epoch(self) -> int:
         """The core's first epoch in draws: at least the delivery bound (design §2.2).
 
-        ``(1 + min_ratio) * h`` with ``h`` the longest cutoff any decision can carry
-        (``_decision_horizon`` over every channel) and one draw per tick, the bound a
-        core kind is held to (``[evaluation] no_swap_regret_kinds``), so an epoch is at
+        The delivery bound (``_delivery_bound``) at one draw per tick, the bound a core
+        kind is held to (``[evaluation] no_swap_regret_kinds``), so an epoch is at
         least as long as its feedback takes to arrive (essay II.IV.c).
         """
         return self._delivery_bound()
 
     def _delivery_bound(self) -> int:
-        """``L = (1 + min_ratio) * h`` ticks, ``h`` the longest decision cutoff: the
-        latest a router round may still be learned after it opened (design §2.6)."""
+        """``L``: the latest, in ticks after it opened, any router round may still be
+        learned (design §2.6).
+
+        Guarantees ``L`` is at least every router round's own delivery deadline span:
+        the longest horizon any routed decision can carry (``_decision_horizon`` over
+        every channel), cut off as the queue cuts it off (``clockwork.deadline_ticks``,
+        the horizon plus its ratio slack), and stretched by the same formula a
+        round's deadline is (``clockwork.delivery_ticks``). Reading the horizon
+        without its slack put the bound below the delivery it bounds (Sol on
+        #189/#190, P1 3: 800 against 1,068 on edition 8).
+        """
+        from factorylab.runtime.clockwork import deadline_ticks, delivery_ticks
+
+        ratio = self.m.timing.min_ratio
         longest = self._decision_horizon({CH_FAST, CH_CONSEQUENCE})
-        return (1 + self.m.timing.min_ratio) * longest
+        return delivery_ticks(deadline_ticks(longest, ratio), ratio)
 
     def _make_learner(self, learner_kind: str, universe: list[str], lid: str,
                       coverage: float):
@@ -1600,30 +1611,78 @@ class RoutingMixin:
                 for kind in kinds}
 
     def _epoch_due(self, kind: str) -> bool:
-        """Whether a kind's routers may open a new epoch now (time audit T6).
+        """Whether a kind's routers may open a new phase now (time audit T6).
 
         Essay II.IV.b: "some speed limit needs to be applied to the velocity with
         which the factory refactors itself, allowing feedback loops the time they
-        need to actually close". A router's menu grows at most once per
-        ``min_ratio`` measured periods of its own rounds, in ticks: a registration
-        waits for the rounds drawn over the old menu to be learned before the menu
-        changes again.
+        need to actually close". Only a change that orphans rounds in flight opens a
+        phase (learners design §2.5): a population router replacement, or a core
+        menu's growth that raises its coverage bound. Such a change waits
+        ``min_ratio`` measured periods of the router's own rounds, in ticks, and
+        ``min_ratio`` delivery bounds since the kind's last phase opened. A menu that
+        grows in place orphans nothing and never waits here.
         """
         opened = self.clockwork.opened(f"epoch:{kind}")
         inner = self.clockwork.measured(f"router:{kind}")
-        # §IV.c: the loop changing a router's action set is an outer loop over that
-        # router's rounds, so it keeps the same min_ratio separation (Codex review). The
-        # measured period alone does not bound when a round is learned (a round that
-        # never closes is never measured, and a credit waits on its window), so the
-        # change also waits min_ratio delivery bounds (learners design §2.5): at least
-        # 1 - 1/min_ratio of a phase's rounds are learned inside it.
+        # §IV.c: the loop changing a router is an outer loop over that router's rounds,
+        # so it keeps the same min_ratio separation (Codex review). The measured period
+        # alone does not bound when a round is learned (a round that never closes is
+        # never measured, and a credit waits on its window), so the change also waits
+        # min_ratio delivery bounds (learners design §2.5): at least 1 - 1/min_ratio of
+        # a phase's rounds are learned inside it.
         wait = self.m.timing.min_ratio * max(inner, self._delivery_bound())
         return opened is None or self.ticks_consumed - opened >= wait
 
+    def _phase_opened(self, kind: str) -> None:
+        """Record that a router phase of ``kind`` opened at this tick: the settle gate
+        (``_epoch_due``) counts the next phase-opening change from it."""
+        previous = self.clockwork.loops.get(f"epoch:{kind}", {})
+        now = self.ticks_consumed
+        self.clockwork.loops[f"epoch:{kind}"] = {
+            "opened": now, "due": now, "period": 1.0,
+            "inner": self.clockwork.measured(f"router:{kind}"),
+            "fires": previous.get("fires", 0) + 1}
+
     def _open_pending_epochs(self) -> None:
-        """Open every deferred epoch whose speed limit has passed."""
+        """Activate every deferred router replacement, then open every deferred phase,
+        whose speed limit has passed."""
+        for kind in list(self.pending_routers):
+            if self._epoch_due(kind):
+                pending = self.pending_routers.pop(kind)
+                self._activate_router(kind, pending["learner"], add=False,
+                                      by=pending["by"])
         for kind in list(self.pending_epochs):
             self._open_epoch(kind)
+
+    def _grow_in_place(self, state: RouterState, universe: list[str]) -> None:
+        """Add the seats of ``universe`` missing from ``state``'s menu to its live learner.
+
+        Learners design §2.5 (Mourtada & Maillard 2017; the bandit step is ours): a
+        new arm joins the learner in force at the mean weight, so nothing in flight
+        is orphaned, no identity changes and no gate applies; a founded seat is
+        drawable on the next event of its kind, inside its novelty trial (essay
+        II.IV.b: the compensation period is shorter than the lifetime). Guarantees a
+        core menu's coverage bound never changes in place: a seat whose arrival would
+        raise it is left off, for a phase (``_open_epoch``). A frontier's bound is the
+        grown menu's, as a fresh router's is (§2.3). The grown menu keeps every seat
+        it had, a retired one included (infeasible, never drawn), in id order with
+        NOOP last.
+        """
+        new = [a for a in universe if a not in state.universe]
+        if state.learner.inner.core:
+            new = [a for a in new if self._coverage([*state.universe, a]) <= state.coverage]
+        if not new:
+            return
+        grown = sorted({a for a in (*state.universe, *new) if a != NOOP}) + [NOOP]
+        state.learner.inner.add_actions(new)
+        state.universe = grown
+        state.router.action_ids_for_event = lambda _k, u=grown: [x for x in u if x != NOOP]
+        if not state.learner.inner.core:
+            state.coverage = self._coverage(grown)
+        self.ledger.append({"kind": "router.grown", "learner_id": state.learner.id,
+                            "event_kind": state.kind, "added": new, "universe": grown,
+                            "coverage": state.coverage, "ordinal": self.n,
+                            "tick": self.ticks_consumed, "ts": self.clock.now_ns})
 
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
@@ -1636,16 +1695,21 @@ class RoutingMixin:
             self.stats.epochs += 1
             configuration_changed(self, f"router:{kind}", self.clockwork.measured(
                 f"router:{kind}"))
-            self.clockwork.loops[f"epoch:{kind}"] = {"opened": now, "due": now, "period": 1.0,
-                                                    "inner": 1, "fires": 1}
+            self._phase_opened(kind)
             return
+        # A grown menu grows each live learner in place (design §2.5): no phase, no
+        # gate, nothing orphaned.
+        for state in states:
+            self._grow_in_place(state, universe)
         # A retirement alone opens no phase: the retired seat is infeasible in the phase
         # in force (``_route_with``), so nothing in flight is orphaned (design §2.5).
         if all(set(universe) <= set(st.universe) for st in states):
             self.pending_epochs.pop(kind, None)
             return
-        # A menu that gains a seat waits for the gate; a retired seat in it is already
-        # infeasible, so the wait never draws an assembly that left.
+        # What is left is a seat that would raise a core menu's coverage bound kappa,
+        # which the learner fixes for its life (§2.3): that opens a phase, and waits for
+        # the gate; a retired seat in the menu is already infeasible, so the wait never
+        # draws an assembly that left.
         if not self._epoch_due(kind):
             if kind not in self.pending_epochs:
                 self.ledger.append({"kind": "epoch.deferred", "event_kind": kind,
@@ -1656,30 +1720,25 @@ class RoutingMixin:
                 self.pending_epochs[kind] = now
             return
         self.pending_epochs.pop(kind, None)
-        if any(universe != st.universe for st in states):
-            # Time audit T14: an epoch replaces the router's configuration; how long
-            # the last one lived, against the loop that corrects it.
-            configuration_changed(self, f"router:{kind}", self.clockwork.measured(
-                f"router:{kind}"))
-            previous = self.clockwork.loops.get(f"epoch:{kind}", {})
-            self.clockwork.loops[f"epoch:{kind}"] = {
-                "opened": now, "due": now, "period": 1.0,
-                "inner": self.clockwork.measured(f"router:{kind}"),
-                "fires": previous.get("fires", 0) + 1}
+        # Time audit T14: a phase replaces the router's configuration; how long the last
+        # one lived, against the loop that corrects it.
+        configuration_changed(self, f"router:{kind}", self.clockwork.measured(
+            f"router:{kind}"))
+        self._phase_opened(kind)
         for i, state in enumerate(list(states)):
-            if universe == state.universe:
+            if set(universe) <= set(state.universe):
                 continue
-            # A new menu opens a new phase (learners design §2.5): a fresh learner of
-            # the same class under a new identity. No weight is carried, since no
-            # theorem spans the change. The old identity stays addressable for its
-            # in-flight decisions, which settle in the kernel and train nothing
-            # (``learner.orphaned``).
+            # A raised coverage bound opens a new phase (learners design §2.5): a fresh
+            # learner of the same class under a new identity. No weight is carried,
+            # since the bound scales every gain the rows learned. The old identity stays
+            # addressable for its in-flight decisions, which settle in the kernel and
+            # train nothing (``learner.orphaned``).
             lid = self._fresh_router_id(state.learner.id)
             coverage = self._coverage(universe)
             fresh = self._make_learner("blum_mansour" if state.learner.inner.core else "exp3",
                                        universe, lid, coverage)
             self.ledger.append({**entry, "carried": False, "router": lid,
-                                "phase": state.epoch + 1, "cause": "menu",
+                                "phase": state.epoch + 1, "cause": "coverage",
                                 "ordinal": self.n})
             self._hand_over(state, lid)
             self._retain_router(state)

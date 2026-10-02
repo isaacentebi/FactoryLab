@@ -1,4 +1,4 @@
-# Learners that are no-regret: design for the edition-8 redesign (revision 3)
+# Learners that are no-regret: design for the edition-8 redesign (revision 4)
 
 Status: revised after GPT-Sol 6.1 rejected revision 1 (`951d947b`). Inputs: audit s06
 findings #1–#4; the owner's rulings (propensities stay truthful everywhere, and any
@@ -27,6 +27,18 @@ owner's ruling on the core:
 - an operational delivery bound (§2.6) and a settle gate (§2.5);
 - the startup horizon of Proposition 2 (§2.2);
 - what the run does not demonstrate (§2.8).
+
+**Revision 4** applies GPT-Sol 6.1's cold review of #189/#190 (BLOCK, five P1s) and the
+senior advisor's memo on menu growth, whose recommendation the integrator adopted:
+- a menu grows in place; only a population router replacement, or a seat that would
+  raise a core menu's `kappa`, opens a phase (§2.5). Under revision 3 a founded seat
+  waited the settle gate, 2,400 ticks on edition 8, while its novelty trial expired
+  after about 360 (P1 1);
+- a replacement waits the settle gate too, kept across a checkpoint (P1 2);
+- the delivery bound is the queue's own cutoff stretched by the deadline formula,
+  through one shared function (P1 3, §2.6);
+- withdrawing a quiet draw that rolled a core epoch restores the epoch (P1 4, §2.2);
+- a population `blum_mansour` router needs a per-tick kind, as the core key does (P1 5).
 
 ## 1. Two learning situations, and an inventory of the learners
 
@@ -102,6 +114,11 @@ So the learner is mean-based and has `O(sqrt(T))` regret. Revision 1's claim tha
 mean-basedness forces `T^(3/4)` regret was wrong: Braverman et al. chose the exponent
 1/4 "for convenience of analysis". The quarter-exponent schedule is dropped.
 
+**A growing menu** (§2.5). A new arm's cumulative loss is set so that its weight at the
+next round's rate, `exp(−eta·L_new)`, is the mean weight of the arms already on the
+menu, and `N` grows, so `eta_t = gamma_t/N_t` stays nonincreasing (all the proof
+above needs). The round count is not reset.
+
 **Measured.**
 - At T = 26k: regret 114, against 911 for the quarter exponent.
 - Growth per 4x horizon: x1.54 (deterministic game) and x1.24 (Bernoulli game).
@@ -125,13 +142,26 @@ satisfy Lemma 10. The only change is the schedule:
 `H_0` is the larger of `⌈N ln N/(e − 1)⌉` and the router's delivery bound converted
 into draws (§2.6):
 
-    H_0 ≥ r · (1 + min_ratio) · h
+    H_0 ≥ r · L,   L = (1 + min_ratio) · c(h),   c(h) = h + ⌈h/min_ratio⌉
 
-Here `r` is the kind's per-tick draw bound and `h` is the router's decision horizon at
-genesis. On `Tick`, `r = 1`: one Tick event per tick, and Tick rounds are not judged
-again. At load, the kernel refuses a `no_swap_regret_kinds` entry that has no per-tick
-draw bound. These epochs belong to the doubling trick; they are not the phases of
-§2.5.
+Here `r` is the kind's per-tick draw bound, `h` is the longest decision horizon at
+genesis, and `c(h)` is the cutoff the queue actually sets for it. On `Tick`, `r = 1`:
+one Tick event per tick, and Tick rounds are not judged again. At load, the kernel
+refuses a `no_swap_regret_kinds` entry that has no per-tick draw bound, and at
+admission it refuses a population `blum_mansour` router for such a kind (revision 4;
+Sol's probe opened two rounds of a `ProducerReturn` core in one tick). These epochs
+belong to the doubling trick; they are not the phases of §2.5.
+
+**A growing menu** (§2.5). A new action gets a uniform new row and, in every old row, a
+column at that row's mean weight. The epoch's `gamma_k` and row step `gamma_k/N` stay
+frozen at the `N` the epoch opened with, so a round's update never depends on when the
+menu grew; the next epoch reads the grown `N`. Within a grown epoch, Lemma 10's
+constant loosens by at most `sqrt(N_end ln N_end/(N_0 ln N_0))`.
+
+**A quiet draw** is withdrawn exactly. When the draw that rolled an epoch is withdrawn
+while it is the new epoch's only round, the closed epoch's position and rows are
+restored, so its outstanding rounds still train (Sol's `H_0 = 3` probe moved the
+position from `(0, 3)` to `(1, 0)` and orphaned them).
 
 **Compressed snapshots.** The Lemma-10 row update uses
 `X_ik = g_ik/q_ik = p_i · r/pi_k`; the row proposal `q_ik` cancels. A core snapshot
@@ -201,8 +231,14 @@ comparator class.
 - The executed policy is not mean-based where `s > 0`.
 
 **Edition 8:** `antagonist-core` accepts `Tick` on `launch-world`. The core's menu
-therefore holds an adversary from genesis, with `kappa = 1/0.15 ≈ 6.7`, and the cap
-holds the executed antagonist mass at 0.15 or less.
+therefore holds an adversary from genesis, with `kappa = 1/0.15 ≈ 6.67`, and the cap
+holds the executed antagonist mass at 0.15 or less. **Recorded for the run:** dividing
+every row gain by `kappa` means the core learns its menu at about `1/kappa` (one
+seventh) of the speed it would without the adversary. The advisor's measurements put
+nearly all of the core's 5.3x regret over the old constant-gamma core on this factor
+(4.5x of it), not on doubling. A tighter fixed constant does not exist, since
+`pi_adv ≥ min(p_adv, share)` leaves the worst case at `1/share`. This is accepted for
+the run and not retuned; a core that needs no transform is research (R3).
 
 ### 2.4 Estimator and rare propensities
 
@@ -232,24 +268,65 @@ Equation 3).
   particular does not inherit Auer's gain-form theorem. The schematic states this as a
   fact.
 
-### 2.5 Phases: only on menu growth; no reset on stable failure
+### 2.5 Phases: only on replacement or a raised core kappa; no reset on stable failure
 
-- **Growth, replacement and retirement.** A registration that grows a router's menu,
-  or a population router replacement, opens a phase. The learner restarts (`t = 0`,
-  `L = 0`, or core epoch 0). The old identity is retained while it has outstanding or
-  owed rounds, as `_retain_router` does today, but those rounds train nothing: they are
-  `learner.orphaned`. A **retirement** opens no phase: the retired arm becomes
-  infeasible within the current phase, and nothing is orphaned.
+- **Growth is in place.** A registration that adds a seat to a router's menu adds an arm
+  to the live learner, with the initialisation of §2.1 (frontier) or §2.2 (core). It
+  opens no phase, orphans nothing, changes no identity and waits for no gate. It is
+  ledgered `router.grown`, with the router, the seats added, the grown menu, its
+  `kappa` and the event ordinal. A founded seat is therefore drawable on the next event
+  of its kind, inside its novelty trial: §IV.b requires the compensation period to be
+  shorter than the lifetime of what it compensates. In-flight rounds are safe because a
+  snapshot's support is a subset of the grown menu, the frontier's update touches only
+  the drawn arm, and a core round gives the new row zero gain (`p.get(action, 0)`).
+- **Why it is no-regret.** In full information this is Hedge with experts that arrive
+  over time: Mourtada and Maillard (2017), "Efficient tracking of a growing number of
+  experts" (ALT 2017, PMLR 76:517–539; arXiv 1708.09811). An expert that enters at the
+  mean weight raises the potential by at most `ln(1 + 1/N)`, so regret against each
+  expert counts from its arrival, by the same potential argument. **The bandit step is
+  our own argument, measured and not published**, as §2.1's anytime step is ours over
+  Braverman et al. Regret against an arm `j` over `[s_j, T]` is Proposition 1's bound
+  with `N_T` in place of `N`, plus the variance term, which exploration `gamma_t/K` over
+  the *current* menu already covers. For the core, the potential step holds within
+  each row, and the loosening of §2.2 applies.
+- **Measured** (advisor's memo; the repo's learners; arms arriving at rounds 100, 3,000
+  and 10,000; 4 seeds; T = 32k). The frontier's regret was 952 when it grew in place,
+  1,629 when it restarted at once, and 2,093 when it restarted behind revision 3's gate.
+  The gated restart put no mass at all on a new arm in its first 200 rounds. For the
+  core (`H_0 = 800`, an arm arriving at round 2,000, T = 16k), regret from arrival was
+  668 in place against 797 for a restart. For both classes, the test
+  `test_regret_with_an_arm_added_mid_run_is_sublinear_from_its_arrival` checks that
+  regret from an arm's arrival grows like `sqrt` and stays inside the class's
+  fixed-menu bound at the grown `N`.
+- **What opens a phase.** A phase is a fresh learner of the same class under a new
+  identity, with no weight carried. Two changes open one:
+  - a population router replacement (`add = false` for a kind that has routers);
+  - a seat whose arrival would raise a core menu's `kappa`, since the core divides every
+    gain by a `kappa` fixed for its life (§2.3). On edition 8 only a forecast-shaped
+    seat accepting `Tick` can do that. A seat that keeps `kappa` still grows the core in
+    place while such a phase waits. A frontier's `kappa` is the grown menu's.
+
+  The old identity is retained while it has outstanding or owed rounds, as
+  `_retain_router` does, but those rounds train nothing: they are `learner.orphaned`.
+  A **retirement** opens no phase: the retired arm becomes infeasible within the
+  current phase, and nothing is orphaned. An added router (`add = true`) opens no phase
+  either, since it orphans nothing.
 - **The settle gate.** `_epoch_due` uses a measured period, so it does **not**
   guarantee that feedback settles between changes. A phase-opening change is therefore
-  deferred, as `epoch.deferred` already is, until `min_ratio·L` ticks have passed since
-  the router's last phase opened. Here `L = (1 + min_ratio)·h` is the delivery bound of
-  §2.6, and this is §IV.c's cascade ratio, with the menu loop as the outer loop over
-  delivery. Under the most churn the gate permits, the rounds drawn in the first
+  deferred until `min_ratio·L` ticks have passed since the kind's last phase opened.
+  Genesis opens the first phase. Here `L` is the delivery bound of §2.6, and this is
+  §IV.c's cascade ratio, with the router loop as the outer loop over delivery. A waiting
+  replacement is ledgered `router.deferred` and kept across a checkpoint
+  (`pending_routers`). A later replacement of the same kind supersedes it. The phase it
+  opens is stamped with the tick it is built (Sol's probe: replacements at ticks 1, 2
+  and 3 all took effect and orphaned every round). A waiting coverage phase is
+  `epoch.deferred`. Under the most churn the gate permits, the rounds drawn in the first
   `1 − 1/min_ratio` (at least 2/3) of each phase are delivered inside it, provided the
   draw rate is uniform and nothing expires.
 - **Carry is deleted:** `expand`, `reshaped`, `update_carried`, the carry branch of
-  `_apply_router_round`, and `step_rescaled`.
+  `_apply_router_round`, and `step_rescaled`. Growth in place is not carry. Carry moved
+  weights across a change no theorem spanned. Growth keeps one learner whose potential
+  argument spans the arrival.
 - **No learner reset on stable failure.** The exploration ratchet is deleted:
   `immune._gain`, `gamma()`, `seed_gamma`, `router_gamma`, `immune.gain_step` and
   `immune.gamma_max`. Stable failure keeps the duration price ratchet
@@ -260,10 +337,19 @@ Equation 3).
 ### 2.6 Delay and lifecycle: an operational delivery bound
 
 The runtime enforces a deadline for every router snapshot. A round opened at tick `o`
-with horizon `h` (its `queue.deadline_tick` is `o + h`) must be learned, discarded,
-withdrawn, orphaned or expired by
+with horizon `h` is cut off by the queue at `o + c(h)`, `c(h) = h + ⌈h/min_ratio⌉`, and
+must be learned, discarded, withdrawn, orphaned or expired by
 
-    o + L,   where L = (1 + min_ratio)·h
+    o + (1 + min_ratio)·c(h)
+
+The router-wide **delivery bound** `L` is the same formula at the longest horizon any
+routed decision can carry. Both come from one function (`clockwork.delivery_ticks`
+over the queue's `clockwork.deadline_ticks`), so `L` is never below a round's own
+delivery. Revision 3 read `L = (1 + min_ratio)·h` without the cutoff's slack. Sol's
+edition-8 probes measured an Exposure round with horizon 160, cutoff 214 and delivery
+856, and a Forecast round with horizon 200, cutoff 267 and delivery 1,068, while the
+bound and `H_0` said 800. The bound is still router-wide; bounds per kind can wait,
+since with growth in place a longer bound no longer delays a founded seat.
 
 Two code paths do not meet this today, and PR B changes both:
 - **Owed abstention credits.** `_defer_abstention` can set a due tick beyond the
@@ -285,9 +371,9 @@ plus the sibling's issuance mark. No closed epoch and no lifetime record is kept
 **Tests written to fail first** (PR B):
 - `test_owed_credit_due_never_exceeds_cutoff`, using the probe values;
 - `test_window_outliving_bound_expires_round`, using the probe values;
-- `test_permitted_menu_churn_keeps_learning`: open phases as fast as the gate allows
-  for 10 phases, and assert the learned fraction is at least `1 − 1/min_ratio − 0.05`
-  and positive in every phase;
+- `test_permitted_menu_churn_keeps_learning`: a seat joins every tick; revision 4
+  asserts no phase opens, nothing is orphaned or expired, and the learned fraction is 1
+  (revision 3 asserted at least `1 − 1/min_ratio − 0.05` across gated phases);
 - `test_snapshot_count_bounded_by_r_times_L`;
 - checkpoint and resume across a phase opening, covering owed credits, an unclosed
   window, simultaneous causes, duplicate returns and a quiet-draw withdrawal.
@@ -306,7 +392,10 @@ phase or epoch.
 ### 2.8 What the 72-hour run does and does not demonstrate
 
 Propositions 1 and 2 are synchronous, fixed-menu guarantees **for the learners' own
-policies**. The run's routers are delayed, and on the edition-8 `Tick` core and the
+policies**. A grown menu has the growing-experts bound of §2.5, whose bandit step is our
+own measured argument. On edition 8 the `Tick` core learns at about `1/kappa` speed,
+with `kappa ≈ 6.67`, because the adversary sits on its menu (§2.3). This is accepted for
+the run. The run's routers are delayed, and on the edition-8 `Tick` core and the
 evaluator routers they are transformed. **The run does not demonstrate no-regret for
 delayed or transformed policies**, and it demonstrates none for off-policy seat
 learners.

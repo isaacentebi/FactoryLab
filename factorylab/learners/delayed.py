@@ -141,6 +141,14 @@ class SnapshotLearner:
         else:
             self.inner.withdraw_round()
 
+    def add_actions(self, new: Sequence[str]) -> None:
+        """Grow the inner learner's menu in place (learners design §2.5).
+
+        Guarantees every open round keeps its snapshot and still trains: its support is
+        a subset of the grown menu, and growth closes no core epoch.
+        """
+        self.inner.add_actions(new)
+
     def update(self, feedback: Feedback) -> None:
         """Reject unaddressed feedback, which cannot identify a delayed decision."""
         raise TypeError("SnapshotLearner requires update_for(handle, feedback)")

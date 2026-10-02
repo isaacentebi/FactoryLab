@@ -84,6 +84,19 @@ def deadline_ticks(horizon: int, min_ratio: int) -> int:
     return horizon + max(1, -(-horizon // min_ratio))
 
 
+def delivery_ticks(cutoff: int, min_ratio: int) -> int:
+    """How long after it opened a router round whose cutoff is ``cutoff`` ticks away may
+    still be learned: ``(1 + min_ratio) * cutoff`` (learners design §2.6).
+
+    The one formula behind both a round's own delivery deadline and the delivery bound
+    a router is gated and its core's first epoch sized by, so the bound is never
+    shorter than the delivery it bounds (Sol on #189/#190, P1 3).
+    """
+    if type(cutoff) is not int or cutoff < 0:
+        raise ValueError("a cutoff is a nonnegative number of ticks")
+    return (1 + min_ratio) * cutoff
+
+
 def tick_ns(clock) -> int:
     """The delivered tick interval: the slower of the measured and the declared gap.
 
