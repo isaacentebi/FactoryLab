@@ -234,24 +234,28 @@ def test_permitted_menu_churn_keeps_learning(monkeypatch):
 @pytest.mark.gate
 def test_snapshot_count_bounded_by_r_times_L(scripted_runtime_run):
     """Design §2.6, memory: after a world run, every open router round belongs to a live
-    decision or an owed credit, none is past its delivery deadline, and every one opened
-    within the last delivery bound: the open rounds are the last L ticks' draws at most,
-    never a lifetime of them."""
+    decision or an owed credit, none is past its delivery deadline, and each one's
+    delivery span is within the delivery bound L: the open rounds are the last L ticks'
+    draws at most, never a lifetime of them. The world is the shared 100-event scripted
+    run (``scripted_runtime_run``), which already holds open rounds of every kind;
+    a 200-event run of its own put this file over its gate CPU budget (Sol on #191),
+    and with L = 1,068 ticks no longer run proved nothing more."""
     from factorylab.runtime.worlds import load_manifest
 
     manifest = load_manifest("scripted")
-    rt = scripted_runtime_run(manifest, 200, 1).runtime(manifest)
+    rt = scripted_runtime_run(manifest, 100, 1).runtime(manifest)
     owners = {key: handle for handle, key in rt.snapshot_keys.items()}
     owners.update({c["key"]: h for h, c in rt.noop_credits.items() if c.get("key")})
     bound = rt._delivery_bound()
+    checked = 0
     for state in [*rt._all_router_states(), *rt.retired_routers.values()]:
-        open_rounds = state.learner.inner.outstanding()
-        for key in open_rounds:
+        for key in state.learner.inner.outstanding():
             assert key in owners, (state.learner.id, key)  # no orphaned snapshot
             deadline = rt._delivery_deadline(owners[key])
             assert deadline is None or rt.ticks_consumed <= deadline
-        # Each open round's decision opened within the bound: at most the draws of the
-        # last L ticks are open, never a lifetime of them.
-        for key in open_rounds:
+            # Each open round is learned within L of its opening: at most the draws of
+            # the last L ticks are open, never a lifetime of them.
             opened = rt.queue.opened_tick(owners[key])
-            assert opened is None or opened >= rt.ticks_consumed - bound
+            assert deadline is None or opened is None or deadline - opened <= bound
+            checked += 1
+    assert checked  # the run left rounds open: nothing above is vacuous

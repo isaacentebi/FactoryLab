@@ -115,9 +115,10 @@ mean-basedness forces `T^(3/4)` regret was wrong: Braverman et al. chose the exp
 1/4 "for convenience of analysis". The quarter-exponent schedule is dropped.
 
 **A growing menu** (§2.5). A new arm's cumulative loss is set so that its weight at the
-next round's rate, `exp(−eta·L_new)`, is the mean weight of the arms already on the
-menu, and `N` grows, so `eta_t = gamma_t/N_t` stays nonincreasing (all the proof
-above needs). The round count is not reset.
+pre-growth rate, `exp(−eta·L_new)`, is the mean weight of the arms already on the menu.
+`N` then grows, so `eta_t = gamma_t/N_t` stays nonincreasing (all the proof above
+needs), and at the next, lower rate the new arm's weight is no longer exactly the mean.
+The round count is not reset.
 
 **Measured.**
 - At T = 26k: regret 114, against 911 for the quarter exponent.
@@ -152,11 +153,33 @@ admission it refuses a population `blum_mansour` router for such a kind (revisio
 Sol's probe opened two rounds of a `ProducerReturn` core in one tick). These epochs
 belong to the doubling trick; they are not the phases of §2.5.
 
-**A growing menu** (§2.5). A new action gets a uniform new row and, in every old row, a
-column at that row's mean weight. The epoch's `gamma_k` and row step `gamma_k/N` stay
-frozen at the `N` the epoch opened with, so a round's update never depends on when the
-menu grew; the next epoch reads the grown `N`. Within a grown epoch, Lemma 10's
-constant loosens by at most `sqrt(N_end ln N_end/(N_0 ln N_0))`.
+**A growing menu** (§2.5; revision 4, after Sol's review of #191). Each row holds
+cumulative gain estimates `Ĝ_i`, adds `X_ik = p_i·r/(kappa·pi_k)` per round, and
+proposes `q_i ∝ exp(eta_t·Ĝ_i)` mixed with `gamma_k/K` at the rate
+`eta_t = gamma_k/N_t`, where `N_t` is the menu's size at the draw. `gamma_k`, the epoch's
+exploration mass, stays frozen at the `N` the epoch opened with. The rate reads the
+menu now, so it is **nonincreasing within the epoch**, and every update keeps Auer's
+premise: `q_ik ≥ gamma_k/K_t` gives `X_ik ≤ K_t/gamma_k`, so
+`eta_t·X_ik ≤ K_t/N_t ≤ 1`. (At `ca655ca4` the step was frozen at `gamma_k/N_0`
+while the floor used the grown `K`; Sol's probe reached an exponent of 1.614.)
+- A new action gets a uniform new row and, in every old row, a gain estimate at that
+  row's mean weight at the pre-growth rate.
+- Growth from a singleton epoch (`N = 1`, `gamma = 0`, every draw NOOP, nothing
+  learned) restarts that epoch at the grown `N`, under the same epoch index. Sol's
+  probe had frozen `gamma = 0` into a snapshot no restore accepted.
+- The next epoch retunes `gamma` to the grown `N`.
+
+Within a grown epoch, each row is EXP3 in FTRL form with a nonincreasing rate. Its regret
+against any arm `j` from `j`'s arrival is at most
+`ln N_T/eta_T + (e − 2)·Σ_t eta_t·E[Σ_a q_a·X_a²] ≤ N_T ln N_T/gamma_k + (e − 2)·gamma_k·H_k`,
+which is Auer's bound with `N_T` in place of `N`. The time-varying rate is published in
+loss form (Cesa-Bianchi and Lugosi 2006, Theorem 2.3). **The gain form under
+`eta_t·X ≤ 1` and the mean-weight entry term `ln(N_T/N_0) ≤ ln N_T` are our own
+argument.** Lemma 10 and Theorem 11 then apply per epoch unchanged, and Lemma 10's
+constant loosens by at most `sqrt(N_T ln N_T/(N_0 ln N_0))`. The price is the step: a
+grown epoch learns at `N_0/N_T` of its pre-growth rate until the next boundary, which
+is 1.5x slower for one Tick seat on edition 8. Without growth the policy is the one
+before this change (to 1e-12).
 
 **A quiet draw** is withdrawn exactly. When the draw that rolled an epoch is withdrawn
 while it is the new epoch's only round, the closed epoch's position and rows are
@@ -288,7 +311,11 @@ Equation 3).
   Braverman et al. Regret against an arm `j` over `[s_j, T]` is Proposition 1's bound
   with `N_T` in place of `N`, plus the variance term, which exploration `gamma_t/K` over
   the *current* menu already covers. For the core, the potential step holds within
-  each row, and the loosening of §2.2 applies.
+  each row at the nonincreasing rate `gamma_k/N_t`, and the loosening of §2.2 applies.
+  These are statements for an oblivious adversary, with the new arm's regret counted
+  from its arrival and the growth times fixed in advance. The frontier's mean-based
+  property (§2.1) is argued for a fixed menu; with arms arriving, it holds against
+  each arm from its arrival, under the same slack.
 - **Measured** (advisor's memo; the repo's learners; arms arriving at rounds 100, 3,000
   and 10,000; 4 seeds; T = 32k). The frontier's regret was 952 when it grew in place,
   1,629 when it restarted at once, and 2,093 when it restarted behind revision 3's gate.

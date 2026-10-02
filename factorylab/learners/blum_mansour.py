@@ -4,9 +4,12 @@ Source: Blum & Mansour (2007), "From External to Internal Regret", JMLR 8,
 1307--1324, §5 and Theorem 11; rows are EXP3 (Auer et al. 2002), which satisfy
 Lemma 10. Each round the N rows propose q_i over the feasible menu, the master
 plays the stationary p = pQ, and when action k is played with logged probability
-pi_k and pays r, row i adds (gamma_k / N) * X_ik to its log-weight for k, with
+pi_k and pays r, row i adds X_ik to its cumulative gain estimate G_ik, with
 
     X_ik = g_ik / q_ik = p_i * r / (kappa * pi_k)          (on-policy)
+
+and proposes q_i proportional to exp(eta_t * G_i), mixed with gamma_k / K, at the rate
+eta_t = gamma_k / N_t, N_t the menu's size at the draw (EXP3 in FTRL form).
 
 The row proposal q_ik cancels, so a round's snapshot is O(N): its epoch, the
 master p and the executed pi (docs/architecture/learners-noregret.md §2.2).
@@ -23,11 +26,17 @@ For T >= H_0 and synchronous feedback, max_F E[swap regret_F] <= 8.98 kappa N
 sqrt(T N ln N); E[max_F] and delayed feedback are not claimed.
 
 A menu grows in place (§2.5): a new action gets a uniform new row and, in each old
-row, a column at that row's mean weight; the epoch's gamma (and its row step
-gamma_k / N) stay frozen at the N the epoch opened with, and the next epoch reads the
-grown N. Within a grown epoch Lemma 10's constant loosens by at most
-sqrt(N_end ln N_end / (N_0 ln N_0)); the growing-experts step is our own argument
-(Mourtada & Maillard 2017 for full information), measured, not published.
+row, a gain estimate at that row's mean weight at the pre-growth rate. The epoch's
+gamma_k stays frozen at the N the epoch opened with (its exploration mass), while the
+rate eta_t = gamma_k / N_t reads the menu now, so it is nonincreasing within the epoch
+and eta_t * X_ik <= (gamma_k / N_t)(K_t / gamma_k) <= 1 on every update (Auer's
+premise: q_ik >= gamma_k / K_t gives X_ik <= K_t / gamma_k, and K_t <= N_t). The next
+epoch retunes gamma to the grown N. A singleton epoch (N = 1, gamma 0) learned
+nothing, so growth from one restarts it at the grown N under the same epoch index.
+Within a grown epoch each row's regret is Auer's with N_T for N (Cesa-Bianchi &
+Lugosi 2006, Thm 2.3, for a time-varying rate in loss form; the gain form and the
+mean-weight entry term are our own argument), so Lemma 10's constant loosens by at
+most sqrt(N_T ln N_T / (N_0 ln N_0)).
 
 A quiet draw is withdrawn exactly: withdrawing the round that rolled the epoch, while it
 is the new epoch's only round, restores the closed epoch's position and rows, so its
@@ -36,7 +45,7 @@ outstanding rounds still train.
 Every row keeps q_ik >= gamma_k / K, so Q is strictly positive and the stationary
 solve is unique. An off-policy learner (trained on a seat's declared propensities)
 uses X_ik = p_i * r / (pi_k + beta_k), beta_k = gamma_k / (2N): one update moves a
-log-weight by at most 2, and no guarantee is claimed.
+logit eta_t * G_ik by at most 2, and no guarantee is claimed.
 """
 
 import math
@@ -187,6 +196,11 @@ class BlumMansour:
             return self.epoch + 1, [dict.fromkeys(self.actions, 0.0) for _ in self.actions]
         return self.epoch, self._rows
 
+    def rate(self, epoch: int | None = None) -> float:
+        """eta_t = gamma_k / N_t: ``epoch``'s gamma over the menu's size now, the rate the
+        rows' gain estimates are played at; nonincreasing within an epoch."""
+        return self.gamma(epoch) / len(self.actions)
+
     def gamma(self, epoch: int | None = None) -> float:
         """gamma_k of ``epoch`` (default the current one): the current epoch's is frozen
         at the N it opened with; a later epoch's reads the menu as it is now."""
@@ -195,11 +209,11 @@ class BlumMansour:
 
     def _solve(self, support: tuple[str, ...], epoch: int,
                rows: list[dict[str, float]]) -> dict[str, float]:
-        gamma = self.gamma(epoch)
+        gamma, eta = self.gamma(epoch), self.rate(epoch)
         by_action = {}
-        for action, logw in zip(self.actions, rows, strict=True):
-            high = max(logw[a] for a in support)
-            w = {a: math.exp(logw[a] - high) for a in support}
+        for action, gains in zip(self.actions, rows, strict=True):
+            high = max(gains[a] for a in support)
+            w = {a: math.exp(eta * (gains[a] - high)) for a in support}
             total = math.fsum(w.values())
             by_action[action] = {a: (1 - gamma) * w[a] / total + gamma / len(support)
                                  for a in support}
@@ -245,22 +259,35 @@ class BlumMansour:
     def add_actions(self, new: Sequence[str]) -> None:
         """Grow the menu in place without restarting the epoch (learners design §2.5).
 
-        Guarantees every old row keeps its log-weights and gains each new action at the
-        row's mean weight, each new action's row is uniform, and the epoch, its count
-        and its gamma are unchanged. An empty ``new`` changes nothing; an action already
-        on the menu raises ValueError and changes nothing.
+        Guarantees every old row keeps its gain estimates and gains each new action at
+        the row's mean weight at the pre-growth rate, each new action's row is uniform,
+        and the epoch, its count and its gamma are unchanged; except that growth from a
+        singleton epoch (gamma 0, nothing learned) restarts that epoch at the grown
+        menu: fresh rows, no rounds counted, the same index, a positive gamma. An empty
+        ``new`` changes nothing; an action already on the menu raises ValueError and
+        changes nothing.
         """
         if not tuple(new):
             return
         added = _actions(new)
         if set(added) & set(self.actions):
             raise ValueError("an action already on the menu is not new")
+        if self.epoch_n < 2:
+            # Sol on #191: a gamma frozen at 0 learned nothing and froze snapshots no
+            # restore accepts. Every draw of a singleton menu is NOOP, so nothing it
+            # opened can train.
+            self.actions = (*self.actions, *added)
+            self.epoch_n, self.epoch_rounds = len(self.actions), 0
+            self._rows = [dict.fromkeys(self.actions, 0.0) for _ in self.actions]
+            self._rolled = None
+            return
+        eta = self.rate()  # the pre-growth rate, as the frontier's entry uses
         rows = []
-        for logw in self._rows:
-            high = max(logw.values())
-            mean = high + math.log(
-                math.fsum(math.exp(v - high) for v in logw.values()) / len(logw))
-            rows.append(_center({**logw, **dict.fromkeys(added, mean)}))
+        for gains in self._rows:
+            high = max(gains.values())
+            mean = high + math.log(math.fsum(
+                math.exp(eta * (v - high)) for v in gains.values()) / len(gains)) / eta
+            rows.append(_center({**gains, **dict.fromkeys(added, mean)}))
         self.actions = (*self.actions, *added)
         rows.extend(dict.fromkeys(self.actions, 0.0) for _ in added)
         self._rows = rows
@@ -283,27 +310,25 @@ class BlumMansour:
         if k not in saved.support or not math.isclose(
                 feedback.propensity, executed[k], rel_tol=1e-12, abs_tol=0):
             raise ValueError("feedback must carry the saved round's executed propensity")
-        gamma = saved.gamma
-        # The row step gamma_k / N of the round's epoch, frozen at the N it opened with.
-        n = self.epoch_n
         if self.off_policy:
-            denominator = feedback.propensity + gamma / (2 * n)
+            denominator = feedback.propensity + saved.gamma / (2 * self.epoch_n)
         else:
             if p[k] > self.coverage * feedback.propensity * (1 + 1e-12):
                 raise ValueError("executed propensity below the coverage bound")
             denominator = self.coverage * feedback.propensity
         updated = []
-        for action, logw in zip(self.actions, self._rows, strict=True):
+        for action, gains in zip(self.actions, self._rows, strict=True):
+            # The gain estimate alone: the rate is applied at play time (``_solve``).
             x = p.get(action, 0.0) * feedback.reward / denominator
-            row = dict(logw)
-            row[k] += gamma / n * x
+            row = dict(gains)
+            row[k] += x
             updated.append(_center(row))
         self._rows = updated
         self._rolled = None
 
     def state(self) -> dict:
-        """Parameters, epoch position, the N it opened with and every row's exact
-        log-weights (and the closed epoch a withdrawal would restore, while kept)."""
+        """Parameters, epoch position, the N it opened with and every row's exact gain
+        estimates (and the closed epoch a withdrawal would restore, while kept)."""
         rolled = {} if self._rolled is None else {"rolled": {
             "epoch": self._rolled[0], "epoch_rounds": self._rolled[1],
             "rows": self._rolled[2], "epoch_n": self._rolled[3]}}

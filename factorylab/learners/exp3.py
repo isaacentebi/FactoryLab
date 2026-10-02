@@ -13,8 +13,9 @@ synchronous on-policy feedback its expected regret is at most
 (Braverman, Mao, Schneider & Weinberg 2018, Thm D.3, adapted to an anytime schedule).
 
 A menu grows in place (§2.5): a new arm's cumulative loss is set so that its weight at
-the next round's rate is the mean weight of the arms already there, and N grows, so
-eta_t stays nonincreasing. Mourtada & Maillard (2017) give the full-information step:
+the pre-growth rate is the mean weight of the arms already there; N then grows, so
+eta_t stays nonincreasing (and the new arm's weight at the next, lower rate is no
+longer exactly that mean). Mourtada & Maillard (2017) give the full-information step:
 an arm entering at the mean weight raises the potential by at most ln(1 + 1/N), so
 regret against each arm counts from its arrival with N_T for N. The bandit step is our
 own argument, measured, not published (§2.5).
@@ -95,10 +96,10 @@ class EXP3:
         """Grow the menu in place without restarting.
 
         Guarantees the round count and every existing arm's loss are unchanged, and
-        each new arm's weight ``exp(-eta * L)`` at the next round's rate before growth
-        equals the mean weight of the arms already on the menu (learners design §2.5).
-        An empty ``new`` changes nothing; an arm already on the menu raises ValueError
-        and changes nothing.
+        each new arm's weight ``exp(-eta * L)`` at the pre-growth rate (the next round's
+        rate before N grows) equals the mean weight of the arms already on the menu
+        (learners design §2.5). An empty ``new`` changes nothing; an arm already on the
+        menu raises ValueError and changes nothing.
         """
         if not tuple(new):
             return

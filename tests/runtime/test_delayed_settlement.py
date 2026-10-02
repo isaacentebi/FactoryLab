@@ -31,7 +31,9 @@ def test_executed_propensity_trains_the_core_through_its_fixed_coverage_bound():
     wide = SnapshotLearner.restore(wide.state())
     assert wide.update_for('old', BanditFeedback('b', 1., .01))
     for a, row in zip(('a', 'b'), wide.inner.state()['rows'], strict=True):
-        assert row['b'] - row['a'] == pytest.approx(gamma / 2 * p[a] / (100.0 * .01))
+        # Rows hold gain estimates; the logit moves by eta = gamma / N times it.
+        assert wide.inner.rate() * (row['b'] - row['a']) == pytest.approx(
+            gamma / 2 * p[a] / (100.0 * .01))
     assert not wide.state()['snapshots']
 
 

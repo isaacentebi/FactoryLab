@@ -70,7 +70,9 @@ def test_row_update_is_lemma_10_with_the_row_proposal_cancelled():
     gamma = saved.gamma
     for i, row in zip(core.actions, core.state()["rows"], strict=True):
         x = p[i] * 0.8 / (2.0 * 0.25)
-        assert row["b"] - row["a"] == pytest.approx(gamma / 3 * x)
+        # Rows hold gain estimates; the logit is eta * G, eta = gamma / N.
+        assert row["b"] - row["a"] == pytest.approx(x)
+        assert core.rate() * (row["b"] - row["a"]) == pytest.approx(gamma / 3 * x)
         assert row["a"] == row["c"]
 
 
@@ -97,7 +99,7 @@ def test_off_policy_rare_propensity_step_bounded():
                            (("a", 1 - 1e-6), ("b", 1e-6)))
     core.update_round(declared, BanditFeedback("b", 1.0, 1e-6))
     for row in core.state()["rows"]:
-        assert row["b"] - row["a"] <= 2 + 1e-12
+        assert core.rate() * (row["b"] - row["a"]) <= 2 + 1e-12  # the logit's move
     master = core.distribution(core.actions)
     assert 0 < master["a"] < 1 and 0 < master["b"] < 1
 

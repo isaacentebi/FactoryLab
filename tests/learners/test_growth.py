@@ -57,7 +57,7 @@ def test_core_grows_a_uniform_row_and_a_mean_weight_column_with_its_gamma_frozen
         p, saved = core.open_round(core.actions)
         core.update_round(saved, BanditFeedback("a" if t % 2 else "b", 0.7, p["a" if t % 2
                                                                             else "b"]))
-    gamma = core.gamma()
+    gamma, eta = core.gamma(), core.rate()
     rows = core.state()["rows"]
     core.add_actions(["c"])
     state = core.state()
@@ -65,10 +65,11 @@ def test_core_grows_a_uniform_row_and_a_mean_weight_column_with_its_gamma_frozen
     assert (state["epoch"], state["epoch_rounds"]) == (0, 5)  # no restart
     assert core.gamma() == gamma == epoch_gamma(2, 8)  # frozen at the N it opened with
     for old, new in zip(rows, state["rows"][:2], strict=True):
-        # The old row's own log-weights are kept; the new column is their mean weight.
+        # The old row's own gain estimates are kept; the new column is at their mean
+        # weight at the pre-growth rate.
         assert {a: new[a] for a in old} == old
-        assert new["c"] == pytest.approx(
-            math.log(math.fsum(math.exp(v) for v in old.values()) / 2))
+        assert math.exp(eta * new["c"]) == pytest.approx(
+            math.fsum(math.exp(eta * v) for v in old.values()) / 2)
     assert len(set(state["rows"][2].values())) == 1  # the new row is uniform
     assert core.gamma(1) == epoch_gamma(3, 16)  # the next epoch reads the grown menu
     for _ in range(3):
@@ -127,10 +128,10 @@ def test_checkpoint_and_resume_across_growth_continue_bit_for_bit(core):
 
 def _arrival_regret(learner, horizon, arrival, marks, *, seed=0):
     """Expected regret against the arriving arm ``c`` from its arrival, synchronous, at
-    each of ``marks`` rounds after it."""
+    each of ``marks`` rounds after it, and (a core's) worst row exponent eta_t * x_hat."""
     rewards = {"a": 0.7, "b": 0.2, "NOOP": 0.5, "c": 1.0}
     rng = Random(seed)
-    regret, seen = 0.0, {}
+    regret, seen, worst = 0.0, {}, 0.0
     for t in range(horizon):
         if t == arrival:
             learner.add_actions(["c"])
@@ -139,10 +140,15 @@ def _arrival_regret(learner, horizon, arrival, marks, *, seed=0):
         if t >= arrival:
             regret += rewards["c"] - math.fsum(p[a] * rewards[a] for a in menu)
         k = rng.choices(menu, weights=[p[a] for a in menu], k=1)[0]
-        learner.update_for(f"r{t}", BanditFeedback(k, rewards[k], p[k]))
+        feedback = BanditFeedback(k, rewards[k], p[k])
+        if learner.core:
+            saved = learner._snapshots[f"r{t}"]
+            if saved.epoch == learner.inner.epoch:
+                worst = max(worst, _row_exponent(learner.inner, saved, feedback))
+        learner.update_for(f"r{t}", feedback)
         if t + 1 - arrival in marks:
             seen[t + 1 - arrival] = regret
-    return [seen[m] for m in marks]
+    return [seen[m] for m in marks], worst
 
 
 @pytest.mark.gate
@@ -157,9 +163,128 @@ def test_regret_with_an_arm_added_mid_run_is_sublinear_from_its_arrival(core):
     marks = (16_000, 64_000) if core else (8_000, 32_000)
     learner = SnapshotLearner(BlumMansour(("a", "b", "NOOP")) if core
                               else EXP3(("a", "b", "NOOP")), id="L")
-    short, long = _arrival_regret(learner, arrival + marks[1], arrival, marks)
+    (short, long), worst = _arrival_regret(learner, arrival + marks[1], arrival, marks)
     assert 0 < short and long / short <= 4 ** 0.65
+    assert worst <= 1.0  # Auer's premise eta_t * x_hat <= 1 held on every core update
     horizon = arrival + marks[1]
     bound = (8.98 * n * math.sqrt(horizon * n * math.log(n)) if core
              else (n * math.log(n) + 4) * math.sqrt(horizon) + 3)
     assert long <= bound
+
+
+# --- the core's row step under growth (Sol on #191; the advisor's fix) ------------------
+
+
+def _row_exponent(core, saved, feedback):
+    """The largest exponent eta_t * x_hat an on-policy update of ``saved`` applies: the
+    rate in force now times the round's gain estimate p_i * r / (kappa * pi_k)."""
+    p = dict(saved.p)
+    x = max(p.get(a, 0.0) for a in core.actions) * feedback.reward / (
+        core.coverage * feedback.propensity)
+    return core.rate() * x
+
+
+def test_core_row_step_never_exceeds_one_after_growth():
+    """Sol's probe on #191: two arms, H0 = 1000, grown to ten, 999 rewards on a, then a
+    reward on b. At ca655ca4 the step divided by the frozen N while exploration used the
+    grown one, and round 1000's exponent was 1.614: Auer's premise eta * x_hat <= 1 broke."""
+    core = BlumMansour(("a", "b"), first_epoch=1000)
+    core.add_actions([f"n{i}" for i in range(8)])
+    menu = core.actions
+    worst = 0.0
+    for t in range(1000):
+        p, saved = core.open_round(menu)
+        feedback = BanditFeedback("a" if t < 999 else "b", 1.0, p["a" if t < 999 else "b"])
+        worst = max(worst, _row_exponent(core, saved, feedback))
+        core.update_round(saved, feedback)
+    assert core.epoch == 0 and worst <= 1.0
+
+
+def test_core_rate_is_nonincreasing_across_growth():
+    """eta_t = gamma_k / N_t: gamma_k frozen for the epoch, N_t the menu now, so the rate
+    only falls when the menu grows, and the floor gamma/K and the step read the same N."""
+    core = BlumMansour(("a", "b", "NOOP"), first_epoch=50)
+    for _ in range(5):
+        core.open_round(core.actions)
+    before, gamma = core.rate(), core.gamma()
+    core.add_actions(["c", "d"])
+    assert core.gamma() == gamma and core.rate() == gamma / 5 <= before
+    p = core.distribution(core.actions)
+    assert min(p.values()) >= core.rate() * (1 - 1e-12)  # floor gamma/K = gamma/N here
+
+
+def test_singleton_core_grows_into_a_positive_gamma_and_restores():
+    """Sol on #191: a [NOOP] core (epoch_n 1, gamma 0) grew with gamma frozen at 0; a
+    round drawn then saved gamma 0.0, and restore refused it ("invalid saved gamma")."""
+    learner = SnapshotLearner(BlumMansour(("NOOP",), first_epoch=1068), id="core")
+    learner.add_actions(["s1"])
+    p = learner.distribution_for("h1", ("s1", "NOOP"), ordinal=1)
+    assert learner.exploration("h1") > 0 and p["s1"] > 0
+    restored = SnapshotLearner.restore(json.loads(json.dumps(learner.state())))
+    assert restored.state() == learner.state()
+    assert restored.update_for("h1", BanditFeedback("s1", 0.8, p["s1"])) is True
+
+
+def test_core_growth_from_singleton_restarts_the_epoch():
+    """A singleton epoch learned nothing (gamma 0, every draw NOOP): growth restarts it at
+    the grown N, the same epoch index, fresh rows, no rounds counted."""
+    core = BlumMansour(("NOOP",), first_epoch=20)
+    for _ in range(25):
+        core.open_round(core.actions)
+    epoch = core.epoch
+    assert core.epoch_rounds > 0
+    core.add_actions(["s1", "s2"])
+    assert (core.epoch, core.epoch_rounds, core.epoch_n) == (epoch, 0, 3)
+    assert all(set(row.values()) == {0.0} for row in core.state()["rows"])
+    assert core.gamma() == epoch_gamma(3, core.horizon()) > 0
+
+
+class _PreFixCore(BlumMansour):
+    """The core as it was before the fix, on a fixed menu: rows in log-weight units, the
+    step gamma_k / N applied at update time."""
+
+    def _solve(self, support, epoch, rows):
+        from factorylab.learners.blum_mansour import stationary_distribution
+
+        gamma = self.gamma(epoch)
+        by_action = {}
+        for action, logw in zip(self.actions, rows, strict=True):
+            high = max(logw[a] for a in support)
+            w = {a: math.exp(logw[a] - high) for a in support}
+            total = math.fsum(w.values())
+            by_action[action] = {a: (1 - gamma) * w[a] / total + gamma / len(support)
+                                 for a in support}
+        matrix = [[by_action[a][b] for b in support] for a in support]
+        return dict(zip(support, stationary_distribution(matrix), strict=True))
+
+    def update_round(self, saved, feedback):
+        from factorylab.learners.base import _center
+
+        p = dict(saved.p)
+        n, k = len(self.actions), feedback.action
+        updated = []
+        for action, logw in zip(self.actions, self._rows, strict=True):
+            row = dict(logw)
+            row[k] += saved.gamma / n * (p.get(action, 0.0) * feedback.reward
+                                         / (self.coverage * feedback.propensity))
+            updated.append(_center(row))
+        self._rows = updated
+
+
+def test_core_fixed_menu_policy_unchanged_by_the_fix():
+    """Regression guard: without growth the rate gamma_k / N is the old step, so the fixed
+    menu's policy sequence is the pre-fix learner's to 1e-12 (the runtime regret test's
+    Tick game: a seat and NOOP pay 1, the antagonist 0, kappa = 1/0.15)."""
+    menu = ("antagonist-a", "seed-decider", "NOOP")
+    rewards = {"antagonist-a": 0.0, "seed-decider": 1.0, "NOOP": 1.0}
+    new = BlumMansour(menu, first_epoch=300, coverage=1 / 0.15)
+    old = _PreFixCore(menu, first_epoch=300, coverage=1 / 0.15)
+    rng = Random(0)
+    for _ in range(700):  # past the first epoch boundary
+        p_new, s_new = new.open_round(menu)
+        p_old, s_old = old.open_round(menu)
+        assert max(abs(p_new[a] - p_old[a]) for a in menu) <= 1e-12
+        k = rng.choices(menu, weights=[p_new[a] for a in menu], k=1)[0]
+        new.update_round(s_new, BanditFeedback(k, rewards[k], p_new[k]))
+        old.update_round(s_old, BanditFeedback(k, rewards[k], p_old[k]))
+    assert new.epoch == old.epoch == 1

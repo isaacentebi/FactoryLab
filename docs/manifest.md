@@ -1472,10 +1472,13 @@ A menu grows in place: a seat registered for a routed kind joins each live route
 that kind on the spot (`router.grown`, with the router, the seats added, the grown menu,
 its `kappa` and the event `ordinal`), so it is drawable on the next event of its kind,
 inside its novelty trial. The frontier gives the new arm a cumulative loss at which its
-weight, at the next round's rate, is the mean weight of the arms already there, and
-`N` grows, so `eta_t` never rises; the core gives it a uniform new row and, in every old
-row, a column at that row's mean weight, and keeps the current epoch's `gamma_k` and row
-step at the `N` the epoch opened with (the next epoch reads the grown menu). Nothing in
+weight, at the pre-growth rate, is the mean weight of the arms already there, and
+`N` grows, so `eta_t` never rises. The core's rows hold gain estimates played at
+`eta_t = gamma_k / N_t` (the menu's size now): the new arm gets a uniform new row and,
+in every old row, a gain estimate at that row's mean weight at the pre-growth rate; the
+epoch's `gamma_k` stays at the `N` it opened with and the rate falls with growth, so no
+update's exponent exceeds 1 (the next epoch reads the grown menu). A core grown from a
+lone NOOP restarts its epoch at the grown menu. Nothing in
 flight is orphaned, no identity changes and nothing waits. Regret against each arm counts
 from its arrival (Mourtada and Maillard 2017 for full information; the bandit step is
 the design's own argument, measured: docs/architecture/learners-noregret.md §2.5). Two
