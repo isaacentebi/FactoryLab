@@ -226,8 +226,9 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     recorded tape ([exchange.tape], absent by default), and again when each model came
     to state its training cutoff (models.training_cutoff, unknown by default; the
     look-ahead guard of a tape world), and again when Polymarket gained live orders
-    ([polymarket] orders, principal_usd, funder, signature_type, order_requests_per_10s);
-    each time it is a new v0."""
+    ([polymarket] orders, principal_usd, funder, signature_type, order_requests_per_10s),
+    and again when the exploration ratchet left with the no-regret learners
+    (immune.gain_step and immune.gamma_max refused); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
@@ -235,8 +236,9 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     assert '"tape":null' in scripted.canonical_json()
     assert '"training_cutoff":null' in scripted.canonical_json()
     assert '"orders":false,"principal_micro":null' in scripted.canonical_json()
+    assert '"gain_step"' not in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "f13cdf2062157eadb70f32e0f05190d64a3791c799d9ca15e23cacbc7a3a48f6"
+        "4d70c42b91cf3d49c24c8649022bd1d52310cc9fe525fa3aadadaab62f333664"
     )
 
     implicit = manifest_from_dict(_base())
@@ -381,6 +383,8 @@ def test_manifest_card_rejects_unknown_role(value):
     ("immune", "tv_threshold", -1),
     ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
     ("immune", "gain_step", True), ("immune", "decay_step", 0),
+    # Removed with the exploration ratchet (learners design §2.5): refused at any value.
+    ("immune", "gamma_max", 0.5), ("immune", "gain_step", 0.05),
 ])
 def test_fidelity_casts_reject_invalid_values(section, field, value):
     raw = _base()

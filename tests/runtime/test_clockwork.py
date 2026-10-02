@@ -227,7 +227,9 @@ def test_a_trial_is_protected_for_min_ratio_measured_consequence_periods_in_tick
 
 def test_a_grown_menu_waits_min_ratio_measured_round_periods_for_its_epoch(monkeypatch):
     """Time audit T6, Codex review of #133: a speed limit on refactoring; a registration
-    joins a routed kind at most once per min_ratio periods of that router's own rounds."""
+    joins a routed kind at most once per min_ratio periods of that router's own rounds,
+    and never before min_ratio delivery bounds (learners design §2.5): a round's
+    learning may outlast its measured closure."""
     rt = make_runtime()
     kind = "Tick"
     state = rt.routers[kind][0]
@@ -239,7 +241,9 @@ def test_a_grown_menu_waits_min_ratio_measured_round_periods_for_its_epoch(monke
     rt._open_epoch(kind)
     assert "newcomer" not in state.universe and kind in rt.pending_epochs
     assert _items(rt, "epoch.deferred")[-1]["inner_ticks"] == 5
-    rt.ticks_consumed += rt.m.timing.min_ratio * 5 - 1
+    wait = rt.m.timing.min_ratio * max(5, rt._delivery_bound())
+    assert wait > rt.m.timing.min_ratio * 5  # the delivery bound is the longer here
+    rt.ticks_consumed += wait - 1
     rt._open_pending_epochs()
     assert "newcomer" not in rt.routers[kind][0].universe
     rt.ticks_consumed += 1

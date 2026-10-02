@@ -98,7 +98,7 @@ def test_a_declared_record_needs_no_seed_but_a_sampled_one_must_replay():
 def _register_learner(runtime, handle, actions, learner="blum_mansour"):
     from factorylab.cortex.registration import LearnerProposal
 
-    runtime._register(handle, LearnerProposal("seed-decider", learner, tuple(actions), 0.1))
+    runtime._register(handle, LearnerProposal("seed-decider", learner, tuple(actions)))
 
 
 def _learner_runtime(propensity):

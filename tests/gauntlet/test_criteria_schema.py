@@ -854,7 +854,7 @@ def _launched(manifest):
 
 @pytest.mark.parametrize("block,field,value", [
     ("novelty", "share", -0.1), ("novelty", "share", 1.5), ("prices", "decay", 0.0),
-    ("prices", "penalty_cap", 1.0), ("immune", "gain_step", 0.0), ("timing", "min_ratio", 2),
+    ("prices", "penalty_cap", 1.0), ("immune", "price_step", 0.0), ("timing", "min_ratio", 2),
     ("prices", "decay", float("inf"))])
 def test_a_launched_manifest_the_kernel_refuses_is_diary_invalid(block, field, value):
     """Codex on b56e793: a diary's launched physics is validated by the kernel's own load
@@ -941,7 +941,7 @@ def _longrun1_manifest():
 
 @pytest.mark.parametrize("block,field,value,why", [
     ("novelty", "share", -0.1, "novelty share"), ("prices", "decay", 0.0, "decay"),
-    ("immune", "gain_step", 0.0, "gain_step"), ("timing", "min_ratio", 2, "min_ratio"),
+    ("immune", "price_step", 0.0, "price_step"), ("timing", "min_ratio", 2, "min_ratio"),
     # Codex on 646e3c7: only the SF-0 relation is set aside; the launched kp and eta
     # still take the kernel's own field rules (``validate_price_fields``).
     ("prices", "kp", -1, "prices.kp"), ("prices", "eta", -1, "prices.eta"),

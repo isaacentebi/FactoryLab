@@ -170,11 +170,14 @@ def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop
     """Not TH-2's detector: the kernel's own speed limit. The population registers a fresh
     judge every third decision; each is admitted (no speed limit is committed on the
     population), and each growth of the judges' router menu waits ``min_ratio`` measured
-    router periods (``RoutingMixin._epoch_due``), so every lifespan of that loop is at
-    least its correcting loop: no short lifespan exists for TH-2 to read (unsupported)."""
+    router periods and ``min_ratio`` delivery bounds (``RoutingMixin._epoch_due``;
+    learners design §2.5), so every lifespan of that loop is at least its correcting
+    loop: no short lifespan exists for TH-2 to read (unsupported). The growth is
+    deferred, never refused."""
     result = g.th2_short_lived(th2.events, th2.manifest, loop="router:ProducerReturn")
     assert result.status == g.UNSUPPORTED, result.evidence
-    assert result.evidence["lifespans"] > 0 and result.evidence["speed_refusals"] == 0
+    assert result.evidence.get("speed_refusals", 0) == 0
+    assert th2.rows("epoch.deferred")
     registered = [r for r in th2.rows("registry.register")
                   if r["contract"]["id"].startswith("molt-judge")]
     refused = [r for r in th2.rows("registration.rejected")]
@@ -189,15 +192,18 @@ def th2r(shared_run):
     return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=150))
 
 
-@pytest.mark.parametrize("loop", ["seat:molt-seat", "router:ProducerReturn"])
-def test_th2_a_seat_driven_reversion_is_read_as_thrash(th2r, loop):
+def test_th2_a_seat_driven_reversion_is_read_as_thrash(th2r):
     """TH-2 exercised on the path a seat drives: retire a seat (the committee votes, the
     next window boundary activates it) and register its next version (``_register``),
     again and again. Each version of ``seat:<id>`` lives shorter than the consequence
-    loop that corrects it, and each shrink of the router's menu opens its epoch at once
-    (only growth waits, ``_open_epoch``); the organ reads every such lifespan as thrash
-    with ``unsettled >= 1 − ratio`` in the windows whose tail holds it, and nothing is
-    refused for its speed."""
+    loop that corrects it; the organ reads every such lifespan as thrash with
+    ``unsettled >= 1 − ratio`` in the windows whose tail holds it, and nothing is
+    refused for its speed. The router's own loop does not thrash with it: a retirement
+    opens no phase, and a growth waits its delivery bounds (learners design §2.5)."""
+    loop = "seat:molt-seat"
+    router = [row for row in th2r.rows("config.lifespan")
+              if row["loop"] == "router:ProducerReturn" and row["ratio"] < 1]
+    assert not router
     short = [row for row in th2r.rows("config.lifespan")
              if row["loop"] == loop and row["ratio"] < 1]
     assert short, "the population produced no short-lived configuration"

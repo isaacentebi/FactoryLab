@@ -111,8 +111,10 @@ def test_a_retired_executor_never_fails_a_request(monkeypatch):
         assert result["result"]["status"] == "ok"
     later = {c["target"] for c in _children(rt)[1:]}
     assert first not in later and later
-    menu = rt.routers[request_router_key("ProducerReturn")][0].universe
-    assert first not in menu
+    # A retirement opens no phase (learners design §2.5): the seat stays in the
+    # router's universe, infeasible, and is off every live menu.
+    assert first in rt.routers[request_router_key("ProducerReturn")][0].universe
+    assert first not in rt._universe_for(request_router_key("ProducerReturn"))
 
 
 def test_a_request_for_a_kind_nobody_else_serves_is_refused_before_any_decision(monkeypatch):

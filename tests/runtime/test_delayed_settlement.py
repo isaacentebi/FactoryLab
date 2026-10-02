@@ -38,7 +38,7 @@ def test_executed_propensity_trains_the_core_through_its_fixed_coverage_bound():
 def test_producer_return_router_proposal_then_delayed_epoch_settlement():
     rt = make_runtime()
     rt._manage_reserve_window()
-    rt._register('population', RouterProposal('ProducerReturn', 'blum_mansour', .2))
+    rt._register('population', RouterProposal("ProducerReturn", "blum_mansour"))
     old = rt.routers['ProducerReturn'][0]
     assert isinstance(old.learner, _KeyedLearner)
     old.learner.current_key, old.learner.current_ordinal = 'old', rt.n

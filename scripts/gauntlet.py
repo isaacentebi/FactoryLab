@@ -310,6 +310,16 @@ RETIRED_FIELDS: dict[tuple[str, str], str] = {
     ("evaluation", "opportunity_scale_bps"): "wave 16 D1 (6b80e43): the road not taken is "
                                              "a binary money fact, net of the venue's fee",
 }
+#: The launched-manifest fields the kernel removed after a world of any era may have
+#: launched, each with the change that removed it: a launch that states one is read
+#: without it, exactly as the kernel reads physics that no longer exist, and nothing
+#: else changes (it is not a pre-wave-16 world for that). The criteria that judged the
+#: removed mechanism are ``RETIRED``.
+REMOVED_FIELDS: dict[tuple[str, str], str] = {
+    ("immune", "gain_step"): "the no-regret learners: no diagnosis changes a learner's "
+                             "exploration (docs/architecture/learners-noregret.md §2.5)",
+    ("immune", "gamma_max"): "the no-regret learners: as immune.gain_step",
+}
 #: The launched-manifest fields the kernel added before wave 16 that a world launched
 #: earlier does not state, each with the commit that added it: in a pre-wave-16 world
 #: (and only there) such a field may be absent, and the kernel's default stands in, as
@@ -370,7 +380,7 @@ def kernel_problem(launched: Mapping) -> str | None:
 
     candidate = json.loads(json.dumps(launched, default=str))
     legacy = is_legacy_world(candidate)
-    for (block, name) in RETIRED_FIELDS:
+    for (block, name) in (*RETIRED_FIELDS, *REMOVED_FIELDS):
         section = candidate.get(block)
         if isinstance(section, dict) and name in section:
             del section[name]
@@ -835,8 +845,10 @@ ROUTER_SOURCES: dict[str, tuple[str, ...]] = {
     "router.retained": ("learner_id",),
     "router.drained": ("learner_id",),
     "router.step_rescaled": ("learner_id",),
-    # A round that trained nothing: a replaced router's, or a closed core epoch's.
+    # A round that trained nothing: a replaced router's, or a closed core epoch's; or
+    # one closed untrained past its delivery deadline.
     "learner.orphaned": ("learner_id",),
+    "learner.expired": ("learner_id",),
     "router.abstention_priced": ("router",),
     "router.decline_priced": ("router",),
     # R16b-5: the router that drew the round and the one that learned it.

@@ -731,6 +731,11 @@ class RoutingMixin:
         core kind is held to (``[evaluation] no_swap_regret_kinds``), so an epoch is at
         least as long as its feedback takes to arrive (essay II.IV.c).
         """
+        return self._delivery_bound()
+
+    def _delivery_bound(self) -> int:
+        """``L = (1 + min_ratio) * h`` ticks, ``h`` the longest decision cutoff: the
+        latest a router round may still be learned after it opened (design §2.6)."""
         longest = self._decision_horizon({CH_FAST, CH_CONSEQUENCE})
         return (1 + self.m.timing.min_ratio) * longest
 
@@ -1270,8 +1275,15 @@ class RoutingMixin:
         only its counter-shaped readers are on the menu, at "release" only the rest.
         """
         kind = str(ev.kind)
+        transform: dict[str, float] = {}
+
         def mix(dist):
-            return self._cap_adversarial(self._mix_with_standing(dist))
+            # The world's draw transforms act outside the learner (learners design
+            # §2.3): what they move is the extra regret of the executed policy over
+            # the learner's own, at most twice this distance, on the record per draw.
+            executed = self._cap_adversarial(self._mix_with_standing(dist))
+            transform["tv"] = 0.5 * math.fsum(abs(executed[a] - dist[a]) for a in dist)
+            return executed
 
         # One key per draw: several events may be released and drawn at one event
         # number (a cascade's releases), so the event's id is part of it.
@@ -1289,6 +1301,10 @@ class RoutingMixin:
         taken = {self._family(a) for a in exclude}
 
         def feasible(action_id: str) -> tuple[bool, str]:
+            if action_id in self.retired_assemblies:
+                # A retirement opens no phase: the seat is infeasible in the one in
+                # force (learners design §2.5), never drawn again.
+                return False, "retired"
             if action_id not in universe:
                 return False, "self-judgement"
             if action_id in exclude:
@@ -1298,6 +1314,11 @@ class RoutingMixin:
                 return False, "read at release"
             if phase == "release" and counter:
                 return False, "read at emission"
+            if (self.ev.adversarial_share == 0 and set(assembly_rewards(
+                    self.assemblies[action_id].spec).values()) & ADVERSARIAL_SHAPES):
+                # No adversarial mass may be executed, so none is offered: the seat is
+                # outside the learner's support and its comparator (design §2.3).
+                return False, "adversarial share 0"
             judging = self._judging(action_id)
             if judging and self._family(action_id) in chain:
                 return False, "same-family"
@@ -1330,6 +1351,7 @@ class RoutingMixin:
                 "event_id": ev.id,
                 "router": state.learner.id,
                 "unaffordable": unaffordable,
+                **({"transform_tv": transform["tv"]} if transform.get("tv") else {}),
             }
         )
         self._compute_routed = True
@@ -1590,8 +1612,13 @@ class RoutingMixin:
         opened = self.clockwork.opened(f"epoch:{kind}")
         inner = self.clockwork.measured(f"router:{kind}")
         # §IV.c: the loop changing a router's action set is an outer loop over that
-        # router's rounds, so it keeps the same min_ratio separation (Codex review).
-        return opened is None or self.ticks_consumed - opened >= self.m.timing.min_ratio * inner
+        # router's rounds, so it keeps the same min_ratio separation (Codex review). The
+        # measured period alone does not bound when a round is learned (a round that
+        # never closes is never measured, and a credit waits on its window), so the
+        # change also waits min_ratio delivery bounds (learners design §2.5): at least
+        # 1 - 1/min_ratio of a phase's rounds are learned inside it.
+        wait = self.m.timing.min_ratio * max(inner, self._delivery_bound())
+        return opened is None or self.ticks_consumed - opened >= wait
 
     def _open_pending_epochs(self) -> None:
         """Open every deferred epoch whose speed limit has passed."""
@@ -1612,11 +1639,14 @@ class RoutingMixin:
             self.clockwork.loops[f"epoch:{kind}"] = {"opened": now, "due": now, "period": 1.0,
                                                     "inner": 1, "fires": 1}
             return
-        # Only a grown menu waits: a retirement is already cadence-gated, and a router
-        # must never keep drawing an assembly that left.
-        grows = (any(set(universe) > set(st.universe) for st in states)
-                 and not any(set(st.universe) - set(universe) for st in states))
-        if grows and not self._epoch_due(kind):
+        # A retirement alone opens no phase: the retired seat is infeasible in the phase
+        # in force (``_route_with``), so nothing in flight is orphaned (design §2.5).
+        if all(set(universe) <= set(st.universe) for st in states):
+            self.pending_epochs.pop(kind, None)
+            return
+        # A menu that gains a seat waits for the gate; a retired seat in it is already
+        # infeasible, so the wait never draws an assembly that left.
+        if not self._epoch_due(kind):
             if kind not in self.pending_epochs:
                 self.ledger.append({"kind": "epoch.deferred", "event_kind": kind,
                                     "universe": universe, "tick": now,

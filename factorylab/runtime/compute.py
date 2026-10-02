@@ -2974,13 +2974,10 @@ class ComputeMixin:
         except (KeyError, ValueError):
             return None
         if reason is not None:
-            # A refused declaration is degenerate (the one action taken); a floored
-            # one keeps the support the return declared.
-            floored = len(record.action_ids) > 1
-            self.ledger.append({"kind": "propensity.floored" if floored else "propensity.refused",
-                                "handle": req.handle, "reason": reason, "ts": self.clock.now_ns})
-            self._refusal_to_owner(req.handle, "propensity_floored" if floored
-                                   else "propensity_refused", reason)
+            # A refused declaration is recorded degenerate: the one action taken.
+            self.ledger.append({"kind": "propensity.refused", "handle": req.handle,
+                                "reason": reason, "ts": self.clock.now_ns})
+            self._refusal_to_owner(req.handle, "propensity_refused", reason)
         self._open_assembly_round(action_id, req.handle, record)
         return record
 

@@ -1373,9 +1373,9 @@ parameters; the observer never substitutes a second set of thresholds.
 | `immune.revision_bins` | increasing nonnegative numeric array | `[0]` | Yes: zero versus positive revision. |
 | `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioural version boundaries and settling (the TV between adjacent k-window blocks), and the bound the gap series' volatility is priced above (the thrash price). |
 | `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: a wide gap: a version is `durable`, and a persistent violation is stable failure, at or above it. |
-| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
+| `immune.gain_step` | Refused | Absent | Removed with the exploration ratchet: no diagnosis changes a learner's exploration, which is its own schedule (docs/architecture/learners-noregret.md §2.5). |
 | `immune.price_step` | finite positive number | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
-| `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
+| `immune.gamma_max` | Refused | Absent | Removed with the exploration ratchet (as `immune.gain_step`). |
 
 `immune.decay_step` is refused (versioning audit C2): thrash is priced by its
 duration, never answered by letting card prices decay faster.
@@ -1467,7 +1467,22 @@ row gains divided by the menu's fixed coverage bound `kappa` (`router.created`
 states it): `1 / (1 - evaluation.sampling_cap)` with a forecast-shaped evaluator on the
 menu, times `1 / evaluation.adversarial_share` with an adversary on it. Every estimate
 uses the drawn arm's logged propensity as executed. A new menu opens a fresh learner
-under a new identity (`epoch` with `cause: "menu"`); no weight is carried.
+under a new identity (`epoch` with `cause: "menu"`); no weight is carried. A menu that
+gains a seat waits until `timing.min_ratio` delivery bounds have passed since the
+router's last phase opened (and `min_ratio` measured round periods, as before), so at
+least `1 - 1/min_ratio` of a phase's rounds are learned inside it; a retirement opens no
+phase: the retired seat is infeasible (`retired`) in the phase in force. With
+`evaluation.adversarial_share = 0` no adversarial seat is offered (`adversarial share
+0`). A draw the world's transforms moved (the standing mix, the adversarial cap) states
+`transform_tv` on its `compute.route` row: the executed policy's extra regret over the
+learner's own is at most twice it. A round's delivery deadline is its open tick plus
+`(1 + timing.min_ratio)` times its cutoff horizon: an owed abstention credit is due no
+later than its round's cutoff, and a round still unlearned past its deadline (a credit
+whose price window outlasted its period, say) closes untrained as `learner.expired`. A
+seat's declared propensity is recorded as declared, never floored; a seat's own learner
+reads it off-policy through an implicit-exploration estimate, `l / (pi + eta / 2)`,
+inside the learner, and no regret is claimed for it. `evaluation.no_swap_regret_kinds`
+may name only a kind with a per-tick draw bound (`Tick`).
 
 ## The clock (Chapter II §IV.b-c; time audit T1-T13)
 
@@ -1849,9 +1864,8 @@ tools or final answers. Other effects use `close:<COIN>`, `cancel:<COIN>`,
 `leverage:<COIN>`, `transfer:<direction>` and `request:<assembly id>`.
 Multiple parts join with `+` in execution order, truncated to 64 characters.
 A trade through a tool followed by `hold` therefore retains its trade label.
-Positive declared mass below `MIN_DECLARED_MASS` is raised to `0.05` after
-normalisation, with other probabilities rescaled and `propensity.floored`
-recorded. Zero mass remains a refused declaration.
+Declared mass is recorded as declared after normalisation, never floored (audit s06
+#4; older diaries carry `propensity.floored`). Zero mass remains a refused declaration.
 
 The declared propensity travels forward on the request about that decision: the
 `ProducerReturn`, `Verdict` and `MetaVerdict` events carry it, and the judge's
@@ -1859,8 +1873,8 @@ The declared propensity travels forward on the request about that decision: the
 block, named apart from the answer's own `propensity` field. This is the essay's single exception to privacy (II.I.b), so nothing else
 of an agent's local state moves with it.
 
-A `{"kind": "learner", "assembly_id", "learner", "actions", "gamma"}`
-registration gives one assembly a learner over the action set it declares.
+A `{"kind": "learner", "assembly_id", "learner", "actions"}`
+registration (a `gamma` is refused: the learner's exploration is its own schedule) gives one assembly a learner over the action set it declares.
 Blum--Mansour needs one copy per action before the first round, which is why the
 set is declared at registration rather than inferred. The learner proposes; the
 assembly decides; the reward that settles the decision trains the learner
@@ -4018,9 +4032,8 @@ the clock and provider inventory), never the world block. The judged return's
 consequence standing, and `your_action_policy` is absent when a seat has no
 registered learner. When it has one, `your_action_policy` is one draw from that
 learner, `{recommended, p}`, never the distribution (Chapter II rulings R4,
-information audit P3). A seat whose action taken is the recommended action is
-recorded at the learner's own policy, so its round is on-policy; otherwise its own
-declared propensity stands, floored as before.
+information audit P3). The seat's own declared propensity always stands, as declared:
+taking the recommended action is no evidence the draw produced it.
 
 A decision may buy up to five tool rounds, bounded by its existing money and model
 call ceilings. Known reads can extend retrieval; a write or child call ends it.

@@ -317,10 +317,17 @@ def test_the_core_key_refuses_a_kind_the_world_cannot_route(typo):
         replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=typo)).validate()
 
 
-def test_the_core_key_admits_every_kind_a_seat_accepts_or_emits():
+def test_the_core_key_admits_only_a_kind_with_a_per_tick_draw_bound():
+    """Learners design §2.2, §2.6: the core's first epoch is its delivery bound in
+    draws, at one draw per tick; a kind with no per-tick draw bound is refused."""
     base = load_manifest("scripted")
-    kinds = tuple(sorted({k for a in base.assemblies for k in (*a.accepts, *a.emits)}))
-    replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=kinds)).validate()
+    replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=("Tick",))).validate()
+    kinds = sorted({k for a in base.assemblies for k in (*a.accepts, *a.emits)} - {"Tick"})
+    assert kinds
+    for kind in kinds:
+        with pytest.raises(ValueError, match="no per-tick draw bound"):
+            replace(base, evaluation=replace(base.evaluation,
+                                             no_swap_regret_kinds=(kind,))).validate()
 
 
 def test_the_core_key_is_a_set_its_order_never_renames_the_world():

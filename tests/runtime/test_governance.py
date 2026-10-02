@@ -56,7 +56,7 @@ def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
     assert not [i for i in rt.ledger._recovery_items() if i['kind'] == 'novelty.release']
     assert rt.wallet.check_conservation()
     # Replacing a router is still allowed at the cap, and that one does register.
-    rt._register('author', RouterProposal('Tick', 'exp3', .1))
+    rt._register('author', RouterProposal("Tick", "exp3"))
     assert len(rt.routers['Tick']) == 1 and rt.reserve.remaining() < remaining
 
 

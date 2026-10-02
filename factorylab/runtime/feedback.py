@@ -2944,12 +2944,65 @@ class FeedbackMixin:
         cutoff = self.queue.deadline_tick(decision.handle)
         due = (opened + -(-total // count) if count
                else cutoff if cutoff is not None else self.ticks_consumed)
+        if cutoff is not None:
+            # Never past the round's own cutoff: the delivery bound counts from it
+            # (learners design §2.6), and a mean latency can exceed this round's cutoff.
+            due = min(due, cutoff)
         self.noop_credits[decision.handle] = {"router": state.learner.id, "due_tick": due,
                                               "key": key}
         self._credit_abstentions()
 
+    def _delivery_deadline(self, handle: str) -> int | None:
+        """The tick by which a router round must be learned or closed (design §2.6):
+        its open tick plus ``(1 + min_ratio)`` times its own cutoff horizon; None for a
+        round whose open or cutoff tick is unrecorded."""
+        opened, cutoff = self.queue.opened_tick(handle), self.queue.deadline_tick(handle)
+        if opened is None or cutoff is None:
+            return None
+        return opened + (1 + self.m.timing.min_ratio) * max(0, cutoff - opened)
+
+    def _expire_learning(self) -> None:
+        """Close, untrained, every router round past its delivery deadline.
+
+        Guarantees no router snapshot or owed credit outlives ``_delivery_deadline``: a
+        price window that outlasts its period (its measured inner loop grew) would
+        otherwise keep a round waiting without bound. Each is ledgered
+        ``learner.expired`` with what it waited on, its snapshot released.
+        """
+        routers = {st.learner.id: st
+                   for st in self._all_router_states() + list(self.retired_routers.values())}
+        now = self.ticks_consumed
+        stale = []
+        for handle, credit in self.noop_credits.items():
+            deadline = self._delivery_deadline(handle)
+            if deadline is not None and now > deadline:
+                stale.append((handle, credit.get("router"), credit.get("key"),
+                              "awaiting its window's close"
+                              if self._abstention_awaits_close(handle) else "credit owed"))
+        for handle, key in self.snapshot_keys.items():
+            deadline = self._delivery_deadline(handle)
+            if deadline is not None and now > deadline and handle not in self.noop_credits:
+                try:
+                    actor = self.queue.get(handle).actor
+                except KeyError:
+                    actor = None
+                stale.append((handle, actor, key, "never returned"))
+        for handle, router, key, why in stale:
+            self.noop_credits.pop(handle, None)
+            self.snapshot_keys.pop(handle, None)
+            drawer = routers.get(router)
+            if (drawer is not None and key is not None
+                    and key in drawer.learner.inner.outstanding()):
+                drawer.learner.inner.discard_for(key)
+            self.thrash_charges.pop(handle, None)
+            self.ledger.append({"kind": "learner.expired", "handle": handle,
+                                "learner_id": router, "waited_on": why,
+                                "deadline_tick": self._delivery_deadline(handle),
+                                "tick": now, "ts": self.clock.now_ns})
+
     def _credit_abstentions(self) -> None:
         """Apply every owed abstention credit that is due, in the order it was owed."""
+        self._expire_learning()
         now = self.clock.now_ns
         routers = {st.learner.id: st
                    for st in self._all_router_states() + list(self.retired_routers.values())}

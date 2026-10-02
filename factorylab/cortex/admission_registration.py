@@ -78,7 +78,7 @@ def registration_admission_schematics() -> dict:
         "router": {
             "event_kind": "A known world or population event kind.",
             "learners": list(r.LEARNERS),
-            "gamma": "Numeric, not boolean, greater than 0 and at most 1; default 0.1.",
+            "gamma": "Refused: a learner's exploration is its own schedule.",
             "add": "Boolean, or case-insensitive text true/false; default false.",
         },
         "tool": {
@@ -112,7 +112,7 @@ def registration_admission_schematics() -> dict:
             "actions": "List of strings, nonempty after strip, raw length bounded; "
             "unique after stripping; stored stripped in order.",
             "max_action_characters": r.MAX_ACTION_ID_CHARS,
-            "gamma": "Numeric, not boolean, greater than 0 and at most 1; default 0.1.",
+            "gamma": "Refused: a learner's exploration is its own schedule.",
         },
         "connector": {
             "fields": "Exactly kind, id, description, origin, with optional preflight_path, "

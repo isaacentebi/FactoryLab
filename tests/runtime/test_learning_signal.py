@@ -51,8 +51,8 @@ def _drawn(rt, state, chosen, *, channel=CH_CONFORMITY, parent=None, hash_="draw
     lid = state.learner.id
     handle = rt.queue.open(actor=lid, event_id=f"draw-{chosen}-{rt.stats.decisions}",
                            propensity=PropensityRecord(arms, probs, chosen, seed, lid, hash_),
-                           channel=channel, deadline_ns=10**15, parent_handle=parent,
-                           cost_ceiling=0)
+                           channel=channel, deadline_ns=rt.clock.now_ns + 10**15,
+                           parent_handle=parent, cost_ceiling=0)
     freeze_round(rt, handle, state)
     return handle
 
