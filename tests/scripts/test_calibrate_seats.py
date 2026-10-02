@@ -81,7 +81,7 @@ def test_the_launch_world_calibrates_offline_for_every_seated_model():
     provider-native seat resolves its own candidate's window. Every tree completes
     and none is refused by a seat's grant."""
     launch = load_manifest("worlds/edition8-launch.toml")
-    candidates = ["deepseek/deepseek-v4.1-flash", "openai/gpt-6-luna",
+    candidates = ["qwen/qwen3-235b-a22b-2507", "openai/gpt-6-luna",
                   "mistralai/mistral-small-3.2-24b-instruct"]
     report = calibrate(launch, candidates, provider=CalibrationProvider(), repeats=1,
                        seed=0, budget_micro=None, long_context_bytes=20_000)
