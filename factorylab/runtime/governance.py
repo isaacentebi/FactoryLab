@@ -1958,6 +1958,9 @@ class GovernanceMixin:
             self.controller.remove(card_id, amendment_id=reason_id)
             self.priced.remove(card_id)
             self.regions.pop(card_id, None)
+            # Its ratio clock goes with its price: a card that returns is registered
+            # anew, and no retired card's marker outlives it (essay II.II.b, "memory").
+            self.card_clock.pop(card_id, None)
 
     def _activate_charter_if_due(self) -> None:
         """Every window boundary: internal motions; a governance boundary: the committee.
