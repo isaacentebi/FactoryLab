@@ -1855,36 +1855,6 @@
    "status": "untriaged"
   },
   {
-   "id": "40c32717ee90",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "d1eda86dd591",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "625c07bd4be9",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "ca55a86c3b66",
    "world": "edition8-launch",
    "surface": "rendered",
@@ -1902,36 +1872,6 @@
    "path": "edition8-launch/request/counter/request/#prose",
    "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "10774680be5b",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/judge/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "633aa16c91ac",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/judge/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "1cbc38720353",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/judge/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
@@ -1965,36 +1905,6 @@
    "status": "untriaged"
   },
   {
-   "id": "0187fa09a5e1",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/meta/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "5e9ecd1a98f4",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/meta/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "9e5c9888bd1a",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/meta/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "99689a84b331",
    "world": "edition8-launch",
    "surface": "rendered",
@@ -2015,26 +1925,6 @@
    "status": "untriaged"
   },
   {
-   "id": "972dc442b017",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/produce/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "12eb9f0f21a1",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/produce/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
    "id": "663ff049bca0",
    "world": "edition8-launch",
    "surface": "rendered",
@@ -2051,16 +1941,6 @@
    "rule": "IMP",
    "path": "edition8-launch/request/produce/base_capabilities/proposals[].description",
    "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "45aafdaefdce",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/produce/base_capabilities/returns",
-   "quote": "retrieve it with catalogue.search.",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -2105,16 +1985,6 @@
    "status": "untriaged"
   },
   {
-   "id": "d89b2b2b13aa",
-   "world": "edition8-launch",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition8-launch/request/produce/inputs/continuation",
-   "quote": "return the final answer;",
-   "design_ref": "B1-5",
-   "status": "untriaged"
-  },
-  {
    "id": "0f0df1ccc879",
    "world": "edition8-launch",
    "surface": "rendered",
@@ -2142,26 +2012,6 @@
    "path": "edition8-launch/institutions/a_return_may_include/about_handle",
    "quote": "omit it to judge the delivered return.",
    "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "72a688dd1edf",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/institutions/capability_header",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "3073bbf3f686",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/institutions/capability_header",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
    "status": "untriaged"
   },
   {
@@ -2255,36 +2105,6 @@
    "status": "untriaged"
   },
   {
-   "id": "40c32717ee90",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "d1eda86dd591",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "625c07bd4be9",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "ca55a86c3b66",
    "world": "edition8-launch",
    "surface": "static",
@@ -2305,36 +2125,6 @@
    "status": "untriaged"
   },
   {
-   "id": "1dcdbedcc138",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/testify/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "1d5b0a82d549",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/testify/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "56685a7c3dbd",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/testify/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
    "id": "ea1bb0903a05",
    "world": "edition8-launch",
    "surface": "static",
@@ -2352,36 +2142,6 @@
    "path": "edition8-launch/request/testify/request/#prose",
    "quote": "testify on a norm edition.",
    "design_ref": "B1-4",
-   "status": "untriaged"
-  },
-  {
-   "id": "e3c507632465",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/vote/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "2725cb7f0942",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/vote/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "3e828fc7fcaf",
-   "world": "edition8-launch",
-   "surface": "static",
-   "rule": "IMP",
-   "path": "edition8-launch/request/vote/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
    "status": "untriaged"
   },
   {
