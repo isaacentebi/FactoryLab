@@ -38,7 +38,7 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.shared import CH_CONFORMITY, CH_FAST, CH_VERDICT
 from factorylab.runtime.worlds import ExchangeSpec, WorldManifest, load_manifest
 from factorylab.world.metering import Infeasible
-from factorylab.world.models import ModelRequest, ModelResponse
+from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.scripted import (
     ScriptedProvider,
     _description_from_prompt,
@@ -61,6 +61,11 @@ FAIL_DESCRIPTION = (
     "Report the venue fill id and the settlement time of the order named in inputs."
 )
 HELPER_DESCRIPTION = "Count the perp markets in world.trading_markets and return the count."
+#: The completion window the offline catalogue advertises for every menu model. A
+#: scripted reply (40 tokens) never approaches it; it only lets a provider-native seat
+#: resolve its allowance offline, small enough that the dearest menu model's first-call
+#: ceiling fits a candidate seat's grant. A paid run reads each model's real window.
+OFFLINE_COMPLETION_WINDOW = 16_384
 COLUMNS = ("candidate", "trees", "completion", "well_formed", "task_met", "refusal_correct",
            "cost_p50_micro", "cost_p95_micro", "latency_p50_ms", "cached_share",
            "tick_cost_micro")
@@ -80,6 +85,19 @@ class CalibrationProvider(ScriptedProvider):
     """
 
     name: str = "scripted-calibration"
+    #: The world's model menu (``calibrate`` sets it), for ``catalogue``.
+    menu: tuple = ()
+
+    def catalogue(self) -> list[CatalogueEntry]:
+        """Every menu model at its menu price, advertising ``OFFLINE_COMPLETION_WINDOW``:
+        a seat on the provider-native completion allowance (``max_tokens =
+        "provider"``) resolves it offline as a paid run's real catalogue would."""
+        return [CatalogueEntry(
+            id=m.id, name=m.id,
+            prompt_usd_per_token=str(Decimal(m.input_usd_per_mtok) / 1_000_000),
+            completion_usd_per_token=str(Decimal(m.output_usd_per_mtok) / 1_000_000),
+            context_length=None, max_completion_tokens=OFFLINE_COMPLETION_WINDOW)
+            for m in self.menu]
 
     def complete(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
@@ -234,9 +252,18 @@ def calibration_manifest(manifest: WorldManifest) -> WorldManifest:
     if manifest.exchange.kind == "fake":
         return manifest
     ex = manifest.exchange
+    # The scripted venue lists no builder-deployed (HIP-3) dex and no spot listing to
+    # select from, so a selector on either (``xyz:*``, ``*/USDC``) names no market of
+    # the calibration world, as in ``fastloop``; every other venue fact (its read
+    # budget, read slots and vault tools) is the world's own, so the calibration world
+    # loads under the same invariants it does.
+    coins = tuple(c for c in ex.coins if ":" not in c) or ("BTC", "ETH")
+    pairs = tuple(p for p in ex.spot_pairs if "*" not in p)
     return replace(manifest, exchange=ExchangeSpec(
-        kind="fake", coins=ex.coins, spot_pairs=ex.spot_pairs, seed=ex.seed,
-        start_cash_usd=ex.start_cash_usd))
+        kind="fake", coins=coins, spot_pairs=pairs, seed=ex.seed,
+        start_cash_usd=ex.start_cash_usd, vault_tools=ex.vault_tools,
+        public_read_weight_per_minute=ex.public_read_weight_per_minute,
+        max_readers=ex.max_readers))
 
 
 def build_runtime(manifest: WorldManifest, provider: Any, *, seed: int) -> Runtime:
@@ -274,6 +301,11 @@ def install_seats(rt: Runtime, candidate: str, guard: BudgetGuard | None, *,
         kwargs = ({"max_tokens": base.max_tokens, "effort": base.effort,
                    "system_prompt": base.system_prompt, "memory_policy": base.memory_policy}
                   if base is not None else {})
+        seed = next((a for a in rt.m.assemblies if a.role == role), None)
+        if base is not None and seed is not None and seed.max_tokens is None:
+            # A provider-native seat's allowance is its own model's window, never the
+            # window of the model the manifest seated there.
+            kwargs["max_tokens"] = rt._resolve_max_tokens(candidate, None)
         sid = seat_id(candidate, role)
         rt._instantiate(AssemblySpec(id=sid, version=1, model_id=candidate, role=role, **kwargs))
         seats[role] = sid
@@ -634,6 +666,8 @@ def calibrate(manifest: WorldManifest, candidates: list[str], *, provider: Any,
     if unknown:
         raise ValueError(f"candidates not on the manifest's model menu: {unknown}")
     guard = BudgetGuard(budget_micro) if budget_micro is not None else None
+    if isinstance(provider, CalibrationProvider) and not provider.menu:
+        provider.menu = tuple(manifest.models)
     rt = build_runtime(manifest, provider, seed=seed)
     rows: dict[str, list[dict[str, Any]]] = {c: [] for c in candidates}
     # Every candidate seat is endowed alike from the unallocated pool (C10): the
