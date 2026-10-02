@@ -1639,7 +1639,7 @@ class Runtime(
             "charter": self._charter_text(),
             "predicates": [
                 {"predicate": p.id, "description": p.description, "params": list(p.param_schema)}
-                for p in self.predicates.all()
+                for p in self.predicates.forecastable()
             ],
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),

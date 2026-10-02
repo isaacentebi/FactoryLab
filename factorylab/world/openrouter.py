@@ -7,6 +7,7 @@ import json
 import os
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
+from decimal import Decimal
 from typing import Any
 from urllib import error, request
 
@@ -166,7 +167,9 @@ class OpenRouterProvider:
             body = response.read().decode("utf-8", errors="replace")
             if not 200 <= response.status < 300:
                 raise OpenRouterError(response.status, self._redact(body))
-            return json.loads(body)
+            # Wire numbers are read as Decimal, never float: a cost or an allowance is
+            # money, and money is never a float (AGENTS engineering rules; s01 #3).
+            return json.loads(body, parse_float=Decimal)
 
     def _post_completion(self, payload: dict, timeout_s: float | None) -> dict:
         """One completion POST under its caller's deadline, restored afterwards."""

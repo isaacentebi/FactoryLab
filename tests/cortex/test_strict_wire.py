@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -124,7 +125,7 @@ def _completion(text):
     return {"id": "gen-1", "model": "test/flash",
             "choices": [{"message": {"role": "assistant", "content": text},
                          "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.00001}}
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": Decimal("0.00001")}}
 
 
 class _Transport:

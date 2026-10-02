@@ -57,7 +57,6 @@ def _fresh_witness(monkeypatch):
     """No receiver, no inherited note, no remembered kill: each test witnesses its own."""
     monkeypatch.delenv(witness.URL_ENV, raising=False)
     monkeypatch.setattr(witness, "_killed_here", set())
-    witness.note_wind_down(wind_down=False, orders=0)
 
 
 class Diary:
@@ -149,7 +148,7 @@ def _runtime_double(venue, diary, *, wind=True, final=False):
     return SimpleNamespace(m=SimpleNamespace(kill=SimpleNamespace(wind_down=wind,
                                                                   dust_micro=1_000_000)),
                            exchange=venue, ledger=diary, termination=term,
-                           launch_nonce=NONCE)
+                           launch_nonce=NONCE, kill_witness=witness.KillWitness())
 
 
 # ---- 1. two states, ledgered separately ---------------------------------------------------
@@ -225,7 +224,7 @@ def test_a_diary_failure_during_the_wind_down_never_prevents_death():
     assert report["ledger_failures"] >= 1 and report["error"] == "OSError"
     assert venue.sent("close")                        # the operation still happened
     assert report["exposure_state"] == PENDING        # and the account still holds it
-    assert witness._pending_wind_down["ledger_failures"] >= 1
+    assert rt.kill_witness.note["ledger_failures"] >= 1
 
 
 def test_every_operation_has_a_durable_id_derived_from_the_launch_identity():
@@ -423,7 +422,8 @@ def test_renaming_the_diary_does_not_revive_a_killed_identity(tmp_path, monkeypa
 
     with LedgerLock(str(path)):
         ledger = Ledger.reopen(path, manifest=json.loads(m.canonical_json()))
-        Termination(ledger=ledger, bus=Bus(ledger)).kill("explicit_kill:operator")
+        Termination(ledger=ledger, bus=Bus(ledger),
+                    witness=witness.KillWitness()).kill("explicit_kill:operator")
         nonce = ledger.identity()["launch_nonce"]
     monkeypatch.setattr(witness, "_killed_here", set())  # only the files may answer
 

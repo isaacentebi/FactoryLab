@@ -113,7 +113,8 @@ def _kill_from_outside(m, path, reason="explicit_kill:operator"):
     """The operator's kill: the CLI's path, a reopened ledger and a fresh Termination."""
     with LedgerLock(str(path)):
         ledger = Ledger.reopen(path, manifest=json.loads(m.canonical_json()))
-        Termination(ledger=ledger, bus=Bus(ledger)).kill(reason)
+        Termination(ledger=ledger, bus=Bus(ledger),
+                    witness=witness.KillWitness()).kill(reason)
         return ledger.identity()
 
 
@@ -346,3 +347,23 @@ def test_the_witness_never_raises_into_the_kill(tmp_path, monkeypatch):
     monkeypatch.setattr(witness, "witness_path", broken)
     m2, path2 = _world(tmp_path, "v")
     assert _kill_from_outside(m2, path2)["terminated"]
+
+
+def test_memory_only_kill_cannot_contaminate_another_world(tmp_path):
+    """s05 #2: a wind-down note belongs to the world that noted it. World A, memory-only,
+    notes seven orders and a flat account and is killed; world B, on disk, is killed
+    with no wind-down and is witnessed as exactly that."""
+    from tests.conftest import make_runtime
+
+    a = make_runtime()
+    a.kill_witness.note_wind_down(wind_down=True, orders=7, exposure_state="flat")
+    a.termination.kill("explicit_kill:operator")
+    m, path = _world(tmp_path, "b")
+    with LedgerLock(str(path)):
+        ledger = Ledger.reopen(path, manifest=json.loads(m.canonical_json()))
+        Termination(ledger=ledger, bus=Bus(ledger),
+                    witness=witness.KillWitness()).kill("explicit_kill:operator")
+    (line,) = [json.loads(raw) for raw in witness.witness_path(path).read_text().splitlines()]
+    assert (line["wind_down"], line["wind_down_orders"], line["exposure_state"]) == (
+        False, 0, "unknown")
+    assert not hasattr(witness, "_pending_wind_down")

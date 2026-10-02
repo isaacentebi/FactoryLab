@@ -38,12 +38,12 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
         calls.append(text)
         if 'REQUEST\ngrandchild' in text:
             body = {'answer': 42}
-        elif 'REQUEST\nchild task' in text and '"continuation":' not in text:
+        elif 'REQUEST\nchild task' in text and '"tool_results":' not in text:
             body = {'answer': 42, 'requests': [{'target': 'self', 'description': 'grandchild',
                                               'inputs': {}, 'outcome_schema': {}}]}
         elif 'REQUEST\nchild task' in text:
             body = {'answer': 42}
-        elif '"continuation":' in text:
+        elif '"tool_results":' in text:
             # The result names the kind asked for, never the executor.
             assert '42' in text and 'request:ProducerReturn' in text
             assert 'assembly:helper' not in text

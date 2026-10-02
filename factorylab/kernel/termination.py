@@ -11,19 +11,6 @@ from factorylab.kernel.wallet import Wallet
 #: The non-terminal budget trigger: unaffordable now, backed by a scheduled release.
 DORMANT = "budget_dormant"
 
-#: The one hook a kill calls once the terminal event is in the diary: the witness
-#: outside the diary (``factorylab/runtime/witness.py`` installs it through
-#: ``bind_witness``). The kernel names no upper layer; a kill with no witness
-#: bound is final all the same.
-_witness: Callable[[Ledger, str], object] | None = None
-
-
-def bind_witness(witness: Callable[[Ledger, str], object] | None) -> None:
-    """Install (or clear) the kill witness. Called by the runtime, never by a world."""
-    global _witness
-    _witness = witness
-
-
 class Termination:
     """World finality and seal release remain irreversible, even if event callbacks fail."""
 
@@ -34,7 +21,13 @@ class Termination:
         ledger: Ledger,
         bus: Bus,
         clock_ns: Callable[[], int] = time_ns,
+        witness: Callable[[Ledger, str], object] | None = None,
     ) -> None:
+        """``witness`` is the one hook this world's kill calls once the terminal event is
+        in its diary: the record outside the diary (``factorylab/runtime/witness.py``).
+        It belongs to this instance, so one world's kill never reaches another's
+        witness (no global mutable state). The kernel names no upper layer; a world
+        built without a witness is final all the same."""
         required = frozenset(("balance_zero", "explicit_kill", "ledger_failure"))
         self.__conditions = frozenset(conditions)
         if self.__conditions != required:
@@ -47,6 +40,7 @@ class Termination:
         self.__bus = bus
         self.__clock = clock_ns
         self.__reason: str | None = None
+        self.__witness = witness
         ledger._bind_termination(self)
 
     @property
@@ -105,7 +99,8 @@ class Termination:
     def kill(self, reason: str) -> None:
         """Publish one final event and release the key; repeated kills preserve the first reason.
 
-        The kill is also witnessed outside the diary (``runtime/witness.py``): in
+        The kill is also witnessed outside the diary by this world's own witness
+        (``runtime/witness.py``, injected at construction): in
         this process, in the local witness file beside the diary's directory and,
         when a receiver is configured, at the receiver. An earlier copy of the
         diary cannot carry its own death, so resume reads that record. The
@@ -125,8 +120,8 @@ class Termination:
         try:
             self.__bus._publish_terminal(event, self)
         finally:
-            if _witness is not None:
+            if self.__witness is not None:
                 try:
-                    _witness(self.__ledger, reason)
+                    self.__witness(self.__ledger, reason)
                 except Exception:  # noqa: BLE001 - nothing may raise into a kill
                     pass

@@ -188,9 +188,14 @@ def test_every_static_surface_is_registered_and_every_registered_one_is_rendered
 
 
 def test_the_baseline_names_the_design_findings_it_confirms():
-    """The day-one findings the design read from the code are in the baseline."""
+    """The day-one findings the design read from the code are in the baseline until fixed.
+
+    B1-1 and B1-2 (the capability prefix's discovery instructions, s03 #2) and B1-5 (the
+    tool continuation's coaching, s03 #3) are fixed: the text is gone from every render.
+    """
     refs = {row["design_ref"] for row in lexicon.load_baseline()}
-    assert {"B1-1", "B1-2", "B1-4", "B1-5", "B1-7"} <= refs
+    assert {"B1-4", "B1-7"} <= refs
+    assert not {"B1-1", "B1-2", "B1-5"} & refs
 
 
 def _request_builders_in_code() -> dict[str, list[int]]:

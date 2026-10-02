@@ -251,7 +251,7 @@ class GovernanceMixin:
                    for k, v in assembly_rewards(a.spec).items()}, **self.kind_reward_shapes}
 
     def _validate_output_contract(self, parsed, req) -> None:
-        """Registered predicates extend forecast validation without relaxing any return schema.
+        """World predicates extend forecast validation without relaxing any return schema.
 
         The fault a rejected forecast raises stays scoped to that forecast. The
         inherited validator names the section with a ``SectionError``, which is a
@@ -278,6 +278,10 @@ class GovernanceMixin:
                     # resolve (empty, or a stored definition that no longer builds) is
                     # that forecast's fault, not the return's.
                     predicate = self.predicates.get(forecast["predicate"])
+                    if predicate is not None and predicate.code is not None:
+                        # A consequence forecast names a world-measured predicate only
+                        # (``PredicateBook.forecastable``; essay II.III.b).
+                        raise ValueError("a registered predicate is not forecastable")
                     _validate_params(forecast["predicate"], forecast["params"],
                                      predicate=predicate)
                 except (ValueError, TypeError, ArithmeticError, RecursionError) as fault:

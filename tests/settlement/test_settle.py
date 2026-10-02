@@ -273,44 +273,36 @@ def test_retired_evaluator_keeps_attribution_and_historical_feedback(
     assert standing.snapshot()[forecast.evaluator_id]["settled"] == 1
 
 
-def test_replaced_population_definition_starts_its_own_prevalence_baseline(
+def test_meta_reading_cannot_train_consequence_standing(
     queue, book, baseline, standing, clock
 ):
-    """A new version is a new claim: it cannot be scored against, or feed, the old base rate."""
-    from factorylab.settlement import PrevalenceBaseline, open_forecast_decision
-    from factorylab.settlement.settle import PredicateForecast, baseline_key
+    """s05 #1. AGENTS rule 6: realized consequence is "never another model's reading";
+    Chapter II §III.b: the second signal "sits outside the factory's input entirely". A
+    population predicate can read meta-verdicts, so a sealed forecast on one is never
+    scored as consequence, and no evaluator's standing moves on it."""
+    from factorylab.settlement import open_forecast_decision
+    from factorylab.settlement.settle import PredicateForecast
     from factorylab.settlement.vocabulary import PredicateBook
 
-    predicates = PredicateBook(run=lambda code, facts: (True, None))
+    code = "def resolve(facts): return facts['meta_verdicts'][-1] > 0.5"
+    predicates = PredicateBook(run=lambda code, facts: (facts["meta_verdicts"][-1] > 0.5, None))
+    window = {"meta_verdicts": [0.9]}
+    predicate = predicates.register("meta-approves", "The last meta verdict exceeds 0.5.",
+                                    code, facts=window, persist=lambda predicate: None)
     settler = Settler(book, queue, standing, baseline, Observer(predicates))
-    facts = WindowFacts(1_000_000, 1_100_000, 900_000, (), public_window={"fills": 1})
-
-    def register(description, code):
-        return predicates.register("has-fill", description, code, facts={"fills": 1},
-                                   persist=lambda predicate: None)
-
-    def seal(predicate, due):
-        handle = open_forecast_decision(
-            queue, evaluator_id="judge-a", event_id=f"forecast-{due}", q=0.5,
-            deadline_ns=clock.now + 10_000, parent_handle=None, now_event=0, horizon=due)
-        return book.seal(PredicateForecast(
-            handle, "judge-a", "producer-1", "has-fill", {"horizon_events": due}, 0.5, 0, due,
-            "", predicate=predicate))
-
-    first = register("A fill occurred.", "def resolve(facts): return facts['fills'] > 0")
-    seal(first, 1)
+    facts = WindowFacts(1_000_000, 1_000_000, 1_000_000, (), public_window=window)
+    handle = open_forecast_decision(
+        queue, evaluator_id="judge-a", event_id="forecast-1", q=1.0,
+        deadline_ns=clock.now + 10_000, parent_handle=None, now_event=0, horizon=1)
+    book.seal(PredicateForecast(handle, "judge-a", "producer-1", "meta-approves",
+                                {"horizon_events": 1}, 1.0, 0, 1, "", predicate=predicate))
     (settled,) = settler.settle_due(1, lambda forecast: facts)
-    assert settled.y == 1 and settled.baseline_brier == 0.75  # no history yet: base rate 0.5
-    assert baseline.baseline_q("has-fill@1") == 1.0
-
-    second = register("Any fill at all.", "def resolve(facts): return bool(facts['fills'])")
-    assert (first.version, second.version) == (1, 2)
-    assert baseline_key(seal(second, 2)) == "has-fill@2"
-    (replaced,) = settler.settle_due(2, lambda forecast: facts)
-    # The replacement is scored against an empty history, not its predecessor's certainty.
-    assert replaced.baseline_brier == 0.75
-    assert baseline.baseline_q("has-fill@2") == 1.0
-    assert baseline.baseline_q("has-fill") == PrevalenceBaseline().baseline_q("has-fill") == 0.5
+    assert settled.y is None and settled.brier is None
+    assert settled.status is not SettleStatus.SETTLED
+    assert standing.snapshot().get("judge-a", {}).get("settled", 0) == 0
+    # The predicate still resolves for the charter's holdouts, on the same book.
+    assert predicates.resolve("meta-approves", {"horizon_events": 1}, window,
+                              version=predicate.version)[0] is True
 
 
 def test_verdicts_are_scored_against_the_base_rate_of_their_own_kind_of_outcome(

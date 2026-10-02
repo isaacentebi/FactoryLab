@@ -287,6 +287,41 @@ def test_an_unsettled_version_holds_governance_only_min_ratio_consequence_period
     assert settling[0]["settling_ticks"] >= 3 * cadence.consequence_period_events()
     # Censored once: the version's age no longer holds the loop, its bound still slows it.
     assert cadence.slowest_period_events() == settling[0]["settling_ticks"]
+    # A later lower bound (its supersession) is not recorded twice.
+    cadence.record_settling(version=1, cause="superseded", ticks=40, settled=False)
+    assert len([i for i in ledger._recovery_items()
+                if i["kind"] == "governance.settling"]) == 1
+
+
+def test_a_censored_version_keeps_its_late_settlement_and_marks_the_boundary_unsettled():
+    """Time audit s09 #2, the owner's ruling: the bounded wait stays (a version the world
+    never settles cannot stall governance: §IV.b, the control apparatus is not slower
+    than its environment), but the censor is not the end of the measurement. A boundary
+    opened while the version is unsettled says so, and the version's genuine settlement,
+    arriving after the censor, is recorded and sets the slowest period."""
+    ledger, cadence = _cadence(backstop=20)  # floor 20 ticks, ratio 3: censored at 60
+    cadence.launch(0)
+    for tick in range(0, 181):
+        cadence.advance(tick)
+        cadence.track_version(version=1, opened=0, settled=False)
+    assert cadence.slowest_period_events() == 60  # the bounded wait: censored at 60
+    assert cadence.ready(now_ns=180, tick_interval_ns=1, window=1)
+    cadence.boundary(1, window=1, now_ns=180, tick_interval_ns=1)
+    (row,) = [i for i in ledger._recovery_items() if i["kind"] == "charter.boundary"]
+    assert row["unsettled_version"] == 1  # it acted on an unsettled distribution
+    for tick in range(181, 201):
+        cadence.advance(tick)
+        cadence.track_version(version=1, opened=0, settled=False)
+    cadence.record_settling(version=1, cause="charter", ticks=200, settled=True)
+    cadence.track_version(version=1, opened=0, settled=True)
+    settling = [i for i in ledger._recovery_items() if i["kind"] == "governance.settling"]
+    assert [(i["settling_ticks"], i["settled"]) for i in settling] == [(60, False),
+                                                                       (200, True)]
+    assert cadence.slowest_period_events() == 200
+    cadence.advance(800)
+    cadence.boundary(2, window=2, now_ns=800, tick_interval_ns=1)
+    rows = [i for i in ledger._recovery_items() if i["kind"] == "charter.boundary"]
+    assert rows[-1]["unsettled_version"] is None
 
 
 def test_governance_is_ledgered_nonviable_when_its_period_outlasts_the_run_or_the_world():

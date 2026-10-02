@@ -2,7 +2,12 @@ from decimal import Decimal, localcontext
 
 import pytest
 
-from factorylab.kernel.money import money_to_usd, usd_to_micro, usd_to_money
+from factorylab.kernel.money import (
+    money_to_usd,
+    nonnegative_usd_micro,
+    usd_to_micro,
+    usd_to_money,
+)
 
 
 @pytest.mark.parametrize(
@@ -79,3 +84,16 @@ def test_a_negative_sub_micro_wire_amount_is_refused_before_rounding():
     with pytest.raises(ValueError):
         nonnegative_usd_micro("-0.0000001", rounding="nearest")
     assert nonnegative_usd_micro("0.0000001", rounding="ceil") == 1
+
+
+@pytest.mark.parametrize("convert", [usd_to_micro, nonnegative_usd_micro])
+@pytest.mark.parametrize("rounding", ["ceil", "floor", "nearest", "exact"])
+def test_every_usd_conversion_refuses_floats(convert, rounding):
+    """Money is integer micro-USD, never a float (AGENTS engineering rules; s01 #3):
+    a float has already lost its decimal value before any conversion reads it."""
+    with pytest.raises((TypeError, ValueError)):
+        convert(0.1 + 0.2, rounding=rounding)
+    with pytest.raises((TypeError, ValueError)):
+        convert(1.0, rounding=rounding)
+    assert convert("0.3", rounding=rounding) == 300_000
+    assert convert(Decimal("0.3"), rounding=rounding) == 300_000

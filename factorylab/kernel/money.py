@@ -41,15 +41,18 @@ def _decimal(value: Decimal | str) -> Decimal:
     return result
 
 
-def usd_to_micro(value: Decimal | str | int | float, *, rounding: str) -> Money:
+def usd_to_micro(value: Decimal | str | int, *, rounding: str) -> Money:
     """Return integer micro-USD for a USD amount, rounded exactly as ``rounding`` says.
 
     ``exact`` refuses any amount that is not already an integral micro-USD;
     ``floor`` rounds towards minus infinity, ``ceil`` towards plus infinity and
     ``nearest`` half-to-even. A number is read through its decimal text, never
     its binary expansion, and the shift by a million is exact at any magnitude.
-    Non-finite amounts are refused whatever the rounding.
+    Non-finite amounts are refused whatever the rounding, and a float is refused
+    outright (``TypeError``): it lost its decimal value before it got here.
     """
+    if isinstance(value, float):
+        raise TypeError("a float is not an exact USD amount")
     amount = value if isinstance(value, (Decimal, str)) else Decimal(str(value))
     if rounding == "exact":
         numerator, denominator = _decimal(amount).as_integer_ratio()
@@ -72,9 +75,12 @@ def nonnegative_usd_micro(value: Any, *, rounding: str) -> Money:
     Venues and providers quote prices and balances as wire values of unknown
     shape. This is the one place that decides what a bad one is; each caller
     catches ``ValueError`` and raises its own error type, so no provider's
-    pricing fault can surface as another provider's failure.
+    pricing fault can surface as another provider's failure. A float is a bad one:
+    the caller reads its wire value as ``Decimal`` or ``str``.
     """
     try:
+        if isinstance(value, float):
+            raise TypeError("a float is not an exact USD amount")
         amount = value if isinstance(value, (Decimal, str)) else Decimal(str(value))
         amount = Decimal(amount)
         if not amount.is_finite() or amount < 0:

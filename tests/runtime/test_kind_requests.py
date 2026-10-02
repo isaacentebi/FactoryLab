@@ -153,8 +153,10 @@ def test_the_requesters_propensity_is_forwarded_and_recorded_on_the_childs_handl
         "delegate": 0.6, "do-it-myself": 0.4}
     assert requester.chosen == "delegate" and executor.chosen != "delegate"
     assert child["forwarded_propensity"] == {"delegate": 0.6, "do-it-myself": 0.4}
-    # It travels forward on the child's own request.
-    assert "do-it-myself" in seen[0]
+    # It travels forward on the child's own request, author-neutral: the masses and the
+    # action taken, with the requester's own words held back (s04 #1; §I.b).
+    assert "do-it-myself" not in seen[0]
+    assert '{"other:1":0.6,"other:2":0.4}' in seen[0] and "(other:1)" in seen[0]
 
 
 @pytest.mark.parametrize("item,reason", [

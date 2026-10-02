@@ -21,7 +21,10 @@ def test_missing_resolution_facts_never_become_false():
         book.resolve("has-fill", {"horizon_events": 1}, {"fills": 0}, version=2)
 
 
-def test_observer_uses_the_forecasts_version_and_public_window_only():
+def test_a_population_predicate_resolves_by_version_on_the_public_window_only():
+    """The book resolves a registered predicate (for the charter's holdouts) at the
+    version asked for, on the public window alone. As a consequence forecast it is
+    never scored: its code may read another model's reading (s05 #1; §III.b)."""
     seen = []
 
     def run(code, facts):
@@ -35,13 +38,13 @@ def test_observer_uses_the_forecasts_version_and_public_window_only():
     observer = vocabulary.Observer(book)
     facts = vocabulary.WindowFacts(10, 20, 5, (), public_window={"fills": 1})
     params = {"horizon_events": 1}
-    assert observer.observe("has-fill", params, facts, version=1) == 1
-    assert observer.observe("has-fill", params, facts, version=2) == 0
+    assert book.resolve("has-fill", params, {"fills": 1}, version=1) == (True, None)
+    assert book.resolve("has-fill", params, {"fills": 1}, version=2) == (False, None)
     assert seen[-2:] == [{"fills": 1}, {"fills": 1}]
-    with pytest.raises(ValueError, match="bind a predicate version"):
-        observer.observe("has-fill", params, facts)
-    assert observer.observe("has-fill", params, vocabulary.WindowFacts(10, 20, 5, ()),
-                            version=1) is None
+    before = len(seen)
+    for version in (1, 2, None):
+        assert observer.observe("has-fill", params, facts, version=version) is None
+    assert len(seen) == before  # the observer never runs population code
     with pytest.raises(ValueError, match="unknown predicate"):
         vocabulary.Observer().observe("has-fill", params, facts, version=1)
 
