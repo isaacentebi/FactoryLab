@@ -1,4 +1,4 @@
-# Learners that are no-regret: design for the edition-8 redesign (revision 2)
+# Learners that are no-regret: design for the edition-8 redesign (revision 3)
 
 Status: revised after GPT-Sol 6.1 rejected revision 1 (`951d947b`). Inputs: audit s06
 findings #1–#4; the owner's rulings (propensities stay truthful everywhere, and any
@@ -17,6 +17,16 @@ tombstones) and #3 (`fix-chapter2-p1`: no recommendation inference).
 
 All seven points are accepted. Revision 2 takes the smaller, citable route and says
 plainly which parts are research.
+
+**Revision 3** applies the round-2 review of `9b52245e` (APPROVE WITH CHANGES) and the
+owner's ruling on the core:
+- a fixed coverage bound `kappa` for each phase, and the swap-regret cost of the
+  transforms (§2.3);
+- the IX bias stated with coverage, with off-policy guarantees moved to research
+  (§2.4, R5);
+- an operational delivery bound (§2.6) and a settle gate (§2.5);
+- the startup horizon of Proposition 2 (§2.2);
+- what the run does not demonstrate (§2.8).
 
 ## 1. Two learning situations, and an inventory of the learners
 
@@ -63,8 +73,9 @@ map already in force. At each draw:
 The schedule is set at the draw and depends only on `t`, so no organ step can rewrite
 it.
 
-**Proposition 1** (fixed menu, synchronous on-policy feedback, oblivious losses, with
-the estimate `l/q_k`):
+**Proposition 1** (fixed menu, synchronous on-policy feedback, oblivious losses, the
+learner's own policy `q`, with the estimate `l/q_k`; with the transforms of §2.3, the
+variance term is multiplied by the fixed `kappa`):
 
     E[R_T] ≤ (N ln N + 4)·sqrt(T) + 3
 
@@ -100,166 +111,225 @@ mean-basedness forces `T^(3/4)` regret was wrong: Braverman et al. chose the exp
 
 ### 2.2 Core: the published Blum–Mansour bandit reduction, with doubling epochs
 
-The core is SR_MAB as it is today (Blum and Mansour 2007, §5). Its rows are Auer
-EXP3, which satisfies Lemma 10 (`blum_mansour.py` is kept, including the row-gain and
-Lemma-10 interfaces). The only change is the schedule:
-- epoch `k` has horizon `H_k = H_0·2^k`;
+**Owner ruling:** the core keeps doubling epochs, with the first epoch at least as long
+as the delay. A single fixed-horizon epoch would need a hard cap on draws, which is an
+architect constant that Chapter II argues against. The measured cost of about 3.4x
+regret (§6) is accepted for this existence run.
+
+The core is SR_MAB as it is today (Blum and Mansour 2007, §5), with Auer EXP3 rows that
+satisfy Lemma 10. The only change is the schedule:
+- epoch `k` has horizon `H_k = H_0·2^k` draws;
 - within an epoch, `gamma_k = min(1, sqrt(N ln N/((e − 1)·H_k)))` is constant;
-- all rows restart at each epoch boundary;
-- `H_0` is the larger of `⌈N ln N/(e − 1)⌉` and the router's learning-delivery bound
-  `D` (§2.6), so each epoch is at least as long as its feedback takes to arrive.
+- every row restarts at each epoch boundary.
 
-These are epochs of the doubling trick, internal to the algorithm. They are not the
-phases of §2.5.
+`H_0` is the larger of `⌈N ln N/(e − 1)⌉` and the router's delivery bound converted
+into draws (§2.6):
 
-**Proposition 2** (fixed menu, synchronous on-policy feedback). Apply Blum–Mansour
-Theorem 11 within each epoch, with Auer et al. 2002, Corollary 3.2, giving
-`R^MAB(H_k) ≤ 2.63·sqrt(H_k·N·ln N)`. Summing over doubling epochs:
+    H_0 ≥ r · (1 + min_ratio) · h
 
-    max_F E[swap regret_F] ≤ 8.98·N·sqrt(T·N·ln N) + (number of orphaned rounds)
+Here `r` is the kind's per-tick draw bound and `h` is the router's decision horizon at
+genesis. On `Tick`, `r = 1`: one Tick event per tick, and Tick rounds are not judged
+again. At load, the kernel refuses a `no_swap_regret_kinds` entry that has no per-tick
+draw bound. These epochs belong to the doubling trick; they are not the phases of
+§2.5.
 
-The orphan term is at most `D·(log2(T/H_0) + 1)`.
+**Compressed snapshots.** The Lemma-10 row update uses
+`X_ik = g_ik/q_ik = p_i · r/pi_k`; the row proposal `q_ik` cancels. A core snapshot
+therefore stores only `{epoch, p, pi}`, which is `O(N)`. Today's snapshot stores every
+row, which is `O(N²)`.
 
-This is exactly the published form. In Theorem 11, the quantity `B_{SR_MAB,F}` is an
-expectation and the maximum over `F` is taken outside it (B&M p. 1317). The stronger
-statement `E[max_F]` is **not claimed** (research item R1).
+**Proposition 2** (fixed menu, synchronous feedback, the learner's own master policy
+`p`, fixed coverage `kappa` from §2.3).
+- **For T ≥ H_0:** apply Theorem 11 within each epoch, with row gains divided by
+  `kappa`, and Auer's `R^MAB(H) ≤ 2.63·sqrt(H·N·ln N)`. Summing over the doubling
+  epochs gives
+
+      max_F E[swap regret_F] ≤ 8.98·kappa·N·sqrt(T·N·ln N)
+
+- **For T < H_0:** the first epoch is cut short. Lemma 10 then gives each row a regret
+  of at most `2·gamma_0·T + N ln N/gamma_0`. The bound is
+  `kappa·N·(2·gamma_0·T + N ln N/gamma_0)`, which can exceed `T`. **No sublinear claim
+  is made before `H_0`.**
+
+This is the published form. `B_{SR_MAB,F}` is an expectation, and the maximum over `F`
+sits outside it (B&M p. 1317). `E[max_F]` is **not claimed** (R1). Rounds orphaned at
+epoch boundaries are an accounting cost, not a delayed-feedback theorem (R2).
 
 Two properties hold by construction:
 - Every row keeps `q_ik ≥ gamma_k/N`. The matrix `Q` is therefore strictly positive and
-  the stationary solve is unique; the reducible branch of `stationary_distribution`
-  never fires on this path.
-- Every master propensity is at least `gamma_k/N`. That bounds every importance weight,
-  so the review's P0 example (propensity 1e-6 locking the master at (1, 0)) cannot
-  happen on-policy.
+  the stationary solve is unique.
+- Every master propensity is at least `gamma_k/N` before any transform, so the
+  review's 1e-6 lock cannot occur on-policy.
 
-**Measured** (Bernoulli game, N = 3, T = 64k): regret 2541 synchronous and 2791 with
-delay 120, growing x2.5 per 4x horizon. That is worse than today's constant gamma at
-this horizon (745). The constants of the doubling trick are poor; this is the price of
-a cited guarantee (open question Q2).
+**Measured** (Bernoulli game, N = 3, 64k draws): 2541 synchronous and 2791 at delay
+120, against 745 for today's constant gamma. That is 3.41x.
 
 ### 2.3 The draw transforms: world-level limits outside the learner
 
-`_cap_adversarial` keeps the adversarial minority within its share. §III.b calls it
-"a constraint on routing", and rule 7 treats the adversarial layer as a population
-constraint. `_mix_with_standing` is the consequence-sampling actuator. §IV.b says
-overfitting is answered by raising the sampling rate (rule 10), and rule 6 says
-evaluators are graded by realized consequence. Both are world facts about how a draw
-is executed. Neither is part of the learner's strategy.
+`_cap_adversarial` keeps the adversarial minority within its share. §III.b calls it "a
+constraint on routing", and rule 7 treats the adversarial layer as a population
+constraint. `_mix_with_standing` is the consequence-sampling actuator: §IV.b answers
+overfitting by raising the sampling rate (rule 10), and rule 6 grades evaluators by
+realized consequence. Both are world facts about how a draw is executed. **Both stay,
+explicitly outside the learner.** The learner learns its own policy (`q`, or the master
+`p` for the core). Importance weights use the truthfully logged executed policy `pi`.
 
-**Decision:** keep both transforms, and place them explicitly outside the learner.
-- The learner learns its own policy `q`. Importance weights use the executed policy
-  `pi`, logged truthfully.
-- Coverage is guaranteed by the transforms themselves: `pi_k ≥ (1 − s)·share·q_k`. So
-  the coverage ratio `kappa = max_k q_k/pi_k ≤ 1/((1 − s)·share)`, where the share
-  factor applies only when an adversary is on the menu.
-- **For the learner's policy q:** Proposition 1 holds with its variance term multiplied
-  by `kappa`. Proposition 2 holds with row gains divided by `kappa`, which keeps Lemma
-  10's `g ≤ 1`, and its regret multiplied by `kappa`.
-- **For the executed policy pi:** regret equals the learner's regret plus
-  `Σ_t (pi_t − q_t)·l_t`. That second term is the cost of the world constraint, and it
-  is **not claimed small**.
-- The executed policy is **not** mean-based on routers where `s > 0`.
-- When no transform binds (`kappa = 1`, `pi = q`), both guarantees hold for the
-  executed policy.
+**A fixed, phase-wide coverage bound.** For a menu in force through a phase:
 
-The runtime will ledger the per-draw total variation `TV(pi, q)` as a new field on
-the draw's existing record, so the cost is measured rather than assumed. A PR-2 test asserts whether the edition-8
-`Tick` core menu holds a forecast or adversarial seat, which decides whether `kappa = 1`
-there. Moving the consequence mix out of the draw and into the reward channel is
-research item R3.
+    kappa = 1 / ( (1 − s_cap if a forecast-shaped evaluator is on the menu, else 1)
+                · (share if an adversary is on the menu, else 1) )
+
+Here `s_cap = evaluation.sampling_cap` and `share = evaluation.adversarial_share`, both
+fixed for the world's life. The transforms guarantee `pi_k ≥ q_k/kappa` on every draw.
+Each step multiplies an arm by at least `(1 − s)` or `share`. `kappa` is constant within
+a phase, so dividing Lemma-10 gains by it scales the game itself, not time-weighted
+rewards. A per-round `kappa_t` is not used.
+
+**When `adversarial_share = 0`:** adversarial seats can never be woken, so they are
+infeasible on every router. They sit outside the learner's support and outside its
+comparator class.
+
+**The executed policy pi:**
+- External regret is the learner's regret plus `Σ_t (pi_t − q_t)·l_t`, which is at
+  most `Σ_t TV(pi_t, q_t)`.
+- For a fixed swap mapping `F`, swap regret is the learner's regret plus
+  `Σ_t Σ_a (pi_t,a − p_t,a)·(l_t,a − l_t,F(a))`, which is at most
+  `2·Σ_t TV(pi_t, p_t)`. On two actions with `q = (.5, .5)`, `pi = (.75, .25)`, losses
+  `(1, 0)` and the exchange mapping, this term is 0.5.
+- These terms are the cost of the world constraint. They are ledgered per draw as
+  `TV(pi, q)` and **not claimed small**.
+- The executed policy is not mean-based where `s > 0`.
+
+**Edition 8:** `antagonist-core` accepts `Tick` on `launch-world`. The core's menu
+therefore holds an adversary from genesis, with `kappa = 1/0.15 ≈ 6.7`, and the cap
+holds the executed antagonist mass at 0.15 or less.
 
 ### 2.4 Estimator and rare propensities
 
 Logged propensities stay truthful in the request, the reward channel and the ledger.
-`_floored` and `MIN_DECLARED_MASS` are deleted, together with their refusal and their
-schematic text.
+`_floored`, `MIN_DECLARED_MASS`, the floor refusal and its schematic text are deleted.
 
-- **On-policy** uses the unbiased estimate `l/pi_k`. Its size is bounded by the
-  learner's own exploration and the coverage above:
-  - frontier: one update moves a logit by at most `eta_t·K·kappa/gamma_t ≤ kappa`;
-  - core: Auer's estimate is at most `N/gamma_k`.
-- **Off-policy (seat learners)** uses an IX estimate inside the learner (Neu 2015,
-  Equation 3): `lhat = l/(pi_k + beta_t)`, with `beta_t = eta_t/2`. For a seat-learner
-  core, the row update is `p_i·l/(pi_k + beta_t)`.
-  - *Stability:* one update moves a logit by at most `eta_t/beta_t = 2`. The review's
-    P0 example becomes a step of 2, not a lock.
-  - *Bias, stated:* the expected estimate is `l_a·pi_a/(pi_a + beta_t)`. It is
-    optimistic for actions the seat rarely takes, and the bias shrinks as `beta_t`
-    falls.
-  - *Coverage, stated:* an action the seat never takes (`pi_a = 0`) is never observed.
-    Its estimate stays at zero, so the recommendation favours it. In the review's
-    example the recommendation was `bad` 96% of the time. This is not a defect to
-    hide: the learner has no evidence about such an action.
-  - *What is claimed:* when the seat's behaviour covers the learner's policy
-    (`max_a q_a/pi_a ≤ kappa` on every round), the recommendation's regret is the
-    on-policy bound with variance multiplied by `kappa`, plus the IX bias
-    `Σ_t beta_t·N`. **No regret is claimed without coverage.** The schematic states
-    this as a fact.
+**On-policy.** The estimate is `l/pi_k`. Its size is bounded by the learner's own
+exploration and `kappa`:
+- frontier: one update moves a logit by at most `kappa`;
+- core: `X_ik` is at most `kappa·N/gamma_k`, before the `1/kappa` gain scaling.
 
-### 2.5 Phases: only on menu changes; no reset on stable failure
+**Off-policy (seat learners).** The update is IX inside the learner (Neu 2015,
+Equation 3).
+- **Frontier rule:** `lhat = l/(pi_k + beta_t)`, with `beta_t = eta_t/2`.
+- **Core rule:** Auer rows in doubling epochs, with `Xtilde_ik = p_i·r/(pi_k + beta_k)`
+  and `beta_k = gamma_k/(2N)`.
+- **Stability:** one update moves a logit by at most `eta/beta = 2`.
+- **Bias:** the expected frontier loss estimate is `l_a·pi_a/(pi_a + beta)`. That is
+  optimistic for actions the seat rarely takes. The weighted bias
+  `Σ_a q_a·l_a·beta/(pi_a + beta)` is at most `kappa·N·beta` under coverage `kappa`,
+  and is unbounded without coverage. The core rule's gain estimate is pessimistic by
+  the same factor `pi/(pi + beta)`.
+- **Coverage:** an action the seat never takes is never observed, and its estimate
+  stays at its prior. In the review's example, the recommendation was `bad` 96% of the
+  time.
+- **No regret guarantee is claimed for off-policy learners** (R5). The core rule in
+  particular does not inherit Auer's gain-form theorem. The schematic states this as a
+  fact.
 
-**Menu phases.** A router's menu changes through a registration, a retirement or a
-router proposal. These go through today's epoch path, which is already gated so that
-feedback settles between control changes: `_epoch_due` allows at most one change per
-`min_ratio` measured router periods (§IV.c). The new learner starts fresh: `t = 0` and
-`L = 0`, or epoch 0 for the core. The old identity stays retained while its rounds are
-outstanding or owed, as `_retain_router` does today, but **its rounds train nothing**.
-They are orphaned and ledgered `learner.orphaned`, at most the outstanding count per
-change. The carry path (`expand`, `reshaped`, `update_carried`, the carry branch of
-`_apply_router_round`, and `step_rescaled`) is deleted.
+### 2.5 Phases: only on menu growth; no reset on stable failure
 
-**No learner reset on stable failure.** The immune organ's exploration ratchet
-(`immune._gain`, `gamma()`, `seed_gamma`, `router_gamma`, `immune.gain_step` and
-`immune.gamma_max`) is deleted. Stable failure keeps the existing duration price
-ratchet (`immune.py:443-453`). §IV.b defines a loop's gain as "nothing less than
-exactly λ", so that ratchet is the gain ratchet Chapter II asks for. Thrash keeps its
-price.
+- **Growth, replacement and retirement.** A registration that grows a router's menu,
+  or a population router replacement, opens a phase. The learner restarts (`t = 0`,
+  `L = 0`, or core epoch 0). The old identity is retained while it has outstanding or
+  owed rounds, as `_retain_router` does today, but those rounds train nothing: they are
+  `learner.orphaned`. A **retirement** opens no phase: the retired arm becomes
+  infeasible within the current phase, and nothing is orphaned.
+- **The settle gate.** `_epoch_due` uses a measured period, so it does **not**
+  guarantee that feedback settles between changes. A phase-opening change is therefore
+  deferred, as `epoch.deferred` already is, until `min_ratio·L` ticks have passed since
+  the router's last phase opened. Here `L = (1 + min_ratio)·h` is the delivery bound of
+  §2.6, and this is §IV.c's cascade ratio, with the menu loop as the outer loop over
+  delivery. Under the most churn the gate permits, the rounds drawn in the first
+  `1 − 1/min_ratio` (at least 2/3) of each phase are delivered inside it, provided the
+  draw rate is uniform and nothing expires.
+- **Carry is deleted:** `expand`, `reshaped`, `update_carried`, the carry branch of
+  `_apply_router_round`, and `step_rescaled`.
+- **No learner reset on stable failure.** The exploration ratchet is deleted:
+  `immune._gain`, `gamma()`, `seed_gamma`, `router_gamma`, `immune.gain_step` and
+  `immune.gamma_max`. Stable failure keeps the duration price ratchet
+  (`immune.py:443-453`); §IV.b defines a loop's gain as "nothing less than exactly λ".
+  Thrash keeps its price.
+- **Charter and terms revisions** open no phase during the run (R4).
 
-**Charter and terms revisions** do not open phases in the run. Deciding which games a
-revision affects is research item R4.
+### 2.6 Delay and lifecycle: an operational delivery bound
 
-### 2.6 Delay and lifecycle
+The runtime enforces a deadline for every router snapshot. A round opened at tick `o`
+with horizon `h` (its `queue.deadline_tick` is `o + h`) must be learned, discarded,
+withdrawn, orphaned or expired by
 
-A router round's **learning delivery** ends at the latest of three points:
-- its cutoff (`queue.deadline_tick`);
-- for an owed credit, its due tick (`_defer_abstention`). That is the open tick plus
-  the router's mean learned latency, and so no later than the cutoff;
-- for an abstention or unscored round, the close of its origin price window
-  (`_abstention_awaits_close`).
+    o + L,   where L = (1 + min_ratio)·h
 
-So `D ≤ cutoff + W_price`, in ticks, where `W_price` is the price loop's window. Both
-are published in `world.clock.loops`.
+Two code paths do not meet this today, and PR B changes both:
+- **Owed abstention credits.** `_defer_abstention` can set a due tick beyond the
+  round's cutoff. The review's probe had open tick 100, cutoff 110 and mean latency
+  100, which gave due tick 200. The due tick is clamped to the round's own cutoff:
+  `min(o + ⌈mean latency⌉, o + h)`.
+- **Window closure.** A price window can outlast its period: when its measured inner
+  period grows, closure is postponed (the review's probe closed at tick 300). A round
+  still awaiting its origin window at `o + L` **expires untrained**, ledgered
+  `learner.expired` with the window's state. §IV.c's ratio is the justification: a
+  window still open after `min_ratio` of the round's own horizon has broken the
+  cascade ratio the kernel declares.
 
-A snapshot is removed when its round is learned, discarded, withdrawn (a quiet draw)
-or orphaned. Live snapshots are therefore at most `(draws per tick)·(D + 1)` per
-router. Live state per learner is that, times `O(N)` per snapshot, plus the current
-epoch (`O(N)` for the frontier, `O(N²)` for the core), plus the sibling's issuance mark.
-No closed epoch and no lifetime record is kept.
+**From ticks to draws.** With a per-tick draw bound `r` (§2.2), live snapshots per
+router are at most `r·(L + 1)`, each `O(N)` (core included, after compression). Live
+state per learner is that, plus the current epoch (`O(N)` frontier, `O(N²)` core rows),
+plus the sibling's issuance mark. No closed epoch and no lifetime record is kept.
 
-A delayed-feedback regret guarantee is **not proven here** for either class (research
-item R2). The measured effect is small: about +9% for the frontier at delay 120.
+**Tests written to fail first** (PR B):
+- `test_owed_credit_due_never_exceeds_cutoff`, using the probe values;
+- `test_window_outliving_bound_expires_round`, using the probe values;
+- `test_permitted_menu_churn_keeps_learning`: open phases as fast as the gate allows
+  for 10 phases, and assert the learned fraction is at least `1 − 1/min_ratio − 0.05`
+  and positive in every phase;
+- `test_snapshot_count_bounded_by_r_times_L`;
+- checkpoint and resume across a phase opening, covering owed credits, an unclosed
+  window, simultaneous causes, duplicate returns and a quiet-draw withdrawal.
+
+**A delayed-feedback regret guarantee is not proven** for either class (R2). Measured:
+the frontier is about 9% higher at delay 120.
 
 ### 2.7 Diagnostics computed at draw time
 
-`_watch_abstention` records each draw's own threshold: the floor `gamma_t/K` and its
-epoch.
-- `uninvoked` means every draw gave NOOP at least `1 − gamma_t` of that same draw.
-- `fresh_ratio_max` is computed against that draw's floor.
+`_watch_abstention` records each draw's own threshold: the floor `gamma_t/K` and the
+phase or epoch.
+- `uninvoked` means every draw gave NOOP at least `1 − gamma_t` of that draw.
+- `fresh_ratio_max` is computed against the same draw-time floor.
 - Core routers are excluded from the frontier-floor diagnostics.
+
+### 2.8 What the 72-hour run does and does not demonstrate
+
+Propositions 1 and 2 are synchronous, fixed-menu guarantees **for the learners' own
+policies**. The run's routers are delayed, and on the edition-8 `Tick` core and the
+evaluator routers they are transformed. **The run does not demonstrate no-regret for
+delayed or transformed policies**, and it demonstrates none for off-policy seat
+learners.
+
+The run removes the known false guarantees: linear regret by construction, rewritten
+propensities, and an exploration ratchet that rewrote rounds in flight. It also bounds
+delivery and memory operationally, and ledgers the transform cost and every orphaned
+or expired round.
 
 ## 3. Research items (they do not block the run)
 
-- **R1.** `E[max_F swap regret]` for the core: high-probability row bounds under
-  Lemma-10-style off-proposal feedback.
-- **R2.** Delayed-feedback guarantees for both classes. Under delay, the stationarity
-  identity of the synchronous proof no longer holds between the current `Q` and the
-  frozen `p_s`.
+- **R1.** `E[max_F swap regret]` for the core, which needs high-probability row bounds
+  under Lemma-10-style off-proposal feedback.
+- **R2.** Delayed-feedback guarantees for both classes. The frozen stationarity
+  `p_s·Q_s = p_s` remains true. What is missing is a result for **delayed row
+  learning**: rows that learn round `s` after later rounds have moved them.
 - **R3.** Executed-policy guarantees under the standing mix and the cap, or moving the
   consequence mix into the reward channel (rule 6).
-- **R4.** Phases on charter and terms revisions for the affected games only.
-- **R5.** Off-policy bounds expressed through measured coverage ratios.
-- **R6.** An anytime core (decaying `gamma_t` rows without restarts). It is likely
-  better in practice but has no published swap theorem yet.
+- **R4.** Phases on charter and terms revisions, for the affected games only.
+- **R5.** Off-policy guarantees: frontier IX under measured coverage (bias at most
+  `kappa·N·beta`), and a cited algorithm for the off-policy core.
+- **R6.** A horizon-free core with better constants. We have not established a
+  compatible cited replacement.
 - **R7.** Deleting `Hedge` and the full-information Blum–Mansour branch.
 
 ## 4. Migration
@@ -280,10 +350,12 @@ test lines.
   `tests/learners/*`.
 - Changes:
   - frontier: FTRL form with the half-exponent schedule;
-  - core: doubling epochs, with `H_0` supplied by the caller;
-  - snapshots tagged with their epoch, and orphaning;
+  - core: doubling epochs, with `H_0` supplied by the caller and Lemma-10 gains divided
+    by a fixed `kappa`;
+  - compressed core snapshots `{epoch, p, pi}`;
+  - snapshots tagged with their epoch or phase, and orphaning;
   - `withdraw_for`;
-  - an off-policy flag for the IX estimate;
+  - the off-policy IX rules for the frontier and the core (§2.4);
   - delete `expand`, `reshaped` and `update_carried`.
 - Tests written to fail first:
   - `test_frontier_regret_sqrt_growth`: from T = 2k to 32k, growth is at most 16^0.6.
@@ -295,14 +367,22 @@ test lines.
     moves by at most 2 and the master stays interior;
   - `test_checkpoint_continues_across_epoch_boundary`: bit-identical continuation,
     including orphans;
-  - `test_withdrawn_draw_does_not_advance_t`.
+  - `test_withdrawn_draw_does_not_advance_t`;
+  - `test_core_snapshot_is_order_n_and_trains_identically`.
 
 **PR B: runtime** (on PR A and `fix-chapter2-p1`). About +250/−550.
 - Files: `runtime/{routing,feedback,immune,propensity,compute,governance,bootstrap,loop,published,resume,worlds}.py`,
   `cortex/{schematics,registration}.py`, `docs/manifest.md` and `README.md`.
 - Changes:
   - every router is keyed;
-  - `H_0` is taken from `D`;
+  - `H_0 = max(⌈N ln N/(e − 1)⌉, r·(1 + min_ratio)·h)`;
+  - the load refuses a core kind that has no per-tick draw bound;
+  - the delivery deadline `o + L`: the owed-credit due tick is clamped to the cutoff,
+    and a round past the deadline expires as `learner.expired`;
+  - the settle gate for phase-opening changes;
+  - a retirement becomes infeasibility within the phase;
+  - adversarial seats are infeasible when `adversarial_share = 0`;
+  - the phase-wide `kappa`;
   - orphan in place of carry;
   - delete the floor;
   - delete `_gain` and `gamma()` (the price ratchet stays);
@@ -314,7 +394,12 @@ test lines.
   - the auditor's `test_runtime_learners_have_sublinear_fixed_menu_regret` (gate);
   - `test_truthful_rare_propensity_survives_learning_and_restore`;
   - `test_epoch_change_orphans_in_flight_rounds_across_resume` (gate), covering owed
-    credits, an unclosed origin window, duplicate returns and quiet withdrawal;
+    credits, an unclosed origin window, simultaneous causes, duplicate returns and
+    quiet withdrawal;
+  - `test_owed_credit_due_never_exceeds_cutoff`;
+  - `test_window_outliving_bound_expires_round`;
+  - `test_permitted_menu_churn_keeps_learning`;
+  - `test_snapshot_count_bounded_by_r_times_L`;
   - `test_stable_failure_ratchets_price_not_learner`;
   - `test_manifest_refuses_gamma_keys`.
 
@@ -360,29 +445,40 @@ regret / T at 64k:
 | core, doubling SR_MAB | 0.005 (0.003 at 16k) |
 | today's SR_MAB | 0.024 |
 
-**Off-policy.** The seat declares hold 0.01 / order 0.99, and order pays 0.5. The
-table gives the recommendation's p(hold) at 50k rounds:
+**Off-policy** (half-exponent frontier, 20 seeds). The seat declares hold 0.01 / order
+0.99, and order pays 0.5. The table gives the recommendation's median p(hold) at 50k
+rounds, with the value at 1k in brackets:
 
 | Hold pays | Floored (today) | IX | Unbiased |
 |---|---|---|---|
-| 0.9 | 0.10 | 0.97 | 0.97 |
-| 0.6 | 0.10 | 0.97 | 0.97 |
-| 0.3 | 0.10 | 0.97 | 0.03 |
+| 0.9 | 0.10 [0.10] | 0.998 [0.983] | 0.998 [0.982] |
+| 0.6 | 0.10 [0.10] | 0.998 [0.979] | 0.998 [0.841] |
+| 0.3 | 0.10 [0.10] | 0.002 [0.945] | 0.002 [0.059] |
 
-IX's optimism toward the rare action is the bias stated in §2.4. It is kept for its
-bounded step, which matches the owner's ruling.
+The review measured 0.00453 for IX on the hold-0.3 case, against 0.9666 under the
+quarter exponent of revision 1. With the half exponent, IX's optimism toward the rare
+action is transient: it is wrong at 1k (0.945) and right by 50k. That is the bias
+stated in §2.4. IX is kept for its bounded step, as the owner ruled. Every row covers
+the same declared behaviour, so these figures say nothing about uncovered actions.
 
 **Memory:** live state is bounded by outstanding rounds, at 15.8 KB with 119
 outstanding after 50k rounds.
 
-## 7. Open questions for the owner
+## 7. Resolved, and remaining questions for the owner
 
-1. **Ship the half-exponent frontier?** Recommended: yes. It is mean-based, with
-   `O(sqrt(T))` regret and the best measured numbers.
-2. **Is the doubling core's poor constant acceptable?** It costs 2541 against today's
-   745 at 64k, but carries a cited theorem. Recommended: yes for the run. The anytime
-   core (R6) comes after, once proven.
-3. **Keep the consequence mix and the adversarial cap as world limits, with the
-   executed-policy cost ledgered rather than bounded?** Recommended: yes for the run.
-   R3 comes after.
-4. **Refuse the `gamma` proposal fields and the two immune keys?** Recommended: yes.
+**Resolved:**
+- the half-exponent frontier, which the reviewer approved;
+- the doubling core, accepted at about 3.4x by the owner's ruling;
+- the transforms kept as world limits, with their cost ledgered rather than bounded;
+- refusing the `gamma` proposal fields and the two immune keys, which the reviewer
+  agreed to.
+
+**Remaining:**
+1. **Should a core kind be required to have a per-tick draw bound at load?** This is
+   needed to convert the delivery bound from ticks into draws. Recommended: yes. Only
+   `Tick` is a core kind today, and it has `r = 1`.
+2. **Should a round still awaiting its origin price window at `o + L` expire
+   untrained, rather than wait unbounded?** Recommended: yes, ledgered and counted. An
+   unbounded wait is the memory defect of #1 in another form.
+3. **Should a retirement remove the arm from the feasible menu, with no new phase?**
+   Recommended: yes. Nothing is orphaned, and the retired arm is never drawn again.
