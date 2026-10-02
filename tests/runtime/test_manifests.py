@@ -490,6 +490,32 @@ def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
         manifest_from_dict(raw)
 
 
+def test_the_edition8_launch_world_is_edition7_reseated_and_nothing_else():
+    """The owner's roster decision of 2 October 2026: no Gemini and no Claude seat, GPT-6.1
+    Sol on meta-audit alone, every other seat on GPT-6 Luna, Qwen 3.8 Flash or DeepSeek
+    v4.1 Flash. Every physics, evaluation, charter and timing value is edition 7's;
+    Polymarket reads stay on and its live order rail off."""
+    from dataclasses import replace
+
+    from factorylab.runtime.families import model_family
+
+    launch, breadth = load_manifest("edition8-launch"), load_manifest("edition7-breadth-testnet")
+    seats = {a.id: a.model_id for a in launch.assemblies}
+    assert [s for s, m in seats.items() if m == "openai/gpt-6.1-sol"] == ["meta-audit"]
+    assert set(seats.values()) - {"openai/gpt-6.1-sol"} <= {
+        "openai/gpt-6-luna", "qwen/qwen3.8-flash", "deepseek/deepseek-v4.1-flash"}
+    assert {model_family(m) for m in seats.values()} == {"gpt", "qwen", "deepseek"}
+    assert not {m.id for m in launch.models} & {"google/gemini-3.8-flash",
+                                               "anthropic/claude-sonnet-5.5"}
+    assert all(m.training_cutoff for m in launch.models)
+    assert launch.polymarket.enabled and not launch.polymarket.orders
+    assert [a.id for a in launch.assemblies] == [a.id for a in breadth.assemblies]
+    assert all(replace(a, model_id="") == replace(b, model_id="")
+               for a, b in zip(launch.assemblies, breadth.assemblies, strict=True))
+    assert replace(launch, name="", models=(), assemblies=()) == replace(
+        breadth, name="", models=(), assemblies=())
+
+
 def test_the_edition6_worlds_carry_the_schema_on_the_probed_routes_alone():
     # Chapter II §I.a I/O conformance: DeepSeek left json_schema after the first live
     # rehearsal; Qwen after the 2026-09-27 host schema refusal; MiniMax after the
