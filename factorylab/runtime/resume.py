@@ -1091,7 +1091,7 @@ def runtime_state(rt) -> Checkpoint:
         "format": 1, "manifest_hash": rt.m.manifest_hash(),
         "config": {
             "events": rt.events_budget, "seed": rt.seed, "initial_balance_micro": rt.initial,
-            "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
+            "kill_at_end": rt.kill_at_end,
             # The universe the manifest's selectors resolved to at launch, pinned for
             # the world's life: a resume is handed it and never resolves again.
             **({"universe": rt.universe} if getattr(rt, "universe", None) else {}),

@@ -393,7 +393,7 @@ def _constructor_wire():
     manifest = replace(manifest, assemblies=tuple(
         replace(a, max_tokens=1024) for a in manifest.assemblies))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, provider=ScriptedProvider(),
+                 provider=ScriptedProvider(),
                  exchange=FakeExchange(coins=manifest.exchange.coins))
     rt.recent_mids = {coin: deque([{"t_s": 0, "mid": "1"}]) for coin in ("BTC", "ETH")}
     rt._may_write = lambda handle: True
@@ -995,7 +995,7 @@ def _universe_world():
                          listed_coins=("BTC", "ETH", "SOL"), listed_spot_pairs=("PURR/USDC",),
                          min_order_value_usd=Decimal(10), spread_bps=Decimal(0))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   router_gamma=0.1, provider=ScriptedProvider(), exchange=venue)
+                   provider=ScriptedProvider(), exchange=venue)
 
 
 def test_every_tradeable_market_publishes_its_terms_in_world_read():

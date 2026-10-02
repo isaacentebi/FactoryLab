@@ -22,7 +22,7 @@ from factorylab.world.scripted import ScriptedProvider
 
 def pot_runtime() -> Runtime:
     rt = Runtime(load_manifest("scripted"), events=0, seed=1,
-                 initial_balance_micro=100_000_000, ledger_path=None, router_gamma=.1,
+                 initial_balance_micro=100_000_000, ledger_path=None,
                  provider=ScriptedProvider(),
                  exchange=FakeExchange(start_cash_usd=Decimal("1000")))
     rt.ledger.active = True  # ``run`` opens the journal; these tests call pots directly

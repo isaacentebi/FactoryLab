@@ -31,7 +31,7 @@ UNTIL = 50  # the window after which flip is steady
 #: frontier), TH-2 at 100, TH-3 at 150 (two charter boundaries). The soak tier
 #: (``-m soak``) reads the original lengths too, and alone runs what only a long run
 #: shows: TH-1e's release after flip is steady (window 50 of 300 events), TH-1b's
-#: frozen integral (360), TH-1f's priority and TH-4's null (300-event statistics).
+#: frozen integral (360) and TH-4's null (300-event statistics).
 SHORT, LONG = "short", pytest.param("long", marks=pytest.mark.soak)
 TH1_EVENTS = {"short": 100, "long": 300}
 
@@ -120,12 +120,6 @@ def test_th1d_no_charge_reaches_the_frontier_the_niche_or_a_frontier_noop(th1):
 def test_th1e_once_flip_is_steady_the_flag_clears_and_the_price_leaks_away(th1_long):
     result = g.th1e_release(th1_long.events, th1_long.manifest, steady_from=UNTIL)
     assert result.ok, result.evidence
-
-
-@pytest.mark.soak  # unsupported before both flags coincide, late in the 300 events
-def test_th1f_where_thrash_and_stable_failure_coincide_gain_moves_down(th1_long):
-    result = g.th1f_priority(th1_long.events, th1_long.manifest)
-    assert result.status != g.FAIL, result.evidence
 
 
 def test_th1_the_physics_prices_and_never_steers(th1):

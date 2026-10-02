@@ -108,7 +108,7 @@ def test_the_draw_is_stratified_over_roles_and_learner_types(monkeypatch):
     """C2: a Blum-Mansour-routed seat and an EXP3-routed seat are both seated."""
     rt, _ = _runtime(monkeypatch)
     # meta-a is sampled by the Verdict router; make that router no-swap-regret.
-    rt._build_router("Verdict", "blum_mansour", 0.1)
+    rt._build_router("Verdict", "blum_mansour")
     learners = rt._seat_learners(SEATS)
     assert learners["meta-a"] == frozenset({"blum_mansour"})
     assert learners["seed-decider"] == frozenset({"exp3"})
@@ -128,10 +128,8 @@ def test_the_draw_is_stratified_over_roles_and_learner_types(monkeypatch):
 def test_an_assembly_learner_is_its_own_stratum(monkeypatch):
     from factorylab.learners.blum_mansour import BlumMansour
     from factorylab.learners.delayed import SnapshotLearner
-    from factorylab.learners.exp3 import EXP3
-
     rt, _ = _runtime(monkeypatch)
-    inner = BlumMansour(lambda acts: EXP3(acts, 0.1), ("hold", "buy"), id="x")
+    inner = BlumMansour(("hold", "buy"), id="x", off_policy=True)
     rt.assembly_learners["seed-observer"] = SnapshotLearner(inner, id="x")
     assert rt._seat_learners({"seed-observer": "producer"}) == {
         "seed-observer": frozenset({"blum_mansour"})}

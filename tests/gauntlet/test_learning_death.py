@@ -26,8 +26,8 @@ NS = 1_000_000_000
 #: the newcomer registers (window 10), is woken three times inside its trial on the
 #: niche's funds, and is offered and priced on it: LD-1a, b, c, d and LD-2, each red
 #: under its matched mutant (the unfunded control below). The soak tier (``-m soak``)
-#: reads the original 350 too, and alone runs LD-1e and LD-1f, which read a whole
-#: quarantined tail and are unsupported before it.
+#: reads the original 350 too, and alone runs LD-1e, which reads a whole quarantined
+#: tail and is unsupported before it.
 SHORT, LONG = "short", pytest.param("long", marks=pytest.mark.soak)
 LD1_EVENTS = {"short": 150, "long": 350}
 
@@ -125,11 +125,6 @@ def test_ld1e_learning_death_is_flagged_only_for_a_quarantined_frontier(ld1_long
         assert not g.flagged(ld1_long.events, "learning_death")
     else:
         assert result.ok, result.evidence
-
-
-@pytest.mark.soak  # as LD-1e: the gain hold is read on the 350-event world's tail
-def test_ld1f_gain_is_held_while_learning_death_is_flagged(ld1_long):
-    assert g.ld1f_hold(ld1_long.events, ld1_long.manifest).status != g.FAIL
 
 
 def test_ld1_every_draw_is_the_routers_own_and_the_physics_never_steers(ld1):

@@ -275,8 +275,7 @@ def test_the_cli_reports_witness_unavailable_with_the_retried_exit_code(tmp_path
 
 def test_a_checkpoint_cannot_revive_a_killed_runtime():
     m = load_manifest("scripted")
-    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1)
+    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None)
     rt.run()
     state = runtime_state(rt)
     # The fingerprint rides beside the mapping, never in it: two runs of one manifest
@@ -303,7 +302,7 @@ def test_a_memory_only_kill_touches_no_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     m = load_manifest("scripted")
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, kill_at_end=True)
+                 kill_at_end=True)
     rt.run()
     assert rt.termination.final
     assert list(tmp_path.iterdir()) == []
@@ -377,8 +376,7 @@ def test_kills_accumulate_nothing_global_and_a_killed_checkpoint_still_refuses()
     before = module_state()
     worlds = []
     for seed in (1, 2):
-        rt = Runtime(m, events=1, seed=seed, initial_balance_micro=None, ledger_path=None,
-                     router_gamma=.1)
+        rt = Runtime(m, events=1, seed=seed, initial_balance_micro=None, ledger_path=None)
         rt.run()
         worlds.append((rt, runtime_state(rt)))
     (a, state_a), (b, state_b) = worlds
@@ -395,8 +393,7 @@ def test_kills_accumulate_nothing_global_and_a_killed_checkpoint_still_refuses()
         restore_runtime(twin, state_a)
     assert refused.value.code == "identity_killed"
     # A live world's checkpoint restores, and the restored runtime joins its lineage.
-    c = Runtime(m, events=1, seed=3, initial_balance_micro=None, ledger_path=None,
-                router_gamma=.1)
+    c = Runtime(m, events=1, seed=3, initial_balance_micro=None, ledger_path=None)
     c.run()
     state_c = runtime_state(c)
     assert not state_c["lineage"].killed  # another world's kills are not this lineage's
@@ -411,8 +408,7 @@ def test_kills_accumulate_nothing_global_and_a_killed_checkpoint_still_refuses()
 def _killed_after_checkpoint(copy_of):
     """A memory-only world checkpointed, the checkpoint copied by ``copy_of``, then killed."""
     m = load_manifest("scripted")
-    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1)
+    rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None)
     rt.run()
     saved = copy_of(runtime_state(rt))
     rt.termination.kill("explicit_kill:operator")

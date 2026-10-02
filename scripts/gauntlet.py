@@ -835,6 +835,8 @@ ROUTER_SOURCES: dict[str, tuple[str, ...]] = {
     "router.retained": ("learner_id",),
     "router.drained": ("learner_id",),
     "router.step_rescaled": ("learner_id",),
+    # A round that trained nothing: a replaced router's, or a closed core epoch's.
+    "learner.orphaned": ("learner_id",),
     "router.abstention_priced": ("router",),
     "router.decline_priced": ("router",),
     # R16b-5: the router that drew the round and the one that learned it.
@@ -3907,17 +3909,14 @@ def _probs(base: Mapping) -> list[float]:
 #: Criteria that need no per-population parameter: what ``replay`` runs over a diary.
 GENERIC: dict[str, Callable[[list[Mapping], Mapping], Result]] = {
     "SF-1b": sf1b_ratchet_cadence,
-    "SF-1e": sf1e_gain,
     "SF-1f": sf1f_route_open,
     "LD-1a": ld1a_accrual,
     "LD-1d": ld1d_exemption,
     "LD-1e": ld1e_detection,
-    "LD-1f": ld1f_hold,
     "TH-1b": th1b_duration,
     "TH-1b-antiwindup": th1b2_frozen,
     "TH-1c": th1c_movement,
     "TH-1d": th1d_frontier,
-    "TH-1f": th1f_priority,
     "TH-3": th3_governance_gap,
     "OF-1a": of1a_outside_the_loop,
     "OF-2d": of2d_authorship,
@@ -3928,8 +3927,6 @@ GENERIC: dict[str, Callable[[list[Mapping], Mapping], Result]] = {
     "S4": s4_boundedness,
     "S5": s5_neutral_imputation,
     "S5b": s5b_observed_neutral,
-    "S7": s7_gain_targets,
-    "S8": s8_gain_rows_uniform,
 }
 
 #: Per-card criteria: ``replay`` runs each over every card the diary names
@@ -3956,8 +3953,6 @@ POPULATION_ONLY: dict[str, str] = {
     "th4_null": "synthetic: the detector's own null rate, from a separate synthetic run",
     "sf2_gradient": "relievers and holders: the seat roles the population scripted",
     "of2c_holdout_bites": "seats and after_window: the population's holdout script",
-    "gain_neutral": "the learners' states before and after a gain act, instrumented "
-                    "in the run; the diary holds only the gain rows (S8 reads those)",
 }
 #: Criteria with no diary reading at all: each needs two runs of one population, and a
 #: diary is one run. ``replay`` reports each as UNSUPPORTED with its reason, so a diary's
@@ -3968,6 +3963,19 @@ POPULATION_METAMORPHIC: dict[str, str] = {
           "a diary is one run",
 }
 #: Criteria ``replay`` runs by their own rule rather than a registry above.
+#: Criteria of a retired mechanism, each with why: they still read the diaries of their
+#: era (whose ``immune.gain`` rows they judge), and ``replay`` no longer runs them on this
+#: kernel's diaries, which write none. The exploration ratchet they judged was deleted
+#: with the constant-exploration learners (docs/architecture/learners-noregret.md §2.5).
+RETIRED: dict[str, str] = {
+    "sf1e_gain": "SF-1e: the stable-failure exploration ratchet, deleted",
+    "ld1f_hold": "LD-1f: the ratchet's hold while learning-dead, deleted",
+    "th1f_priority": "TH-1f: the ratchet's thrash priority, deleted",
+    "s7_gain_targets": "S7: the ratchet's targets, deleted",
+    "s8_gain_rows_uniform": "S8: the ratchet's uniform step, deleted",
+    "gain_neutral": "S8 (instrumented): the ratchet's arm-symmetric step, deleted",
+}
+
 REPLAY_DIRECT: dict[str, str] = {
     "sf0_relation": "SF-0, from the manifest and every region the diary measured",
 }

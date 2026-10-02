@@ -188,7 +188,7 @@ def _launched_block(manifest, launch, tmp_path, *, as_launched=False):
                   "clock_source": AdmissionClock(LiveClock(launched.tick_interval_ns, 1),
                                                  Admission(1_000_000, 1))}
     rt = Runtime(launched, events=1, seed=launched.seed, initial_balance_micro=None,
-                 ledger_path=str(tmp_path / "ledger.jsonl"), router_gamma=0.1,
+                 ledger_path=str(tmp_path / "ledger.jsonl"),
                  provider=charter_session.ManifestCatalogue(launched),
                  exchange=HyperliquidExchange(mainnet=False), **kwargs)
     if launch != "run":
@@ -401,7 +401,7 @@ def test_the_schematics_path_cannot_run_a_world():
 
     def build(manifest=world, **changes):
         kwargs = {"events": 1, "seed": None, "initial_balance_micro": None,
-                  "ledger_path": None, "router_gamma": 0.1,
+                  "ledger_path": None,
                   "provider": charter_session.ManifestCatalogue(manifest),
                   "market": InertMarket(), "exchange": InertVenue(manifest.exchange),
                   "_schematics_rail": rail, **changes}
@@ -451,8 +451,7 @@ def test_the_plain_runtime_still_refuses_the_capital_loop_world():
 
     world = load_manifest(CAPITAL_LOOP)
     with pytest.raises(RailError):
-        Runtime(world, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
-                router_gamma=0.1)
+        Runtime(world, events=1, seed=None, initial_balance_micro=None, ledger_path=None)
     assert world.exchange.kind == "hyperliquid"  # the session's manifest stays live
 
 
@@ -626,7 +625,7 @@ def _diary_of(world, tmp_path, *, bound_by_run=True):
         run_world(manifest, events=1, seed=1, ledger_path=str(path))
     else:
         Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                ledger_path=str(path), router_gamma=0.1).run()
+                ledger_path=str(path)).run()
     return manifest, path
 
 

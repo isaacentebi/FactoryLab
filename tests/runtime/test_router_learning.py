@@ -4,8 +4,9 @@ An abstention is worth what the router's woken, settled rounds earned on average
 their card penalty (wave 16, D4 and ruling R-F), less the same penalty: the one credit
 that tilts a mean-based router neither toward waking a seat nor toward abstaining. The
 published prior 0.5 stands only before the router's first settled round. A manifest can seed its
-retentive core with a no-swap-regret (Blum-Mansour) router, and a router that is replaced
-hands every round it still owes a reward for to the router that replaced it.
+retentive core with a no-swap-regret (Blum-Mansour) router. A router that is replaced
+never samples again, and the rounds it still owes a reward for train nothing: no theorem
+carries them to its successor (docs/architecture/learners-noregret.md §2.5).
 """
 
 import random
@@ -15,7 +16,6 @@ import pytest
 
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
-from factorylab.learners.blum_mansour import BlumMansour
 from factorylab.learners.exp3 import EXP3
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import restore_runtime, runtime_state
@@ -25,7 +25,8 @@ from factorylab.runtime.worlds import load_manifest, manifest_from_dict
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 from tests.conftest import make_runtime
-from tests.runtime.test_learning_signal import _drawn, _router, _settle, _weights
+from tests.helpers import freeze_round
+from tests.runtime.test_learning_signal import _drawn, _losses, _router, _settle, _weights
 
 
 def _core_runtime(kinds=("ProducerReturn",)):
@@ -33,7 +34,7 @@ def _core_runtime(kinds=("ProducerReturn",)):
     manifest = replace(manifest, evaluation=replace(manifest.evaluation,
                                                     no_swap_regret_kinds=tuple(kinds)))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                   ledger_path=None, router_gamma=.1,
+                   ledger_path=None,
                    exchange=FakeExchange(), provider=ScriptedProvider())
 
 
@@ -177,7 +178,9 @@ def test_a_round_that_trains_nothing_books_no_delay_baseline_or_scale():
     rt = _core_runtime()
     state = rt.routers["ProducerReturn"][0]
     arm = next(a for a in state.universe if a != NOOP)
-    handle = _drawn(rt, state, arm)  # no snapshot key: nothing to train
+    handle = _drawn(rt, state, arm)
+    # Its frozen round is gone (spent elsewhere): there is nothing to train.
+    state.learner.inner.discard_for(rt.snapshot_keys[handle])
     rt.clock.now_ns += 5_000_000_000
     _scored(rt, handle, 0.9, "forecast-mean-v1")
     before = state.learner.inner.inner.state()
@@ -190,8 +193,7 @@ def test_an_owed_abstention_whose_router_is_gone_is_ledgered_not_dropped():
     rt = make_runtime()
     state, _lid = _router(rt)
     handle = _drawn(rt, state, NOOP)
-    rt.noop_credits[handle] = {"router": "router:gone", "due_ns": 0, "p": None,
-                               "executed": None}
+    rt.noop_credits[handle] = {"router": "router:gone", "due_ns": 0, "key": None}
     rt._credit_abstentions()
     assert not rt.noop_credits
     assert any(i["kind"] == "propensity.unlearned" and i["handle"] == handle
@@ -215,12 +217,13 @@ def test_a_plain_router_credits_an_abstention_once_whatever_returns_repeat():
                            propensity=PropensityRecord(arms, probs, NOOP, seed, lid, "d"),
                            channel="test", deadline_ns=rt.clock.now_ns + 1, parent_handle=None,
                            cost_ceiling=0)
+    freeze_round(rt, handle, state)
     rt.clock.now_ns += 1
     rt.ticks_consumed += 1  # the cutoff is a tick (time audit T3)
     assert rt.queue.expire_due() == [handle]
     rt._deliver_returns()
     once = _weights(state)
-    assert once[NOOP] > min(once.values())  # credited at its deadline
+    assert _losses(state)[NOOP] > 0  # credited at its deadline
     rt.queue.settle(handle, channel="test", score=0.0, status=SettleStatus.INAPPLICABLE,
                     definition_version="realized-consequence-v2-x", sampling_ref=None)
     rt._deliver_returns()
@@ -233,7 +236,7 @@ def test_a_plain_router_credits_an_abstention_once_whatever_returns_repeat():
 
 def _one_seat_router(rt, seat):
     rt._universe_for = lambda _kind, _ev=None: [seat, NOOP]
-    return rt._build_router("ProducerReturn", "exp3", 0.1)
+    return rt._build_router("ProducerReturn", "exp3")
 
 
 @pytest.mark.parametrize("score", [0.8, 0.2])
@@ -255,6 +258,7 @@ def test_a_one_seat_router_credits_doing_nothing_what_its_seat_earned(score):
             actor=state.learner.id, event_id=f"one-seat-{i}",
             propensity=PropensityRecord(arms, probs, chosen, seed, state.learner.id, "s"),
             channel="test", deadline_ns=10**15, parent_handle=None, cost_ceiling=0)
+        freeze_round(rt, handle, state)
         if chosen == NOOP:
             _settle(rt, handle, SettleStatus.INAPPLICABLE)
         else:
@@ -269,14 +273,15 @@ def test_a_one_seat_router_credits_doing_nothing_what_its_seat_earned(score):
 def test_the_manifest_seeds_a_swap_regret_core_only_for_the_kinds_it_names():
     core = _core_runtime()
     assert isinstance(core.routers["ProducerReturn"][0].learner, _KeyedLearner)
-    assert all(isinstance(st.learner, EXP3)
+    assert core.routers["ProducerReturn"][0].learner.inner.core
+    assert all(isinstance(st.learner.inner.inner, EXP3)
                for kind, states in core.routers.items() if kind != "ProducerReturn"
                for st in states)
     created = [i for i in core.ledger._recovery_items() if i["kind"] == "router.created"]
     assert [i.get("learner") for i in created
             if i["event_kind"] == "ProducerReturn"] == ["blum_mansour"]
     plain = make_runtime()
-    assert all(isinstance(st.learner, EXP3) for st in plain._all_router_states())
+    assert all(isinstance(st.learner.inner.inner, EXP3) for st in plain._all_router_states())
     assert not any("learner" in i for i in plain.ledger._recovery_items()
                    if i["kind"] == "router.created")
 
@@ -345,12 +350,12 @@ def test_the_judge_tier_is_mean_based_in_the_edition6_worlds(name):
     assert "ProducerReturn" not in world.evaluation.no_swap_regret_kinds
     # The world runs on a live venue; its evaluation cast is seeded into the scripted one.
     scripted = replace(load_manifest("scripted"), evaluation=world.evaluation)
-    rt = Runtime(scripted, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
-    assert all(isinstance(state.learner, EXP3) for state in rt.routers["ProducerReturn"])
+    rt = Runtime(scripted, events=0, seed=1, initial_balance_micro=None, ledger_path=None)
+    assert all(isinstance(state.learner.inner.inner, EXP3)
+               for state in rt.routers["ProducerReturn"])
 
 
-# --- a replaced router hands its owed rounds to its successor ----------------------------
+# --- a replaced router's owed rounds train nothing -----------------------------------------
 
 
 def _live_draw(rt, state, ev_id="p"):
@@ -364,10 +369,10 @@ def _live_draw(rt, state, ev_id="p"):
     return handle, sample.chosen
 
 
-def test_a_pending_core_round_survives_replacement_and_resume_into_the_successor():
+def test_a_pending_core_round_of_a_replaced_router_is_orphaned_through_a_resume():
     rt = _core_runtime()
     old = rt.routers["ProducerReturn"][0]
-    handle, chosen = _live_draw(rt, old)
+    handle, _chosen = _live_draw(rt, old)
     grown = [*old.universe[:-1], "new-judge", NOOP]
     rt._universe_for = lambda _kind, _ev=None: grown
     rt._open_epoch("ProducerReturn")
@@ -377,21 +382,22 @@ def test_a_pending_core_round_survives_replacement_and_resume_into_the_successor
     restore_runtime(restored, runtime_state(rt))
     retired = restored.retired_routers[old.learner.id]
     live = restored.routers["ProducerReturn"][0]
-    assert retired.successor == live.learner.id
     retired_before = retired.learner.inner.inner.state()
     live_before = live.learner.inner.inner.state()
+    observed_before = live.observed.state()
     restored.queue.settle(handle, channel="test", score=0.9, status=SettleStatus.SETTLED,
                           definition_version="1", sampling_ref=None)
     restored._deliver_returns()
-    assert live.learner.inner.inner.state() != live_before
+    assert live.learner.inner.inner.state() == live_before
     assert retired.learner.inner.inner.state() == retired_before
     assert not retired.learner.inner.state()["snapshots"]
-    cap = 2 * restored.m.prices.penalty_cap  # a router's one map, B = 2 * cap (R10-l)
-    assert live.observed.state()[chosen] == [pytest.approx((0.9 + cap) / (1 + cap)), 1]
-    assert old.learner.id not in restored.retired_routers  # drained once learned
+    assert live.observed.state() == observed_before
+    assert any(i["kind"] == "learner.orphaned" and i["handle"] == handle
+               for i in restored.ledger._recovery_items())
+    assert old.learner.id not in restored.retired_routers  # drained once closed
 
 
-def test_a_hand_over_follows_a_chain_of_replacements():
+def test_a_chain_of_replacements_orphans_the_first_routers_round():
     rt = make_runtime()
     first = rt.routers["Tick"][0]
     action = next(a for a in first.universe if a != NOOP)
@@ -399,129 +405,29 @@ def test_a_hand_over_follows_a_chain_of_replacements():
         actor=first.learner.id, event_id="chain",
         propensity=PropensityRecord((action,), (1.0,), action, 1, first.learner.id, "s"),
         channel="test", deadline_ns=10**15, parent_handle=None, cost_ceiling=0)
-    second = rt._build_router("Tick", "exp3", .1)
+    freeze_round(rt, handle, first)
+    second = rt._build_router("Tick", "exp3")
     rt.retired_routers.pop(second.learner.id, None)
-    third = rt._build_router("Tick", "exp3", .1)
+    third = rt._build_router("Tick", "exp3")
     assert first.successor == third.learner.id
     before = third.learner.state()
     rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
                     definition_version="1", sampling_ref=None)
     rt._deliver_returns()
-    assert third.learner.state() != before
+    assert third.learner.state() == before
+    assert first.learner.inner.outstanding() == []
+    assert [i["handle"] for i in rt.ledger._recovery_items()
+            if i["kind"] == "learner.orphaned"] == [handle]
 
 
-def test_an_arm_the_successor_no_longer_holds_trains_nothing_and_says_so():
-    rt = make_runtime()
-    old = rt.routers["Tick"][0]
-    gone = next(a for a in old.universe if a != NOOP)
-    handle = rt.queue.open(
-        actor=old.learner.id, event_id="gone",
-        propensity=PropensityRecord((gone,), (1.0,), gone, 1, old.learner.id, "s"),
-        channel="test", deadline_ns=10**15, parent_handle=None, cost_ceiling=0)
-    rt._universe_for = lambda _kind, _ev=None: [a for a in old.universe if a != gone]
-    rt._open_epoch("Tick")
-    fresh = rt.routers["Tick"][0]
-    before = fresh.learner.state()
-    rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
-                    definition_version="1", sampling_ref=None)
-    rt._deliver_returns()
-    assert fresh.learner.state() == before
-    assert any(i["kind"] == "propensity.unlearned" and i["handle"] == handle
-               for i in rt.ledger._recovery_items())
-
-
-# --- the swap learner keeps what it learned across a roster change -----------------------
-
-
-def test_a_reshaped_swap_learner_keeps_surviving_weights():
-    learner = BlumMansour(lambda a: EXP3(a, .2), ("a", "b", NOOP), id="bm")
-    for base in learner._bases:
-        base._log_weights = {"a": 0.0, "b": -1.0, NOOP: -2.0}
-    grown = learner.reshaped(("a", "b", "c", NOOP), id="bm@1")
-    for action, base in zip(grown.actions, grown._bases, strict=True):
-        weights = base.state()["log_weights"]
-        assert weights["b"] - weights["a"] == pytest.approx(-1.0), action
-        assert weights["c"] - weights["a"] == pytest.approx(-1.0), action  # at the mean
-        assert base.gamma == .2
-
-
-def test_a_carried_round_rejects_an_arm_outside_the_universe_or_a_wrong_propensity():
-    from factorylab.learners.base import BanditFeedback
-
-    learner = BlumMansour(lambda a: EXP3(a, .1), ("a", NOOP), id="bm")
-    before = learner.state()
-    executed = {"a": 0.5, "gone": 0.5}
-    with pytest.raises(ValueError):
-        learner.update_carried(executed, executed, BanditFeedback("gone", 1.0, 0.5))
-    with pytest.raises(ValueError):
-        learner.update_carried(executed, executed, BanditFeedback("a", 1.0, 0.25))
-    assert learner.state() == before
-    learner.update_carried(executed, executed, BanditFeedback("a", 1.0, 0.5))
-    assert learner.state() != before
-
-
-# --- a round drawn over a larger universe moves a weight by at most one ----------------
-
-
-def test_a_shrunk_router_steps_a_carried_round_at_the_drawers_size_and_ledgers_it():
-    """Drawn at the floor of a five-arm router, X = 1/0.02 = 50; stepped at gamma/N_new =
-    0.05 by a two-arm successor, one round moved a log weight by 2.5. It is stepped at
-    the drawer's gamma/N_old now, at most one."""
-    rt = make_runtime()
-    old = rt.routers["ProducerReturn"][0]
-    arms = tuple(old.universe)
-    kept = arms[0]
-    floor = 0.1 / len(arms)  # gamma / N_old: the least the predecessor ever drew an arm
-    probs = tuple(floor if a == kept else (1 - floor) / (len(arms) - 1) for a in arms)
-    seed = next(s for s in range(100_000)
-                if random.Random(s).choices(arms, weights=probs, k=1)[0] == kept)
-    handle = rt.queue.open(
-        actor=old.learner.id, event_id="floor",
-        propensity=PropensityRecord(arms, probs, kept, seed, old.learner.id, "s"),
-        channel="test", deadline_ns=10**15, parent_handle=None, cost_ceiling=0)
-    rt._universe_for = lambda _kind, _ev=None: [kept, NOOP]
-    rt._open_epoch("ProducerReturn")
-    fresh = rt.routers["ProducerReturn"][0]
-    before = fresh.learner.state()["log_weights"]
-    rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
-                    definition_version="verdict-v1", sampling_ref=None)
-    rt._deliver_returns()
-    after = fresh.learner.state()["log_weights"]
-    assert (after[kept] - after[NOOP]) - (before[kept] - before[NOOP]) == pytest.approx(1.0)
-    items = rt.ledger._recovery_items()
-    assert any(i["kind"] == "router.step_rescaled" and i["handle"] == handle
-               and i["learner_id"] == fresh.learner.id and i["drawn_universe"] == 5
-               and i["learning_universe"] == 2 and i["stepped_as"] == pytest.approx(0.4)
-               for i in items)
-    assert any(i["kind"] == "router.carried" and i["handle"] == handle
-               and i["reward"] == 1.0 for i in items)
-
-
-def test_a_shrunk_swap_router_steps_every_row_at_the_drawers_size():
-    rt = _core_runtime()
-    old = rt.routers["ProducerReturn"][0]
-    handle, chosen = _live_draw(rt, old)
-    rt._universe_for = lambda _kind, _ev=None: [chosen, NOOP]
-    rt._open_epoch("ProducerReturn")
-    fresh = rt.routers["ProducerReturn"][0]
-    rows = [dict(b.state()["log_weights"]) for b in fresh.learner.inner.inner._bases]
-    rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
-                    definition_version="forecast-mean-v1", sampling_ref=None)
-    rt._deliver_returns()
-    for base, row in zip(fresh.learner.inner.inner._bases, rows, strict=True):
-        now = base.state()["log_weights"]
-        assert (now[chosen] - now[NOOP]) - (row[chosen] - row[NOOP]) <= 1.0
-    assert any(i["kind"] == "router.step_rescaled" and i["handle"] == handle
-               for i in rt.ledger._recovery_items())
-
-
-def test_a_round_learned_over_the_same_universe_is_not_rescaled():
+def test_no_round_is_ever_rescaled_or_carried():
     rt = make_runtime()
     state, _lid = _router(rt)
     arm = next(a for a in state.universe if a != NOOP)
     _scored(rt, _drawn(rt, state, arm), 1.0, "verdict-v1")
     rt._deliver_returns()
-    assert not any(i["kind"] == "router.step_rescaled" for i in rt.ledger._recovery_items())
+    kinds = {i["kind"] for i in rt.ledger._recovery_items()}
+    assert not kinds & {"router.step_rescaled", "router.carried"}
 
 
 # --- learning death, observed ----------------------------------------------------------
@@ -543,16 +449,19 @@ def test_a_window_whose_every_draw_parked_at_noop_is_the_frontier_signal():
     state, lid = _router(rt)
     window = rt.window.index
     for p in (0.95, 0.92, 0.97):
-        rt._watch_abstention(state, _draw_at(state, p))
+        rt._watch_abstention(state, _draw_at(state, p), 0.1)
     watch = dict(state.watch)
     # Versioning P1: the draws also carry the mass they put on unhistoried seats.
     offered, mass = watch.pop("unhistoried_offered"), watch.pop("unhistoried_mass")
     watch.pop("fresh_ratio_max"), watch.pop("incumbent_min")
+    # Each draw's NOOP against its own floor, 1 - gamma (learners design §2.7).
+    slack = watch.pop("min_slack")
     assert watch == {"window": window, "draws": 3, "min_p": 0.92}
+    assert slack == pytest.approx(0.02)
     assert offered == 3 and mass == pytest.approx(0.05 + 0.08 + 0.03)
     (row,) = [r for r in rt.frontier_invocation() if r["router"] == lid]
     assert row["uninvoked"] and row["draws"] == 3 and row["min_p_noop"] == 0.92
-    assert row["floor"] == pytest.approx(0.9)
+    assert row["min_slack"] == pytest.approx(0.02) and not row["core"]
     rt.window.index += 1
     rt._deliver_returns()
     assert not state.watch  # a closed window's watch is dropped, nothing ledgered
@@ -564,11 +473,11 @@ def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_frontier_invoked():
     rt = make_runtime()
     state, lid = _router(rt)
     for p in (0.95, 0.5, 0.97):
-        rt._watch_abstention(state, _draw_at(state, p))
+        rt._watch_abstention(state, _draw_at(state, p), 0.1)
     (row,) = [r for r in rt.frontier_invocation() if r["router"] == lid]
     assert not row["uninvoked"]
     rt.window.index += 1
-    rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw starts anew
+    rt._watch_abstention(state, _draw_at(state, 0.99), 0.1)  # a new window starts anew
     assert {k: state.watch[k] for k in ("window", "draws", "min_p")} == {
         "window": rt.window.index, "draws": 1, "min_p": 0.99}
     assert state.watch["unhistoried_offered"] == 1
@@ -595,7 +504,7 @@ def test_the_watch_is_observation_only_and_survives_a_resume():
     rt = make_runtime()
     state, _lid = _router(rt)
     before = state.learner.state()
-    rt._watch_abstention(state, _draw_at(state, 0.95))
+    rt._watch_abstention(state, _draw_at(state, 0.95), 0.1)
     assert state.learner.state() == before and state.neutral() == NEUTRAL_REWARD
     restored = make_runtime()
     restore_runtime(restored, runtime_state(rt))

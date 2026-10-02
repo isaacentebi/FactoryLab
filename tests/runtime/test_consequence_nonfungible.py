@@ -78,7 +78,7 @@ def test_the_forecast_skill_a_card_prices_is_the_forecasts_alone(monkeypatch):
     monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
     seed = load_manifest("scripted")
     rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(_card(),))), events=1,
-                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+                 seed=1, initial_balance_micro=None, ledger_path=None)
     rt._derive_regions()
     judge = next(a for a in rt.assemblies.values()
                  if "Verdict" in a.spec.emits).spec.id
@@ -105,7 +105,7 @@ def test_the_forecast_skill_a_card_prices_is_the_forecasts_alone(monkeypatch):
 
 def test_a_posted_lambda_is_never_scored_against_a_judgements_consequence():
     rt = Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     rt.margin_windows = {1: {"due": 2, "cards": {}, "decisions": {
         "judge-decision": {"assembly": "eval-a", "role": "evaluator", "cost": 1},
         "producer-decision": {"assembly": "seed-decider", "role": "producer", "cost": 1}}}}

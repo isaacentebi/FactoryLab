@@ -3,9 +3,13 @@ import math
 import pytest
 
 from factorylab.learners.base import BanditFeedback, FullInfoFeedback
-from factorylab.learners.blum_mansour import BlumMansour, stationary_distribution
-from factorylab.learners.exp3 import EXP3
-from factorylab.learners.hedge import Hedge
+from factorylab.learners.blum_mansour import (
+    BlumMansour,
+    Orphaned,
+    epoch_gamma,
+    minimum_epoch,
+    stationary_distribution,
+)
 
 
 @pytest.mark.parametrize("matrix", [
@@ -41,132 +45,99 @@ def test_invalid_matrices_fail(matrix):
         stationary_distribution(matrix)
 
 
-class RecordingHedge(Hedge):
-    def update(self, feedback):
-        self.received = feedback
-        super().update(feedback)
+def test_epochs_double_and_gamma_is_horizon_tuned():
+    core = BlumMansour(("a", "b", "NOOP"), first_epoch=5)
+    h0 = max(minimum_epoch(3), 5)
+    assert core.first_epoch == h0
+    seen = []
+    for _ in range(h0 * 7):
+        _, saved = core.open_round(core.actions)
+        seen.append(saved.epoch)
+        assert saved.gamma == epoch_gamma(3, h0 * 2 ** saved.epoch)
+    assert seen == [0] * h0 + [1] * 2 * h0 + [2] * 4 * h0
+    assert epoch_gamma(3, h0) > epoch_gamma(3, 2 * h0)
+    # The first epoch never falls below the least horizon with gamma <= 1.
+    assert BlumMansour(("a", "b")).first_epoch == minimum_epoch(2)
 
 
-def test_full_information_scales_each_row_and_preserves_round_state():
-    bases = []
-
-    def factory(actions):
-        base = RecordingHedge(actions, 0.4)
-        base.update(FullInfoFeedback(dict(zip(actions, (0, len(bases) / 2, 1), strict=True))))
-        bases.append(base)
-        return base
-
-    learner = BlumMansour(factory, ("a", "b", "c"))
-    p = learner.distribution(("a", "b"))
-    before = learner.state()
-    assert learner.distribution(("a", "b")) == p
-    assert learner.state() == before
-    p["a"] = -1  # Returned dictionaries cannot corrupt the saved round.
-    p = learner.distribution(("a", "b"))
-    with pytest.raises(RuntimeError):
-        learner.distribution(("a", "b", "c"))
-    losses = {"a": 0.2, "b": 0.8, "c": 1.0}
-    learner.update(FullInfoFeedback(losses))
-    for action, base in zip(learner.actions, bases, strict=True):
-        assert base.received.losses == pytest.approx(
-            {a: p.get(action, 0) * loss for a, loss in losses.items()}
-        )
-    assert bases[2].received.losses == {"a": 0, "b": 0, "c": 0}
-    assert learner.state() != before
-    with pytest.raises(RuntimeError):
-        learner.update(FullInfoFeedback(losses))
-    assert set(learner.distribution(("a", "b", "c"))) == {"a", "b", "c"}
+def test_row_update_is_lemma_10_with_the_row_proposal_cancelled():
+    core = BlumMansour(("a", "b", "c"), coverage=2.0)
+    p, saved = core.open_round(core.actions)
+    executed = {"a": 0.5, "b": 0.25, "c": 0.25}
+    saved = type(saved)(saved.epoch, saved.support, saved.p, saved.gamma,
+                        tuple(executed.items()))
+    core.update_round(saved, BanditFeedback("b", 0.8, 0.25))
+    gamma = saved.gamma
+    for i, row in zip(core.actions, core.state()["rows"], strict=True):
+        x = p[i] * 0.8 / (2.0 * 0.25)
+        assert row["b"] - row["a"] == pytest.approx(gamma / 3 * x)
+        assert row["a"] == row["c"]
 
 
-class RecordingEXP3(EXP3):
-    def update_observed_gain(self, action, gain, proposal_probability):
-        self.received = (action, gain, proposal_probability)
-        super().update_observed_gain(action, gain, proposal_probability)
-
-
-def bandit_reduction():
-    bases = []
-
-    def factory(actions):
-        base = RecordingEXP3(actions, 0.3)
-        base.update(BanditFeedback(actions[len(bases)], 1, 0.05 * (len(bases) + 1)))
-        bases.append(base)
-        return base
-
-    return BlumMansour(factory, ("a", "b", "c")), bases
-
-
-@pytest.mark.parametrize("chosen", ["a", "b", "c"])
-def test_sr_mab_gain_split_estimator_and_exploration_match_paper(chosen):
-    learner, bases = bandit_reduction()
-    actions = learner.actions
-    rows = [base.distribution(actions) for base in bases]
-    logs = [base.state()["log_weights"] for base in bases]
-    p = learner.distribution(actions)
-    # Distinct nonuniform rows expose a missing q factor or a second division by p.
-    assert rows[0] != rows[1] and p["a"] != pytest.approx(1 / 3)
-    reward = 0.8
-    learner.update(BanditFeedback(chosen, reward, p[chosen]))
-    assert sum(base.received[1] for base in bases) == pytest.approx(reward)
-    for i, base in enumerate(bases):
-        _, gain, denominator = base.received
-        assert all(prob >= base.gamma / len(actions) for prob in rows[i].values())
-        assert gain == pytest.approx(p[actions[i]] * reward * rows[i][chosen] / p[chosen])
-        assert denominator == rows[i][chosen]
-        estimate = gain / denominator
-        assert p[chosen] * estimate == pytest.approx(p[actions[i]] * reward)
-        after = base.state()["log_weights"]
-        other = next(a for a in actions if a != chosen)
-        delta = after[chosen] - after[other] - (logs[i][chosen] - logs[i][other])
-        assert delta == pytest.approx(base.gamma / len(actions) * estimate)
-
-
-def test_master_denominator_is_the_logged_float_not_a_recomputed_value():
-    learner, bases = bandit_reduction()
-    rows = [base.distribution(learner.actions) for base in bases]
-    p = learner.distribution(learner.actions)
-    logged = p["a"] * (1 + 5e-13)
-    learner.update(BanditFeedback("a", 0.8, logged))
-    assert bases[0].received[1] == p["a"] * 0.8 * rows[0]["a"] / logged
-
-
-def test_bandit_feasibility_solves_on_the_feasible_submatrix():
-    learner, bases = bandit_reduction()
-    p = learner.distribution(("c", "a"))
-    assert tuple(p) == ("c", "a")
-    rows = [base.distribution(("c", "a")) for base in bases]
-    assert p["a"] == pytest.approx(p["a"] * rows[0]["a"] + p["c"] * rows[2]["a"])
-    learner.update(BanditFeedback("a", 1, p["a"]))
-    assert bases[1].received[1] == 0
-
-
-def test_feedback_mode_and_wrong_propensity_are_rejected_before_updates():
-    full = BlumMansour(lambda a: Hedge(a, 0.1), ("a", "b"))
-    full.distribution(full.actions)
-    before = full.state()
+def test_coverage_bound_is_enforced_and_failure_changes_nothing():
+    core = BlumMansour(("a", "b"), coverage=1.5)
+    p, saved = core.open_round(core.actions)
+    starved = type(saved)(saved.epoch, saved.support, saved.p, saved.gamma,
+                          (("a", 0.9), ("b", 0.1)))
+    before = core.state()
+    with pytest.raises(ValueError, match="coverage"):
+        core.update_round(starved, BanditFeedback("b", 1.0, 0.1))
+    with pytest.raises(ValueError, match="executed propensity"):
+        core.update_round(saved, BanditFeedback("b", 1.0, 0.3))
     with pytest.raises(TypeError):
-        full.update(BanditFeedback("a", 1, 0.5))
-    assert full.state() == before
-    bandit, _ = bandit_reduction()
-    bandit.distribution(bandit.actions)
-    before = bandit.state()
-    with pytest.raises(TypeError):
-        bandit.update(FullInfoFeedback({a: 0 for a in bandit.actions}))
-    with pytest.raises(ValueError):
-        bandit.update(BanditFeedback("a", 1, 0.01))
-    with pytest.raises(ValueError):
-        bandit.update(BanditFeedback("unavailable", 1, 0.5))
-    assert bandit.state() == before
+        core.update_round(saved, FullInfoFeedback({"a": 0, "b": 1}))
+    assert core.state() == before
 
 
-def test_bases_must_be_independent_and_state_is_reproducible():
-    base = Hedge(("a", "b"), 0.1)
+def test_off_policy_rare_propensity_step_bounded():
+    """The review's P0 probe: one declared 1e-6 must not lock the master at (1, 0)."""
+    core = BlumMansour(("a", "b"), off_policy=True)
+    p, saved = core.open_round(core.actions)
+    declared = type(saved)(saved.epoch, saved.support, saved.p, saved.gamma,
+                           (("a", 1 - 1e-6), ("b", 1e-6)))
+    core.update_round(declared, BanditFeedback("b", 1.0, 1e-6))
+    for row in core.state()["rows"]:
+        assert row["b"] - row["a"] <= 2 + 1e-12
+    master = core.distribution(core.actions)
+    assert 0 < master["a"] < 1 and 0 < master["b"] < 1
+
+
+def test_rows_stay_strictly_positive_so_the_master_is_interior():
+    core = BlumMansour(("a", "b", "c"))
+    for t in range(200):
+        p, saved = core.open_round(core.actions)
+        assert all(v > 0 for v in p.values())
+        k = "a" if t % 2 else "c"
+        core.update_round(saved, BanditFeedback(k, 1.0, p[k]))
+    assert all(v >= core.gamma() / 3 * 0.999 for v in core.distribution(core.actions).values())
+
+
+def test_a_closed_epochs_round_is_orphaned_and_trains_nothing():
+    core = BlumMansour(("a", "b"))
+    p, old = core.open_round(core.actions)
+    for _ in range(core.first_epoch):
+        core.open_round(core.actions)
+    assert core.epoch == 1
+    before = core.state()
+    with pytest.raises(Orphaned):
+        core.update_round(old, BanditFeedback("a", 1.0, p["a"]))
+    assert core.state() == before
+
+
+def test_feasible_submenu_solves_on_its_own_rows_and_columns():
+    core = BlumMansour(("a", "b", "NOOP"))
+    p = core.distribution(("a", "NOOP"))
+    assert set(p) == {"a", "NOOP"} and p == pytest.approx({"a": 0.5, "NOOP": 0.5})
+    assert core.state()["epoch_rounds"] == 0  # a query opens nothing
+
+
+def test_restore_is_exact_and_refuses_another_schedule():
+    core = BlumMansour(("z", "a"), first_epoch=4, coverage=3.0, id="core")
+    for t in range(9):
+        p, saved = core.open_round(core.actions)
+        core.update_round(saved, BanditFeedback("z", t / 10, p["z"]))
+    restored = BlumMansour.restore(core.state())
+    assert restored.state() == core.state()
+    assert restored.distribution(core.actions) == core.distribution(core.actions)
     with pytest.raises(ValueError):
-        BlumMansour(lambda _: base, base.actions)
-    first, _ = bandit_reduction()
-    second, _ = bandit_reduction()
-    assert first.state() == second.state()
-    for learner in (first, second):
-        p = learner.distribution(learner.actions)
-        learner.update(BanditFeedback("a", 0.4, p["a"]))
-    assert first.state() == second.state()
+        BlumMansour.restore({"algorithm": "BlumMansour", "bases": []})

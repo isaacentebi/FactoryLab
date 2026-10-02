@@ -30,7 +30,7 @@ def _runtime(monkeypatch):
     monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
     seed = load_manifest("scripted")
     rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(HOLDS,))), events=0,
-                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+                 seed=1, initial_balance_micro=None, ledger_path=None)
     rt._derive_regions()
     rt.controller.set_price(HOLDS.id, 0.8, amendment_id="test")
     return rt
@@ -314,7 +314,7 @@ def test_a_reliever_bears_nothing_in_any_scope(monkeypatch, per):
     seed = load_manifest("scripted")
     card = replace(REVISIONS, window=MetricWindow("windows", 1, per))
     rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(card,))), events=0,
-                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+                 seed=1, initial_balance_micro=None, ledger_path=None)
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
     others = [_producer(rt, "seed-decider", "buy") for _ in range(2)]

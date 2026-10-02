@@ -4,8 +4,6 @@
 
 import pytest
 
-from factorylab.learners.base import BanditFeedback
-from factorylab.learners.exp3 import EXP3
 from factorylab.runtime.propensity import (
     MIN_DECLARED_MASS,
     declared_record,
@@ -40,8 +38,3 @@ def test_the_mass_declared_on_the_action_taken_is_floored_before_it_weights_a_re
         "hold", {"hold": MIN_DECLARED_MASS, "buy:BTC": 1 - MIN_DECLARED_MASS},
         learner_id="assembly:x", state_hash="h")
     assert reason is None and record.probs[record.action_ids.index("hold")] == MIN_DECLARED_MASS
-    # With two arms and gamma 0.1, one reward through the recorded mass moves the
-    # chosen arm to at most (1 - gamma) * e^(gamma/2/floor) / (1 + e^(gamma/2/floor)) + gamma/2.
-    learner = EXP3(("hold", "buy:BTC"), 0.1)
-    learner.update(BanditFeedback("hold", 1.0, mass["hold"]))
-    assert learner.distribution(("hold", "buy:BTC"))["hold"] < 0.75

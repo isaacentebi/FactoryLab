@@ -517,7 +517,7 @@ def test_the_world_binds_its_rail_a_guard_for_every_reserve_key_signer(tmp_path,
     run = tmp_path / "runs" / "bound"
     run.mkdir(parents=True)
     runtime = Runtime(load_manifest(str(w["world"])), events=TICKS, seed=1,
-                      initial_balance_micro=None, router_gamma=0.1,
+                      initial_balance_micro=None,
                       ledger_path=str(run / "ledger.jsonl"),
                       provider=kwargs["provider"], exchange=kwargs["exchange"],
                       clock_source=kwargs["clock_source"], capital_loop=True)

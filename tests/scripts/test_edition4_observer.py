@@ -318,7 +318,6 @@ def test_runtime_manifest_labels_capability_and_governance_runway(tmp_path):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        router_gamma=0.1,
         provider=ScriptedProvider(),
     )
     observer = RehearsalObserver.for_runtime(runtime, tmp_path)
@@ -404,7 +403,6 @@ def test_runtime_tick_boundaries_write_before_termination(tmp_path):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        router_gamma=0.1,
         provider=ScriptedProvider(),
         kill_at_end=True,
     )

@@ -112,8 +112,7 @@ def test_no_window_close_input_ledgers_an_infinity(monkeypatch):
                             ("ceiling", {"rule": "at most", "hi": 0.1})))
     manifest = replace(seed, charter=replace(seed.charter, cards=cards),
                        immune=replace(seed.immune, price_step=9e307))
-    rt = Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
+    rt = Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None)
     rt._derive_regions()
     prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
     for window in range(WINDOWS):

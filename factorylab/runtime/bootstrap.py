@@ -163,7 +163,6 @@ class BootstrapMixin:
         seed: int | None,
         initial_balance_micro: int | None,
         ledger_path: str | None,
-        router_gamma: float,
         provider: Any | None = None,
         market: X402Provider | None = None,
         exchange: Any | None = None,
@@ -660,18 +659,10 @@ class BootstrapMixin:
             self.budget.genesis([a.id for a in manifest.assemblies])
 
         # nervous system
-        # A seed exploration above the gain organ's own bound is invalid physics: no
-        # step could ever reach it, and the organ would clamp it on its first (Codex on
-        # #152, the R10-e sweep). Refused at load, as SF-0 is.
-        if (type(router_gamma) not in (int, float) or not 0 < router_gamma
-                or router_gamma > manifest.immune.gamma_max):
-            raise ValueError(f"router_gamma {router_gamma!r} must be in (0, immune.gamma_max "
-                             f"= {manifest.immune.gamma_max}]")
-        self.router_gamma = router_gamma
         self.routers: dict[str, list[RouterState]] = {}
         self.retired_routers: dict[str, RouterState] = {}
         for kind in self._routable_kinds():
-            self._build_router(kind, self._seed_learner_kind(kind), router_gamma)
+            self._build_router(kind, self._seed_learner_kind(kind))
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened tick
         # Exposure decisions whose seat answered status: cannot -> the reason it gave:
         # left ungraded, they settle declined, priced as an abstention (ruling R9).

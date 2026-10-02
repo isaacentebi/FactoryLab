@@ -44,7 +44,7 @@ def _manifest(signer=HOUSE_KEY):
 
 def _runtime(tmp_path, monkeypatch, manifest):
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                 ledger_path=str(tmp_path / "world.jsonl"), router_gamma=.1,
+                 ledger_path=str(tmp_path / "world.jsonl"),
                  exchange=FakeExchange(), provider=ScriptedProvider())
     rt._manage_reserve_window()
     monkeypatch.setattr(rt, "_committee_eligible", lambda: dict(SEATS))

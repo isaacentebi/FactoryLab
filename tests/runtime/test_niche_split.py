@@ -62,7 +62,7 @@ def _run(card_spec, monkeypatch, *, niche, measured=None):
                       MetricWindow("windows", 1, per), region, observation, "producer")
     seed = load_manifest("scripted")
     rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(card,))), events=0,
-                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+                 seed=1, initial_balance_micro=None, ledger_path=None)
     rt._derive_regions()
     rt.controller.set_price("card", 0.05, amendment_id="test")
     a = _decision(rt, "a", ok=True, cost=100, calls=2, notional=1_000_000, action="hold")

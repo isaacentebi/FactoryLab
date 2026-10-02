@@ -34,7 +34,7 @@ from factorylab.world.scripted import ScriptedProvider
 def venue_runtime() -> Runtime:
     """A scripted runtime with a venue rich enough to carry the orders here."""
     rt = Runtime(load_manifest("scripted"), events=0, seed=1,
-                 initial_balance_micro=100_000_000, ledger_path=None, router_gamma=.1,
+                 initial_balance_micro=100_000_000, ledger_path=None,
                  provider=ScriptedProvider(),
                  exchange=FakeExchange(start_cash_usd=Decimal("1000")))
     # The scripted world's fake treasury recomputes its pot view from the venue on

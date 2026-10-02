@@ -37,6 +37,7 @@ from factorylab.world.scripted import (
     _inputs_from_prompt,
     request_form,
 )
+from tests.helpers import freeze_round
 from tests.runtime.test_attributable_blame import _card, _commitments
 
 
@@ -69,7 +70,7 @@ def _priced_runtime(monkeypatch):
     seed = load_manifest("scripted")
     manifest = replace(seed, charter=replace(seed.charter, cards=(card,)))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1, provider=Refuser())
+                 ledger_path=None, provider=Refuser())
     rt._manage_reserve_window()
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
@@ -93,6 +94,7 @@ def _drawn(rt, chosen, channel="verdict"):
                            propensity=rt._propensity(sample), channel=channel,
                            deadline_ns=10**18, parent_handle=None,
                            cost_ceiling=rt.wallet.available)
+    freeze_round(rt, handle, state)
     return state, handle
 
 
@@ -407,6 +409,7 @@ def test_a_polymorphic_decline_settles_on_the_kind_it_selected_at_its_cutoff(mon
                            return_channels=rt._return_channels("dual-x"),
                            deadline_ns=10**18, parent_handle=None,
                            cost_ceiling=rt.wallet.available)
+    freeze_round(rt, handle, state)
     assert rt.queue.queue.get(handle).channel == "emits"
     rt.n += 1
     rt._producer_step(
@@ -457,7 +460,7 @@ def _declining_runtime(monkeypatch):
     manifest = replace(seed, assemblies=(*seed.assemblies, adversary),
                        charter=replace(seed.charter, cards=(card,)))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1, provider=Decliner())
+                 ledger_path=None, provider=Decliner())
     rt._manage_reserve_window()
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
@@ -476,6 +479,7 @@ def _draw(rt, seat, channel):
                            propensity=rt._propensity(sample), channel=channel,
                            deadline_ns=10**18, parent_handle=None,
                            cost_ceiling=rt.wallet.available)
+    freeze_round(rt, handle, state)
     return state, handle
 
 
@@ -605,7 +609,7 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
     No assertion here says which action a seat should prefer, or where routing shares
     should move (AGENTS.md rule 2); the harness only reads the ledger."""
     rt = Runtime(_standoff_manifest(), events=300, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1, provider=Standoff())
+                 ledger_path=None, provider=Standoff())
     rt.run()
     tick = {s.learner.id for s in rt._all_router_states() if s.kind == "Tick"}
     items = rt.ledger._recovery_items()
@@ -663,7 +667,7 @@ def test_a_seat_that_declines_every_round_leaves_the_niche_when_its_trial_ends(m
     card = _card(per=None)
     seed = load_manifest("scripted")
     rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(card,))), events=0,
-                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1,
+                 seed=1, initial_balance_micro=None, ledger_path=None,
                  provider=Refuser())
     rt._manage_reserve_window()
     rt._derive_regions()

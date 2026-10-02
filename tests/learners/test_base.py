@@ -29,4 +29,4 @@ def test_endpoints_and_defensive_feedback_copy():
     assert BanditFeedback("a", 0, 1).reward == 0
     assert BanditFeedback("a", 1, 0.01).reward == 1
     assert isinstance(Hedge(("a", "b"), 0.1), Learner)
-    assert isinstance(EXP3(("a", "b"), 0.1), Learner)
+    assert isinstance(EXP3(("a", "b")), Learner)

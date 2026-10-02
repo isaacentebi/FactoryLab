@@ -388,6 +388,7 @@ class GovernanceMixin:
         that set and the reward that settles each decision trains the learner
         off-policy through the declared propensity.
         """
+        from factorylab.learners.blum_mansour import BlumMansour
         from factorylab.learners.delayed import SnapshotLearner
         from factorylab.learners.exp3 import EXP3
 
@@ -415,12 +416,14 @@ class GovernanceMixin:
         self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
         self._move_trial(handle, self.ev.trial_amount_micro, to=None, reason="trial:learner")
         lid = self._assembly_learner_id(prop.assembly_id)
+        # Trained on the seat's declared propensities: off-policy, so the estimator is
+        # implicit-exploration inside the learner and no regret is claimed (learners
+        # design §2.4). The declaration itself is never rewritten.
         if prop.learner == "blum_mansour":
-            from factorylab.learners.blum_mansour import BlumMansour
-
-            inner = BlumMansour(lambda acts: EXP3(acts, prop.gamma), actions, id=lid)
+            inner = BlumMansour(actions, id=lid, first_epoch=self._first_epoch(),
+                                off_policy=True)
         else:
-            inner = EXP3(actions, prop.gamma, id=lid)
+            inner = EXP3(actions, id=lid, off_policy=True)
         self.assembly_learners[prop.assembly_id] = SnapshotLearner(inner, id=lid)
         self.stats.assembly_learners_registered += 1
         self._emit(EventKind.REGISTERED, {"kind": "learner", "id": prop.assembly_id,
@@ -1004,14 +1007,13 @@ class GovernanceMixin:
                 resource_bounds=ResourceBounds(),
             )
             self._register_with_trial(contract, handle, amount)
-            self._build_router(prop.event_kind, prop.learner, prop.gamma, replace=not prop.add)
+            self._build_router(prop.event_kind, prop.learner, replace=not prop.add)
             self.stats.routers_replaced += 1
             self._emit(
                 EventKind.ROUTER_REPLACED,
                 {
                     "event_kind": prop.event_kind,
                     "learner": prop.learner,
-                    "gamma": prop.gamma,
                     "added": prop.add,
                     "by": handle,
                 },

@@ -148,7 +148,7 @@ def _runtime(monkeypatch, cards=None, kp=0.0):
     if cards is not None:
         manifest = replace(manifest, charter=replace(manifest.charter, cards=cards))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                 ledger_path=None, router_gamma=.1, exchange=FakeExchange(),
+                 ledger_path=None, exchange=FakeExchange(),
                  provider=ScriptedProvider())
     rt._manage_reserve_window()
     monkeypatch.setattr(rt, "_committee_eligible", lambda: dict(ELIGIBLE))

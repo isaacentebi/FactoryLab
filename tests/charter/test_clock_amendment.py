@@ -19,7 +19,7 @@ def runtime():
     base = load_manifest("scripted")
     manifest = replace(base, timing=replace(base.timing, world_repricing_ns=360 * 10**9))
     return Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=0.1)
+                   ledger_path=None)
 
 
 def seated_yes(rt, monkeypatch):

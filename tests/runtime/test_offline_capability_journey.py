@@ -229,7 +229,6 @@ def _runtime(provider: JourneyProvider) -> Runtime:
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        router_gamma=0.2,
         provider=provider,
         exchange=FakeExchange(coins=manifest.exchange.coins),
     ))

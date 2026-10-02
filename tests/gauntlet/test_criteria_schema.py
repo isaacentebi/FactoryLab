@@ -496,7 +496,8 @@ def test_every_criterion_is_replayed_or_population_only_with_a_reason():
 
     registered = {fn.__name__ for table in (g.GENERIC, g.PER_CARD, g.PER_LOOP)
                   for fn in table.values()}
-    accounted = registered | set(g.POPULATION_ONLY) | set(g.REPLAY_DIRECT)
+    accounted = (registered | set(g.POPULATION_ONLY) | set(g.REPLAY_DIRECT)
+                 | set(g.RETIRED))
     criteria = _criteria()
     assert "th1b2_frozen" in criteria and "of2d_authorship" in criteria
     assert sorted(criteria - accounted) == [], "a criterion replay never runs"

@@ -28,7 +28,6 @@ from factorylab.runtime.grounded import (
     latest_mids,
     opportunity_cost,
 )
-from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_CONSEQUENCE,
@@ -2781,14 +2780,14 @@ class FeedbackMixin:
         is deferred to the delay the router's seat rounds take to be learned
         (``_defer_abstention``): an abstention settles at once, and crediting it at
         once would put it a whole feedback delay ahead of every seat it competes
-        with. A router that has been replaced trains its live successor on these
-        rounds instead of itself (``_apply_router_round``), so no settled reward is
-        spent on a copy that never samples again.
+        with. A router that has been replaced never samples again: its rounds train
+        nothing (``learner.orphaned``), since no theorem carries them to its successor
+        (learners design §2.5). Every router is keyed: a round trains only through the
+        snapshot its draw froze.
         """
         decision = self.queue.get(lr.handle)
         prop = decision.propensity
-        keyed = isinstance(state.learner, _KeyedLearner)
-        key = self.snapshot_keys.pop(lr.handle, None) if keyed else None
+        key = self.snapshot_keys.pop(lr.handle, None)
         if not self._router_sampled(decision):
             if key is not None:
                 state.learner.inner.discard_for(key)
@@ -2804,20 +2803,25 @@ class FeedbackMixin:
                 if key is not None:
                     state.learner.inner.discard_for(key)
                 return
-            if not keyed or key is not None:
+            if key is not None:
                 self._defer_abstention(state, key, decision)
             return
-        target = self._successor_state(state)
+        if key is None:
+            return  # its frozen round is already spent: nothing trains, nothing is booked
+        if state.successor is not None:
+            # A replaced router never samples again: its rounds train nothing (learners
+            # design §2.5, rev 3). They settle in the kernel all the same.
+            self._orphan_round(state, lr.handle, key, "the router was replaced")
+            return
+        target = state
         settled = lr.status is SettleStatus.SETTLED
         if not settled and self._abstention_awaits_close(lr.handle):
             # Priced on its origin window's count of decisions, frozen at the window's
-            # close (wave 16, D5): owed until then, as an abstention is.
-            if keyed and key is None:
-                return
-            p, executed = state.learner.inner.take_for(key) if keyed else (None, None)
+            # close (wave 16, D5): owed until then, as an abstention is. The round's
+            # snapshot stays open in its learner under ``key``.
             self.noop_credits[lr.handle] = {
-                "router": state.learner.id, "due_tick": self.ticks_consumed, "p": p,
-                "executed": executed, "action": prop.chosen, "status": str(lr.status),
+                "router": state.learner.id, "due_tick": self.ticks_consumed, "key": key,
+                "action": prop.chosen, "status": str(lr.status),
                 "definition": lr.definition_version}
             return
         if settled:
@@ -2829,8 +2833,6 @@ class FeedbackMixin:
             # judges otherwise earned more by avoiding the world than by facing it).
             raw = target.neutral()
             penalty = self._priced_abstention(lr.handle)
-        if keyed and key is None:
-            return  # its frozen round is already spent: nothing trains, nothing is booked
         # Its raw score and its total charge, card share plus thrash, on the one map
         # (ruling R10-l).
         charged = self._learning_value(lr.handle, raw, penalty, router=state)
@@ -2844,28 +2846,12 @@ class FeedbackMixin:
                                 "terms": self._abstention_price_terms(lr.handle),
                                 "ts": self.clock.now_ns})
         fb = BanditFeedback(prop.chosen, charged, prop.probs[prop.action_ids.index(prop.chosen)])
-        if target is not state:
-            p, executed = state.learner.inner.take_for(key) if keyed else (None, None)
-            learned = self._apply_router_round(state, lr.handle, p, executed, fb)
-        elif keyed:
-            state.learner.inner.update_for(key, fb)
-            learned = True
-        elif set(prop.action_ids) <= set(state.universe):
-            state.learner.update(fb)
-            learned = True
-        else:
-            self.ledger.append({"kind": "propensity.unlearned", "handle": lr.handle,
-                                "learner_id": state.learner.id,
-                                "reason": "the drawn arm is outside this router's universe",
-                                "ts": self.clock.now_ns})
-            learned = False
-        if not learned:
+        if not self._apply_router_round(state, lr.handle, key, fb):
             return
         # Booked only for a round that trained the router: the seat's own baseline, the
         # delay abstentions wait for and the scales they are priced on all describe
         # rounds the router learned from, never one that trained nothing.
-        self._router_learned(state, target, lr.handle, prop.chosen,
-                             "direct" if target is state else "carried", scored=settled)
+        self._router_learned(state, target, lr.handle, prop.chosen, "direct", scored=settled)
         self._record_router_round(state, target, lr.handle)
         if settled:
             target.observed.record(prop.chosen, charged)
@@ -2949,10 +2935,9 @@ class FeedbackMixin:
         Guarantees the credit is applied exactly once, at the drawn NOOP's logged
         propensity, no earlier than its open tick plus the mean delay, in world
         ticks, the router's learned seat rounds took (its tick cutoff while there is
-        none), and that a swap router's frozen round is detached now and survives a
-        checkpoint in ``noop_credits``.
+        none). The round's snapshot stays open in its learner under ``key`` until then,
+        so it survives a checkpoint with the learner.
         """
-        p, executed = state.learner.inner.take_for(key) if key is not None else (None, None)
         total, count = self._successor_state(state).latency
         opened = self.queue.opened_tick(decision.handle)
         opened = self.ticks_consumed if opened is None else opened
@@ -2960,7 +2945,7 @@ class FeedbackMixin:
         due = (opened + -(-total // count) if count
                else cutoff if cutoff is not None else self.ticks_consumed)
         self.noop_credits[decision.handle] = {"router": state.learner.id, "due_tick": due,
-                                              "p": p, "executed": executed}
+                                              "key": key}
         self._credit_abstentions()
 
     def _credit_abstentions(self) -> None:
@@ -2986,6 +2971,10 @@ class FeedbackMixin:
                                     "ts": now})
                 continue
             prop = self.queue.get(handle).propensity
+            if drawer.successor is not None:
+                self._orphan_round(drawer, handle, credit.get("key"),
+                                   "the router was replaced")
+                continue
             # Priced when due, at the observed mean raw score of every seat round learned
             # by then, less the charter prices a woken decision bears in the window it
             # was drawn in (wave 16, D4).
@@ -3005,8 +2994,7 @@ class FeedbackMixin:
                                 "penalty": penalty, "reward": reward,
                                 "terms": self._abstention_price_terms(handle), "ts": now})
             fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
-            learned = self._apply_router_round(drawer, handle, credit["p"], credit["executed"],
-                                               fb)
+            learned = self._apply_router_round(drawer, handle, credit.get("key"), fb)
             if learned:
                 self._router_learned(drawer, self._successor_state(drawer), handle, action,
                                      "credit", scored=False)
@@ -3142,58 +3130,54 @@ class FeedbackMixin:
         """Keep a router addressable until every abstention it drew has been credited."""
         return any(c["router"] == learner_id for c in self.noop_credits.values())
 
-    def _apply_router_round(self, drawer: Any, handle: str, p: dict | None,
-                            executed: dict | None, fb: BanditFeedback) -> bool:
-        """Train the live router that owns ``drawer``'s rounds once on this round.
+    def _orphan_round(self, drawer: Any, handle: str, key: str | None, reason: str) -> None:
+        """Close a router round that trains nothing, on the record (``learner.orphaned``).
 
-        Guarantees the update uses the drawn arm's logged propensity: a swap router
-        credits each row its share of the policy that owned the round (the drawing
-        swap router's frozen p, else the logged draw). A drawn arm the learning
-        router no longer holds trains nothing and is ledgered unlearned; a round a
-        replaced router drew is ledgered ``router.carried``. Returns whether it trained.
-
-        A round drawn over a larger universe than the learning router's (N_old >
-        N_new) is stepped at the drawer's size, gamma/N_old rather than gamma/N_new
-        (the reward is scaled by N_new/N_old, which scales a swap router's every row
-        alike): its estimator is bounded by N_old/gamma, so at gamma/N_new one round
-        could move a log weight by N_old/N_new > 1 and swamp every round before it
-        (thrash, essay II.II.a). The rescale is ledgered ``router.step_rescaled``.
+        Guarantees its snapshot (when one is open) and any thrash charge held for it are
+        released, so an orphan leaves no state behind (essay II.II.b, "memory").
         """
-        target = self._successor_state(drawer)
-        prop = self.queue.get(handle).propensity
-        logged = dict(zip(prop.action_ids, prop.probs, strict=True))
-        drawn, learning = len(drawer.universe), len(target.universe)
-        scored = fb.reward
-        if learning < drawn:
-            fb = BanditFeedback(fb.action, scored * learning / drawn, fb.propensity)
-        reason = None
-        if fb.action not in target.universe:
-            reason = "the drawn arm is outside the learning router's universe"
-        else:
-            try:
-                if isinstance(target.learner, _KeyedLearner):
-                    target.learner.inner.update_carried(p or logged, executed or logged, fb)
-                else:
-                    target.learner.update(fb)
-            except (KeyError, ValueError, TypeError) as exc:
-                reason = str(exc)[:200]
-        if reason is not None:
+        if key is not None and key in drawer.learner.inner.outstanding():
+            drawer.learner.inner.discard_for(key)
+        self.thrash_charges.pop(handle, None)
+        self.ledger.append({"kind": "learner.orphaned", "handle": handle,
+                            "learner_id": drawer.learner.id, "reason": reason,
+                            "ts": self.clock.now_ns})
+
+    def _apply_router_round(self, drawer: Any, handle: str, key: str | None,
+                            fb: BanditFeedback) -> bool:
+        """Train ``drawer`` once on the round it drew under ``key``; whether it trained.
+
+        Guarantees the update is the round's own frozen snapshot with the drawn arm's
+        truthful logged propensity, and only for a live router: a replaced router's
+        round, or a core round whose epoch has closed, trains nothing and is ledgered
+        ``learner.orphaned`` (learners design §2.2, §2.5). An update the learner refuses
+        (a propensity that is not the round's, a coverage bound broken) trains nothing
+        and is ledgered ``propensity.unlearned``; its snapshot is closed.
+        """
+        if drawer.successor is not None:
+            self._orphan_round(drawer, handle, key, "the router was replaced")
+            return False
+        inner = drawer.learner.inner
+        if key is None or key not in inner.outstanding():
             self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
-                                "learner_id": target.learner.id, "reason": reason,
+                                "learner_id": drawer.learner.id,
+                                "reason": "no open round under this handle",
                                 "ts": self.clock.now_ns})
             return False
-        if target is not drawer:
-            self.ledger.append({"kind": "router.carried", "handle": handle,
-                                "from": drawer.learner.id, "to": target.learner.id,
-                                "action": fb.action, "reward": scored,
+        try:
+            trained = inner.update_for(key, fb)
+        except (KeyError, ValueError, TypeError) as exc:
+            inner.discard_for(key)
+            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                "learner_id": drawer.learner.id, "reason": str(exc)[:200],
                                 "ts": self.clock.now_ns})
-        if learning < drawn:
-            self.ledger.append({"kind": "router.step_rescaled", "handle": handle,
-                                "learner_id": target.learner.id,
-                                "drawn_universe": drawn, "learning_universe": learning,
-                                "reward": scored, "stepped_as": fb.reward,
-                                "ts": self.clock.now_ns})
-        return True
+            return False
+        if not trained:
+            self.thrash_charges.pop(handle, None)
+            self.ledger.append({"kind": "learner.orphaned", "handle": handle,
+                                "learner_id": drawer.learner.id,
+                                "reason": "its core epoch closed", "ts": self.clock.now_ns})
+        return trained
 
     def _deliver_returns(self) -> None:
         self._close_assembly_rounds()

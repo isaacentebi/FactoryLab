@@ -44,7 +44,7 @@ def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
     rt._manage_reserve_window()
     cap = rt.m.tools.max_routers_per_kind
     while len(rt.routers['Tick']) < cap:
-        rt._build_router('Tick', 'exp3', .1, replace=False)
+        rt._build_router('Tick', 'exp3', replace=False)
     registry, remaining = rt.registry.state(), rt.reserve.remaining()
     rt._apply_registrations('author', Return('author', {'register': [
         {'kind': 'router', 'learner': 'exp3', 'event_kind': 'Tick', 'add': True}]}, 0, 'ok'))

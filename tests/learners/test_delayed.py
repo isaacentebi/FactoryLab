@@ -1,369 +1,143 @@
-import math
-from dataclasses import FrozenInstanceError
-from random import Random
-
 import pytest
 
-from factorylab.learners.base import BanditFeedback, FullInfoFeedback, Learner
+from factorylab.learners.base import BanditFeedback, state_bytes
 from factorylab.learners.blum_mansour import BlumMansour
 from factorylab.learners.delayed import SnapshotLearner
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.hedge import Hedge
-from tests.learners.reference_games import (
-    Round,
-    external_regret,
-    investment_trap,
-    simulate,
-    simulate_delayed,
-    swap_regret,
-    trap_sequence,
-)
 
 
-@pytest.mark.parametrize("kind", ["hedge", "exp3", "blum_mansour"])
-def test_immediate_ordered_delivery_matches_synchronous(kind):
-    actions = ("a", "b", "c")
-
-    def make():
-        if kind == "exp3":
-            return EXP3(actions, 0.3)
-        if kind == "hedge":
-            return Hedge(actions, 0.4)
-        return BlumMansour(lambda a: Hedge(a, 0.4), actions)
-
-    synchronous = make()
-    inner = make()
-    delayed = SnapshotLearner(inner)
-    assert isinstance(delayed, Learner)
-    assert delayed.id == inner.id
-    rng = Random(0)
-    for index in range(60):
-        support = (actions, ("c", "a"), ("b",))[index % 3]
-        p = synchronous.distribution(support)
-        assert delayed.distribution_for(str(index), support, ordinal=index) == p
-        chosen = rng.choices(support, weights=list(p.values()))[0]
-        losses = {a: rng.random() for a in actions}
-        feedback = (
-            BanditFeedback(chosen, 1 - losses[chosen], p[chosen])
-            if kind == "exp3" else FullInfoFeedback(losses)
-        )
-        synchronous.update(feedback)
-        delayed.update_for(str(index), feedback)
-        assert delayed.state()["inner"] == synchronous.state()
-        assert not delayed.state()["snapshots"]
+def _learner(core: bool, actions=("a", "b", "NOOP")) -> SnapshotLearner:
+    return SnapshotLearner(BlumMansour(actions) if core else EXP3(actions), id="L")
 
 
-@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
-def test_investment_trap_at_5000_seed_zero_separates_delivery_from_adaptation():
-    game = investment_trap()
-    count = 5000
-    eta = math.sqrt(8 * math.log(len(game.actions)) / count)
-    sequence = trap_sequence(count)
-
-    def make():
-        return BlumMansour(lambda a: Hedge(a, eta), game.actions)
-
-    synchronous = simulate(game, make(), sequence, seed=0)
-    immediate = SnapshotLearner(make())
-    immediate_history = []
-    rng = Random(0)
-    for index, opponent in enumerate(sequence):
-        losses = game.loss_vector(opponent)
-        p = immediate.distribution_for(str(index), game.actions, ordinal=index)
-        chosen = rng.choices(game.actions, weights=list(p.values()))[0]
-        immediate_history.append(Round(losses, p, chosen))
-        immediate.update_for(str(index), FullInfoFeedback(losses))
-
-    order = list(range(count))
-    ordered = SnapshotLearner(make())
-    ordered_history = simulate_delayed(game, ordered, sequence, delay_permutation=order)
-    Random(0).shuffle(order)
-    shuffled = SnapshotLearner(make())
-    shuffled_history = simulate_delayed(game, shuffled, sequence, delay_permutation=order)
-    assert [r.probs for r in immediate_history] == [r.probs for r in synchronous]
-    assert immediate_history == synchronous
-    assert [r.probs for r in shuffled_history] == [r.probs for r in ordered_history]
-    assert shuffled_history == ordered_history
-    assert all(r.probs == dict.fromkeys(game.actions, 1 / 3) for r in shuffled_history)
-    # A fixed opponent sequence does not supply feedback during the opening
-    # phase. Comparing this batch to an adaptive synchronous run is invalid.
-    assert shuffled_history[1].probs != synchronous[1].probs
-    for expected in (False, True):
-        for regret in (external_regret, swap_regret):
-            reference = regret(synchronous, expected=expected)
-            batch = regret(ordered_history, expected=expected)
-            assert regret(immediate_history, expected=expected) == pytest.approx(
-                reference, rel=0, abs=1e-9,
-            )
-            assert regret(shuffled_history, expected=expected) == pytest.approx(
-                batch, rel=0, abs=1e-9,
-            )
-            print(
-                f"T={count}, seed=0, {regret.__name__}, expected={expected}: "
-                f"synchronous/immediate={reference:.12f}; ordered/shuffled batch={batch:.12f}"
-            )
-    # Identical histories alone cannot establish that the updates were applied.
-    ordered_bases = ordered.state()["inner"]["bases"]
-    shuffled_bases = shuffled.state()["inner"]["bases"]
-    for left, right in zip(ordered_bases, shuffled_bases, strict=True):
-        left_logs = left["log_weights"]
-        right_logs = right["log_weights"]
-        assert right_logs == pytest.approx(left_logs, rel=0, abs=1e-9)
-        assert min(right_logs.values()) < -1
-
-
-@pytest.mark.parametrize("reduction", [False, True])
-def test_handle_lifecycle_plain_update_and_state(reduction):
-    actions = ("a", "b")
-    inner = (
-        BlumMansour(lambda a: Hedge(a, 0.2), actions) if reduction else Hedge(actions, 0.2)
-    )
-    learner = SnapshotLearner(inner, id="delayed")
-    assert learner.id == "delayed"
-    assert learner.state()["inner"] == inner.state()
-    assert not learner.state()["snapshots"]
-    feedback = FullInfoFeedback({"a": 0, "b": 1})
+@pytest.mark.parametrize("core", [False, True])
+def test_handle_lifecycle_and_one_use_handles(core):
+    learner = _learner(core)
+    actions = learner.inner.actions
     with pytest.raises(KeyError):
-        learner.update_for("missing", feedback)
+        learner.update_for("missing", BanditFeedback("a", 1, 0.5))
     with pytest.raises(TypeError, match="update_for"):
-        learner.update(feedback)
-    assert learner.state()["inner"] == inner.state()
-    assert not learner.state()["snapshots"]
-
-    returned = learner.distribution_for("round", actions, ordinal=0)
-    before = learner.state()
-    assert before["snapshots"]
-    saved = before
-    assert saved["inner"] == inner.state()
-    assert set(saved["snapshots"]) == {"round"}
-    if reduction:
-        assert saved["snapshots"]["round"]["support"] == list(actions)
-        assert len(saved["snapshots"]["round"]["rows"]) == len(actions)
-    else:
-        assert saved["snapshots"]["round"] == returned
-    returned["a"] = -1
-    assert learner.state() == before
+        learner.update(BanditFeedback("a", 1, 0.5))
+    p = learner.distribution_for("r", actions, ordinal=0)
     with pytest.raises(KeyError):
-        learner.distribution_for("round", ("b",), ordinal=0)
+        learner.distribution_for("r", actions, ordinal=0)
     with pytest.raises(KeyError):  # outstanding: no later ordinal reopens it either
-        learner.distribution_for("round", ("b",), ordinal=1)
-    assert learner.state() == before
-    learner.distribution_for("second", ("b",), ordinal=1)
-    learner.update_for("round", feedback)
-    assert set(learner.state()["snapshots"]) == {"second"}
+        learner.distribution_for("r", actions, ordinal=1)
+    learner.distribution_for("s", ("a", "NOOP"), ordinal=1)
+    assert learner.outstanding() == ["r", "s"]
+    assert learner.update_for("r", BanditFeedback("a", 0.5, p["a"])) is True
     with pytest.raises(KeyError):
-        learner.update_for("round", feedback)
+        learner.update_for("r", BanditFeedback("a", 0.5, p["a"]))
     with pytest.raises(KeyError):
-        learner.distribution_for("round", actions, ordinal=0)
+        learner.distribution_for("r", actions, ordinal=0)
+    learner.discard_for("s")
     with pytest.raises(KeyError):
-        learner.distribution_for("second", actions, ordinal=1)
-    learner.update_for("second", feedback)
-    assert learner.state()["inner"] == inner.state()
-    assert not learner.state()["snapshots"]
+        learner.distribution_for("s", actions, ordinal=1)
+    assert learner.outstanding() == []
 
 
-def test_plain_distribution_delegates_without_snapshot():
-    inner = BlumMansour(lambda a: Hedge(a, 0.2), ("a", "b"))
-    learner = SnapshotLearner(inner)
-    assert learner.distribution(inner.actions) == inner.distribution(inner.actions)
-    assert learner.state()["inner"] == inner.state()
-    assert not learner.state()["snapshots"]
-    with pytest.raises(RuntimeError, match="pending"):
-        learner.distribution(("a",))
-    inner.update(FullInfoFeedback({"a": 0, "b": 1}))
-    assert learner.state()["inner"] == inner.state()
-    assert not learner.state()["snapshots"]
-
-
-def test_invalid_feedback_keeps_snapshot_for_retry():
-    inner = BlumMansour(lambda a: Hedge(a, 0.2), ("a", "b"))
-    learner = SnapshotLearner(inner)
-    learner.distribution_for("old", inner.actions, ordinal=0)
+@pytest.mark.parametrize("core", [False, True])
+def test_invalid_feedback_keeps_the_snapshot_for_retry(core):
+    learner = _learner(core)
+    p = learner.distribution_for("r", learner.inner.actions, ordinal=0)
     before = learner.state()
     with pytest.raises(ValueError):
-        learner.update_for("old", FullInfoFeedback({"a": 1}))
-    with pytest.raises(TypeError):
-        learner.update_for("old", BanditFeedback("a", 1, 0.5))
+        learner.update_for("r", BanditFeedback("a", 1, p["a"] / 2))
     assert learner.state() == before
-    learner.update_for("old", FullInfoFeedback({"a": 0, "b": 1}))
-    assert learner.state()["inner"] == inner.state()
-    assert not learner.state()["snapshots"]
+    assert learner.update_for("r", BanditFeedback("a", 1, p["a"]))
 
 
-def test_explicit_snapshot_is_immutable_owned_and_preserves_plain_pending_round():
-    inner = BlumMansour(lambda a: Hedge(a, 0.2), ("a", "b"))
-    with pytest.raises(RuntimeError):
-        inner.snapshot()
-    p = inner.distribution(inner.actions)
-    snapshot = inner.snapshot()
-    assert dict(snapshot.p) == p
-    with pytest.raises(FrozenInstanceError):
-        snapshot.support = ("b",)
-    with pytest.raises(TypeError):
-        snapshot.rows[0][0] = ("a", -1)
-    with pytest.raises(RuntimeError):
-        inner.update(FullInfoFeedback({"a": 0, "b": 1}))
-    other = BlumMansour(lambda a: Hedge(a, 0.2), inner.actions)
-    with pytest.raises(ValueError, match="belong"):
-        other.update_from_snapshot(snapshot, FullInfoFeedback({"a": 0, "b": 1}))
-    current = inner.distribution(("b",))
-    before = inner.state()
+@pytest.mark.parametrize("core", [False, True])
+def test_executed_policy_is_frozen_and_must_be_carried(core):
+    learner = SnapshotLearner(BlumMansour(("a", "b"), coverage=2.0) if core
+                              else EXP3(("a", "b")))
+    learner.distribution_for("r", ("a", "b"), ordinal=0)
+    learner.record_executed("r", {"a": 0.75, "b": 0.25})
     with pytest.raises(ValueError):
-        inner.update_from_snapshot(snapshot, FullInfoFeedback({"a": 0}))
-    assert inner.state() == before
-    inner.update_from_snapshot(snapshot, FullInfoFeedback({"a": 0, "b": 1}))
-    assert inner.distribution(("b",)) == current
-    inner.update(FullInfoFeedback({"a": 1, "b": 0}))
+        learner.update_for("r", BanditFeedback("b", 1, 0.5))
+    assert learner.update_for("r", BanditFeedback("b", 1, 0.25))
 
 
-def test_full_info_updates_use_old_p_with_interleaved_rounds_and_supports():
-    bases = []
-
-    class RecordingHedge(Hedge):
-        def update(self, feedback):
-            self.received = feedback
-            super().update(feedback)
-
-    def factory(actions):
-        base = RecordingHedge(actions, 0.4)
-        base.update(FullInfoFeedback({a: (i + len(bases)) % 3 / 2
-                                      for i, a in enumerate(actions)}))
-        bases.append(base)
-        return base
-
-    inner = BlumMansour(factory, ("a", "b", "c"))
-    learner = SnapshotLearner(inner)
-    old_p = learner.distribution_for("old", ("c", "a"), ordinal=0)
-    learner.distribution_for("fast", inner.actions, ordinal=1)
-    learner.update_for("fast", FullInfoFeedback({"a": 1, "b": 0, "c": 0.2}))
-    new_p = learner.distribution_for("new", inner.actions, ordinal=2)
-    assert new_p["a"] != old_p["a"]
-    losses = {"a": 0.3, "b": 1, "c": 0.8}
-    learner.update_for("old", FullInfoFeedback(losses))
-    for action, base in zip(inner.actions, bases, strict=True):
-        assert base.received.losses == {
-            a: old_p.get(action, 0) * loss for a, loss in losses.items()
-        }
-    learner.update_for("new", FullInfoFeedback(losses))
-    for action, base in zip(inner.actions, bases, strict=True):
-        assert base.received.losses == {a: new_p[action] * loss for a, loss in losses.items()}
+def test_withdrawn_draw_does_not_advance_t():
+    for core in (False, True):
+        learner = _learner(core)
+        before = learner.inner.state()
+        learner.distribution_for("quiet", learner.inner.actions, ordinal=0)
+        learner.withdraw_for("quiet")
+        assert learner.inner.state() == before
+        with pytest.raises(KeyError):  # the handle stays spent
+            learner.distribution_for("quiet", learner.inner.actions, ordinal=0)
 
 
-def test_shuffled_bandit_feedback_uses_frozen_master_policy_and_all_base_rows():
-    bases = []
-
-    class RecordingEXP3(EXP3):
-        def update_observed_gain(self, action, gain, proposal_probability):
-            self.received = action, gain, proposal_probability
-            super().update_observed_gain(action, gain, proposal_probability)
-
-    def factory(actions):
-        base = RecordingEXP3(actions, 0.3)
-        base.update(BanditFeedback(actions[len(bases)], 1, 0.05 * (len(bases) + 1)))
-        bases.append(base)
-        return base
-
-    inner = BlumMansour(factory, ("a", "b", "c"))
-    learner = SnapshotLearner(inner)
-    rng = Random(0)
-    rounds = []
-    expected_logs = [base.state()["log_weights"] for base in bases]
-    for index in range(30):
-        support = (inner.actions, ("c", "a"), ("b", "c"))[index % 3]
-        rows = [base.distribution(support) for base in bases]
-        p = learner.distribution_for(str(index), support, ordinal=index)
-        chosen = rng.choices(support, weights=list(p.values()))[0]
-        rounds.append((p, rows, BanditFeedback(chosen, rng.random(), p[chosen])))
-    order = list(range(len(rounds)))
-    rng.shuffle(order)
-    first_p, _, first_feedback = rounds[order[0]]
-    before = learner.state()
-    with pytest.raises(ValueError, match="propensity"):
-        learner.update_for(
-            str(order[0]), BanditFeedback(first_feedback.action, 0.5,
-                                         first_p[first_feedback.action] / 2),
-        )
-    assert learner.state() == before
-    for index in order:
-        p, rows, feedback = rounds[index]
-        learner.update_for(str(index), feedback)
-        for action, base, row, logs in zip(inner.actions, bases, rows, expected_logs, strict=True):
-            k, gain, denominator = base.received
-            assert k == feedback.action
-            assert denominator == row[k]
-            assert gain == p.get(action, 0) * feedback.reward * row[k] / feedback.propensity
-            logs[k] += base.gamma / len(inner.actions) * gain / denominator
-    for base, logs in zip(bases, expected_logs, strict=True):
-        offset = max(logs.values())
-        assert base.state()["log_weights"] == pytest.approx(
-            {a: value - offset for a, value in logs.items()}, rel=0, abs=1e-12,
-        )
-    assert learner.state()["inner"] == inner.state()
-    assert not learner.state()["snapshots"]
+def test_discarded_round_still_counts_as_opened():
+    learner = _learner(False)
+    learner.distribution_for("r", learner.inner.actions, ordinal=0)
+    learner.discard_for("r")
+    assert learner.inner.rounds == 1
 
 
-def test_simulator_opens_every_round_before_any_feedback():
-    game = investment_trap()
-    events = []
-
-    class Traced(SnapshotLearner):
-        def distribution_for(self, handle, feasible, *, ordinal):
-            events.append(("open", handle))
-            return super().distribution_for(handle, feasible, ordinal=ordinal)
-
-        def update_for(self, handle, feedback):
-            events.append(("update", handle))
-            return super().update_for(handle, feedback)
-
-    learner = Traced(Hedge(game.actions, 0.2))
-    simulate_delayed(game, learner, trap_sequence(3), delay_permutation=[2, 0, 1])
-    assert events == [
-        ("open", "0"), ("open", "1"), ("open", "2"),
-        ("update", "2"), ("update", "0"), ("update", "1"),
-    ]
-
-
-@pytest.mark.parametrize("order", [[], [0, 1], [0, 0, 2], [-1, 0, 1], [0, 1, 3],
-                                  [0, 1, 2, 3], [0, 1, 2.0], [False, 1, 2]])
-def test_invalid_permutation_fails_without_mutation(order):
-    game = investment_trap()
-    learner = SnapshotLearner(Hedge(game.actions, 0.2))
-    before = learner.state()
-    with pytest.raises(ValueError, match="permutation"):
-        simulate_delayed(game, learner, trap_sequence(3), delay_permutation=order)
-    assert learner.state() == before
-
-
-def test_empty_simulation_and_invalid_opponent_leave_state_unchanged():
-    game = investment_trap()
-    learner = SnapshotLearner(Hedge(game.actions, 0.2))
-    before = learner.state()
-    assert simulate_delayed(game, learner, [], delay_permutation=[]) == []
-    with pytest.raises(ValueError):
-        simulate_delayed(game, learner, ["Top", "invalid"], delay_permutation=[0, 1])
-    assert learner.state() == before
+def test_core_snapshot_is_order_n_and_trains_identically():
+    """A core snapshot holds its epoch, p and pi (O(N)), and a delayed update through
+    it leaves exactly the rows a synchronous update leaves."""
+    actions = tuple(f"s{i}" for i in range(6))
+    learner = SnapshotLearner(BlumMansour(actions), id="core")
+    direct = BlumMansour(actions)
+    p = learner.distribution_for("r", actions, ordinal=0)
+    q, saved = direct.open_round(actions)
+    assert p == q
+    snapshot = learner.state()["snapshots"]["r"]
+    assert set(snapshot) == {"epoch", "support", "p", "gamma", "executed"}
+    assert len(snapshot["p"]) == len(actions)
+    feedback = BanditFeedback("s3", 0.7, p["s3"])
+    learner.update_for("r", feedback)
+    direct.update_round(saved, feedback)
+    assert learner.inner.state() == direct.state()
 
 
 def test_completed_rounds_leave_bounded_state():
     """Two cohorts of a thousand rounds, each opened and closed, leave the learner's
-    state the same size (essay II.II.b, "memory"): it keeps the outstanding rounds
-    and the issuance mark, never a tombstone per round. A spent round still cannot be
-    reopened, before or after a restore."""
-    from factorylab.learners.base import state_bytes
-
+    state the same size (essay II.II.b, "memory"): it keeps the outstanding rounds and
+    the issuance mark, never a tombstone per round."""
     actions = ("a", "b", "NOOP")
-    learner = SnapshotLearner(BlumMansour(lambda a: Hedge(a, 0.2), actions), id="core")
-    sizes = []
-    for cohort in range(2):
-        for n in range(1000 * cohort, 1000 * (cohort + 1)):
-            learner.distribution_for(f"core:{n}", actions, ordinal=n)
-            learner.discard_for(f"core:{n}")
-        sizes.append(len(state_bytes(learner.state())))
-    # Only the mark's digits grow: logarithmic in the rounds, not linear.
-    assert sizes[1] - sizes[0] <= 2
-    restored = SnapshotLearner.restore(learner.state())
-    for spent in (learner, restored):
-        for n in (0, 999, 1999):
-            with pytest.raises(KeyError):
-                spent.distribution_for(f"core:{n}", actions, ordinal=n)
-    restored.distribution_for("core:2000", actions, ordinal=2000)
+    for core in (False, True):
+        learner = _learner(core, actions)
+        sizes = []
+        for cohort in range(2):
+            for n in range(1000 * cohort, 1000 * (cohort + 1)):
+                learner.distribution_for(f"r:{n}", actions, ordinal=n)
+                learner.discard_for(f"r:{n}")
+            sizes.append(len(state_bytes(learner.state())))
+        # Only the mark's digits and the counters grow: logarithmic, not linear.
+        assert sizes[1] - sizes[0] <= 8
+        restored = SnapshotLearner.restore(learner.state())
+        for spent in (learner, restored):
+            for n in (0, 999, 1999):
+                with pytest.raises(KeyError):
+                    spent.distribution_for(f"r:{n}", actions, ordinal=n)
+        restored.distribution_for("r:2000", actions, ordinal=2000)
+
+
+def test_state_bounded_by_outstanding():
+    """Live snapshots are exactly the open rounds; each is O(N) for both classes."""
+    actions = ("a", "b", "c", "NOOP")
+    for core in (False, True):
+        learner = _learner(core, actions)
+        for n in range(500):
+            p = learner.distribution_for(f"r:{n}", actions, ordinal=n)
+            if n >= 20:  # a delay of twenty rounds
+                old = f"r:{n - 20}"
+                k = "a"
+                prop = learner.state()["snapshots"][old]
+                prop = (dict(prop["executed"]) if not core else dict(prop["p"]))[k]
+                learner.update_for(old, BanditFeedback(k, 0.5, prop))
+            del p
+        state = learner.state()
+        assert len(state["snapshots"]) == 20
+        per = max(len(state_bytes(s)) for s in state["snapshots"].values())
+        assert per < 400
+
+
+def test_snapshot_learner_wraps_only_the_two_classes():
+    with pytest.raises(TypeError):
+        SnapshotLearner(Hedge(("a", "b"), 0.1))

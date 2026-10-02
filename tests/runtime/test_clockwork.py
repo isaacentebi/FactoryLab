@@ -132,7 +132,7 @@ def _returns_runtime():
     charter = replace(seed.charter, cards=tuple(replace(c, window=window)
                                                for c in seed.charter.cards))
     rt = Runtime(replace(seed, charter=charter), events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     rt._derive_regions()
     return rt
 
@@ -327,12 +327,12 @@ def test_a_censored_version_keeps_its_late_settlement_and_marks_the_boundary_uns
 def test_governance_is_ledgered_nonviable_when_its_period_outlasts_the_run_or_the_world():
     manifest = load_manifest("scripted")  # three backstops of 20 ticks: 60 ticks
     short = Runtime(manifest, events=50, seed=1, initial_balance_micro=None, ledger_path=None,
-                    router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                    exchange=FakeExchange(), provider=ScriptedProvider())
     short._manage_reserve_window()
     nonviable, = _items(short, "governance.nonviable")
     assert nonviable["needed_ticks"] == 60 and nonviable["run_ticks"] == 50
     long = Runtime(manifest, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
-                   router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                   exchange=FakeExchange(), provider=ScriptedProvider())
     long._manage_reserve_window()
     assert not _items(long, "governance.nonviable") and long.governance_viable
     # A world repriced every 59 s: H = 59/3 s is 20 one-second ticks (the first tick at
@@ -347,7 +347,7 @@ def _repriced(manifest, seconds):
     world = Runtime(replace(manifest, timing=replace(manifest.timing,
                                                      world_repricing_ns=seconds * 10**9)),
                     events=500, seed=1, initial_balance_micro=None, ledger_path=None,
-                    router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                    exchange=FakeExchange(), provider=ScriptedProvider())
     world._manage_reserve_window()
     return world
 
@@ -375,7 +375,7 @@ def test_a_short_backstop_never_schedules_launch_or_passes_viability_below_h():
     manifest = replace(base, timing=replace(base.timing, world_repricing_ns=60 * 10**9),
                        evaluation=replace(base.evaluation, consequence_backstop_events=3))
     rt = Runtime(manifest, events=20, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                 exchange=FakeExchange(), provider=ScriptedProvider())
     assert rt._horizon_ticks() == 20
     assert rt.cadence.consequence_period_events() == 20  # before any window opens
     rt._manage_reserve_window()
@@ -396,7 +396,7 @@ def test_a_faster_clock_mid_window_moves_the_floor_at_once():
     manifest = replace(base, tick_interval_ns=2 * 10**9,
                        timing=replace(base.timing, world_repricing_ns=60 * 10**9))
     rt = Runtime(manifest, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, exchange=FakeExchange(), provider=ScriptedProvider())
+                 exchange=FakeExchange(), provider=ScriptedProvider())
     rt._manage_reserve_window()
     assert rt.cadence.consequence_period_events() == 10
     rt.tick_clock.set_interval(10**9)  # what an activated clock amendment does, mid-window
@@ -737,7 +737,7 @@ def test_a_fill_the_venue_makes_while_a_model_thinks_settles_between_tool_rounds
     manifest = replaced(base, exchange=replaced(base.exchange, kind="hyperliquid",
                                                 coins=("BTC",)))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.2, exchange=LateFill(coins=("BTC",),
+                 exchange=LateFill(coins=("BTC",),
                                                      start_prices={"BTC": Decimal("100")},
                                                      start_cash_usd=Decimal("1000")),
                  provider=Slow({"action": "order", "tool_calls": [{

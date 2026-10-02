@@ -19,7 +19,7 @@ def runtime(**changes):
                                                for c in seed.charter.cards))
     manifest = replace(seed, charter=charter, **changes)
     return Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=0.1)
+                   ledger_path=None)
 
 
 def decision(rt, assembly, *, settled=False):
@@ -134,17 +134,15 @@ def test_live_immune_actions_are_ledger_first_and_do_not_read_diary(monkeypatch)
     monkeypatch.setattr(rt.ledger, "decrypt_item", unreadable)
 
     def record(entry):
-        if entry["kind"] == "immune.gain":
-            router = next(r for r in rt._all_router_states() if r.learner.id == entry["router"])
-            assert router.learner.gamma == entry["gamma_before"][0]
         entries.append(entry)
         return append(entry)
 
     monkeypatch.setattr(rt.ledger, "append", record)
     close(rt, 0.2)
     kinds = [e["kind"] for e in entries]
-    assert kinds.index("pathology.stable_failure") < kinds.index("immune.gain")
+    assert kinds.index("pathology.stable_failure") < kinds.index("immune.price_ratchet")
     assert "immune.window" in kinds
+    assert "immune.gain" not in kinds  # no diagnosis changes a learner (design §2.5)
     assert rt.ledger.verify()
 
 
@@ -216,25 +214,6 @@ def test_an_empty_thinking_pot_does_not_stop_an_order_the_venue_can_carry(mode):
     # gate never prevented that — a loss settles whatever the gate allowed — and
     # separating the two pots for real is the funded world's own question.
     assert rt.wallet.available <= 0
-
-
-def test_gamma_write_failure_leaves_router_unchanged(monkeypatch):
-    rt = runtime()
-    rt._derive_regions()
-    for _ in range(2):
-        close(rt, 0.2)
-    append = rt.ledger.append
-    before = [s.state() for s in rt._all_router_states()]
-
-    def reject(entry):
-        if entry["kind"] == "immune.gain":
-            raise RuntimeError("ledger unavailable")
-        return append(entry)
-
-    monkeypatch.setattr(rt.ledger, "append", reject)
-    with pytest.raises(RuntimeError, match="ledger unavailable"):
-        close(rt, 0.2)
-    assert before == [s.state() for s in rt._all_router_states()]
 
 
 def test_order_protection_uses_acknowledged_leverage_not_the_maximum():

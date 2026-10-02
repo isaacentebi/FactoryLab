@@ -58,7 +58,7 @@ EVENTS = 150
 def _world(events=EVENTS, path=None, seed=1):
     return Runtime(load_manifest("scripted"), events=events, seed=seed,
                    initial_balance_micro=None,
-                   ledger_path=None if path is None else str(path), router_gamma=.1)
+                   ledger_path=None if path is None else str(path))
 
 
 def _plain(summary):

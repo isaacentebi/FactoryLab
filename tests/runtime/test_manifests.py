@@ -180,8 +180,7 @@ def test_a_non_finite_decay_never_launched_before_the_rule(decay, tmp_path) -> N
         canonical(json.loads(bad.canonical_json()))
     path = tmp_path / "ledger.jsonl"
     with pytest.raises(ValueError, match="not JSON compliant"):
-        Runtime(bad, events=1, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                router_gamma=0.1)
+        Runtime(bad, events=1, seed=1, initial_balance_micro=None, ledger_path=str(path))
     assert not path.exists()  # no row was written
     with pytest.raises(ValueError, match="decay must be a finite number"):
         PriceController(None, eta=m.prices.eta, decay=decay, penalty_cap=0.5,

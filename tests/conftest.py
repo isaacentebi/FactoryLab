@@ -176,7 +176,7 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode):
                 # These consumers originally used in-memory ledgers. Preserve that call:
                 # persisting every encrypted append here would add thousands of fsyncs.
                 rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                             ledger_path=None, router_gamma=.1)
+                             ledger_path=None)
                 append = rt.ledger.append
 
                 def capture(item):
@@ -350,9 +350,9 @@ GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
         "returns are slim, under the test's own non-vacuity bound)"),
     "tests/gauntlet/test_stable_failure.py": (
         "57-64 s: SF-1 at 100 events (a-d, f, physics) with its two 52-event controls, the "
-        "transient world at 150 with its control, SF-2 at 100 and the 220-event "
+        "transient world at 150 with its control, SF-2 at 100 and the 240-event "
         "intermittent world, several running observations in the jail. The original "
-        "228/250 worlds and SF-1e run in the soak tier"),
+        "228/250 worlds run in the soak tier"),
     "tests/audit/test_class2_rendered.py": (
         "56-66 s: every launchable world's launch path run for 60 ticks on the scripted "
         "population, each once and shared by the file's tests, and every request it sends "
@@ -1063,7 +1063,7 @@ def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
     if live:
         manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=balance,
-                   ledger_path=None, router_gamma=.1,
+                   ledger_path=None,
                    exchange=FakeExchange(), provider=ScriptedProvider(),
                    clock_source=clock_source)
 

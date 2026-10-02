@@ -1407,10 +1407,10 @@ of the diagnosis tail measured stays in the failing set (`unmeasured_held` in th
 `pathology.*` and `immune.window` evidence), so its duration is neither reset nor read
 as relief, and with the card gap unreadable and the attractor held only by such cards
 the attractor holds; a card never measured never enters the set, and a card the
-charter dropped is gone, not held. The exploration gain raised for stable
-failure steps back toward each router's seed gamma once a window diagnoses no
-pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
-it. That state resumes with the controller. (Older worlds halved the violated
+charter dropped is gone, not held. No diagnosis changes a learner: a router's
+exploration is its learner's own schedule (docs/architecture/learners-noregret.md
+§2.5), and the organ writes no `immune.gain` (older diaries carry them). That state
+resumes with the controller. (Older worlds halved the violated
 cards' effective price for one window instead; `immune.price_relief` entries in
 their diaries record that. The relief is deleted, charter audit U2.) The ratchet
 reaches abstention: a router's NOOP bears the card penalty of the window it was
@@ -1446,8 +1446,28 @@ of equal size lower it equally (wave 16, rulings R10-c, R10-l; `thrash.charged`)
 a router trains on writes one `router.learned` row (R16b-5; the diary only, never seen
 by a seat): the drawing and the learning router, the arm, its raw score, card
 penalty, thrash charge (`exempt: "niche"` when a stored charge was dropped for a
-round drawn in the niche) and reward, and the path (`direct`, `carried` to a
-successor, or `credit` at its window's close, a NOOP credit included).
+round drawn in the niche) and reward, and the path (`direct`, or `credit` at its
+window's close, a NOOP credit included). A round that trains nothing writes
+`learner.orphaned` instead: a round of a router since replaced (it never samples
+again, and no theorem carries its round to its successor) or of a core epoch since
+closed (docs/architecture/learners-noregret.md §2.2, §2.5). Older diaries carry
+`router.carried` and `router.step_rescaled`, which no router writes now.
+
+The routers' learners (docs/architecture/learners-noregret.md). Every router is
+keyed: a draw freezes its round (its rates, or its core epoch, master policy and
+executed policy) under a snapshot key, and only that snapshot trains it; a draw that
+opened no decision (a quiet tick) is withdrawn and does not count as a round. The
+frontier (every kind not in `evaluation.no_swap_regret_kinds`) is anytime EXP3 in
+follow-the-regularised-leader form over loss estimates, `gamma_t = min(1, t^(-1/2))`
+and `eta_t = gamma_t / N` at its `t`-th round, never restarted. The core is
+Blum-Mansour SR_MAB with Auer EXP3 rows over doubling epochs, `H_k = H_0 * 2^k`
+rounds at `gamma_k = min(1, sqrt(N ln N / ((e - 1) H_k)))`, its first epoch
+`H_0 = (1 + timing.min_ratio) * h` draws or more (`h` the longest decision cutoff), its
+row gains divided by the menu's fixed coverage bound `kappa` (`router.created`
+states it): `1 / (1 - evaluation.sampling_cap)` with a forecast-shaped evaluator on the
+menu, times `1 / evaluation.adversarial_share` with an adversary on it. Every estimate
+uses the drawn arm's logged propensity as executed. A new menu opens a fresh learner
+under a new identity (`epoch` with `cause: "menu"`); no weight is carried.
 
 ## The clock (Chapter II §IV.b-c; time audit T1-T13)
 
@@ -1738,9 +1758,10 @@ slowest loop; time audit T14; `u` = 1 - lifespan / latency). Stationary random
 behaviour over three cells is flagged in about 3% of windows at k = 3. Learning
 death: one cell over the tail, no registration or revision, and the frontier gone:
 a frontier (non-core) router whose every draw in every tail window gave NOOP at
-least `1 - gamma` (`uninvoked_routers`, whatever the reason), or one that in every
-tail window held each unhistoried seat it offered within `(1 +
-immune.tv_threshold) * gamma / N` while a historied seat held more than all the
+least `1 - gamma`, `gamma` the exploration that draw was made at
+(`uninvoked_routers`, whatever the reason), or one that in every tail window held each
+unhistoried seat it offered within `(1 + immune.tv_threshold) * gamma / N` of that
+draw while a historied seat held more than all the
 other arms together (`quarantined_routers`). Card compliance never enters it
 (versioning audit P1). Each `immune.window` item
 publishes the profile, the flags and their evidence, the routers' draws, the

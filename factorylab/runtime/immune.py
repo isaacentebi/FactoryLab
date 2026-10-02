@@ -27,10 +27,10 @@ report also replays (``versioning.versions.diagnose``). The answers:
 * **learning death**: "delivered as a fact about the world", never as a response:
   the novelty reserve is usable by unhistoried actions of every seat (ruling R5,
   ``RoutingMixin._niche_action``), and a decision taken in the niche bears no card
-  penalty (wave 16, R-E). The organ only holds the exploration gain it raised while
-  the frontier is gone.
+  penalty (wave 16, R-E). The organ changes no learner: exploration is each
+  learner's own schedule (learners design §2.5), never a response to a diagnosis.
 
-The organ diagnoses every window and acts (gain, ratchet) on its own loop, at least
+The organ diagnoses every window and acts (the ratchet) on its own loop, at least
 ``min_ratio`` price periods apart (versioning P5). The thrash price is a price and
 moves on the price loop, like every card's.
 """
@@ -181,65 +181,6 @@ def thrash_penalty(rt) -> dict:
     penalty = pressure(price, violation, rt.m.prices.penalty_cap)
     return {"unsettled": unsettled, "violation": violation, "lambda": price,
             "penalty": penalty}
-
-
-def _bases(saved: dict) -> list[dict]:
-    if saved["algorithm"] == "EXP3":
-        return [saved]
-    if "inner" in saved:
-        return _bases(saved["inner"])
-    return [base for row in saved.get("bases", []) for base in _bases(row)]
-
-
-def gamma(learner) -> float:
-    """Return exploration shared by a router's EXP3 rows, including delayed swap learners."""
-    return _bases(learner.state())[0]["gamma"]
-
-
-def _gain(rt, kind: str, window: int) -> None:
-    """Move every router's exploration one ``gain_step``: up on stable failure, else down.
-
-    Up is bounded by ``gamma_max``; down (thrash, or ``cleared`` once no pathology
-    that the gain answers is diagnosed) never goes below the router's own seed
-    gamma, so a ratchet the organ raised unwinds after the attractor is left and a
-    router that was never raised is not touched. Guarantees no step leaves or holds
-    a gamma above ``gamma_max`` (a router restored or seeded above it is clamped to it
-    on the organ's next step, in either direction): a value above its bound would sit
-    where no step could reach it. Each change is ledgered first.
-
-    A router's gain is an outer loop over that router's own rounds (time audit T2):
-    a kind's routers step at most once per ``min_ratio`` times their measured round
-    period, so a step is never taken on rounds drawn under the previous one.
-    """
-    spec = rt.m.immune
-    now = rt.ticks_consumed
-    stepped: set[str] = set()
-    for router in rt._all_router_states():
-        loop = f"gain:{router.kind}"
-        inner = rt.clockwork.measured(f"router:{router.kind}")
-        if router.kind not in stepped and not rt.clockwork.due(loop, now, inner):
-            continue
-        saved = router.state()
-        bases = _bases(saved["router"]["learner"])
-        before = [base["gamma"] for base in bases]
-        after = [
-            min(spec.gamma_max, old + spec.gain_step) if kind == "stable_failure"
-            else min(spec.gamma_max, old, max(router.seed_gamma, old - spec.gain_step))
-            for old in before
-        ]
-        if before == after:
-            continue
-        for base, value in zip(bases, after, strict=True):
-            base["gamma"] = value
-        # Restore before the append to validate every row and retained delayed snapshot.
-        replacement = type(router).restore(saved)
-        rt.ledger.append({"kind": "immune.gain", "pathology": kind, "window": window,
-                          "router": router.learner.id, "gamma_before": before,
-                          "gamma_after": after, "tick": now})
-        router.learner, router.router = replacement.learner, replacement.router
-        if router.kind not in stepped:
-            rt.clockwork.fire(loop, now, inner)
-            stepped.add(router.kind)
 
 
 def access_evidence(rt) -> dict[str, tuple[bool, str | None]]:
@@ -435,12 +376,11 @@ def close_window(rt, values: dict[str, float]) -> None:
     schedule = rt.clockwork.fire("immune", now, inner)
     rt._ledger_loop("immune", schedule, inner_loop="price")
     # Oscillation has priority: gain ramped into an attractor overshoots into thrash
-    # (essay II.IV.b), so a thrashing factory's raised exploration unwinds first.
+    # (essay II.IV.b), so a thrashing window ratchets nothing. The gain is lambda
+    # (essay II.IV.b: "nothing less than exactly lambda"): no learner is reset or
+    # re-explored on a diagnosis (learners design §2.5).
     ratcheted: set[str] = set()
-    if flags["thrash"]:
-        _gain(rt, "thrash", current["index"])
-    elif flags["stable_failure"]:
-        _gain(rt, "stable_failure", current["index"])
+    if flags["stable_failure"] and not flags["thrash"]:
         # Essay II.II.b: stable failure is priced by its duration. Every violated card
         # of the failing attractor has its price ratcheted up by how long the factory
         # has sat there, never relieved: the gain to leave the attractor must grow.
@@ -450,10 +390,6 @@ def close_window(rt, values: dict[str, float]) -> None:
             if card_id in known:
                 rt.controller.ratchet(card_id, window=current["index"], step=spec.price_step)
                 ratcheted.add(card_id)
-    elif not flags["learning_death"]:
-        # The attractor is left: the exploration the organ added unwinds toward seed.
-        # A learning-dead window holds it, since less exploration is the wrong answer.
-        _gain(rt, "cleared", current["index"])
     # An unmeasured failing card holds its duration whatever the flags say (M-6):
     # missing evidence ends no failure.
     unmeasured = {cid.removeprefix("card:") for cid in diagnosed.get("unmeasured_held", ())}

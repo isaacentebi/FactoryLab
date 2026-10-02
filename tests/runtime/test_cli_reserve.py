@@ -388,8 +388,7 @@ def test_a_mainnet_treasury_world_is_never_run_without_a_ledger(tmp_path, monkey
     assert "mainnet_rail_requires_a_ledger" in capsys.readouterr().err
     assert list(tmp_path.iterdir()) == []  # nothing was created
     with pytest.raises(MainnetRailRequiresALedger):
-        Runtime(mainnet, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                router_gamma=.1)
+        Runtime(mainnet, events=0, seed=1, initial_balance_micro=None, ledger_path=None)
     testnet = replace(mainnet, exchange=replace(mainnet.exchange, mainnet=False))
     from factorylab.runtime.bootstrap import mainnet_rail
 
