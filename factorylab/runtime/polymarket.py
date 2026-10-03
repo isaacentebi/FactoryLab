@@ -1611,10 +1611,17 @@ def tick(rt: Any) -> None:
             _ledger_malformed(rt, surface, answer.get("malformed") or [])
             # A resolution check Polygon did not answer holds buying until one does
             # (Sol P0, round 1 of #180): the reconciliation below reads this.
-            surface.chain_owed = bool(answer.get("chain_unread"))
-            if surface.chain_owed:
+            pending = list((answer.get("cursor") or {}).get("chain_pending") or [])
+            surface.chain_owed = bool(answer.get("chain_unread")) or bool(pending)
+            if answer.get("chain_unread"):
                 rt.ledger.append({"kind": "polymarket.chain_unavailable",
                                   "reason": CHAIN_UNREAD, "ts": rt.clock.now_ns})
+            if pending:
+                # Gamma states a resolution Polygon has not reported (Sol P0, round 3):
+                # drift, and buying waits until the chain reports it or Gamma withdraws.
+                rt.ledger.append({"kind": "polymarket.drift",
+                                  "reason": "a resolution Polygon has not reported",
+                                  "tokens": pending[:20], "ts": rt.clock.now_ns})
             surface.cursor = answer["cursor"]
             settle(rt, answer["events"])
             if answer.get("complete"):

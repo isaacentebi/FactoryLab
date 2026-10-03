@@ -1105,6 +1105,11 @@ class LivePolymarket(PolymarketReader):
                             if t not in state["resolved"] and markets.get(t))
         events: list[dict[str, Any]] = []
         facts = state.setdefault("resolution_facts", {})
+        # Tokens Gamma states resolved and Polygon has not yet reported (Sol P0, round 3
+        # of #180): a disagreement of the API with the chain, durable across the
+        # rotation, kept while the pot holds or may hold the token; buying waits on it.
+        pending = state["chain_pending"] = sorted(
+            t for t in state.get("chain_pending", []) if t in candidates)
 
         if candidates:
             # One market read a poll, in turn: what the pot holds or has resting.
@@ -1119,6 +1124,7 @@ class LivePolymarket(PolymarketReader):
                 contradictions[f"{token}:market"] = reason
                 return events
             paid = payout(market, token)
+            claimed = paid is not None
             outcome = next(o for o in market["outcomes"] if o["token_id"] == token)
             if paid is not None:
                 # Issue #180: Gamma's payout is paid only once Polygon reports the same
@@ -1132,6 +1138,12 @@ class LivePolymarket(PolymarketReader):
                     return events
                 if not reported:
                     paid = None
+                    if token not in pending:
+                        pending.append(token)
+                        pending.sort()
+            if (paid is not None or not claimed) and token in pending:
+                # Confirmed on chain, or Gamma no longer states it: nothing is owed.
+                pending.remove(token)
             if paid is not None:
                 state["resolved"][token] = str(paid)
                 facts[token] = {"market_id": markets[token],

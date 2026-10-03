@@ -191,16 +191,42 @@ def test_a_resolution_polygon_confirms_is_paid():
 
 
 def test_a_resolution_polygon_has_not_reported_waits_and_is_paid_once_it_does():
+    """Sol P0, round 3: Gamma stating a resolution the chain has not reported is a
+    disagreement of the API with the chain: nothing is paid and buying waits on it."""
     rt, server = resolved_world()
     server.chain_lag.add("fake-1")  # Gamma: resolved; the chain: not yet reported
     polymarket.tick(rt)
     polymarket.tick(rt)
     assert not items(rt, "polymarket.resolution") and not rt.polymarket.contradicted
     assert token(server) not in rt.polymarket.cursor.get("resolved", {})
+    assert rt.polymarket.drifting and rt.polymarket.cursor["chain_pending"] == [token(server)]
+    assert any(row.get("reason") == "a resolution Polygon has not reported"
+               for row in items(rt, "polymarket.drift"))
+    refused = buy(rt, server, collateral_decision(rt), market="fake-2", price="0.20")
+    assert refused["error"] == polymarket.DRIFT_REFUSAL
     server.chain_lag.clear()
     polymarket.tick(rt)
     (row,) = items(rt, "polymarket.resolution")
     assert row["payout"] == "1"
+    assert rt.polymarket.cursor["chain_pending"] == [] and not rt.polymarket.drifting
+    placed = buy(rt, server, collateral_decision(rt), market="fake-2", price="0.20",
+                 slot="tool:1")
+    assert placed["status"] == "resting"
+
+
+def test_an_unconfirmed_resolution_holds_buying_across_the_rotation():
+    """Sol P0, round 3: reading another market's resolution in turn must not clear the
+    hold a lagging one owes."""
+    rt, server = resolved_world()
+    server.chain_lag.add("fake-1")
+    buy(rt, server, collateral_decision(rt), market="fake-2", price="0.10")  # rests
+    while not rt.polymarket.cursor.get("chain_pending"):
+        polymarket.tick(rt)  # until the rotation first reads fake-1
+    for _ in range(4):  # it reads fake-2 and fake-1 in turn from here on
+        polymarket.tick(rt)
+        assert rt.polymarket.drifting
+    reads = [path for _method, path in server.calls if path.startswith("/markets/")]
+    assert {"/markets/fake-1", "/markets/fake-2"} <= set(reads)
 
 
 @pytest.mark.parametrize("report", [(1, [0, 1]), (2, [1, 1])])

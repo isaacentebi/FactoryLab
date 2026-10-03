@@ -2874,9 +2874,12 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
     one: the token is first proven, on chain, to be the position of the market's
     condition at its outcome index for the market's collateral (the proof binds the
     token to that condition, index and kind forever), and the condition's payout
-    vector binds at its first report. A condition not yet reported waits (nothing is
-    paid, nothing halts); a chain that did not answer leaves the read unread, and buying
-    waits until a later poll reads it; a token the condition does not issue, a condition
+    vector binds at its first report. A resolution Gamma states and the chain has not
+    reported is a disagreement: nothing is paid, `polymarket.drift` ("a resolution
+    Polygon has not reported") is ledgered each tick, and buying waits until the chain
+    reports it or Gamma no longer states it (held across the rotation of market reads,
+    while the pot holds or may hold the token); a chain that did not answer leaves the
+    read unread, and buying waits until a later poll reads it; a token the condition does not issue, a condition
     other than the one bound, or a payout other than `numerator / denominator` exactly
     halts buying for the world's life and pays nothing. What is paid is only what the
     chain holds: the payout of the tokens the books hold waits until the chain holds, of
