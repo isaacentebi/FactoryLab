@@ -98,7 +98,11 @@ class CoreRound:
         epoch, gamma = saved["epoch"], saved["gamma"]
         if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
             raise ValueError("invalid saved epoch")
-        if type(gamma) not in (int, float) or not 0 < gamma <= 1:
+        # A one-action round is deterministic: epoch_gamma(1, H) is 0 and p is that
+        # action's 1. Gamma 0 is that round's alone; on any larger support it is refused.
+        singleton = len(support) == 1 and p == ((support[0], 1.0),)
+        if type(gamma) not in (int, float) or not (
+                0 < gamma <= 1 or (singleton and gamma == 0)):
             raise ValueError("invalid saved gamma")
         return cls(epoch, support, p, float(gamma), executed)
 

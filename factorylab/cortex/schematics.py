@@ -32,7 +32,7 @@ from factorylab.runtime.propensity import (
 )
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
-from factorylab.settlement.lots import FEE_UNKNOWN, NO_MARK
+from factorylab.settlement.lots import FEE_UNKNOWN, FILL_REORDERED, NO_MARK
 from factorylab.settlement.scoring import (
     UNINFORMATIVE_HIGH,
     UNINFORMATIVE_LOW,
@@ -2235,7 +2235,8 @@ class SchematicsMixin:
         so a formula and its value cannot drift apart.
         """
         values: dict[str, Any] = {"penalty_cap": self.m.prices.penalty_cap,
-                                  "uninformative_reasons": [FEE_UNKNOWN, NO_MARK]}
+                                  "uninformative_reasons": [FEE_UNKNOWN, NO_MARK,
+                                                            FILL_REORDERED]}
         for key, name in (("consequence_horizon_ns", "_horizon_ns"),
                           ("consequence_patience_ns", "_patience_ns")):
             reader = getattr(self, name, None)
@@ -2282,7 +2283,12 @@ class SchematicsMixin:
                 "compute and tool cost, fixed at H or when its lots close; a held "
                 "instrument with no mid at or after H within the consequence patience, "
                 "H + verdict_timeout_ticks after the return, makes it uninformative, "
-                f"{NO_MARK}; a fill after H is late money, booked and never graded; any "
+                f"{NO_MARK}; a fill delivered after a later fill on its instrument was "
+                "applied makes every open return holding, having held or trading that "
+                f"instrument uninformative, {FILL_REORDERED}, as does every later fill "
+                "that closes into the lots that fill left, for its own return, until none "
+                "of those lots remains; "
+                "a fill after H is late money, booked and never graded; any "
                 "counterfactual such a return named is ignored. "
                 "fills are complete through T when, at venue observations at or after T, "
                 "every factory order's venue-reported filled size equals its booked fills "

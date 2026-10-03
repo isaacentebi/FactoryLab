@@ -152,6 +152,11 @@ FEE_UNKNOWN = "fee_unknown"
 #: a venue mid at or after its horizon within its patience (Codex on #152): the same
 #: rule a named trade the venue never priced follows; uninformative, never pending.
 NO_MARK = "no_mark"
+#: Why a return's outcome is censored when a fill on an instrument it holds or traded
+#: arrived after a later fill on that instrument was already applied (Sol 6.1 r4): the
+#: shared FIFO matched them in arrival order, not the world's, so its state at H is not
+#: reconstructed and the outcome is uninformative, never certified.
+FILL_REORDERED = "fill_reordered"
 
 
 #: The kernel-owned consequence account every kill wind-down (and seal) closing order is

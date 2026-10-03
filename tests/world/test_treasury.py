@@ -7,8 +7,16 @@ import pytest
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.wallet import Wallet
 from factorylab.runtime.live import Reconciler
+from factorylab.runtime.venue import VenueMixin
 from factorylab.world.evm import Pending
-from factorylab.world.treasury import FakeRail, FakeTreasury, Treasury, provider_pots
+from factorylab.world.exchange import AccountState
+from factorylab.world.treasury import (
+    FakeRail,
+    FakeTreasury,
+    Treasury,
+    UnconfiguredRail,
+    provider_pots,
+)
 
 
 def setup():
@@ -560,3 +568,162 @@ def test_late_evidence_for_a_parked_action_is_booked_from_that_read(step):
     assert treasury.pots()["parked"] == []
     assert not treasury.pots()["pending"]  # the transfer finished; nothing holds the slot
     assert treasury.state["id"] == stuck and treasury.state["status"] == "confirmed"
+
+
+class _RetryExecutedClassRail(UnconfiguredRail):
+    """An offline class-transfer rail whose first POST never completes and whose retry
+    executes: the venue stamps the execution 70 s after the signed nonce."""
+
+    def __init__(self, executes=True):
+        self.rows, self.sends, self.executes = [], 0, executes
+        account = AccountState(Decimal(500), Decimal(500), (), Decimal(0))
+        super().__init__(SimpleNamespace(
+            name="hyperliquid", _address="offline-account",
+            _exchange=SimpleNamespace(wallet=SimpleNamespace(address="offline-account"),
+                                      vault_address=None),
+            _info=SimpleNamespace(user_non_funding_ledger_updates=lambda *_: self.rows),
+            account=lambda: account))
+
+    def send(self, step, reference):
+        self.sends += 1
+        if self.sends == 1:
+            raise Pending("offline first POST did not complete")
+        if self.executes and not self.rows:
+            self.rows.append({
+                "time": reference["nonce"] + 70_000, "hash": "executed-class-move",
+                "delta": {"type": "accountClassTransfer", "toPerp": False, "usdc": "5"}})
+
+
+def test_class_transfer_executed_on_retry_must_confirm_and_unblock_venue():
+    """A class move retried at its own nonce may execute on any ledgered attempt, so
+    its receipt window spans every attempt, not the first send's alone. A retry that
+    executed past the first send's window confirmed nothing, held the principal and
+    the slot forever, and refused every venue write but a cancel, closes included."""
+    ledger, wallet, _ = setup()
+    rail = _RetryExecutedClassRail()
+    treasury = Treasury(ledger, wallet, rail)
+    start_ns = 1_700_000_000_000_000_000
+    assert treasury.transfer("perps_to_spot", "5", handle="h",
+                             now_ns=start_ns)["status"] == "submitted"
+    treasury.tick(start_ns + 70_000_000_000)  # the retry executes at nonce + 70 s
+    assert rail.sends == 2 and len(rail.rows) == 1
+    treasury.tick(start_ns + 80_000_000_000)
+    assert treasury.state["status"] == "confirmed"
+    assert wallet.available == wallet.balance  # the principal hold is released
+    rt = SimpleNamespace(treasury=treasury, order_intents={}, vault_intents={},
+                         _spot_shortfall=lambda *_: None)
+    rt._class_transfer_pending = lambda: VenueMixin._class_transfer_pending(rt)
+    assert VenueMixin.venue_batch_refusal(
+        rt, "seat", "close", [("0", "venue.close", {"coin": "BTC"})]) is None
+    # The unique-row rule still holds across the widened window: a second candidate
+    # row inside it confirms nothing.
+    ledger2, wallet2, _ = setup()
+    rail2 = _RetryExecutedClassRail()
+    treasury2 = Treasury(ledger2, wallet2, rail2)
+    treasury2.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    treasury2.tick(start_ns + 70_000_000_000)
+    rail2.rows.append({**rail2.rows[0], "hash": "another", "time": rail2.rows[0]["time"] + 1})
+    treasury2.tick(start_ns + 80_000_000_000)
+    assert treasury2.state["status"] == "submitted"
+
+
+def _unrelated_class_row(nonce: int, after_ms: int, name: str) -> dict:
+    return {"time": nonce + after_ms, "hash": name,
+            "delta": {"type": "accountClassTransfer", "toPerp": False, "usdc": "5"}}
+
+
+def test_an_unrelated_class_transfer_between_attempts_confirms_nothing():
+    """Sol 6.1 on #193: a ledger row binds to no signed action (an accountClassTransfer
+    row carries no nonce, the submit answers no hash), so the evidence window is the
+    union of each ledgered send's own window. Neither send executed; another $5 move
+    the same way executed at nonce + 65 s, between the windows: it confirms nothing."""
+    start_ns = 1_700_000_000_000_000_000
+    ledger, wallet, _ = setup()
+    rail = _RetryExecutedClassRail(executes=False)
+    treasury = Treasury(ledger, wallet, rail)
+    treasury.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    nonce = treasury.state["nonce"]
+    treasury.tick(start_ns + 70_000_000_000)  # the retry, which does not execute either
+    assert rail.sends == 2
+    rail.rows.append(_unrelated_class_row(nonce, 65_000, "someone-else"))
+    treasury.tick(start_ns + 80_000_000_000)
+    assert treasury.state["status"] == "submitted"
+    assert wallet.available < wallet.balance  # the principal stays held
+    # Ours executing on the retry beside it is ambiguous: two candidates, still pending.
+    rail.rows.append(_unrelated_class_row(nonce, 72_000, "ours"))
+    treasury.tick(start_ns + 90_000_000_000)
+    assert treasury.state["status"] == "submitted"
+
+
+def test_a_long_retry_run_ledgers_each_send_once_not_a_growing_list():
+    """Every ledgered send widens the evidence window by its own window, so the sends
+    are kept; a transfer retried every minute for days must not copy them all into
+    each row it writes (the diary would grow quadratically)."""
+    start_ns = 1_700_000_000_000_000_000
+    ledger, wallet, records = setup()
+    rail = _RetryExecutedClassRail(executes=False)
+    treasury = Treasury(ledger, wallet, rail)
+    treasury.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    for minute in range(1, 6):
+        treasury.tick(start_ns + minute * 61_000_000_000)
+    assert len(treasury.state["sent_ns"]) == rail.sends == 6
+    rows = [r for r in records if r["kind"].startswith("treasury.")]
+    assert not any("sent_ns" in r.get("state", {}) for r in rows)
+    assert [r["sent_ns"] for r in rows if r["kind"] == "treasury.broadcast"] == (
+        treasury.state["sent_ns"])
+
+
+def test_a_send_resent_by_recovery_is_recorded_at_its_own_time():
+    """Sol 6.1 on 5154f86c: a send interrupted by a crash at t0 is resent by the
+    recovery at t120, the replayed event's clock still reading t0. The resend is
+    recorded at its own time (the journal's io.result, and the treasury's sends), so
+    the venue's t120 execution confirms instead of falling outside every window."""
+    import hashlib
+
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal, canonical, encode
+
+    start_ns, wall_ns = 1_700_000_000_000_000_000, 1_700_000_120_000_000_000
+    rail = _RetryExecutedClassRail(executes=False)
+    plain = Ledger(clock_ns=lambda: 0)
+    journal = RecoveryJournal(plain, lambda: start_ns)
+    journal.wall_ns = lambda: wall_ns
+    wallet = Wallet(100_000_000, journal, clock_ns=lambda: 0)
+    treasury = Treasury(journal, wallet, JournalProxy(rail, journal, "treasury.rail"))
+    journal.active = True
+    # The process died after the send's io.call and before its result: the recovery
+    # finds the call in the tail and resends it, now.
+    real_call = journal.call
+
+    def interrupted(name, function, args, kwargs, **kw):
+        if name != "treasury.rail.send":
+            return real_call(name, function, args, kwargs, **kw)
+        fingerprint = hashlib.sha256(canonical(encode((args, kwargs)))).hexdigest()
+        plain.append({"kind": "io.call", "name": name, "input_hash": fingerprint,
+                      "ts": start_ns})
+        journal.tail = [plain._recovery_items()[-1]]
+        journal.position, journal._next = 0, None
+        journal.call = real_call
+        return real_call(name, function, args, kwargs, **kw)
+
+    journal.call = interrupted
+    treasury.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    assert rail.sends == 1  # the recovery's resend
+    assert [r["resent_ns"] for r in plain._recovery_items()
+            if r["kind"] == "io.result" and "resent_ns" in r] == [wall_ns]
+    assert treasury.state["sent_ns"][-1] == treasury.state["last_send_ns"] == wall_ns
+    nonce = treasury.state["nonce"]
+    rail.rows.append(_unrelated_class_row(nonce, 120_000, "executed-on-recovery"))
+    journal.active = False
+    treasury.tick(wall_ns + 1_000_000_000)  # no retry yet: the resend was a second ago
+    assert rail.sends == 1 and treasury.state["status"] == "confirmed"
+    # A later replay reads the resend's time from the recorded result, sending nothing.
+    items = plain._recovery_items()
+    replay = RecoveryJournal(Ledger(clock_ns=lambda: 0), lambda: start_ns)
+    replay.active = True
+    replay.tail = [next(i for i in items if i["kind"] == "io.call"
+                        and i["name"] == "treasury.rail.send"),
+                   next(i for i in items if "resent_ns" in i)]
+    with pytest.raises(Pending):  # the resend's recorded outcome: unknown
+        replay.call("treasury.rail.send", rail.send,
+                    ("perps_to_spot", treasury.state["reference"]), {})
+    assert replay.resent_ns == wall_ns and rail.sends == 1

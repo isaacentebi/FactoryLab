@@ -13,7 +13,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-InaccessiblePaths=/srv/factorylab/runs /srv/factorylab/repo /srv/factorylab/openrouter.key /srv/factorylab/hyperliquid.key /srv/factorylab/reserve.key /srv/factorylab/ops.env /srv/factorylab/rclone.conf
+# Every root key and secret file is masked; a file is optional ("-"): a host without
+# backups has no rclone.conf, a world without a reserve or event-market orders no key.
+InaccessiblePaths=/srv/factorylab/runs /srv/factorylab/repo -/srv/factorylab/openrouter.key -/srv/factorylab/hyperliquid.key -/srv/factorylab/reserve.key -/srv/factorylab/polymarket.key -/srv/factorylab/ops.env -/srv/factorylab/rclone.conf
 StandardOutput=null
 StandardError=null
 LimitCORE=0

@@ -1,10 +1,12 @@
 [Unit]
-Description=Hourly Factory Lab health verdict
+Description=Factory Lab health verdict after boot
 
 [Timer]
-# Half an hour after the wake's hourly publish, so the verdict reads a finished one.
+# The hourly verdict runs from the wake unit (OnSuccess=), right after each finished
+# publication: the ledger is aged at the check, and a check half an hour after the
+# publish would read every fresh ledger as stale. This timer covers a boot whose wake
+# failed; a wake that keeps failing is alerted by its own unit (wake_failed).
 OnBootSec=10min
-OnCalendar=*-*-* *:30:00
 Persistent=true
 Unit=factorylab-health.service
 

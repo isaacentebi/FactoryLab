@@ -259,3 +259,33 @@ def test_snapshot_count_bounded_by_r_times_L(scripted_runtime_run):
             assert deadline is None or opened is None or deadline - opened <= bound
             checked += 1
     assert checked  # the run left rounds open: nothing above is vacuous
+
+
+def test_singleton_core_router_round_survives_checkpoint_and_restore():
+    """Sol 6.1 r3: every Tick reader retired, a blum_mansour replacement routes Tick
+    over [NOOP] alone. That draw is a real round (no candidate makes it quiet), its
+    snapshot carries gamma 0, and a checkpoint taken while it was outstanding could not
+    be restored ("invalid saved gamma"): a restart would never come back."""
+    from factorylab.cortex.registration import RouterProposal
+    from factorylab.kernel.events import Event, EventKind
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    for n, seat in enumerate(("antagonist-a", "seed-decider"), 1):
+        rt._retire_assembly(seat, f"vote-{n}")
+    rt.ticks_consumed = rt.m.timing.min_ratio * rt._delivery_bound()  # the gate is open
+    rt.clock.now_ns = rt.ticks_consumed * rt.m.tick_interval_ns
+    rt.n += 1
+    rt._register("population", RouterProposal("Tick", "blum_mansour"))
+    state = rt.routers["Tick"][0]
+    assert state.universe == [NOOP]
+    rt.n += 1
+    rt._route_with(state, Event("singleton-tick", EventKind.TICK, rt.clock.now_ns, {},
+                                "clock"))
+    (saved,) = state.learner.inner.state()["snapshots"].values()
+    assert saved["gamma"] == 0.0
+    checkpoint = runtime_state(rt)
+    restored = make_runtime()
+    restore_runtime(restored, checkpoint)
+    assert (restored.routers["Tick"][0].learner.inner.state()
+            == state.learner.inner.state())

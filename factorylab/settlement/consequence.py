@@ -8,6 +8,7 @@ from fractions import Fraction
 from factorylab.kernel.ledger import Ledger
 from factorylab.settlement.lots import (
     FEE_UNKNOWN,
+    FILL_REORDERED,
     NO_MARK,
     RELEASED_ORDER,
     WIND_DOWN,
@@ -56,6 +57,16 @@ class ReturnConsequences:
         # and earned. Its state at H is derived from these at fix time, applying every
         # fact at or before H, so what arrived when, on which stream, cannot matter.
         self.history: dict[str, list[dict]] = {}
+        # Sol 6.1 r4 (§III.b: a realized consequence is a fact the world measured): the
+        # latest fill fact time applied per instrument, and each open return whose
+        # outcome an older fill, applied after it, left unreconstructable. The lots
+        # keep custody's arrival-order books; the outcome is censored, never graded.
+        self.fill_ns: dict[str, int] = {}
+        self.reordered: dict[str, str] = {}
+        # Each instrument whose inventory a reordered fill left in arrival order, and
+        # how many of its lots, at the head of its FIFO, are still that inventory
+        # (Sol 6.1 on #193): a later closer of them is censored too.
+        self.tainted: dict[str, int] = {}
         self.pending_orders: dict[str, dict] = {}
         # R4-C: intents the venue never answered and never will. The hold on
         # consequence resolution is released for them, but the exposure is not
@@ -378,6 +389,8 @@ class ReturnConsequences:
             if any(o.order_id == str(payload["order_id"]) and o.handle == WIND_DOWN
                    for o in self.table.orders):
                 self._unattributed_wind_down(payload, event, self.table, table)
+            if at is not None:
+                self._check_fill_order(int(at), payload, table, event)
             # What the fill did to every open return, at its own fact time.
             self._record_effects(at, str(payload["coin"]), self.table, table)
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
@@ -406,6 +419,63 @@ class ReturnConsequences:
             self._apply("funding", {"event": event, "payload": dict(payload)}, table)
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
             self.cancel(str(payload["order_id"]), event)
+
+    def _check_fill_order(self, at_ns: int, payload: dict, after: LotTable,
+                          event: int) -> None:
+        """Censor every open return whose outcome rests on lots matched in arrival
+        order rather than the world's.
+
+        Guarantees the latest applied fill time per (market, instrument) is kept. A
+        fill strictly older than it taints every lot of that instrument the fill leaves
+        (the shared FIFO matched it in arrival order) and marks ``FILL_REORDERED`` on
+        each open return that holds, held or trades the instrument: no outcome built on
+        that matching is certified as what the world did by its horizon. The tainted
+        lots are the head of the instrument's FIFO (an instrument's lots are one-sided,
+        closed from the front, opened at the back), so their count is kept. Until every
+        tainted lot is gone, a later fill that closes into them marks the same on its
+        own return; a fill that only opens fresh inventory, and any fill after the last
+        tainted lot is gone, marks nothing. Fills of one instant keep the venue's order
+        (their order is itself a fact); other instruments are untouched.
+        """
+        coin, market = str(payload["coin"]), payload.get("market", "perp")
+        key = f"{market}:{coin}"
+        latest = self.fill_ns.get(key)
+        self.fill_ns[key] = at_ns if latest is None else max(latest, at_ns)
+        reordered = latest is not None and at_ns < latest
+        if not reordered and key not in self.tainted:
+            return
+        before = [lot for lot in self.table.lots if lot.coin == coin and lot.market == market]
+        held = [lot for lot in after.lots if lot.coin == coin and lot.market == market]
+        owner = {order.handle for order in after.orders
+                 if order.order_id == str(payload["order_id"])}
+        if reordered:
+            touched = {lot.handle for lot in (*before, *held)} | owner | {
+                handle for handle, entries in self.history.items()
+                if any(entry.get("coin") == coin for entry in entries)}
+            remaining = len(held)
+        else:
+            # Closing consumes the head of the FIFO: the lots of its side that remain
+            # are the tail, and every tainted lot past them is gone.
+            closes = bool(before) and payload["is_buy"] != before[0].is_buy
+            survivors = sum(lot.is_buy == before[0].is_buy for lot in held) if closes else len(
+                before)
+            remaining = max(0, self.tainted[key] - (len(before) - survivors))
+            touched = owner if closes else set()
+        censored = sorted(handle for handle in touched
+                          if handle is not None and self.account_open(handle)
+                          and handle not in self.reordered)
+        for handle in censored:
+            self.reordered[handle] = FILL_REORDERED
+        if remaining:
+            self.tainted[key] = remaining
+        else:
+            self.tainted.pop(key, None)
+        if reordered or censored or not remaining:
+            self.ledger.append({"kind": "consequence.reordered", "event": event,
+                                "order_id": str(payload["order_id"]), "instrument": key,
+                                "fact_ns": at_ns, "applied_through_ns": latest,
+                                "handles": censored, "reordered": reordered,
+                                "tainted_lots": remaining})
 
     def _unattributed_wind_down(self, payload: dict, event: int, before: LotTable,
                                 after: LotTable) -> None:
@@ -730,7 +800,8 @@ class ReturnConsequences:
                      for account in self.table.returns
                      if account.payoff is None and not account.voided}
         table = self.table.resolve(event, self.backstop, self.mids,
-                                   censored=self._unknown_portions(), tick=self._tick(event),
+                                   censored={**self.reordered, **self._unknown_portions()},
+                                   tick=self._tick(event),
                                    now_ns=self._now_ns(), through_ns=through,
                                    through_by_handle=by_handle,
                                    horizon_ns=self.horizon_ns,
@@ -764,7 +835,7 @@ class ReturnConsequences:
         self.table = table
         # A horizon mark is pinned by its return's open outcome: fixed or voided, no
         # reader remains.
-        for kept in (self.horizon_marks, self.horizon_mark_ns, self.history):
+        for kept in (self.horizon_marks, self.horizon_mark_ns, self.history, self.reordered):
             for handle in [h for h in kept if not self.account_open(h)]:
                 del kept[handle]
         return fixed

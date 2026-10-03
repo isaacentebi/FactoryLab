@@ -243,6 +243,21 @@ def test_a_clock_that_runs_backwards_is_unknown_not_fresh():
     assert _assess(doc).status == "unknown"
 
 
+def test_the_ledger_is_aged_at_the_check_not_at_the_publication():
+    """Sol 6.1 r5: an event 19 minutes old when the wake published read as fresh half
+    an hour later, when it was 49 minutes old. The ledger's age is read now, so the
+    check runs right after each publication (the wake unit's OnSuccess), where a fresh
+    event is still healthy."""
+    published = NOW - 30 * 60 * S
+    doc = _wake(published, last=published - 19 * 60 * S)
+    assert _assess(doc, published=published).reasons == ("ledger_stale",)
+    just = NOW - 60 * S
+    assert _assess(_wake(just), published=just).status == "healthy"
+    # A stale publication still measures nothing now: unknown, as before.
+    old = NOW - 3 * 3600 * S
+    assert _assess(_wake(old), published=old) == liveness.Verdict("unknown", ("wake_stale",))
+
+
 def test_terminated_is_final_and_not_alive(tmp_path, fakes, monkeypatch):
     monkeypatch.setattr(liveness, "disk_percent", lambda path: 10.0)
     assert _assess(_wake(NOW, status="terminated", last=1)) == liveness.Verdict("terminated")
@@ -444,10 +459,13 @@ def test_the_health_heartbeat_and_alert_units_are_wired_as_documented():
     assert health["SuccessExitStatus"] == [" ".join(map(str, handled))] == ["10 11 12"]
     assert health["OnFailure"] == ["factorylab-alert@health_failed.service"]
     assert "--health /srv/factorylab/runs/funded.health" in health["ExecStart"][0]
-    assert _unit("factorylab-health.timer")["OnCalendar"] == ["*-*-* *:30:00"]
+    # The verdict ages the ledger at the check, so it runs as each publication
+    # finishes, however long the wake took; the timer only covers a boot.
+    assert "OnCalendar" not in _unit("factorylab-health.timer")
     assert _unit("factorylab-heartbeat.timer")["OnCalendar"] == ["*-*-* 00/6:45:00"]
     wake = _unit("factorylab-wake.service")
     assert wake["OnFailure"] == ["factorylab-alert@wake_failed.service"]
+    assert wake["OnSuccess"] == ["factorylab-health.service"]
     assert "ExecStartPost" not in wake  # the witness moved to the health unit
     # ProtectSystem=strict refuses a unit whose writable path does not exist: every one
     # is a directory the provisioner creates before any world.
@@ -504,12 +522,20 @@ def _run_backup(tmp_path: Path, root: Path, *, avail_kb: int) -> subprocess.Comp
         "RCLONE_CONFIG": str(tmp_path / "fixture.conf")})
 
 
+def _staged(tmp_path: Path) -> list[str]:
+    """What the backup left in its staging directory. macOS's xcrun writes its own
+    cache (``xcrun_db``) into TMPDIR when a stand-in tool runs; that is the host's,
+    not the backup's."""
+    return sorted(p.name for p in (tmp_path / "staging").iterdir()
+                  if not p.name.startswith("xcrun_db"))
+
+
 def test_backup_prunes_plaintext_before_upload_and_all_staging_after(tmp_path):
     root = _backup_root(tmp_path)
     proc = _run_backup(tmp_path, root, avail_kb=60_000_000)
     assert proc.returncode == 0, proc.stderr.decode()
     assert (tmp_path / "calls").read_text().splitlines() == ["age", "rclone backup.tar.age"]
-    assert list((tmp_path / "staging").iterdir()) == []
+    assert _staged(tmp_path) == []
     assert not (root / "runs/.backup-pin").exists()
     assert (root / "runs/funded.jsonl").read_bytes() == b'{"item": 1}\n{"item": 2}\n'
 
@@ -522,4 +548,46 @@ def test_backup_refuses_to_stage_without_room_beside_the_world(tmp_path):
     assert proc.returncode == 1
     assert b"backup not taken: not enough free space" in proc.stderr
     assert not (tmp_path / "calls").exists()
-    assert list((tmp_path / "staging").iterdir()) == []
+    assert _staged(tmp_path) == []
+
+
+def test_the_supervisor_launches_and_resumes_the_edition8_roster():
+    """Sol 6.1 r5: start.sh's own arguments, parsed by the CLI's parser, name a world
+    that loads, and it is edition 8's fourteen-seat roster. A missing world made every
+    start a manifest_unavailable refusal that Restart=always repeated forever."""
+    import shlex
+
+    from factorylab.runtime.cli import build_parser
+    from factorylab.runtime.worlds import load_manifest
+
+    text = (DEPLOY / "start.sh").read_text()
+    ledger = re.search(r"^ledger=(\S+)$", text, re.M).group(1)
+    invocations = re.findall(r'"\$cli" ((?:run|resume) [^;|\n]*)', text)
+    assert [line.split()[0] for line in invocations] == ["run", "resume"]
+    edition8 = load_manifest("edition8-launch")
+    for line in invocations:
+        argv = [ledger if a == "$ledger" else a for a in shlex.split(line)]
+        args = build_parser().parse_args(argv)
+        assert args.ledger == ledger
+        world = load_manifest(args.world)
+        assert len(world.assemblies) == 14
+        assert world.assemblies == edition8.assemblies and world.models == edition8.models
+    # The backup stages the manifest the supervisor runs, by its fixed path.
+    backup = (DEPLOY / "backup.sh").read_text()
+    assert f"repo/worlds/{args.world}.toml" in backup
+
+
+def test_the_static_server_masks_every_key_and_starts_without_optional_files():
+    """Sol 6.1 r5: the static unit masked rclone.conf as mandatory, so a host without
+    backups could not start it, and it never masked polymarket.key. Every root key the
+    CLI reads is masked, each file optionally ("-": absent is nothing to mask)."""
+    from factorylab.runtime import cli
+
+    (paths,) = _unit("factorylab-static.service")["InaccessiblePaths"]
+    masked = paths.split()
+    keys = re.findall(r'\("([a-z]+\.key)", "[A-Z_]+"\)', (Path(cli.__file__)).read_text())
+    assert {"openrouter.key", "hyperliquid.key", "reserve.key", "polymarket.key"} <= set(keys)
+    for name in (*keys, "ops.env", "rclone.conf"):
+        assert f"-/srv/factorylab/{name}" in masked, name
+    # The directories the provisioner creates stay mandatory: a missing one is an error.
+    assert {"/srv/factorylab/runs", "/srv/factorylab/repo"} <= set(masked)

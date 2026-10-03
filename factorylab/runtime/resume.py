@@ -319,6 +319,12 @@ class RecoveryJournal:
     def __init__(self, ledger: Ledger, clock) -> None:
         self.ledger = ledger
         self.clock = clock
+        # The wall clock a resend after a crash is stamped with: the replayed event's
+        # clock reads the original send's time, not the resend's (Sol 6.1 on 5154f86c).
+        self.wall_ns = time.time_ns
+        # When the latest call was a treasury send resent by recovery, its wall time:
+        # read from the recorded io.result on replay, so a replay sees the same value.
+        self.resent_ns: int | None = None
         self.tail = iter(())
         self.position = 0
         self.active = False
@@ -431,6 +437,7 @@ class RecoveryJournal:
 
     def call(self, name: str, function, args: tuple, kwargs: dict, *, deterministic=False):
         """Recorded calls return their original result; only deterministic fakes run in replay."""
+        self.resent_ns = None
         if not _read_only(name):
             adapter = name.split(".", 1)[0]
             self.writes[adapter] = self.writes.get(adapter, 0) + 1
@@ -440,6 +447,7 @@ class RecoveryJournal:
         arguments = {k: v for k, v in kwargs.items() if k != "record"}
         replayed = self.peek() is not None
         ambiguous_retry = False
+        resent: int | None = None
         fingerprint = hashlib.sha256(canonical(encode((args, arguments)))).hexdigest()
         seq = self.append({"kind": "io.call", "name": name, "input_hash": fingerprint})
         if replayed and not deterministic:
@@ -457,6 +465,7 @@ class RecoveryJournal:
                                 if k not in ("seq", "prev_hash", "hash")}
                 result = decode(self._recorded_result(item)) if "error" not in item else None
                 self.append(result_entry)
+                self.resent_ns = item.get("resent_ns")
                 if "error" in item:
                     raise _recorded_error(item["error"], item.get("reason"),
                                           status=item.get("status"),
@@ -504,6 +513,8 @@ class RecoveryJournal:
                 from factorylab.world.evm import Pending
 
                 raise Pending("replayed submission requires receipt reconciliation")
+            if ambiguous_retry:
+                resent = self.wall_ns()
             result = function(*args, **kwargs)
             encoded_result = encode(result)
         except Exception as exc:
@@ -545,9 +556,13 @@ class RecoveryJournal:
                 billing["expired"] = True
             self.append({"kind": "io.result", "call": seq, "error": error,
                          **({"reason": reason} if reason is not None else {}),
-                         **({"carry": carry} if carry is not None else {}), **billing})
+                         **({"carry": carry} if carry is not None else {}),
+                         **({"resent_ns": resent} if resent is not None else {}), **billing})
+            self.resent_ns = resent
             raise _recorded_error(error, reason, carry=carry, **billing) from None
-        self.append(self._result_item(seq, encoded_result))
+        item = self._result_item(seq, encoded_result)
+        self.append(item if resent is None else {**item, "resent_ns": resent})
+        self.resent_ns = resent
         return result
 
     def _result_item(self, seq: int, encoded_result) -> dict:
@@ -1014,7 +1029,10 @@ _COMPONENT_FIELDS = (
                           "horizon_marks", "horizon_mark_ns",
                           # Codex on #152: the facts seen through, and returns' economics
                           # frozen at their horizon.
-                          "facts_ns", "tick_through_ns", "history")),
+                          "facts_ns", "tick_through_ns", "history",
+                          # Sol 6.1 r4: the latest fill applied per instrument, and the
+                          # returns an older fill applied after it censored.
+                          "fill_ns", "reordered", "tainted")),
     ("consequence_fills", "", ("launch_ns", "read_ns", "since_ns", "seen", "through_ns", "measured",
                                "propagation_bound_ns", "observation_complete",
                                "reconciliation_ns", "expected_positions", "expected_cash",
@@ -1489,9 +1507,12 @@ def restore_runtime(rt, state: dict, *, from_diary: bool = False) -> None:
             if name in ("working_state", "outcomes") and name not in components:
                 # Older checkpoints predate continuity; heads and inboxes start empty.
                 continue
-            if (name == "consequences" and field in ("unresolved_orders", "censored_payoffs")
+            if (name == "consequences"
+                    and field in ("unresolved_orders", "censored_payoffs", "fill_ns",
+                                  "reordered", "tainted")
                     and field not in components[name]):
-                # Older checkpoints predate the released hold; nothing is released.
+                # Older checkpoints predate the released hold, and the fill-order
+                # check: nothing is released, and no fill order was recorded.
                 continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.

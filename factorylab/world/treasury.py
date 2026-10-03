@@ -213,6 +213,12 @@ class Treasury:
         self.vault_custody = False
 
     def _write(self, kind: str, **fields) -> None:
+        state = fields.get("state")
+        if isinstance(state, dict) and "sent_ns" in state:
+            # A state's send times live in it and in the checkpoint; each send is
+            # ledgered once, on its own broadcast row, so a retry run that lasts days
+            # never copies a growing list into every row it writes.
+            fields["state"] = {k: v for k, v in state.items() if k != "sent_ns"}
         self.ledger.append({"kind": "treasury." + kind, **fields})
 
     def open_window(self, index: int) -> None:
@@ -757,8 +763,11 @@ class Treasury:
     def _send(self) -> None:
         state = self.state
         first_attempt = state["attempts"] == 0
-        state = {**state, "attempts": state["attempts"] + 1}
-        self._write("broadcast", state=state)
+        # Each send of this reference is ledgered with its own time: a venue row that
+        # binds to no signed action is matched against these sends' windows alone.
+        state = {**state, "attempts": state["attempts"] + 1,
+                 "sent_ns": [*state.get("sent_ns", ()), state["last_send_ns"]]}
+        self._write("broadcast", state=state, sent_ns=state["last_send_ns"])
         self.state = state
         try:
             result = self.rail.send(state["steps"][state["index"]], state["reference"])
@@ -778,6 +787,14 @@ class Treasury:
                 )
         except Exception:
             self._write("pending", transfer_id=state["id"], reason="submission outcome unknown")
+        # A send interrupted by a crash is resent by the recovery at its own wall time,
+        # while the replayed event's clock reads the original send's: it is recorded at
+        # that time, as any send is, so its execution falls in its own window.
+        resent = getattr(getattr(self.rail, "journal", None), "resent_ns", None)
+        if resent is not None and self.state.get("status") == "submitted":
+            self.state = {**self.state, "last_send_ns": resent,
+                          "sent_ns": [*self.state.get("sent_ns", ()), resent]}
+            self._write("resent", transfer_id=state["id"], sent_ns=resent)
 
     def reconcile(self, now_ns: int, *, observed: dict | None = None) -> list[dict]:
         """Advance at most one receipt-confirmed step per tick; never replace an ambiguous nonce.
@@ -920,6 +937,7 @@ class Treasury:
             "reference": None,
             "attempts": 0,
             "last_send_ns": now_ns,
+            "sent_ns": [],
         }
         self._write("advance", state=next_state)
         self.state = next_state
@@ -1072,7 +1090,7 @@ class Treasury:
         recovered = {k: v for k, v in self._settled(state).items()
                      if k not in ("reason", "recoverable", "stranded_ns")}
         recovered.update(status="submitted", reference=None, attempts=0, last_send_ns=now_ns,
-                         recovered_ns=now_ns)
+                         sent_ns=[], recovered_ns=now_ns)
         if landed:
             # A superseded authorization settled after all: book it, sign nothing new.
             recovered["reference"] = ref
@@ -1878,25 +1896,37 @@ class ClassTransferRail:
         """Confirm one hashed row of the signed direction and amount executed in window.
 
         The nonce is this client's prepare time and ``time`` is the venue's execution
-        time, so they are never equal; the evidence is the unique row whose execution
-        falls in ``[nonce, nonce + CLASS_EXECUTION_TOLERANCE_MS]``, pinned by its hash.
-        Two candidate rows are ambiguous and confirm nothing.
+        time, so they are never equal. An ``accountClassTransfer`` row carries no nonce
+        and the submit answers no hash, so nothing binds a row to this signed action:
+        the evidence is a row of its direction and amount whose execution falls in one
+        ledgered send's own window, ``[max(nonce, send), send + tolerance]`` (the same
+        signed action is resent at its nonce on every retry, and any one send may be
+        the one that executes). Guarantees confirmation only when exactly one candidate
+        row lies anywhere in ``[nonce, the last window's end]`` and it lies in a send's
+        window: a second candidate is ambiguous and one between windows is not ours;
+        both confirm nothing. A state ledgered before sends were recorded has the
+        nonce's window and its last send's.
         """
         ref = state["reference"]
-        start, end = ref["nonce"], ref["nonce"] + CLASS_EXECUTION_TOLERANCE_MS
+        nonce, tolerance = ref["nonce"], CLASS_EXECUTION_TOLERANCE_MS
+        sends = [ns // 1_000_000 for ns in state.get("sent_ns") or (
+            nonce * 1_000_000, state.get("last_send_ns", 0))]
+        windows = [(max(nonce, sent), max(nonce, sent) + tolerance) for sent in sends]
+        end = max(high for _low, high in windows)
         rows = self.exchange._info.user_non_funding_ledger_updates(
-            self.exchange._address, start)
+            self.exchange._address, nonce)
         matches = []
         for row in rows:
             delta = row.get("delta", {})
             executed = row.get("time")
-            if (type(executed) is int and start <= executed <= end and row.get("hash")
+            if (type(executed) is int and nonce <= executed <= end and row.get("hash")
                     and delta.get("type") == "accountClassTransfer"
                     and delta.get("toPerp") is ref["action"]["toPerp"]
                     and Decimal(str(delta.get("usdc", "0"))) * 1_000_000
                     == state["amount_micro"]):
                 matches.append(row)
-        if len(matches) != 1:
+        if len(matches) != 1 or not any(
+                low <= matches[0]["time"] <= high for low, high in windows):
             return None
         return {"confirmed": True, "received_micro": state["amount_micro"],
                 "fee_micro": 0, "principal_moved": True, "evidence": matches[0]}
