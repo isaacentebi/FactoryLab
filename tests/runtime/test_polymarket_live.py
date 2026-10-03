@@ -25,7 +25,7 @@ from factorylab.world import polymarket_clob as clob
 from tests.helpers import collateral_decision
 from tests.runtime.test_loop import _consequence_runtime
 from tests.runtime.test_polymarket_surface import still_fake
-from tests.world.fake_clob import OTHER, FakeClob, _Wall, make_signer
+from tests.world.fake_clob import OTHER, FakeClob, _Wall, fake_chain, make_signer
 
 
 def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None,
@@ -55,7 +55,8 @@ def live_world(*, fake=None, principal="100", budget=60, confirm=True, wall=None
     venue = clob.LivePolymarket(funder=signer.address, signature_type=0, budget=budget,
                                 signer=signer, send=server, identity=installed.identity,
                                 wall=wall or _Wall(), nonce=lambda: 7,
-                                get=lambda url: server("GET", url, {}, None))
+                                get=lambda url: server("GET", url, {}, None),
+                                chain=fake_chain(server))
     venue.intent_of = installed.intent_of  # the runtime's own intents, as installed
     rt.polymarket.venue.target = venue
     if opened:

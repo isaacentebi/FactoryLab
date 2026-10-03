@@ -613,6 +613,8 @@ def _read_only(name: str) -> bool:
             # identity (a pure function of its fields), a fill poll that carries its
             # own cursor, and a held token's mark.
             "order_identity", "poll", "mark_book", "write_market", "write_market_of_token",
+            # The pot as Polygon states it (issue #180): eth_call reads only.
+            "chain_account",
             # A submission slot taken at admission: local, re-taken by a resume.
             "reserve_order_slot"):
         return True  # the public Polymarket reads (world/polymarket.py)
