@@ -7,8 +7,16 @@ import pytest
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.wallet import Wallet
 from factorylab.runtime.live import Reconciler
+from factorylab.runtime.venue import VenueMixin
 from factorylab.world.evm import Pending
-from factorylab.world.treasury import FakeRail, FakeTreasury, Treasury, provider_pots
+from factorylab.world.exchange import AccountState
+from factorylab.world.treasury import (
+    FakeRail,
+    FakeTreasury,
+    Treasury,
+    UnconfiguredRail,
+    provider_pots,
+)
 
 
 def setup():
@@ -560,3 +568,60 @@ def test_late_evidence_for_a_parked_action_is_booked_from_that_read(step):
     assert treasury.pots()["parked"] == []
     assert not treasury.pots()["pending"]  # the transfer finished; nothing holds the slot
     assert treasury.state["id"] == stuck and treasury.state["status"] == "confirmed"
+
+
+class _RetryExecutedClassRail(UnconfiguredRail):
+    """An offline class-transfer rail whose first POST never completes and whose retry
+    executes: the venue stamps the execution 70 s after the signed nonce."""
+
+    def __init__(self):
+        self.rows, self.sends = [], 0
+        account = AccountState(Decimal(500), Decimal(500), (), Decimal(0))
+        super().__init__(SimpleNamespace(
+            name="hyperliquid", _address="offline-account",
+            _exchange=SimpleNamespace(wallet=SimpleNamespace(address="offline-account"),
+                                      vault_address=None),
+            _info=SimpleNamespace(user_non_funding_ledger_updates=lambda *_: self.rows),
+            account=lambda: account))
+
+    def send(self, step, reference):
+        self.sends += 1
+        if self.sends == 1:
+            raise Pending("offline first POST did not complete")
+        if not self.rows:
+            self.rows.append({
+                "time": reference["nonce"] + 70_000, "hash": "executed-class-move",
+                "delta": {"type": "accountClassTransfer", "toPerp": False, "usdc": "5"}})
+
+
+def test_class_transfer_executed_on_retry_must_confirm_and_unblock_venue():
+    """A class move retried at its own nonce may execute on any ledgered attempt, so
+    its receipt window spans every attempt, not the first send's alone. A retry that
+    executed past the first send's window confirmed nothing, held the principal and
+    the slot forever, and refused every venue write but a cancel, closes included."""
+    ledger, wallet, _ = setup()
+    rail = _RetryExecutedClassRail()
+    treasury = Treasury(ledger, wallet, rail)
+    start_ns = 1_700_000_000_000_000_000
+    assert treasury.transfer("perps_to_spot", "5", handle="h",
+                             now_ns=start_ns)["status"] == "submitted"
+    treasury.tick(start_ns + 70_000_000_000)  # the retry executes at nonce + 70 s
+    assert rail.sends == 2 and len(rail.rows) == 1
+    treasury.tick(start_ns + 80_000_000_000)
+    assert treasury.state["status"] == "confirmed"
+    assert wallet.available == wallet.balance  # the principal hold is released
+    rt = SimpleNamespace(treasury=treasury, order_intents={}, vault_intents={},
+                         _spot_shortfall=lambda *_: None)
+    rt._class_transfer_pending = lambda: VenueMixin._class_transfer_pending(rt)
+    assert VenueMixin.venue_batch_refusal(
+        rt, "seat", "close", [("0", "venue.close", {"coin": "BTC"})]) is None
+    # The unique-row rule still holds across the widened window: a second candidate
+    # row inside it confirms nothing.
+    ledger2, wallet2, _ = setup()
+    rail2 = _RetryExecutedClassRail()
+    treasury2 = Treasury(ledger2, wallet2, rail2)
+    treasury2.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    treasury2.tick(start_ns + 70_000_000_000)
+    rail2.rows.append({**rail2.rows[0], "hash": "another", "time": rail2.rows[0]["time"] + 1})
+    treasury2.tick(start_ns + 80_000_000_000)
+    assert treasury2.state["status"] == "submitted"

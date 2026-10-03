@@ -36,14 +36,14 @@ ID_TERMS = ("constructor", "builder", "trader", "opportunity", "mechanism", "emp
 #: The worlds that carry edition 6's roster: edition 6's own, the edition 7 breadth
 #: draft, a copy of the edition 6 rehearsal that changes only its market universe, and
 #: the edition 8 launch draft, edition 7 re-seated on other models (its seat ids and
-#: lenses are edition 6's).
+#: lenses are edition 6's), with ``funded``, edition 8 under the supervisor's name.
 EDITION6 = ("edition6-capital-loop", "edition6-testnet-rehearsal", "edition7-breadth-testnet",
-            "edition8-launch")
+            "edition8-launch", "funded")
 
 
 #: The edition 6 roster worlds that still carry its constructor and opportunity lenses.
 #: Edition 8 removed both (audit s03 #1), so item 3 is an ordinary assertion there.
-EDITION6_LENSES = tuple(w for w in EDITION6 if w != "edition8-launch")
+EDITION6_LENSES = tuple(w for w in EDITION6 if w not in ("edition8-launch", "funded"))
 
 
 def _edition6_xfail(reason, worlds=EDITION6):

@@ -6,6 +6,7 @@
   "edition6-testnet-rehearsal",
   "edition7-breadth-testnet",
   "edition8-launch",
+  "funded",
   "kernel",
   "scripted",
   "scripted-crash",
@@ -2260,6 +2261,416 @@
    "surface": "static",
    "rule": "IMP",
    "path": "edition8-launch/tools/world.read/description",
+   "quote": "read one current public institutional section by its directory handle.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "9240f5fcfe77",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/counter/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "5768e5daa4d6",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/counter/request/#prose",
+   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "1688eb85b548",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/judge/base_capabilities/outcomes.preview_semantics",
+   "quote": "use outcome.get on an outcome_id to deliver one before acknowledging it",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "78df112aa53e",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/judge/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "67a603d4b38c",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/judge/request/#prose",
+   "quote": "give verdict 0-1 on the return against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "49b09ef41f59",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/meta/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a97cb023e02d",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/meta/request/#prose",
+   "quote": "assess the released representative verdict for conformity with the charter, using its window as context.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "e2bacefccfb4",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/base_capabilities/proposals[].description",
+   "quote": "give one assembly a learner over an action set it declares",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "142688ab622a",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/base_capabilities/proposals[].description",
+   "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a72af708ba64",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/base_capabilities/tools[].description",
+   "quote": "read an archived artifact by its sha256:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "140172a75b10",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/base_capabilities/tools[].description",
+   "quote": "read any indexed body with outcome.get using its exact outcome_id.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "ad00495cca66",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/base_capabilities/tools[].description",
+   "quote": "read one current public institutional section by its directory handle.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "55b495cd28a3",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/base_capabilities/tools[].description",
+   "quote": "read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a5386f3bdca0",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "225f42e36705",
+   "world": "funded",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "funded/request/produce/you/outcomes.preview_semantics",
+   "quote": "use outcome.get on an outcome_id to deliver one before acknowledging it",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "39e3d7c4bf2e",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/a_return_may_include/about_handle",
+   "quote": "omit it to judge the delivered return.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "8e5312975b24",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "4f63357342f6",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/connectors/payment",
+   "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "dc6d4ff625c8",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "9b083dde798c",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "20cf7f7af927",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "77ec19ae81dc",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/venue_listing",
+   "quote": "call the venue.instruments public read for the whole listing, and register a market proposal to trade one of them.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "584655d8032a",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/work/reward_shapes.conformity",
+   "quote": "return conformity (0 to 1) on the judged work.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "74a0d56591f4",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/work/reward_shapes.counter",
+   "quote": "return verdict (0 to 1) on the return a verdict judged.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "325aea85de07",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/institutions/work/reward_shapes.forecast",
+   "quote": "return forecasts:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "9240f5fcfe77",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/counter/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "5768e5daa4d6",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/counter/request/#prose",
+   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "718597555892",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "971b4c517da3",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "15c01a64fbe1",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "6e158aacf673",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "f55de1c56b94",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "014f335ed515",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "7c64c7cf69ca",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "c805f0118e67",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "55d0bef13191",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "7a64f3abf117",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "0b25714286a5",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/tools/artifact.get/description",
+   "quote": "read an archived artifact by its sha256:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a43d798cf858",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/tools/outcome.get/description",
+   "quote": "read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "c8afc168e8c4",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/tools/outcome.list/description",
+   "quote": "read any indexed body with outcome.get using its exact outcome_id.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "94425939ebd4",
+   "world": "funded",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "funded/tools/world.read/description",
    "quote": "read one current public institutional section by its directory handle.",
    "design_ref": null,
    "status": "untriaged"

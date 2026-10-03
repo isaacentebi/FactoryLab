@@ -139,7 +139,9 @@ def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
                        # A copy of the edition 6 rehearsal with the broad universe.
                        "edition7-breadth-testnet.toml",
                        # Edition 7 re-seated, reads only: its live order rail is off.
-                       "edition8-launch.toml"}
+                       "edition8-launch.toml",
+                       # Edition 8 under the name the supervisor launches.
+                       "funded.toml"}
 
 
 def test_a_free_read_is_published_free_and_debits_nothing():

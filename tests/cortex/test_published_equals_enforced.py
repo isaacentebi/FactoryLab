@@ -579,7 +579,7 @@ def test_every_published_value_is_the_one_the_runtime_enforces():
     H, the consequence patience (R10-k), the cap, each learner's map bound (R10-l) and
     the uninformative reasons."""
     from factorylab.runtime.clockwork import tick_ns
-    from factorylab.settlement.lots import FEE_UNKNOWN, NO_MARK
+    from factorylab.settlement.lots import FEE_UNKNOWN, FILL_REORDERED, NO_MARK
     from tests.conftest import make_runtime
 
     rt = make_runtime()
@@ -592,9 +592,9 @@ def test_every_published_value_is_the_one_the_runtime_enforces():
     assert values["penalty_cap"] == rt.controller.snapshot()["parameters"]["penalty_cap"]
     assert values["learned_map_bound"] == {"router": rt._charge_bound(True),
                                            "seat": rt._charge_bound(False)}
-    assert values["uninformative_reasons"] == [FEE_UNKNOWN, NO_MARK]
+    assert values["uninformative_reasons"] == [FEE_UNKNOWN, NO_MARK, FILL_REORDERED]
     text = rt._scoring_block()["verdict_is_a_prediction"]
-    assert FEE_UNKNOWN in text and NO_MARK in text
+    assert FEE_UNKNOWN in text and NO_MARK in text and FILL_REORDERED in text
 
 
 @pytest.mark.parametrize("raw,card,thrash", [(0.1, 0.0, 0.0), (0.3, 0.2, 0.0),

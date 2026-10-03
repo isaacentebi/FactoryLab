@@ -554,3 +554,19 @@ def test_the_edition6_worlds_carry_the_schema_on_the_probed_routes_alone():
         qwen_routes = {"qwen/qwen3.8-flash", "venice:qwen-3-8-flash"}
         assert {model.id: model.contract for model in manifest.models
                 if model.id in qwen_routes} == dict.fromkeys(qwen_routes, "json_object")
+
+
+def test_the_funded_world_is_edition8_named_funded():
+    """Sol 6.1 r5: the installed supervisor launches and resumes ``--world funded``, and
+    no worlds/funded.toml existed, so systemd restarted forever on manifest_unavailable.
+    The funded world is edition 8 byte for byte, but for the name its file stem demands.
+    Ratification replaces its [charter] block; this test then states that difference."""
+    from factorylab.runtime.worlds import WORLDS_DIR
+
+    launch = (WORLDS_DIR / "edition8-launch.toml").read_text()
+    stated = '\nname = "edition8-launch"\n'
+    assert launch.count(stated) == 1
+    assert (WORLDS_DIR / "funded.toml").read_text() == launch.replace(
+        stated, '\nname = "funded"\n')
+    funded = load_manifest("funded")
+    assert funded.name == "funded" and not funded.exchange.mainnet

@@ -843,3 +843,36 @@ def test_resume_refuses_a_roster_changed_after_launch_and_the_unedited_one_runs(
         "factorylab resume: charter_roster_mismatch"]
     assert ledger.read_bytes() == before
     assert main(["resume", "--world", str(ratified), "--ledger", str(ledger)]) == 0
+
+
+@pytest.mark.parametrize("field", ["region", "lambda"])
+def test_a_huge_integer_in_a_proposed_card_is_that_proposal_s_problem(
+        field, tmp_path, monkeypatch):
+    """Sol 6.1 r4: JSON integers are unbounded, so a seat's reply parsed with a bound of
+    10**309, and the float conversion behind it raised OverflowError out of the session.
+    A malformed card value makes that one proposal unusable; the session goes on."""
+    huge = 10 ** 309
+
+    class Huge(charter_session.ScriptedCharterProvider):
+        def complete(self, req):
+            first = self.proposals == 0
+            response = super().complete(req)
+            body = json.loads(response.text)
+            if first and "cards" in body:
+                card = body["cards"][0]
+                if field == "region":
+                    card["region"] = {"rule": "at most", "hi": huge}
+                else:
+                    card["lambda"] = huge
+                response = charter_session.ModelResponse(
+                    response.model_id, json.dumps(body), response.input_tokens,
+                    response.output_tokens, response.stop_reason, cost_micro=0)
+            return response
+
+    monkeypatch.setattr(charter_session, "ScriptedCharterProvider", Huge)
+    out = tmp_path / "session"
+    assert charter_session.main(["session", "--world", "scripted", "--out-dir", str(out),
+                                 "--dry-run", "--launch", "run"]) == 0
+    proposals = json.loads((out / "session.json").read_text())["draft"]["proposals"]
+    assert proposals[0]["problem"] and "card" not in proposals[0]
+    assert any(p["problem"] is None for p in proposals[1:])

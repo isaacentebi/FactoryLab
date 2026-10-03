@@ -4,6 +4,10 @@ Wants=network-online.target
 After=network-online.target
 # A wake that fails or hangs past its timeout reaches the owner (deploy/alert.sh).
 OnFailure=factorylab-alert@wake_failed.service
+# The health verdict ages the ledger at the moment it checks (Chapter II §IV.c: the
+# control apparatus is not slower than its environment), so it runs as each
+# publication finishes, however long the wake took (Sol 6.1 r5).
+OnSuccess=factorylab-health.service
 
 [Service]
 Type=oneshot

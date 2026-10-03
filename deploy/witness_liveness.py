@@ -175,8 +175,14 @@ def assess(wake: dict | None, *, wake_mtime_ns: int | None, now_ns: int,
 def _evidence(wake: dict, status: str, published: int | None, now: int, limits: Limits,
               found: set[str]) -> None:
     skew = limits.clock_skew_s * S
+    # The ledger's age is read at the check, not at the publication (§IV.c): an event
+    # 19 minutes old when the hourly wake published is 49 minutes old half an hour
+    # later. A stale publication says nothing of the ledger now, so it is aged at the
+    # publication, as it always was.
+    aged_at = now
     if published is None or now - published > limits.max_wake_age_s * S:
         found.add("wake_stale")
+        aged_at = published
     elif published - now > skew:
         found.add("clock_skew")
         published = None  # a publication from the future measures no age
@@ -187,7 +193,7 @@ def _evidence(wake: dict, status: str, published: int | None, now: int, limits: 
         found.add("ledger_unknown")
     elif last - published > skew:
         found.add("clock_skew")
-    elif published - last > limits.max_ledger_age_s * S:
+    elif aged_at - last > limits.max_ledger_age_s * S:
         found.add("ledger_stale")
     _settlements(wake.get("commitments"), limits, found)
     if status == "alive":

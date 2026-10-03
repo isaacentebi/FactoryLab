@@ -1879,11 +1879,16 @@ class ClassTransferRail:
 
         The nonce is this client's prepare time and ``time`` is the venue's execution
         time, so they are never equal; the evidence is the unique row whose execution
-        falls in ``[nonce, nonce + CLASS_EXECUTION_TOLERANCE_MS]``, pinned by its hash.
-        Two candidate rows are ambiguous and confirm nothing.
+        falls in ``[nonce, max(nonce, last send) + CLASS_EXECUTION_TOLERANCE_MS]``,
+        pinned by its hash. The same signed action is resent at its own nonce on every
+        ledgered retry, and any one attempt may be the one that executes, so the window
+        spans every attempt, not the first alone. Two candidate rows are ambiguous and
+        confirm nothing.
         """
         ref = state["reference"]
-        start, end = ref["nonce"], ref["nonce"] + CLASS_EXECUTION_TOLERANCE_MS
+        last_send_ms = state.get("last_send_ns", 0) // 1_000_000
+        start = ref["nonce"]
+        end = max(start, last_send_ms) + CLASS_EXECUTION_TOLERANCE_MS
         rows = self.exchange._info.user_non_funding_ledger_updates(
             self.exchange._address, start)
         matches = []

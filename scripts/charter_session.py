@@ -326,8 +326,10 @@ def card_from(raw: dict, norms: tuple) -> tuple[MetricCard | None, float | None,
         preflight_measurement(card)
         price = (None if raw.get("lambda") is None
                  else proposed_price(raw["lambda"]))
-    except (ValueError, TypeError) as exc:
-        return None, None, str(exc)[:300]
+    except (ValueError, TypeError, ArithmeticError) as exc:
+        # JSON integers are unbounded: a bound past float range overflows its
+        # conversion. That is this proposal's malformed value, never the session's end.
+        return None, None, (str(exc) or type(exc).__name__)[:300]
     return card, price, None
 
 

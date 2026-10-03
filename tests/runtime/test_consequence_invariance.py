@@ -611,3 +611,89 @@ def test_every_batching_of_the_same_world_facts_gives_the_same_outcomes():
     # P5 was flat in PM:D from 40 s, whose book died at 70 s, and held PM:A at H: fixed,
     # marked on PM:A, never held by PM:D's dead book.
     assert fixed["P5"]["censored"] is None and fixed["P5"]["marked"] is True
+
+
+def _recovered_fill_run(delayed: bool):
+    """Sol 6.1 r4: A buys 1 BTC at 100 at t90, B sells 1 at 110 at t110, A's horizon is
+    t100 (mid 95). Chronologically A is long at H and loses 5; delivered sell first, the
+    cursor recovering the older buy at its next poll, the shared FIFO matched A's buy
+    against B's later sell and A appeared to profit before H."""
+    from dataclasses import replace as _replace
+
+    from factorylab.world.exchange import AccountState, OrderResult
+
+    class Venue:
+        def __init__(self):
+            self.now, self.shown, self.executed = 0, [], []
+
+        def fills(self, start, *, until_ns=None):
+            return [_replace(f, observed_at_ns=self.now) for f in self.shown
+                    if f.ts_ns >= start and (until_ns is None or f.ts_ns <= until_ns)]
+
+        def account(self):
+            cash = Decimal(1000) + sum((f.realized - f.fee for f in self.executed),
+                                       Decimal(0))
+            return AccountState(cash, cash, (), Decimal(0), reconciliation_cash_usd=cash,
+                                cumulative_fees_usd=Decimal(0), observed_at_ns=self.now)
+
+        def lookup(self, client, **kw):
+            return OrderResult(kw["order_id"], "filled", Decimal(1), None,
+                               observed_at_ns=self.now)
+
+    class Book(ReturnConsequences):
+        def __init__(self, ledger, cursor):
+            super().__init__(ledger, 2, horizon_ns=100)
+            self.cursor = cursor
+
+        def _now_ns(self):
+            return 0
+
+        def _stream_watermark(self, stream):
+            if stream == "hl:fills":
+                through = self.cursor.through_ns
+                return float("-inf") if through is None else through - 1
+            return 200
+
+    ledger, venue = _Rows(), Venue()
+    cursor = FillCursor(ledger, start_ns=0, measured=True)
+    cursor.initialize(venue.account(), now_ns=0)
+    book = Book(ledger, cursor)
+    for handle, oid, submitted in (("A", "1", 80), ("B", "2", 105)):
+        book.start(handle, 0)
+        book.order_result(handle, {"status": "filled", "order_id": oid, "filled_size": "1"},
+                          {"coin": "BTC"}, 0)
+        book.finish(handle, 0)
+        cursor.submitted(oid, now_ns=submitted, coin="BTC")
+        cursor.acknowledged(oid, {"order_id": oid, "status": "filled"})
+    book.observe("MarketMid", {"coin": "BTC", "mid": "95", "ts_ns": 100}, 1)
+    book.tick_through_ns = 200
+    buy = Fill("1", "BTC", True, Decimal(1), Decimal(100), Decimal(0), 90, venue_id="buy",
+               history_complete=False)
+    sell = Fill("2", "BTC", False, Decimal(1), Decimal(110), Decimal(0), 110,
+                realized=Decimal(10), venue_id="sell", history_complete=False)
+    venue.executed = [buy, sell]
+    polls = [(120, [sell]), (140, [buy, sell])] if delayed else [(140, [buy, sell])]
+    for now, shown in polls:
+        venue.now, venue.shown = now, shown
+        for ts, payload in cursor.poll(venue, now_ns=now, tick_ns=10):
+            book.observe("Fill", {**payload, "ts_ns": ts}, 2)
+    assert cursor.through_ns == 140  # reconciliation succeeded either way
+    book.resolve(3)
+    return book.payoff("A")
+
+
+def test_a_recovered_older_fill_never_reverses_a_horizon_outcome():
+    """Identical executions give identical horizon economics whatever order they were
+    delivered in, or the reordered outcome is censored: arrival-order FIFO accounting is
+    never certified as what the world did by H (Chapter II §III.b)."""
+    from factorylab.runtime.feedback import consequence_score
+    from factorylab.settlement.scoring import brier
+
+    chronological, delayed = _recovered_fill_run(False), _recovered_fill_run(True)
+    assert chronological.censored is None
+    assert (chronological.net_micro, chronological.y) == (-5_000_000, 0)
+    assert delayed.censored in (None, "fill_reordered")
+    if delayed.censored is None:
+        assert (delayed.net_micro, delayed.y) == (chronological.net_micro, chronological.y)
+        assert consequence_score(brier(1, delayed.y), brier(.5, delayed.y)) == (
+            consequence_score(brier(1, chronological.y), brier(.5, chronological.y)))

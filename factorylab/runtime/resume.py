@@ -1014,7 +1014,10 @@ _COMPONENT_FIELDS = (
                           "horizon_marks", "horizon_mark_ns",
                           # Codex on #152: the facts seen through, and returns' economics
                           # frozen at their horizon.
-                          "facts_ns", "tick_through_ns", "history")),
+                          "facts_ns", "tick_through_ns", "history",
+                          # Sol 6.1 r4: the latest fill applied per instrument, and the
+                          # returns an older fill applied after it censored.
+                          "fill_ns", "reordered")),
     ("consequence_fills", "", ("launch_ns", "read_ns", "since_ns", "seen", "through_ns", "measured",
                                "propagation_bound_ns", "observation_complete",
                                "reconciliation_ns", "expected_positions", "expected_cash",
@@ -1489,9 +1492,12 @@ def restore_runtime(rt, state: dict, *, from_diary: bool = False) -> None:
             if name in ("working_state", "outcomes") and name not in components:
                 # Older checkpoints predate continuity; heads and inboxes start empty.
                 continue
-            if (name == "consequences" and field in ("unresolved_orders", "censored_payoffs")
+            if (name == "consequences"
+                    and field in ("unresolved_orders", "censored_payoffs", "fill_ns",
+                                  "reordered")
                     and field not in components[name]):
-                # Older checkpoints predate the released hold; nothing is released.
+                # Older checkpoints predate the released hold, and the fill-order
+                # check: nothing is released, and no fill order was recorded.
                 continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.

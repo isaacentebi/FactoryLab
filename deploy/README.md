@@ -809,19 +809,26 @@ launch remains outside the covenant. Prepayment and restart/backup units cannot
 guarantee survival of permanent host loss, exhausted disk, revoked credentials,
 a year beyond prepaid capacity or a hung process that never exits. These are
 explicit limits of this hosting chunk, not claims of durable live acceptance; the
-health verdict and its alerts make a hung process or a full disk *visible* within
-the hour, they do not repair it.
+health verdict and its alerts make a hung process or a full disk *visible* (see
+the latency bound in "Health and alerts"), they do not repair it.
 
 ### Health and alerts
 
-`factorylab-health.service` runs hourly (at half past, after the wake's publish)
-and judges the world from evidence, failing closed: only positive, fresh evidence
+`factorylab-health.service` runs as each hourly wake publication finishes (the wake
+unit's `OnSuccess=`; its timer only covers a boot) and judges the world from
+evidence, failing closed. **Latency bound:** a world that stops making progress is
+first reported by the first check more than 20 minutes after its last event, so
+within about 80 minutes plus the wake's own run time (it was about 90 minutes when
+the check ran at half past). A wake that fails is alerted at once by its own unit
+(`wake_failed`), and that hour has no verdict. only positive, fresh evidence
 is `healthy`. A missing, unreadable or `unavailable` wake, a publication older than
 two hours, a last event ahead of the clock, or a field the wake could not compute is
 `unknown`. A wake that says `alive` is `healthy` only when:
 
-- the ledger advanced: its last event (`last_event_time_ns`) was at most 20 minutes
-  old when the wake was published (`ledger_stale` otherwise);
+- the ledger advanced: its last event (`last_event_time_ns`) is at most 20 minutes
+  old when the check runs, not merely when the wake was published (`ledger_stale`
+  otherwise). A publication older than two hours measures nothing now and is
+  `wake_stale`;
 - work succeeded: at least one invocation answered `ok` in the published `returns`
   rows within two hours of the last event (`provider_failing` when there were only
   failures or refusals, `no_provider_success` when there was nothing, except in a
@@ -851,6 +858,26 @@ scripted rehearsal's simulated event times read as stale.
 A checklist for leaving the host alone with the laptop closed. It assumes the
 provisioning above succeeded and the launch gates are met.
 
+**The world is `funded`, which is edition 8.** `start.sh` launches and resumes
+`--world funded`, so the pinned commit must carry `worlds/funded.toml`. It is
+`worlds/edition8-launch.toml` byte for byte, except for `name = "funded"`, because a
+manifest's name must match its file stem
+(`tests/runtime/test_manifests.py::test_the_funded_world_is_edition8_named_funded`).
+The backup stages that same `repo/worlds/funded.toml`. Edition 8 is an unratified
+draft. Re-ratify it on the funded file itself, with the launch `start.sh` uses:
+
+```sh
+uv run python scripts/charter_session.py session --world worlds/funded.toml \
+    --launch run --out-dir <a fresh directory>
+```
+
+The session must report `approved=true`. Then replace `worlds/funded.toml`'s whole
+`[charter]` block with the exported one (it carries `launch = "run"`,
+`ratified_sha256` and `roster_sha256`), commit it, update the equality test so it
+admits the ratified block, and pin that commit. Record `factorylab manifest --world
+funded`'s hash beside the commit SHA. `--launch run` is a charter-session argument;
+`factorylab run` has no such flag.
+
 **Sizing.** A reference scripted world wrote about 205 KB of diary per 10-second
 tick: about 8.3 GB in 72 hours with 14 seats, and a backup stages twice `runs/` at
 its peak. On a 77 GB disk 14 seats fit; 50 do not comfortably; measure before
@@ -859,11 +886,13 @@ launching more (audit s11).
 **The owner places, before launch** (never in user-data, Git or shell history):
 
 1. `/srv/factorylab/openrouter.key`, `hyperliquid.key`, `reserve.key`: `factory:factory`, 0600.
-2. `/srv/factorylab/rclone.conf`: `root:root`, 0600, for a remote with upload and
-   restore verified.
-3. `/srv/factorylab/ops.env`: `root:root`, 0600, with `AGE_RECIPIENT`, `BACKUP_REMOTE`,
-   `RCLONE_CONFIG=/srv/factorylab/rclone.conf`, `FACTORY_WEBHOOK_URL` (HTTPS, reaching
-   a phone or inbox the owner watches) and, recommended, `FACTORYLAB_WITNESS_URL`.
+2. With backups: `/srv/factorylab/rclone.conf`, `root:root`, 0600, for a remote with
+   upload and restore verified. Without backups, place no file and do not enable the
+   backup timer. The static server masks the file only if it exists.
+3. `/srv/factorylab/ops.env`: `root:root`, 0600, with `FACTORY_WEBHOOK_URL` (HTTPS, reaching
+   a phone or inbox the owner watches), with backups `AGE_RECIPIENT`, `BACKUP_REMOTE`
+   and `RCLONE_CONFIG=/srv/factorylab/rclone.conf` (only `backup.sh` reads them), and,
+   recommended, `FACTORYLAB_WITNESS_URL`.
    Optionally (recommended) `FACTORY_HEARTBEAT_URL`, the ping URL of a dead-man's
    switch with a one-hour period: it is what alerts the owner if the droplet itself
    dies.
@@ -919,7 +948,8 @@ the alert events and `runs/funded.health` are the operational record.
 
 **Stop.** `systemctl stop factorylab.service` pauses the world (alerted as
 `stopped`; the next start resumes it). Ending the experiment is the kill in "The one
-control: kill". After either, `systemctl disable --now factorylab-health.timer
-factorylab-heartbeat.timer` silences the hourly verdict, which otherwise reports the
-paused world as `unhealthy` (`ledger_stale`) every hour: correctly, since it is not
-running.
+control: kill". After either, `systemctl mask factorylab-health.service` and
+`systemctl disable --now factorylab-heartbeat.timer` silence the hourly verdict,
+which otherwise reports the paused world as `unhealthy` (`ledger_stale`) after every
+wake: correctly, since it is not running. `systemctl unmask
+factorylab-health.service` restores it.

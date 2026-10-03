@@ -225,6 +225,35 @@ def test_singleton_core_grows_into_a_positive_gamma_and_restores():
     assert restored.update_for("h1", BanditFeedback("s1", 0.8, p["s1"])) is True
 
 
+@pytest.mark.parametrize("grown", [False, True], ids=["fixed", "grown"])
+def test_singleton_core_round_outstanding_restores(grown):
+    """Sol 6.1 r2/r3: a one-action core round is deterministic, so its gamma is 0, and
+    a [NOOP] router whose round was outstanding at a checkpoint wrote a snapshot no
+    restart could load ("invalid saved gamma"), whether or not the menu grew before."""
+    learner = SnapshotLearner(BlumMansour(("NOOP",), first_epoch=1068), id="router:Tick")
+    assert learner.distribution_for("pending", ("NOOP",), ordinal=1) == {"NOOP": 1.0}
+    if grown:
+        learner.add_actions(["new-seat"])
+    saved = json.loads(json.dumps(learner.state()))
+    assert saved["snapshots"]["pending"]["gamma"] == 0.0
+    assert SnapshotLearner.restore(saved).state() == saved
+
+
+@pytest.mark.parametrize("bad", [
+    {"support": ["NOOP", "s1"], "p": [["NOOP", 0.5], ["s1", 0.5]]},  # gamma 0 on two
+    {"p": [["NOOP", 1.0 - 1e-13]]},  # a singleton, but not deterministic
+    {"gamma": -0.0 - 1e-300},
+], ids=["two-actions", "inexact-singleton", "negative"])
+def test_zero_gamma_restores_only_for_a_deterministic_singleton_round(bad):
+    """Gamma 0 is a deterministic singleton round's alone: otherwise it is refused."""
+    from factorylab.learners.blum_mansour import CoreRound
+
+    saved = {"epoch": 0, "support": ["NOOP"], "p": [["NOOP", 1.0]], "gamma": 0.0,
+             "executed": None, **bad}
+    with pytest.raises(ValueError):
+        CoreRound.restore(saved, ("NOOP", "s1"))
+
+
 def test_core_growth_from_singleton_restarts_the_epoch():
     """A singleton epoch learned nothing (gamma 0, every draw NOOP): growth restarts it at
     the grown N, the same epoch index, fresh rows, no rounds counted."""
