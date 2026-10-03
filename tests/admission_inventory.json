@@ -24959,6 +24959,49 @@
         207
       ],
       "published": "factorylab/cortex/admission_tools.py"
+    },
+    {
+      "id": "tools.polymarket_orders.paper_orders",
+      "rule": "polymarket_orders.paper_orders",
+      "surface": "tools",
+      "path": [
+        "polymarket_orders",
+        "paper_orders"
+      ],
+      "value": false,
+      "enforced": [
+        211
+      ],
+      "published": "factorylab/cortex/admission_tools.py"
+    },
+    {
+      "id": "tools.polymarket_orders.collateral_micro",
+      "rule": "polymarket_orders.collateral_micro",
+      "surface": "tools",
+      "path": [
+        "polymarket_orders",
+        "collateral_micro"
+      ],
+      "value": 0,
+      "enforced": [
+        212
+      ],
+      "published": "factorylab/cortex/admission_tools.py"
+    },
+    {
+      "id": "tools.polymarket_orders.rules.paper",
+      "rule": "polymarket_orders.rules.paper",
+      "surface": "tools",
+      "path": [
+        "polymarket_orders",
+        "rules",
+        "paper"
+      ],
+      "value": "With paper_orders, an order is simulated against Polymarket's live CLOB books and is never sent to Polymarket; the pot holds simulated USDC, opening at collateral_micro. When it is placed, the token's book is read: a buy at or above its best ask is rejected. Each tick, the book of each token with a resting order is read once: while its best ask is at or below a resting buy's price, the buy fills at its own price, as a maker with no fee, for at most that ask's size less what this pot's other buys on the token took at the same read (higher prices first, then earlier orders), in whole hundredths of a token. One market the pot rests or holds unresolved tokens in is read a tick, in turn: closed, its resting orders are cancelled; resolved, its tokens stay in the pot at their payout. A simulated order is not in Polymarket's book: it moves no price, has no queue position, a price that reaches it between two reads fills nothing, and an ask still standing at the next read is counted again. These reads and the marks are the pot's own requests, at most order_requests_per_10s in any sliding 10 s of wall time; one past it is not sent and reads as unavailable.",
+      "enforced": [
+        213
+      ],
+      "published": "factorylab/cortex/admission_tools.py"
     }
   ],
   "audit_rows": [
@@ -26700,6 +26743,30 @@
       "missing_before": true,
       "published_before": "MISSING",
       "surface": "governance"
+    },
+    {
+      "rule": "polymarket_orders.paper_orders",
+      "enforced": "factorylab/runtime/polymarket.py:347 (install)",
+      "published": "factorylab/cortex/admission_tools.py:330 (tool_admission_schematics)",
+      "missing_before": true,
+      "published_before": "MISSING",
+      "surface": "tools"
+    },
+    {
+      "rule": "polymarket_orders.collateral_micro",
+      "enforced": "factorylab/runtime/worlds.py:358 (PolymarketSpec.__post_init__); factorylab/world/polymarket_paper.py:113 (PaperPolymarket.__init__)",
+      "published": "factorylab/cortex/admission_tools.py:332 (tool_admission_schematics)",
+      "missing_before": true,
+      "published_before": "MISSING",
+      "surface": "tools"
+    },
+    {
+      "rule": "polymarket_orders.paper",
+      "enforced": "factorylab/world/polymarket_paper.py:276 (PaperPolymarket.advance)",
+      "published": "factorylab/cortex/admission_tools.py:378 (tool_admission_schematics)",
+      "missing_before": true,
+      "published_before": "MISSING",
+      "surface": "tools"
     }
   ],
   "enforcement": {
@@ -26721,7 +26788,7 @@
     "factorylab/runtime/compute.py": "05fcdedc626509d8d41eb988a1d9220f366d96293f78aab93118145faf0d7443",
     "factorylab/runtime/governance.py": "e3110f16031b349d54372e204ee489154fbff19dae191767ff7eddc643078e71",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
-    "factorylab/runtime/polymarket.py": "737e9964f9ee209a7d033c6d1b60448a1770e2d6a8de84a3f816eaf43fcba165",
+    "factorylab/runtime/polymarket.py": "0fea7da0eb16d4f2d561743dd869c4c91af68ab4ac60d9828e32acaa196bff81",
     "factorylab/runtime/propensity.py": "139dafef269a43b83e6b8d9c7da9181711c6ff3976d61bb69348a693e3c2a07b",
     "factorylab/runtime/routing.py": "52e0cd7a0c98e9fa3e9da5582ba180c4bac4addd641ccedfce14c0dc496abdca",
     "factorylab/runtime/subscriptions.py": "2c096e82698cc03a7f5d7af70942b522b29a00c26611bb2830a0078456d93a6c",
@@ -26733,6 +26800,7 @@
     "factorylab/world/evm.py": "2ba9bba6877e3bd40d7cf487f7feda5526ec6c565b54c3b284b64fbfa8b10360",
     "factorylab/world/exchange.py": "9a835cc008b5f33e9c1d8f0b63be8902a1eef1b0d3ee9e34a0805df4a3c8df2b",
     "factorylab/world/polymarket_clob.py": "47ed32f0a05a0a651b12cc4e31bd7584e66c88ea68aa51b7ce5c049eee3eeebe",
+    "factorylab/world/polymarket_paper.py": "4e02992ada107ca143b5a7674f2c409e1d1a923a3597f023d54b52ae0261dcb3",
     "factorylab/world/tape.py": "4f311b900b9d2e74b29a87e7b33763b22ddf740e118f8307f267e8b90576e81e",
     "factorylab/world/treasury.py": "a44b2c96af9017f4ef08fc30e357246b6d2d86de0d2b9073e14a7afa14e35ae0",
     "factorylab/world/treasury_rails.py": "c40ccf679b339fbffa58d3050c95cf30c3419f9a286e34e375b9f11b76dead43",

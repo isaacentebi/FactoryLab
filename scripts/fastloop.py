@@ -1366,9 +1366,10 @@ def _world_parts(provider_kind: str, world: Path, seed: int, cap_usd: str,
 
 def _prepare(runtime: Any, vault_depositor_usd: str | None, latent: Any = None) -> None:
     surface = getattr(runtime, "polymarket", None)
-    if surface is not None and not surface.writes:
-        # A live-read world's Polymarket reads are answered by the seeded simulated
-        # venue, as its exchange is: the whole run stays simulated and offline.
+    if surface is not None and (not surface.writes or surface.paper):
+        # A live-read or paper world's Polymarket reads (and a paper world's pot) are
+        # answered by the seeded simulated venue, as its exchange is: the whole run
+        # stays simulated and offline.
         from factorylab.runtime.polymarket import simulate_reads
 
         simulate_reads(runtime)
