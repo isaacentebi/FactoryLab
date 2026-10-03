@@ -72,6 +72,11 @@ Protocol facts, each read 2026-09-29 (Polymarket moved to CLOB V2 on 2026-04-28)
   payout in ``outcomePrices``. A holder redeems with ``redeemPositions(pUSD, 0x0,
   conditionId, [1, 2])`` on the collateral adapter, an on-chain transaction paid in POL.
   https://docs.polymarket.com/concepts/resolution, https://docs.polymarket.com/trading/positions/manage
+* **The chain's own word (issue #180).** What the APIs say the pot holds and what a
+  resolution pays are checked against Polygon (``world/polygon_ctf.py``): the funder's
+  pUSD and outcome-token balances (``chain_account``, compared by the runtime's
+  reconciliation) and each resolution's payout vector, on a token proven to be its
+  condition's position (``_chain_payout``).
 * **Rate limits.** ``POST /order`` 5,000 per 10 s, ``/data/orders`` and ``/data/trades``
   500, ``/balance-allowance`` 200; Gamma ``/markets`` 300.
   https://docs.polymarket.com/api-reference/rate-limits
@@ -84,6 +89,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -152,6 +158,8 @@ TRADE_OVERLAP_S = 600
 POSITIONS_PAGE = 500
 #: Pages one poll reads at most; more leaves the stream incomplete for the next poll.
 MAX_TRADE_PAGES = 5
+#: A CTF condition id, as Gamma states a market's ``conditionId``.
+_CONDITION = re.compile(r"0x[0-9a-fA-F]{64}")
 
 
 def _keccak(data: bytes) -> bytes:
@@ -392,6 +400,12 @@ def http_send(method: str, url: str, headers: dict[str, str], body: str | None,
         raise PolymarketUnavailable("response is not JSON") from None
 
 
+class ChainOwed(wire.Malformed):
+    """A resolution Gamma states whose Polygon check cannot even be asked (its condition
+    id is malformed): the read is malformed, and the check is owed, so buying waits on
+    it (Sol P0, round 2 of #180)."""
+
+
 class Withheld(Exception):
     """A signed order not sent: its slot had left the budget's window at the transport,
     and no slot was left to renew it. It never reached the venue."""
@@ -470,7 +484,7 @@ class LivePolymarket(PolymarketReader):
 
     name: str = "polymarket-live"
 
-    def __init__(self, *, funder: str, signature_type: int, budget: int,
+    def __init__(self, *, funder: str, signature_type: int, budget: int, chain: Any,
                  signer: Signer | None = None, key_env: str = "POLYMARKET_PRIVATE_KEY",
                  identity: Any = None, send: Any = http_send, data_url: str = DATA_API_URL,
                  **reader: Any) -> None:
@@ -478,6 +492,11 @@ class LivePolymarket(PolymarketReader):
         self.name = "polymarket-live"
         if signature_type not in SIGNATURE_TYPES:
             raise PolymarketRefused("unknown signature type")
+        if chain is None:
+            # Issue #180: no live pot without the chain's own word on it.
+            raise PolymarketRefused("a live pot needs a Polygon reader")
+        #: Polygon's own word on the pot (``world/polygon_ctf.py``, ``PolygonCtf``).
+        self.chain = chain
         self.funder = funder.lower()
         self.signature_type = signature_type
         self.budget = RequestBudget(budget, wall=self.wall)
@@ -800,6 +819,16 @@ class LivePolymarket(PolymarketReader):
         return {"usdc": str(usdc), "usdc_available": str(usdc - held), "positions": positions,
                 "open_orders": orders, "observed_at_ns": observed}
 
+    def chain_account(self, *, tokens: list[str]) -> dict[str, Any]:
+        """The funder's pUSD and its balance of each of ``tokens`` as Polygon states them
+        at its finalized head (``PolygonCtf.account``), amounts in six-decimal units.
+
+        Issue #180: the chain is an independent source, so an API answer that is wrong
+        the same way everywhere is still caught by the reconciliation. Raises when the
+        chain was not read; nothing here stands in for an unread chain.
+        """
+        return self.chain.account(self.funder, list(tokens))
+
     def _positions(self) -> list[wire.Position]:
         """Every position the Data API lists for the funder, read to the listing's end
         (Astra P1 on #177: one page of 500 could truncate it); a listing longer than the
@@ -837,7 +866,8 @@ class LivePolymarket(PolymarketReader):
     def poll(self, *, now_ns: int, cursor: dict[str, Any],
              orders: dict[str, dict[str, str]], own: Any = None) -> dict[str, Any]:
         """The pot's fills and resolutions since ``cursor``: ``{events, cursor,
-        contradictions, malformed, complete}`` (``malformed``: why a read was unread).
+        contradictions, malformed, complete, chain_unread}`` (``malformed``: why a read
+        was unread; ``chain_unread``: a check Polygon owed was not read).
 
         Guarantees each fill of one of ``orders`` (this world's orders, as their intents
         name them) is reported exactly once, when its trade is CONFIRMED, in the shape
@@ -873,6 +903,9 @@ class LivePolymarket(PolymarketReader):
         # durable intents, uncertain ones included; Sol P1, rounds 8 and 9), never only
         # the orders it settles, and trades are read while any of them may still fill.
         own = dict(own or {})
+        from factorylab.world.polygon_ctf import ChainUnread
+
+        chain_unread = False
         for step in (lambda trial: self._fills(trial, orders, contradictions, own),
                      lambda trial: self._resolutions(trial, orders, now_ns, contradictions)):
             # Each step works on a copy and commits only whole: a read that failed half
@@ -886,12 +919,22 @@ class LivePolymarket(PolymarketReader):
                 complete = False
                 if isinstance(exc, wire.Malformed):
                     malformed.append(str(exc))
+                # A check Polygon did not answer is owed: buying waits on it (Sol P0,
+                # round 1 of #180), not only the payout. A payout check stays owed, in
+                # the cursor, until that token's own check is answered, however the
+                # rotation moves meanwhile (Sol P0, round 4).
+                chain_unread = chain_unread or isinstance(exc, (ChainUnread, ChainOwed))
+                owed = getattr(exc, "owed", None)
+                if chain_unread and owed is not None:
+                    state["chain_pending"] = sorted(
+                        {*state.get("chain_pending", []), owed})
                 continue
             state = trial
             events.extend(found)
         # A read that stopped at the page bound resumes where it stopped (``page``).
         return {"events": events, "cursor": state, "contradictions": contradictions,
-                "malformed": malformed, "complete": complete and "page" not in state}
+                "malformed": malformed, "complete": complete and "page" not in state,
+                "chain_unread": chain_unread}
 
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                contradictions: dict[str, str], own: dict[str, dict]) -> list[dict]:
@@ -1068,18 +1111,12 @@ class LivePolymarket(PolymarketReader):
                             if t not in state["resolved"] and markets.get(t))
         events: list[dict[str, Any]] = []
         facts = state.setdefault("resolution_facts", {})
+        # Tokens Gamma states resolved and Polygon has not yet reported (Sol P0, round 3
+        # of #180): a disagreement of the API with the chain, durable across the
+        # rotation, kept while the pot holds or may hold the token; buying waits on it.
+        pending = state["chain_pending"] = sorted(
+            t for t in state.get("chain_pending", []) if t in candidates)
 
-        # Inventory a trade confirmed after its market resolved (Astra P0 on #177): it is
-        # paid its token's payout once, when it is booked, never lost.
-        for token, paid in sorted(state["resolved"].items()):
-            size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-            if size > 0 and token in facts:
-                state["book"][token] = ["0", str(avg)]
-                _redeemable(state, token, size)
-                events.append({**facts[token], "kind": "resolution", "token_id": token,
-                               "payout": str(paid), "size": str(size),
-                               "realized_usd": str((_dec(paid) - avg) * size),
-                               "ts_ns": now_ns})
         if candidates:
             # One market read a poll, in turn: what the pot holds or has resting.
             token = candidates[state["turn"] % len(candidates)]
@@ -1093,21 +1130,52 @@ class LivePolymarket(PolymarketReader):
                 contradictions[f"{token}:market"] = reason
                 return events
             paid = payout(market, token)
+            claimed = paid is not None
+            outcome = next(o for o in market["outcomes"] if o["token_id"] == token)
+            if paid is not None:
+                # Issue #180: Gamma's payout is paid only once Polygon reports the same
+                # one; a disagreement halts buying and pays nothing, and a payout the
+                # chain has not yet reported waits (a chain that did not answer leaves
+                # this step unread).
+                try:
+                    reported, reason = self._chain_payout(state["bound"], token, market,
+                                                          outcome["outcome_index"], paid)
+                except (ChainOwed, PolymarketUnavailable) as exc:
+                    # The check stays owed beyond this rolled-back step (Sol P0, round 4
+                    # of #180): ``poll`` keeps the token pending in the committed cursor.
+                    exc.owed = token
+                    raise
+                if reason:
+                    contradictions[f"{token}:chain"] = reason
+                    return events
+                if not reported:
+                    paid = None
+                    if token not in pending:
+                        pending.append(token)
+                        pending.sort()
+            if (paid is not None or not claimed) and token in pending:
+                # Confirmed on chain, or Gamma no longer states it: nothing is owed.
+                pending.remove(token)
             if paid is not None:
                 state["resolved"][token] = str(paid)
-                outcome = next(o for o in market["outcomes"] if o["token_id"] == token)
                 facts[token] = {"market_id": markets[token],
                                 "condition_id": market.get("condition_id"),
                                 "outcome_index": outcome["outcome_index"],
                                 "outcome_name": outcome["outcome"]}
-                size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-                if size > 0:
-                    state["book"][token] = ["0", str(avg)]
-                    _redeemable(state, token, size)
-                    events.append({
-                        **facts[token], "kind": "resolution", "token_id": token,
-                        "payout": str(paid), "size": str(size),
-                        "realized_usd": str((paid - avg) * size), "ts_ns": now_ns})
+        # What the books hold of a resolved token is paid its payout once: at its
+        # resolution, or when a trade confirmed after it is booked (Astra P0 on #177),
+        # never lost. Only what Polygon holds is paid (Sol P0, round 1 of #180): the
+        # chain must hold, beyond what the pot opened with and what it keeps resolved
+        # and unredeemed, the whole quantity paid, or it waits for a later poll.
+        for token, paid in sorted(state["resolved"].items()):
+            size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
+            if size > 0 and token in facts and self._chain_holds(state, token, size):
+                state["book"][token] = ["0", str(avg)]
+                _redeemable(state, token, size)
+                events.append({**facts[token], "kind": "resolution", "token_id": token,
+                               "payout": str(paid), "size": str(size),
+                               "realized_usd": str((_dec(paid) - avg) * size),
+                               "ts_ns": now_ns})
         # A resolution cancels what rests on the market (CANCELED_MARKET_RESOLVED): each
         # of this world's orders on a resolved token is read back, two a poll, until the
         # venue says it is terminal AND every quantity it matched is booked from a
@@ -1144,6 +1212,52 @@ class LivePolymarket(PolymarketReader):
                 state["terminal"].append(order_id)
         return events
 
+    def _chain_holds(self, state: dict[str, Any], token: str, size: Decimal) -> bool:
+        """Whether Polygon holds, of ``token``, what the pot opened with, what it keeps
+        resolved and unredeemed, and ``size`` more, at its finalized head (Sol P0, round
+        1 of #180: a resolution paid the books' quantity, which only the APIs stated).
+        Raises when the chain was not read."""
+        opened = ((state.get("bound") or {}).get("opening") or {}).get("tokens") or {}
+        kept = _dec(state.get("redeemable", {}).get(token, "0"))
+        units = int(self.chain.account(self.funder, [token])["tokens"][token])
+        return Decimal(units) / UNIT >= _dec(opened.get(token, "0")) + kept + size
+
+    def _chain_payout(self, bound: dict, token: str, market: dict[str, Any], index: int,
+                      paid: Decimal) -> tuple[bool, str | None]:
+        """(whether Polygon reports this resolution, why it contradicts it or None).
+
+        Guarantees a payout Gamma states is confirmed by the Conditional Tokens contract
+        at a finalized block before it is paid (issue #180): the token is first proven,
+        on chain, to be the position of the market's condition at its outcome index for
+        the market's collateral, and that proof binds the token to the condition, index
+        and kind forever (``wire.bind``); the condition's payout vector binds at its
+        first report; and Gamma's payout must equal ``numerator / denominator`` exactly.
+        A condition the chain has not reported is not yet resolved (``False, None``).
+        """
+        condition = market.get("condition_id")
+        if not isinstance(condition, str) or not _CONDITION.fullmatch(condition):
+            raise ChainOwed("market condition id is not 32 bytes")
+        condition, neg_risk = condition.lower(), bool(market.get("neg_risk"))
+        proven = token in bound.get("position", {})
+        read = self.chain.resolution(condition, token=None if proven else token,
+                                     index=index, neg_risk=neg_risk)
+        if not proven and read.get("issues") is not True:
+            return False, "the market's condition does not issue this token on Polygon"
+        reason = wire.bind(bound, "position", token, [condition, index, neg_risk])
+        if reason:
+            return False, reason
+        denominator = int(read["denominator"])
+        numerators = [int(n) for n in read["numerators"]]
+        if denominator == 0:
+            return False, None
+        reason = wire.bind(bound, "payout", condition,
+                           [str(denominator), *(str(n) for n in numerators)])
+        if reason:
+            return False, reason
+        if Decimal(numerators[index]) / Decimal(denominator) != paid:
+            return False, "a resolution's payout disagrees with Polygon's"
+        return True, None
+
     def drain_events(self) -> list[dict[str, Any]]:
         """Nothing: the live venue's events arrive through ``poll`` alone."""
         return []
@@ -1153,7 +1267,12 @@ def live_venue(spec: Any, *, identity: Any = None) -> LivePolymarket:
     """The live order venue a ``[polymarket] venue = "live", orders = true`` world trades.
 
     Loads no key and sends nothing: the signer is read from ``POLYMARKET_PRIVATE_KEY`` on
-    first use and the CLOB credentials derived on first use, inside a journaled call.
+    first use and the CLOB credentials derived on first use, inside a journaled call. The
+    pot is checked against Polygon (``polygon_ctf.PolygonCtf``, on ``POLYGON_RPC_URL`` or
+    its public default; issue #180).
     """
+    from factorylab.world.polygon_ctf import PolygonCtf
+
     return LivePolymarket(funder=spec.funder, signature_type=spec.signature_type,
-                          budget=spec.order_requests_per_10s, identity=identity)
+                          budget=spec.order_requests_per_10s, identity=identity,
+                          chain=PolygonCtf.from_environment())

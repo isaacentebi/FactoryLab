@@ -2696,6 +2696,10 @@ https://docs.polymarket.com/changelog/predictions):
 | `GET /data/order/{hash}` (LIVE, MATCHED, CANCELED, CANCELED_MARKET_RESOLVED, INVALID; `size_matched`), `GET /data/orders`, `GET /data/trades` (MATCHED, MINED, CONFIRMED, RETRYING, FAILED), Data API `/positions` | `lookup`, `account`, `poll` | https://docs.polymarket.com/concepts/order-lifecycle, https://docs.polymarket.com/api-spec/clob-openapi.yaml |
 | Resolution by UMA's optimistic oracle (2 h challenge, days if disputed); redemption `redeemPositions(pUSD, 0x0, conditionId, [1, 2])` on the collateral adapter, an on-chain transaction paid in POL | resolution read from Gamma; redemption is the operator's (below) | https://docs.polymarket.com/concepts/resolution, https://docs.polymarket.com/trading/positions/manage |
 | Rate limits: `POST /order` 5,000 per 10 s; `/data/orders`, `/data/trades` 500; `/balance-allowance` 200; Gamma `/markets` 300 | `order_requests_per_10s` | https://docs.polymarket.com/api-reference/rate-limits |
+| An outcome token id is its ERC-1155 position id, `getPositionId(collateral, getCollectionId(0x0, conditionId, 1 << outcomeIndex))`; the collateral is USDC.e `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174` for a standard market (`CtfCollateralAdapter.USDCE()`) and the wrapped collateral `0x3A3BD7bb9528E159577F7C2e685CC81A765002E2` for a neg-risk one (`NegRiskCtfCollateralAdapter.WRAPPED_COLLATERAL()`, `NegRiskAdapter.wcol()`), not pUSD as the positions page says: both rules reproduced Gamma's token ids of resolved and open markets of each kind (`eth_call`, read 2026-10-03) | a resolution is paid only on a token so proven (`polygon_ctf.PolygonCtf.resolution`, `LivePolymarket._chain_payout`) | https://docs.polymarket.com/trading/positions/how-positions-work, https://github.com/gnosis/conditional-tokens-contracts (`CTHelpers.sol`), the adapters' own getters on Polygon |
+| A resolution is the condition's payout vector on the Conditional Tokens: `payoutDenominator(conditionId)` is 0 until the oracle reports, then outcome `i` redeems for `payoutNumerators(conditionId, i) / payoutDenominator(conditionId)`; a report is final | Gamma's payout is paid only once the chain reports the same one (below) | https://docs.polymarket.com/concepts/resolution, https://docs.polymarket.com/trading/positions/manage |
+| Balances: pUSD `balanceOf(address)`; Conditional Tokens `balanceOfBatch(address[], uint256[])` | the reconciliation's chain check (below) | ERC-20, ERC-1155 |
+| `/balance-allowance` answers the CLOB's cached balance, refreshed by `GET /balance-allowance/update` | the operator refreshes it after any deposit, withdrawal or redemption (below) | https://docs.polymarket.com/trading/wallets-auth ("Sync CLOB Allowances") |
 
 The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
 
@@ -2841,6 +2845,59 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
   anticipatory settlement (essay II.IV.b); the resolution, days later, closes its lots
   at the payout and books late money without rescoring (II.III.b). A resolved token not
   yet redeemed is valued at its payout.
+* **The chain's own word (issue #180).** Every answer above comes from Polymarket's
+  APIs, so one they gave wrong the same way everywhere would be adopted. Polygon is
+  checked as an independent source (`world/polygon_ctf.py`, `PolygonCtf`), read only:
+  `eth_chainId` (it must be 137), `eth_getBlockByNumber("finalized")` and `eth_call`
+  to the Conditional Tokens and pUSD, every read of one observation pinned to that one
+  finalized block. It holds no key and can move nothing.
+  * *Balances.* Every reconciliation reads, at the finalized head, the funder's pUSD
+    and its balance of every token the pot lists, opened with, holds on its books or
+    keeps resolved and unredeemed (`chain_account`, journaled: a replay reads what the
+    run read). The listing must equal the chain exactly (a token the listing omits
+    holds 0). A difference is drift (`polymarket.drift` with `chain`: the block, the
+    chain's pUSD and the tokens that differ): buying waits until they agree. With the
+    books already held to the listing, the books are held to the chain. A fill, a
+    deposit and a redemption are each checked this way, in aggregate: the pot's value
+    and its token counts on chain.
+  * *Fail closed.* A chain that does not answer, answers another chain, answers for
+    other tokens, or answers anything but a canonical JSON-RPC result (an error, a
+    word of the wrong length, another request's id) is unread, never a zero:
+    `polymarket.chain_unavailable` ("the pot was not read on Polygon") and buying
+    waits. The pot's own requests to the endpoint are at most
+    `CHAIN_REQUESTS_PER_10S` (30) in any sliding 10 s of wall time, each counted
+    before it is sent (the endpoint publishes no limit; a tick sends two
+    reconciliations' 4 each, one resolution check's 7, and 4 for each resolved token
+    whose payout is being paid); one
+    past it is not sent and the read is unread.
+  * *Resolutions.* A payout Gamma states is paid only once the chain states the same
+    one: the token is first proven, on chain, to be the position of the market's
+    condition at its outcome index for the market's collateral (the proof binds the
+    token to that condition, index and kind forever), and the condition's payout
+    vector binds at its first report. A resolution Gamma states and the chain has not
+    reported is a disagreement: nothing is paid, `polymarket.drift` ("a resolution
+    Polygon has not reported") is ledgered each tick, and buying waits until the chain
+    reports it or Gamma no longer states it (held across the rotation of market reads,
+    while the pot holds or may hold the token); a payout check the chain did not
+    answer, or that cannot be asked (a malformed condition id), keeps its token pending
+    the same way, in the journaled cursor, until that token's own check is answered; a token the condition does not issue, a condition
+    other than the one bound, or a payout other than `numerator / denominator` exactly
+    halts buying for the world's life and pays nothing. What is paid is only what the
+    chain holds: the payout of the tokens the books hold waits until the chain holds, of
+    that token, what the pot opened with, what it keeps resolved and unredeemed, and
+    the books' quantity (a token the operator redeemed before a late fill of it was
+    booked leaves that fill unpaid).
+  * *Endpoint.* `POLYGON_RPC_URL` (environment, or `.env` in the run directory) names
+    the endpoint, an https URL with no credentials in its authority; unset, it is
+    `https://polygon-bor-rpc.publicnode.com` (`polygon-rpc.com`, the endpoint Polygon
+    long published, answered "API key disabled" on 2026-10-03). A keyed URL is a
+    secret: it never appears in a result, an error or the ledger. The endpoint is not
+    a manifest key: which node answers changes no fact the world reads, since every
+    answer is checked to be chain 137's and is journaled.
+  * *Still the APIs' word.* Individual fills (`/data/trades`; the chain checks their
+    sum, not each trade), open orders, each token's average cost (`avgPrice`, used to
+    value open tokens at cost), and the forecast predicates' settlement
+    (`event_facts`, which grades claims, not money).
 
 Every venue reply the pot reads passes the door (`world/polymarket_wire.py`) with
 three checks: IDENTITY (it is about what was asked, compared canonically), UNIQUENESS
@@ -2884,19 +2941,48 @@ its books hold, or the pot drifts and buying waits.
 | order | order hash | the most any order read, cancel answer or placement answer said it matched (a floor; the matched quantity used is never below it, nor below its legs' floors) | every such answer; the floor only rises |
 | token | token id | its market, its outcome index, its outcome label (as a digest) | the first market reply naming it: an order's market read, a claim's lookup, a settlement read |
 | market | market id | its outcome tokens, in order | the first market reply |
+| position | token id | its condition, outcome index and market kind, proven on chain to issue the token | its first resolution read |
+| payout | condition id | its payout vector on chain (denominator, numerators) | its first report on chain |
 
 No venue reply is read outside the door: a test audits that every raw
 reply in the reader and the order venue is handed only to a `wire` function.
 
 
-What the owner provides before a live world: a Polygon wallet (a Deposit Wallet,
-`signature_type = 3`, or an allowlisted EOA, `0`) as `funder`, its signing key in
-`polymarket.key` (mode 0400 or 0600, read into `POLYMARKET_PRIVATE_KEY`); pUSD in it
-at most `principal_usd`; POL for the approvals and redemptions; the approvals above,
-and `GET /balance-allowance/update` once; the jurisdiction check
-(https://docs.polymarket.com/api-reference/geoblock). The first live smoke is one GTC
-buy of the market's minimum size at a price that does not cross, its lookup by hash,
-and its cancel.
+What the owner does to fund and arm the pot for a run, each a fact the code reads:
+
+1. **The wallet.** A Polymarket account's wallet: a Deposit Wallet (every account wallet
+   deployed on or after 2026-05-04) is `signature_type = 3`; an EOA trades only if
+   Polymarket allowlisted it, `signature_type = 0`. `funder` is the wallet's own address
+   (the Deposit Wallet's, shown in the polymarket.com profile menu; for an EOA its
+   address), lower-case.
+2. **The key.** The signing key (a Deposit Wallet's owner, or the EOA itself) in
+   `polymarket.key` in the run directory, mode 0400 or 0600, owned by the running
+   account; the CLI reads it into `POLYMARKET_PRIVATE_KEY` (`runtime/cli.py`). With
+   `signature_type = 0` the key's address must be `funder` or nothing is signed.
+3. **The money.** pUSD in the funder wallet, at most `principal_usd`: a polymarket.com
+   deposit (the bridge wraps it to pUSD), or USDC.e wrapped by
+   `CollateralOnramp.wrap(USDC.e, funder, amount)`. Nothing else is read as the pot.
+4. **The approvals.** pUSD `approve` and Conditional Tokens `setApprovalForAll` for the
+   CTF Exchange and the Neg Risk CTF Exchange (a Deposit Wallet submits them as one
+   gasless batch, `setupTradingApprovals`), and Conditional Tokens `setApprovalForAll`
+   for the collateral adapter of each market kind before a redemption.
+5. **The CLOB's cache.** `GET /balance-allowance/update` (`asset_type=COLLATERAL`, the
+   wallet's `signature_type`) once the deposit and approvals are confirmed, and again
+   after any later deposit, withdrawal or redemption: the pot's balance read is that
+   cache, and until it equals the chain the reconciliation drifts and buying waits.
+6. **The manifest.** In `worlds/funded.toml` `[polymarket]`: `enabled = true`,
+   `venue = "live"`, `orders = true`, `funder`, `signature_type`, `principal_usd`
+   (positive exact USD: the cap on every signed commitment, for the world's life). The
+   keys are fixed for the world's life, so this is a new world (a new manifest hash).
+7. **The chain endpoint (optional).** `POLYGON_RPC_URL` in the environment or `.env`,
+   if not the public default; a keyed URL stays out of the manifest.
+8. **Jurisdiction.** The geoblock check (https://docs.polymarket.com/api-reference/geoblock).
+
+POL is spent only by a transaction the operator sends from an EOA (a Deposit Wallet's
+are gasless). The first live smoke is one GTC buy of the market's minimum size at a price
+that does not cross, its lookup by hash, and its cancel; the world's first ticks ledger
+`polymarket.opening` and then no `polymarket.drift` and no `polymarket.chain_unavailable`
+when the wallet, the cache and the chain agree.
 
 **Blocking step of the first live smoke: the units.** Before any live world trades, a
 smoke order must fill (as a maker), and its `GET /data/trades` row is read by hand to

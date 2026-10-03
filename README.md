@@ -188,7 +188,10 @@ venue account, not on the compute wallet. Treasury transfers are ledgered before
 they are sent, and an uncertain outcome is quarantined until it resolves. The
 Polymarket pot is a custody of its own: every order's intent and hash are durable before
 it is signed, a fill is booked once when its trade is confirmed and never past its order,
-and no buy is taken on principal above the manifest's cap.
+and no buy is taken on principal above the manifest's cap. Its balances and every
+resolution it is paid are checked against Polygon's Conditional Tokens contract, read
+only: a disagreement holds buying (a payout's halts it for the world's life), and a
+chain that does not answer holds it too.
 
 **The sealed diary.** Every state change is a ledger item first: encrypted,
 SHA-256 hash-chained, fsynced, append-only, behind an exclusive writer lock. The

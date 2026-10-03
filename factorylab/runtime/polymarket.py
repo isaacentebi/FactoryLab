@@ -231,6 +231,9 @@ class PolymarketSurface:
         # A trade that contradicted the maker-only venue (a taker leg, a fee):
         # buying stops for the world's life.
         self.contradicted = False
+        # Whether the tick's poll owed a check Polygon did not answer (transient: each
+        # tick's poll sets it before the reconciliation that reads it; issue #180).
+        self.chain_owed = False
         # reason -> the tick a malformed read was last ledgered (transient).
         self.malformed_ledgered: dict[str, int] = {}
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
@@ -1606,6 +1609,19 @@ def tick(rt: Any) -> None:
         else:
             _halt_on_contradiction(rt, surface, answer.get("contradictions") or {})
             _ledger_malformed(rt, surface, answer.get("malformed") or [])
+            # A resolution check Polygon did not answer holds buying until one does
+            # (Sol P0, round 1 of #180): the reconciliation below reads this.
+            pending = list((answer.get("cursor") or {}).get("chain_pending") or [])
+            surface.chain_owed = bool(answer.get("chain_unread")) or bool(pending)
+            if answer.get("chain_unread"):
+                rt.ledger.append({"kind": "polymarket.chain_unavailable",
+                                  "reason": CHAIN_UNREAD, "ts": rt.clock.now_ns})
+            if pending:
+                # Gamma states a resolution Polygon has not reported (Sol P0, round 3):
+                # drift, and buying waits until the chain reports it or Gamma withdraws.
+                rt.ledger.append({"kind": "polymarket.drift",
+                                  "reason": "a resolution Polygon has not reported",
+                                  "tokens": pending[:20], "ts": rt.clock.now_ns})
             surface.cursor = answer["cursor"]
             settle(rt, answer["events"])
             if answer.get("complete"):
@@ -2020,16 +2036,62 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
             str(opened.get(t, "0"))) + book.get(t, Decimal(0)))
         if missing:
             result["tokens"] = missing[:20]
-    unexplained = abs(drift) > Decimal("0.000001") or "tokens" in result
+    unread = surface.live and not _on_chain(rt, surface, account, listed, result)
+    unexplained = (abs(drift) > Decimal("0.000001") or "tokens" in result
+                   or "chain" in result)
     if unexplained:
         rt.ledger.append({"kind": "polymarket.drift", **result, "ts": rt.clock.now_ns})
     # Astra P1 on #177: money the books do not explain, gone or arrived, leaves the
     # pot's reconciliation unknown, and new exposure waits on it (architect's decision
     # on Sol's round-7 review: unexplained money in either direction means the books
     # are wrong). No allowance is made (Sol P1: a blanket one hid real losses); a drift
-    # is never booked as a fee (Codex P1).
-    surface.drifting = unexplained
+    # is never booked as a fee (Codex P1). A pot the chain did not confirm is not
+    # reconciled either (issue #180): new risk waits on it, fail closed.
+    surface.drifting = unexplained or unread or surface.chain_owed
     return result
+
+
+#: Six-decimal units of pUSD and of outcome tokens.
+UNITS = Decimal(1_000_000)
+#: Why a ``polymarket.chain_unavailable`` row is written, whatever failed: a replay
+#: reconstructs a recorded failure under another type, and the row must be the run's.
+CHAIN_UNREAD = "the pot was not read on Polygon"
+
+
+def _on_chain(rt: Any, surface: PolymarketSurface, account: dict,
+              listed: dict[str, Decimal], result: dict[str, Any]) -> bool:
+    """Check the custodian's listing against Polygon; whether the chain was read.
+
+    Issue #180: the reconciliation above holds the books to Polymarket's APIs, and an
+    answer they give wrong the same way everywhere would hold too. So the pUSD balance
+    and every token the pot lists, opened with, holds on its books or keeps resolved
+    and unredeemed are read from the chain at its finalized head (``chain_account``,
+    journaled, so a replay reads what the run read), and each must equal the listing
+    exactly (a token the listing omits holds 0). A difference is put in ``result``
+    under ``chain`` and is drift: buying waits until they agree again. A chain that did
+    not answer, or answered for other tokens, is ledgered
+    ``polymarket.chain_unavailable`` and returns False.
+    """
+    cursor = surface.cursor
+    opened = ((cursor.get("bound") or {}).get("opening") or {}).get("tokens") or {}
+    tokens = sorted(set(listed) | set(opened) | set(cursor.get("redeemable", {}))
+                    | {t for t, (size, _avg) in cursor.get("book", {}).items()
+                       if Decimal(str(size)) > 0})
+    try:
+        chain = surface.venue.chain_account(tokens=tokens)
+        usdc = Decimal(int(chain["usdc"])) / UNITS
+        held = {str(t): Decimal(int(units)) / UNITS for t, units in chain["tokens"].items()}
+        if set(held) != set(tokens):
+            raise ValueError("the chain did not answer the tokens asked")
+    except Exception:  # noqa: BLE001 - an unread chain confirms nothing
+        rt.ledger.append({"kind": "polymarket.chain_unavailable",
+                          "reason": CHAIN_UNREAD, "ts": rt.clock.now_ns})
+        return False
+    differs = sorted(t for t in tokens if listed.get(t, Decimal(0)) != held[t])
+    if usdc != Decimal(str(account["usdc"])) or differs:
+        result["chain"] = {"block": chain["block"], "usdc": str(usdc),
+                           "tokens": differs[:20]}
+    return True
 
 
 #: A resolved token's book stream watermark: no book fact can follow a resolution.

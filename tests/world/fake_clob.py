@@ -77,12 +77,24 @@ class FakeClob:
         self.positions_rows = None  # rewrites the whole /positions listing before paging
         self.orders_rows = None  # rewrites the /data/orders listing
         self.funder: str | None = None  # the pot's wallet: the maker of the orders it lists
+        # Polygon, as the chain states the same pot (issue #180): its answers are the
+        # simulated venue's own state unless a test makes them disagree.
+        self.chain_calls: list[tuple[str, list]] = []  # (JSON-RPC method, params)
+        self.chain_block = 70_000_000
+        self.chain_fail = 0  # chain requests that fail before one answers
+        self.chain_usdc_delta = Decimal(0)  # pUSD the chain holds beyond the venue's word
+        self.chain_tokens: dict[str, Decimal] = {}  # token -> the chain's balance instead
+        self.chain_lag: set[str] = set()  # resolved markets the chain has not reported
+        self.chain_payouts: dict[str, tuple[int, list[int]]] = {}  # condition -> report
+        self.chain_answer = None  # rewrites each JSON-RPC answer (method, answer) -> answer
 
     # ---- the transport
 
     def __call__(self, method: str, url: str, headers: dict, body: str | None):
         parts = parse.urlsplit(url)
         path, query = parts.path, dict(parse.parse_qsl(parts.query))
+        if parts.netloc == CHAIN_HOST:
+            return self._rpc(json.loads(body))
         self.calls.append((method, path))
         if self.fail_next:
             failure = self.fail_next.pop(0)
@@ -432,6 +444,108 @@ class FakeClob:
         return rows[offset:offset + limit]
 
 
+    # ---- Polygon: the chain's own word on the same pot (read-only JSON-RPC)
+
+    def _condition(self, condition: bytes) -> dict | None:
+        wanted = "0x" + condition.hex()
+        return next((m for m in self.fake._markets.values()
+                     if m["condition_id"].lower() == wanted), None)
+
+    def _report(self, condition: bytes) -> tuple[int, list[int]]:
+        """The condition's payout report: (denominator, numerators); (0, [0, 0]) while
+        unreported."""
+        stated = self.chain_payouts.get("0x" + condition.hex())
+        if stated is not None:
+            return stated
+        market = self._condition(condition)
+        if market is None or not market["closed"] or market["market_id"] in self.chain_lag:
+            return 0, [0, 0]
+        if market["winner"] is None:
+            return 2, [1, 1]
+        return 1, [int(market["winner"] == side) for side in (0, 1)]
+
+    def _units(self, value: Decimal) -> int:
+        return int(Decimal(value) * clob.UNIT)
+
+    def _eth_call(self, to: str, data: bytes) -> bytes:
+        from eth_abi import decode, encode
+        from eth_utils import keccak
+
+        selector, args = data[:4], data[4:]
+
+        def is_(signature):
+            return selector == keccak(text=signature)[:4]
+
+        word = lambda value: value.to_bytes(32, "big")  # noqa: E731
+        if to.lower() == PUSD.lower() and is_("balanceOf(address)"):
+            return word(self._units(self.fake._cash + self.chain_usdc_delta))
+        assert to.lower() == CTF.lower(), "a chain read of an unpinned contract"
+        if is_("balanceOfBatch(address[],uint256[])"):
+            _owners, ids = decode(["address[]", "uint256[]"], args)
+            sizes = []
+            for token in (str(i) for i in ids):
+                held = self.fake._positions.get(token, {}).get("size", Decimal(0))
+                sizes.append(self._units(self.chain_tokens.get(token, held)))
+            return encode(["uint256[]"], [sizes])
+        if is_("payoutDenominator(bytes32)"):
+            return word(self._report(decode(["bytes32"], args)[0])[0])
+        if is_("payoutNumerators(bytes32,uint256)"):
+            condition, index = decode(["bytes32", "uint256"], args)
+            return word(self._report(condition)[1][index])
+        if is_("getCollectionId(bytes32,bytes32,uint256)"):
+            _parent, condition, index_set = decode(["bytes32", "bytes32", "uint256"], args)
+            return keccak(condition + word(index_set))
+        if is_("getPositionId(address,bytes32)"):
+            collateral, collection = decode(["address", "bytes32"], args)
+            for market in self.fake._markets.values():
+                kind = (NEG_RISK_COLLATERAL if market["market_id"] in self.neg_risk_markets
+                        else STANDARD_COLLATERAL)
+                for side, token in enumerate(market["tokens"]):
+                    mine = keccak(bytes.fromhex(market["condition_id"][2:]) + word(1 << side))
+                    if mine == collection and collateral.lower() == kind.lower():
+                        return word(int(token))
+            return keccak(bytes.fromhex(collateral[2:]) + collection)
+        raise AssertionError("an unexpected chain read")
+
+    def _rpc(self, request: dict) -> dict:
+        method, params = request["method"], request["params"]
+        self.chain_calls.append((method, params))
+        if self.chain_fail:
+            self.chain_fail -= 1
+            raise clob.PolymarketUnavailable("transport: TimeoutError")
+        if method == "eth_chainId":
+            result = "0x89"
+        elif method == "eth_getBlockByNumber":
+            assert params == ["finalized", False]
+            result = {"number": hex(self.chain_block)}
+        elif method == "eth_call":
+            call, block = params
+            assert block == hex(self.chain_block), "a read off the observation's block"
+            result = "0x" + self._eth_call(call["to"], bytes.fromhex(call["data"][2:])).hex()
+        else:
+            raise AssertionError(f"a chain method the reader never sends: {method}")
+        answer = {"jsonrpc": "2.0", "id": request["id"], "result": result}
+        return answer if self.chain_answer is None else self.chain_answer(method, answer)
+
+
+#: The fake chain's endpoint; the contracts and collaterals, written here from the
+#: published addresses (resources/contracts, the adapters' own getters), never from the
+#: code under test.
+CHAIN_HOST = "polygon.test"
+CHAIN_URL = f"https://{CHAIN_HOST}/rpc"
+PUSD = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+CTF = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+STANDARD_COLLATERAL = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+NEG_RISK_COLLATERAL = "0x3A3BD7bb9528E159577F7C2e685CC81A765002E2"
+
+
+def fake_chain(server: FakeClob, wall=None):
+    """A ``PolygonCtf`` reading ``server``'s fake chain."""
+    from factorylab.world.polygon_ctf import PolygonCtf
+
+    return PolygonCtf(rpc=CHAIN_URL, send=server, wall=wall or _Wall())
+
+
 def live_venue(fake: FakePolymarket | None = None, *, signer=None, budget: int = 200,
                wall=None, signature_type: int = 0, funder: str | None = None, **clob_args):
     """A ``LivePolymarket`` wired to a ``FakeClob``: (venue, fake clob)."""
@@ -446,7 +560,8 @@ def live_venue(fake: FakePolymarket | None = None, *, signer=None, budget: int =
     clock = wall or _Wall()
     venue = clob.LivePolymarket(funder=funder, signature_type=signature_type, budget=budget,
                                 signer=signer, send=server, identity=lambda: ("ns", "nonce"),
-                                wall=clock, nonce=lambda: 7)
+                                wall=clock, nonce=lambda: 7,
+                                chain=fake_chain(server))
     return venue, server
 
 
