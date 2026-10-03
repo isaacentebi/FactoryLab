@@ -697,3 +697,54 @@ def test_a_recovered_older_fill_never_reverses_a_horizon_outcome():
         assert (delayed.net_micro, delayed.y) == (chronological.net_micro, chronological.y)
         assert consequence_score(brier(1, delayed.y), brier(.5, delayed.y)) == (
             consequence_score(brier(1, chronological.y), brier(.5, chronological.y)))
+
+
+def _later_closer_run(delayed: bool):
+    """Sol 6.1 on #193: A buys 1 BTC at 100 (t90), B buys 1 at 200 (t110); delivered
+    B first, the shared FIFO is [B, A]. C opens at t150 and sells 1 at 150 (t160): in
+    the world it closed A's lot, +30 for C; in arrival order it closed B's, -21.4."""
+
+    class Book(ReturnConsequences):
+        clock = 0
+
+        def _now_ns(self):
+            return self.clock
+
+        def _stream_watermark(self, stream):
+            return 10_000
+
+    book = Book(_Rows(), 2, horizon_ns=100)
+
+    def order(handle, oid, at):
+        book.clock = at
+        book.start(handle, 0)
+        book.order_result(handle, {"status": "filled", "order_id": oid, "filled_size": "1"},
+                          {"coin": "BTC"}, 0)
+        book.finish(handle, 0)
+
+    def fill(oid, is_buy, px, at):
+        book.observe("Fill", {"order_id": oid, "coin": "BTC", "is_buy": is_buy, "size": "1",
+                              "px": px, "fee_usd": "0", "ts_ns": at}, 1)
+
+    order("A", "1", 0)
+    order("B", "2", 0)
+    buys = [("1", True, "100", 90), ("2", True, "200", 110)]
+    for args in (buys[::-1] if delayed else buys):
+        fill(*args)
+    book.observe("MarketMid", {"coin": "BTC", "mid": "150", "ts_ns": 100}, 2)
+    order("C", "3", 150)
+    fill("3", False, "150", 160)
+    book.observe("MarketMid", {"coin": "BTC", "mid": "150", "ts_ns": 300}, 3)
+    book.clock = book.tick_through_ns = 400
+    book.resolve(4)
+    return book.payoff("C")
+
+
+def test_a_later_closer_of_reordered_inventory_is_censored_too():
+    """The reorder taints the instrument's inventory, not only the returns open when it
+    was found: a later return that closes a lot of it is censored until the inventory
+    is gone, and in fact-time order the same return is graded on what it did."""
+    chronological, delayed = _later_closer_run(False), _later_closer_run(True)
+    assert chronological.censored is None
+    assert (chronological.net_micro, chronological.y) == (30_000_000, 1)
+    assert delayed.censored == "fill_reordered"

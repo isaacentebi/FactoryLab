@@ -522,12 +522,20 @@ def _run_backup(tmp_path: Path, root: Path, *, avail_kb: int) -> subprocess.Comp
         "RCLONE_CONFIG": str(tmp_path / "fixture.conf")})
 
 
+def _staged(tmp_path: Path) -> list[str]:
+    """What the backup left in its staging directory. macOS's xcrun writes its own
+    cache (``xcrun_db``) into TMPDIR when a stand-in tool runs; that is the host's,
+    not the backup's."""
+    return sorted(p.name for p in (tmp_path / "staging").iterdir()
+                  if not p.name.startswith("xcrun_db"))
+
+
 def test_backup_prunes_plaintext_before_upload_and_all_staging_after(tmp_path):
     root = _backup_root(tmp_path)
     proc = _run_backup(tmp_path, root, avail_kb=60_000_000)
     assert proc.returncode == 0, proc.stderr.decode()
     assert (tmp_path / "calls").read_text().splitlines() == ["age", "rclone backup.tar.age"]
-    assert list((tmp_path / "staging").iterdir()) == []
+    assert _staged(tmp_path) == []
     assert not (root / "runs/.backup-pin").exists()
     assert (root / "runs/funded.jsonl").read_bytes() == b'{"item": 1}\n{"item": 2}\n'
 
@@ -540,7 +548,7 @@ def test_backup_refuses_to_stage_without_room_beside_the_world(tmp_path):
     assert proc.returncode == 1
     assert b"backup not taken: not enough free space" in proc.stderr
     assert not (tmp_path / "calls").exists()
-    assert list((tmp_path / "staging").iterdir()) == []
+    assert _staged(tmp_path) == []
 
 
 def test_the_supervisor_launches_and_resumes_the_edition8_roster():

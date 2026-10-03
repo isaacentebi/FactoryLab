@@ -63,6 +63,10 @@ class ReturnConsequences:
         # keep custody's arrival-order books; the outcome is censored, never graded.
         self.fill_ns: dict[str, int] = {}
         self.reordered: dict[str, str] = {}
+        # Each instrument whose inventory a reordered fill left in arrival order, and
+        # the fill time that found it: tainted until the instrument is flat (Sol 6.1
+        # on #193), so a later closer of that inventory is censored too.
+        self.tainted: dict[str, int] = {}
         self.pending_orders: dict[str, dict] = {}
         # R4-C: intents the venue never answered and never will. The hold on
         # consequence resolution is released for them, but the exposure is not
@@ -418,37 +422,49 @@ class ReturnConsequences:
 
     def _check_fill_order(self, at_ns: int, payload: dict, after: LotTable,
                           event: int) -> None:
-        """Censor every open return a fill older than one already applied on its
-        instrument could have changed.
+        """Censor every open return whose outcome rests on an instrument's inventory
+        matched in arrival order rather than the world's.
 
-        Guarantees the latest applied fill time per (market, instrument) is kept, and a
-        fill strictly older than it marks ``FILL_REORDERED`` on each open return that
-        holds, held or trades that instrument, before or after the fill: the shared
-        FIFO matched it in arrival order, so no outcome built on that matching is
-        certified as what the world did by its horizon. Fills of one instant keep the
-        venue's order (their order is itself a fact); other instruments are untouched.
+        Guarantees the latest applied fill time per (market, instrument) is kept. A
+        fill strictly older than it taints that instrument's inventory and marks
+        ``FILL_REORDERED`` on each open return that holds, held or trades it: the
+        shared FIFO matched the fill in arrival order, so no outcome built on that
+        matching is certified as what the world did by its horizon. While the
+        instrument is tainted, every fill on it marks the same on its own return and on
+        each open return holding a lot of it before or after the fill, so a later
+        closer of the misordered lots inherits the censoring; the taint ends with the
+        fill that leaves the instrument flat. Fills of one instant keep the venue's
+        order (their order is itself a fact); other instruments are untouched.
         """
         coin, market = str(payload["coin"]), payload.get("market", "perp")
         key = f"{market}:{coin}"
         latest = self.fill_ns.get(key)
         self.fill_ns[key] = at_ns if latest is None else max(latest, at_ns)
-        if latest is None or at_ns >= latest:
+        reordered = latest is not None and at_ns < latest
+        if not reordered and key not in self.tainted:
             return
         touched = {lot.handle for table in (self.table, after) for lot in table.lots
                    if lot.coin == coin and lot.market == market}
         touched |= {order.handle for order in after.orders
                     if order.order_id == str(payload["order_id"])}
-        touched |= {handle for handle, entries in self.history.items()
-                    if any(entry.get("coin") == coin for entry in entries)}
+        if reordered:
+            touched |= {handle for handle, entries in self.history.items()
+                        if any(entry.get("coin") == coin for entry in entries)}
+            self.tainted.setdefault(key, at_ns)
         censored = sorted(handle for handle in touched
                           if handle is not None and self.account_open(handle)
                           and handle not in self.reordered)
         for handle in censored:
             self.reordered[handle] = FILL_REORDERED
-        self.ledger.append({"kind": "consequence.reordered", "event": event,
-                            "order_id": str(payload["order_id"]), "instrument": key,
-                            "fact_ns": at_ns, "applied_through_ns": latest,
-                            "handles": censored})
+        flat = not any(lot.coin == coin and lot.market == market for lot in after.lots)
+        if flat:
+            self.tainted.pop(key, None)
+        if reordered or censored or flat:
+            self.ledger.append({"kind": "consequence.reordered", "event": event,
+                                "order_id": str(payload["order_id"]), "instrument": key,
+                                "fact_ns": at_ns, "applied_through_ns": latest,
+                                "handles": censored, "reordered": reordered,
+                                "tainted": not flat})
 
     def _unattributed_wind_down(self, payload: dict, event: int, before: LotTable,
                                 after: LotTable) -> None:

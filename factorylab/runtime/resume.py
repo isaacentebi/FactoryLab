@@ -1017,7 +1017,7 @@ _COMPONENT_FIELDS = (
                           "facts_ns", "tick_through_ns", "history",
                           # Sol 6.1 r4: the latest fill applied per instrument, and the
                           # returns an older fill applied after it censored.
-                          "fill_ns", "reordered")),
+                          "fill_ns", "reordered", "tainted")),
     ("consequence_fills", "", ("launch_ns", "read_ns", "since_ns", "seen", "through_ns", "measured",
                                "propagation_bound_ns", "observation_complete",
                                "reconciliation_ns", "expected_positions", "expected_cash",
@@ -1494,7 +1494,7 @@ def restore_runtime(rt, state: dict, *, from_diary: bool = False) -> None:
                 continue
             if (name == "consequences"
                     and field in ("unresolved_orders", "censored_payoffs", "fill_ns",
-                                  "reordered")
+                                  "reordered", "tainted")
                     and field not in components[name]):
                 # Older checkpoints predate the released hold, and the fill-order
                 # check: nothing is released, and no fill order was recorded.

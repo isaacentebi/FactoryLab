@@ -574,8 +574,8 @@ class _RetryExecutedClassRail(UnconfiguredRail):
     """An offline class-transfer rail whose first POST never completes and whose retry
     executes: the venue stamps the execution 70 s after the signed nonce."""
 
-    def __init__(self):
-        self.rows, self.sends = [], 0
+    def __init__(self, executes=True):
+        self.rows, self.sends, self.executes = [], 0, executes
         account = AccountState(Decimal(500), Decimal(500), (), Decimal(0))
         super().__init__(SimpleNamespace(
             name="hyperliquid", _address="offline-account",
@@ -588,7 +588,7 @@ class _RetryExecutedClassRail(UnconfiguredRail):
         self.sends += 1
         if self.sends == 1:
             raise Pending("offline first POST did not complete")
-        if not self.rows:
+        if self.executes and not self.rows:
             self.rows.append({
                 "time": reference["nonce"] + 70_000, "hash": "executed-class-move",
                 "delta": {"type": "accountClassTransfer", "toPerp": False, "usdc": "5"}})
@@ -625,3 +625,49 @@ def test_class_transfer_executed_on_retry_must_confirm_and_unblock_venue():
     rail2.rows.append({**rail2.rows[0], "hash": "another", "time": rail2.rows[0]["time"] + 1})
     treasury2.tick(start_ns + 80_000_000_000)
     assert treasury2.state["status"] == "submitted"
+
+
+def _unrelated_class_row(nonce: int, after_ms: int, name: str) -> dict:
+    return {"time": nonce + after_ms, "hash": name,
+            "delta": {"type": "accountClassTransfer", "toPerp": False, "usdc": "5"}}
+
+
+def test_an_unrelated_class_transfer_between_attempts_confirms_nothing():
+    """Sol 6.1 on #193: a ledger row binds to no signed action (an accountClassTransfer
+    row carries no nonce, the submit answers no hash), so the evidence window is the
+    union of each ledgered send's own window. Neither send executed; another $5 move
+    the same way executed at nonce + 65 s, between the windows: it confirms nothing."""
+    start_ns = 1_700_000_000_000_000_000
+    ledger, wallet, _ = setup()
+    rail = _RetryExecutedClassRail(executes=False)
+    treasury = Treasury(ledger, wallet, rail)
+    treasury.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    nonce = treasury.state["nonce"]
+    treasury.tick(start_ns + 70_000_000_000)  # the retry, which does not execute either
+    assert rail.sends == 2
+    rail.rows.append(_unrelated_class_row(nonce, 65_000, "someone-else"))
+    treasury.tick(start_ns + 80_000_000_000)
+    assert treasury.state["status"] == "submitted"
+    assert wallet.available < wallet.balance  # the principal stays held
+    # Ours executing on the retry beside it is ambiguous: two candidates, still pending.
+    rail.rows.append(_unrelated_class_row(nonce, 72_000, "ours"))
+    treasury.tick(start_ns + 90_000_000_000)
+    assert treasury.state["status"] == "submitted"
+
+
+def test_a_long_retry_run_ledgers_each_send_once_not_a_growing_list():
+    """Every ledgered send widens the evidence window by its own window, so the sends
+    are kept; a transfer retried every minute for days must not copy them all into
+    each row it writes (the diary would grow quadratically)."""
+    start_ns = 1_700_000_000_000_000_000
+    ledger, wallet, records = setup()
+    rail = _RetryExecutedClassRail(executes=False)
+    treasury = Treasury(ledger, wallet, rail)
+    treasury.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    for minute in range(1, 6):
+        treasury.tick(start_ns + minute * 61_000_000_000)
+    assert len(treasury.state["sent_ns"]) == rail.sends == 6
+    rows = [r for r in records if r["kind"].startswith("treasury.")]
+    assert not any("sent_ns" in r.get("state", {}) for r in rows)
+    assert [r["sent_ns"] for r in rows if r["kind"] == "treasury.broadcast"] == (
+        treasury.state["sent_ns"])
