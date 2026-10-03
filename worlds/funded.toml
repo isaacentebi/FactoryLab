@@ -587,6 +587,9 @@ public_read_weight_per_minute = 640
 # universe differs from the one those cards were voted for; re-ratify before launch.
 [charter]
 edition = 1
+launch = "run"
+ratified_sha256 = "f8c72648e3b10c1f1aa88968edb5501467d1102d7434d86a487c8e4456f20718"
+roster_sha256 = "5683030290db3b4a9532a562a6a619becee383033600dde4e260c4e34d2f5f8b"
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
@@ -596,79 +599,34 @@ norms = [
 ]
 
 [[charter.cards]]
-id = "consequence-success-floor"
-norm = "consequential usefulness"
-description = "Share of settled acting returns whose consequence yielded positive real payoff exceeding costs."
-units = "fraction"
-window = { kind = "windows", n = 20 }
-region = { rule = "at least", lo = 0.4 }
-observation = "consequence_paid_off_rate"
-answers_for = "producer"
-lambda = 0.2
-
-[[charter.cards]]
-id = "forecast-skill-baseline"
+id = "avoidable-commitment-resolution"
 norm = "epistemic integrity"
-description = "Mean skill difference of settled forecasts relative to the pre-outcome prevalence base rate."
-units = "score difference"
-window = { kind = "forecasts", n = 25, per = "assembly" }
-region = { rule = "above", lo = 0.0 }
-observation = "forecast_skill"
-answers_for = "all"
-lambda = 0.15
-
-[[charter.cards]]
-id = "cost-per-attempt-limit"
-norm = "bounded reciprocity"
-description = "Mean metered expenditure per response attempt across all invocations, failed attempts included."
-units = "micro-USD per attempt"
-window = { kind = "returns", n = 30, per = "role" }
-region = { rule = "at most", hi = 500000.0 }
-observation = "cost_per_attempt"
-answers_for = "all"
-lambda = 0.1
-
-[[charter.cards]]
-id = "well-formed-integrity"
-norm = "fidelity"
-description = "Proportion of all invocations delivering well-formed schema-compliant returns."
+description = "Share of due accepted commitments that remain unresolved avoidably and are attributable to the responsible scope."
 units = "fraction"
-window = { kind = "returns", n = 25, per = "assembly" }
-region = { rule = "at least", lo = 0.95 }
-observation = "well_formed_rate"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+region = { rule = "at most", hi = 0.1 }
+observation = "avoidably_unresolved_share"
 answers_for = "all"
-lambda = 0.2
 
 [[charter.cards]]
-id = "window-compute-burn-ceiling"
-norm = "durable agency"
-description = "Total metered compute spend across invocations in a closed window."
-units = "micro-USD per window"
-window = { kind = "windows", n = 25 }
-region = { rule = "at most", hi = 1000000.0 }
-observation = "burn_per_window"
-answers_for = "all"
-lambda = 0.2
-
-[[charter.cards]]
-id = "position-concentration-ceiling"
-norm = "durable agency"
-description = "Peak observed absolute marked notional on one coin relative to starting venue equity, assessed only when positions, marks and equity are available."
-units = "ratio"
-window = { kind = "windows", n = 10 }
-region = { rule = "at most", hi = 0.5 }
-observation = "position_concentration"
-answers_for = "producer"
-
-[[charter.cards]]
-id = "evaluator-disagreement-ceiling"
+id = "unresolved-settlement-share"
 norm = "fidelity"
-description = "Mean disagreement among judges assessing the same return should remain limited, while treating insufficient multi-judge evidence as unmeasured."
-units = "score standard deviation"
+description = "Share of resolved settlements that are censored rather than supported by a measured outcome."
+units = "fraction"
 window = { kind = "windows", n = 10 }
 region = { rule = "at most", hi = 0.2 }
-observation = "evaluator_disagreement"
-answers_for = "evaluator"
+observation = "censored_share"
+answers_for = "all"
+
+[[charter.cards]]
+id = "nonacting-outcome-evidence"
+norm = "epistemic integrity"
+description = "Share of fixed outcomes for returns that executed nothing but named a trade that have an informative base-rate key."
+units = "fraction"
+window = { kind = "windows", n = 10 }
+region = { rule = "at least", lo = 0.8 }
+observation = "non_acting_informative_share"
+answers_for = "producer"
 
 [prompt]
 
