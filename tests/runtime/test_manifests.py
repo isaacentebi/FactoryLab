@@ -522,7 +522,8 @@ def test_the_edition8_launch_world_is_edition7_reseated_and_nothing_else():
     assert {model_family(m) for m in evaluators} == {"gpt", "mistral", "qwen"}
     menu = {m.id: m for m in launch.models}
     assert not set(menu) & {"google/gemini-3.8-flash", "anthropic/claude-sonnet-5.5",
-                            "openai/gpt-6.1-sol", "openai/gpt-6-sol", "qwen/qwen3.8-flash",
+                            "openai/gpt-6.1-sol", "openai/gpt-6-sol", "openai/gpt-5.6-sol",
+                            "qwen/qwen3.8-flash",
                             "deepseek/deepseek-v4.1-flash"}
     for added in (mistral, qwen):
         assert menu[added].contract == "json_object" and not menu[added].reasoning

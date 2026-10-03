@@ -213,19 +213,7 @@ start_cash_usd = "120"
 
 # Published route prices checked 15 September 2026 (GPT-6 §10.2), USD per million tokens.
 # Metering charges what the provider reports per request; these set the reservation
-# ceiling. Sol's route currently advertises a promotion; it is not a price promise, and the
-# ceiling here is the undiscounted list price on purpose.
-[[models]]
-id = "openai/gpt-5.6-sol"
-# Published knowledge cutoff.
-# https://developers.openai.com/api/docs/models/gpt-5.6-sol
-training_cutoff = "2026-02-16"
-provider = "openrouter"
-input_usd_per_mtok = "2.00"
-output_usd_per_mtok = "10.00"
-reasoning = { effort = "low" }
-extra_body = { provider = { require_parameters = true } }
-
+# ceiling. No Sol model is on this menu (owner's decision, 2 October 2026: cost).
 # A seated family from 2 October 2026 (the owner's decision; header, item 2): Mistral
 # Small 3.2, on Qwen 3.8 Flash's five seats. OpenRouter list price read 2026-10-02
 # (https://openrouter.ai/api/v1/models): $0.09375 in, $0.25 out. It takes no reasoning
