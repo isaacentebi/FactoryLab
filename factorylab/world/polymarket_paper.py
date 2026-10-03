@@ -164,7 +164,8 @@ class PaperPolymarket:
                 # third-party text and never published as it is.
                 "outcome_name": p["outcome_name"], "size": str(size),
                 "avg_px": str(Decimal(p["cost_micro"]) / MICRO / size),
-                "available": str(size),
+                # The exact cost, integer micro-USD: the average above may repeat.
+                "cost_micro": p["cost_micro"], "available": str(size),
                 **({"payout": p["payout"]} if p.get("payout") is not None else {})})
         return {"usdc": str(Decimal(self.cash_micro) / MICRO),
                 "usdc_available": str(Decimal(self.cash_micro - held) / MICRO),

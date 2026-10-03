@@ -204,6 +204,31 @@ def test_a_paper_order_is_an_intent_first_rests_fills_on_the_live_book_and_recon
     assert "polymarket.drift" not in seen
 
 
+def test_the_paper_pot_is_valued_at_its_exact_cost_never_a_repeating_average():
+    """Sol P0, round 2: 5 tokens at 0.38 and 12 at 0.39 cost exactly 6.58 USD, whose
+    average price repeats; the pot is valued at its integer cost, so no micro-USD is
+    lost or invented in custody, the pots or the reconciliation."""
+    rt, server = paper_world(collateral="100")
+    handle = collateral_decision(rt)
+    step(rt)
+    ask_at(server, "0.41")
+    first = buy(rt, server, handle, price="0.38", size="5", slot="tool:0")
+    ask_at(server, "0.37")
+    step(rt)
+    ask_at(server, "0.41")
+    second = buy(rt, server, handle, price="0.39", size="12", slot="tool:1")
+    ask_at(server, "0.37")
+    step(rt)
+    assert rt.polymarket.filled == {first["order_id"]: "5", second["order_id"]: "12"}
+    (position,) = rt.polymarket.account()["positions"]
+    assert position["cost_micro"] == 6_580_000 and position["size"] == "17"
+    pots = polymarket.pots_view(rt)
+    assert pots["polymarket"] == 100_000_000 and pots["polymarket_usdc"] == 93_420_000
+    assert pots["polymarket_tokens"][0]["cost_micro"] == 6_580_000
+    assert polymarket.held_at_cost(rt.polymarket.account()) == Decimal(100)
+    assert rt.polymarket.drifting is False
+
+
 def test_no_order_of_a_paper_world_is_ever_sent_to_polymarket():
     rt, server = paper_world()
     handle = collateral_decision(rt)

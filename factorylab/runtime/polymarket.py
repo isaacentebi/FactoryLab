@@ -149,8 +149,8 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
                 "resolves, when each winning token pays 1 USDC and each losing token 0. "
                 "size is in tokens, price in USDC per token strictly between 0 and 1 on "
                 "the market's tick. A buy holds price x size USDC while it rests. The "
-                f"order is sent to {venue} as a GTC post-only order: it rests on the book "
-                "as a maker, the venue rejects one that would cross before it executes, "
+                f"order is sent to {venue} as a GTC post-only order: it rests there as "
+                "a maker, the venue rejects one that would cross before it executes, "
                 "and a maker pays no fee. Free to call.",
                 {"token_id": token, "side": {"type": "string", "enum": ["buy"]},
                  "size": decimal, "price": decimal},
@@ -1178,10 +1178,20 @@ def _decimal(value: Any) -> Decimal | None:
     return number if number.is_finite() else None
 
 
+def _cost(position: dict) -> Decimal:
+    """What a position's tokens cost, in USD: exactly its ``cost_micro`` where the pot
+    states one (the paper pot keeps its cost in integer micro-USD; Sol P0, round 2: an
+    average price recomputed from it repeats and lost a micro-USD), else size x average
+    price as the custodian states them."""
+    cost = position.get("cost_micro")
+    if type(cost) is int:
+        return Decimal(cost) / 1_000_000
+    return Decimal(position["size"]) * Decimal(position["avg_px"])
+
+
 def _open_exposure(account: dict) -> Decimal:
     """USDC the pot has committed: tokens held at cost plus what resting buys hold."""
-    held = sum((Decimal(p["size"]) * Decimal(p["avg_px"]) for p in account["positions"]),
-               Decimal(0))
+    held = sum((_cost(p) for p in account["positions"]), Decimal(0))
     resting = sum((Decimal(o["price"]) * Decimal(o["remaining"])
                    for o in account["open_orders"] if o["side"] == "buy"), Decimal(0))
     return held + resting
@@ -1288,7 +1298,7 @@ def held_at_cost(account: dict) -> Decimal:
     for position in account["positions"]:
         size = Decimal(position["size"])
         paid = position.get("payout")
-        tokens += size * (Decimal(paid) if paid is not None else Decimal(position["avg_px"]))
+        tokens += (size * Decimal(paid)) if paid is not None else _cost(position)
     return Decimal(account["usdc"]) + tokens
 
 
@@ -2362,8 +2372,9 @@ def pots_view(rt: Any) -> dict[str, Any]:
     tokens = [] if not observed else [
         {"token_id": p["token_id"], "market_id": p["market_id"], "outcome": p["outcome"],
          "size": p["size"],
-         "cost_micro": usd_to_micro(Decimal(p["size"]) * Decimal(p["avg_px"]),
-                                    rounding="floor"),
+         "cost_micro": (p["cost_micro"] if type(p.get("cost_micro")) is int
+                        else usd_to_micro(Decimal(p["size"]) * Decimal(p["avg_px"]),
+                                          rounding="floor")),
          # A resolved token not yet redeemed is worth its payout, what it redeems for.
          **({"payout": p["payout"],
              "value_micro": usd_to_micro(Decimal(p["size"]) * Decimal(p["payout"]),

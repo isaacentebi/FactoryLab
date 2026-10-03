@@ -2693,7 +2693,9 @@ What is real and what is simulated:
   same wall-clock stamps and journal, and the same admission (`arm`: a ledger, the wall
   clock and the host's IP lock). The forecast predicates settle on the live markets.
 * **The pot is simulated.** It opens with `collateral_usd` of simulated USDC, kept as
-  integer micro-USD, and moves only by a fill's `price x size`. It is a custody pot like
+  integer micro-USD, and moves only by a fill's `price x size`; each position states
+  its exact cost (`cost_micro`), which the pot is valued at (`world.pots`, the
+  reconciliation, `max_open_usd`), never its average price times its size. It is a custody pot like
   the others (`world.pots`, `custody_view`), and its money is never a venue's: no
   Hyperliquid account, reserve or provider is debited or credited by it.
 * **The pot's own reads are live and budgeted.** A write's market read, the book read at
