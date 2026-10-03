@@ -136,6 +136,11 @@ architecture.
 - Never read, print or commit key files (`*.key`) or `*_PRIVATE_KEY` values.
 - Stay inside the files named in your task. Do not refactor neighbours, do
   not reformat unrelated files, do not commit.
+- Clean up git worktrees when their work is done. Once a worktree's branch is
+  merged (or its work is abandoned with the owner's agreement), remove the
+  worktree (`git worktree remove`, then `git worktree prune`) and delete its
+  local branch. Never remove a worktree or branch that still holds uncommitted
+  or unpushed work without asking the owner first.
 
 ## Verify gate
 
