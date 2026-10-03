@@ -106,7 +106,7 @@ EVENTS = 100
 
 def _runtime(path):
     return Runtime(load_manifest("scripted"), events=EVENTS, seed=1,
-                   initial_balance_micro=None, ledger_path=str(path), router_gamma=.1)
+                   initial_balance_micro=None, ledger_path=str(path))
 
 
 def _items(path):

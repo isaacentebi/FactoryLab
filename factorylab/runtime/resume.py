@@ -875,6 +875,9 @@ _RUNTIME_FIELDS = (
     # tier is taken as viable until measured, no epoch waits, and the anchor is
     # rebuilt from the treasury's own window.
     "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
+    # A population router replacement waiting for its kind's settle gate (learners
+    # design §2.5). An older checkpoint has none: no replacement waits.
+    "pending_routers",
     # Each card's consecutive unmeasured windows (wave 16, R10-f). An older checkpoint
     # has none: the run counts from the next close.
     "card_unmeasured",
@@ -1091,7 +1094,7 @@ def runtime_state(rt) -> Checkpoint:
         "format": 1, "manifest_hash": rt.m.manifest_hash(),
         "config": {
             "events": rt.events_budget, "seed": rt.seed, "initial_balance_micro": rt.initial,
-            "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
+            "kill_at_end": rt.kill_at_end,
             # The universe the manifest's selectors resolved to at launch, pinned for
             # the world's life: a resume is handed it and never resolves again.
             **({"universe": rt.universe} if getattr(rt, "universe", None) else {}),

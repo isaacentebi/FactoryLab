@@ -26,6 +26,7 @@ def governance_admission_schematics(manifest) -> dict:
     )
     from factorylab.runtime.governance import MODEL_BASE_MAX_CHARS, MODEL_REASONING_LEVELS
     from factorylab.runtime.observations import OBSERVATION_TIMEOUT_S, SEED_IDS
+    from factorylab.runtime.worlds import PER_TICK_KINDS
 
     return {
         "registration_dispatch": {
@@ -118,6 +119,13 @@ def governance_admission_schematics(manifest) -> dict:
         "router": {
             "max_routers_per_kind": manifest.tools.max_routers_per_kind,
             "cap_application": "The per-event-kind cap applies to add=true; add=false replaces.",
+            "blum_mansour_kinds": sorted(PER_TICK_KINDS),
+            "replacement": "add=true, or add=false for a kind with no router, is built at "
+                           "admission. add=false for a kind with routers replaces them only "
+                           "once min_ratio delivery bounds and min_ratio measured periods of "
+                           "the kind's router rounds have passed since its last phase "
+                           "opened (router.deferred until then); a later add=false for the "
+                           "same kind supersedes one still waiting.",
         },
         "tool": {"jail_required": True},
         "service": {

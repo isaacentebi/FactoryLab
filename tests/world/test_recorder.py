@@ -207,6 +207,6 @@ def test_a_breadth_replay_keeps_its_hip3_markets(tmp_path):
     manifest = replace(manifest, assemblies=tuple(
         replace(a, max_tokens=1024) for a in manifest.assemblies))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(),
+                 provider=ScriptedProvider(),
                  exchange=fastloop.tape_venue(tape, manifest))
     assert "xyz:TSLA" in rt.universe["coins"] and "BTC" in rt.universe["coins"]

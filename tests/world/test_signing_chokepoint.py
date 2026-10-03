@@ -165,7 +165,7 @@ def test_a_world_names_its_exact_diary_to_its_reserve_guards(tmp_path):
     path = tmp_path / "runs" / "foo.jsonl"
     path.parent.mkdir()
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=str(path), router_gamma=.1)
+                 ledger_path=str(path))
     guard = rt.market.target.guard
     assert guard.ledger == path.resolve() and guard.run_dir == path.parent.resolve()
 
@@ -182,8 +182,7 @@ def test_a_resumed_world_names_its_diary_to_its_reserve_guards(tmp_path):
     m = load_manifest("scripted")
     path = tmp_path / "runs" / "foo.jsonl"
     path.parent.mkdir()
-    rt = Runtime(m, events=140, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 router_gamma=.1)
+    rt = Runtime(m, events=140, seed=1, initial_balance_micro=None, ledger_path=str(path))
     rt.events_budget = 8
     stop_after(rt, lambda r, e: r.ticks_consumed == 3 and str(e.kind) == "Tick")
     restored = resume_runtime(m, str(path))

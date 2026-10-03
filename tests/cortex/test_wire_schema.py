@@ -273,7 +273,7 @@ def _edition6_contracts():
     manifest = replace(manifest, assemblies=tuple(
         replace(a, max_tokens=1024) for a in manifest.assemblies))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, provider=ScriptedProvider(),
+                 provider=ScriptedProvider(),
                  exchange=FakeExchange(coins=manifest.exchange.coins))
     base = [(rt._contract_schema(seat), asm.spec.emits)
             for seat, asm in sorted(rt.assemblies.items())]

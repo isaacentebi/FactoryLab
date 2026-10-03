@@ -1,75 +1,106 @@
-"""Blum--Mansour full-information reduction and partial-information SR_MAB.
+"""The core learner: Blum--Mansour SR_MAB with Auer EXP3 rows over doubling epochs.
 
 Source: Blum & Mansour (2007), "From External to Internal Regret", JMLR 8,
-1307--1324, https://www.jmlr.org/papers/volume8/blum07a/blum07a.pdf.
-Section 3 solves p=pQ and supplies loss p_i*loss[j] to row i (equation (1)).
-Section 5's SR_MAB uses the unnumbered equations on pp. 1316--1317:
-  q_ij = (1-gamma_i)*w_ij/sum_j(w_ij) + gamma_i/N,
-  p = pQ,
-  g_i,k = p_i * reward[k] * q_i,k / p_k,
-  X_i,k = g_i,k / q_i,k, with X_i,j=0 for j != k (Lemma 10).
-Thus E[X_i,j] = p_i*reward[j]. EXP3 updates w_i,k by
-exp((gamma_i/N)*X_i,k). Exploration is inside every EXP3 row; SR_MAB adds
-no outer exploration or post-solve clipping. The master denominator p_k is
-the actual logged propensity, checked against the saved round. The separate
-EXP3 observed-gain interface uses q_i,k as required by Lemma 10, not p_k again.
-Bandit bases are restricted to EXP3, whose update satisfies that lemma.
+1307--1324, §5 and Theorem 11; rows are EXP3 (Auer et al. 2002), which satisfy
+Lemma 10. Each round the N rows propose q_i over the feasible menu, the master
+plays the stationary p = pQ, and when action k is played with logged probability
+pi_k and pays r, row i adds X_ik to its cumulative gain estimate G_ik, with
 
-base_factory(actions) must return a fresh learner for each universe action.
-Feedback closes one synchronous round: repeat queries of the same menu are
-idempotent, but changing the menu before feedback is rejected. Delayed or
-out-of-order training requires a separate adapter/algorithm with decision
-snapshots; the thin Feedback type cannot identify earlier rounds.
+    X_ik = g_ik / q_ik = p_i * r / (kappa * pi_k)          (on-policy)
 
-The explicit snapshot()/update_from_snapshot() extension supports that adapter.
-snapshot() detaches the pending round, freezing its support, solved p and every
-base row Q. Later feedback trains the current base weights with that round's
-p_i-scaled losses, or its p_i, q_i,k and logged p_k for SR_MAB. It never restores
-old weights. Full-information Hedge updates add -eta*p_i*loss[j] in log space,
-so delivery order for a fixed collection of snapshots is immaterial apart from
-floating-point rounding. This does not imply identical policies when feedback
-is delayed during play, or commutativity for arbitrary custom base learners.
+and proposes q_i proportional to exp(eta_t * G_i), mixed with gamma_k / K, at the rate
+eta_t = gamma_k / N_t, N_t the menu's size at the draw (EXP3 in FTRL form).
 
-For filtering, all N rows propose over the feasible menu and the stationary
-system uses the feasible rows/columns. Unavailable actions have p_i=0. This
-preserves stationarity on the actual menu, but no dynamic-menu regret theorem
-is claimed. The exact rational solve normalizes rows before solving to remove
-floating-point sum error; returned p is never clipped or renormalized.
+The row proposal q_ik cancels, so a round's snapshot is O(N): its epoch, the
+master p and the executed pi (docs/architecture/learners-noregret.md §2.2).
+``kappa`` is the phase-wide coverage bound of §2.3: the draw transforms guarantee
+pi_k >= p_k / kappa, so g_ik <= 1 as Lemma 10 requires; an update that finds
+p_k > kappa * pi_k is refused (the coverage claim failed) and changes nothing.
+
+Schedule: epoch k lasts H_k = H_0 * 2^k opened rounds at the fixed
+gamma_k = min(1, sqrt(N ln N / ((e - 1) H_k))); every row restarts at each epoch
+boundary. H_0 is at least ceil(N ln N / (e - 1)) and at least the caller's
+``first_epoch`` (the delivery bound in draws), so an epoch is at least as long as its
+feedback takes to arrive. A round from a closed epoch is orphaned: it trains nothing.
+For T >= H_0 and synchronous feedback, max_F E[swap regret_F] <= 8.98 kappa N
+sqrt(T N ln N); E[max_F] and delayed feedback are not claimed.
+
+A menu grows in place (§2.5): a new action gets a uniform new row and, in each old
+row, a gain estimate at that row's mean weight at the pre-growth rate. The epoch's
+gamma_k stays frozen at the N the epoch opened with (its exploration mass), while the
+rate eta_t = gamma_k / N_t reads the menu now, so it is nonincreasing within the epoch
+and eta_t * X_ik <= (gamma_k / N_t)(K_t / gamma_k) <= 1 on every update (Auer's
+premise: q_ik >= gamma_k / K_t gives X_ik <= K_t / gamma_k, and K_t <= N_t). The next
+epoch retunes gamma to the grown N. A singleton epoch (N = 1, gamma 0) learned
+nothing, so growth from one restarts it at the grown N under the same epoch index.
+Within a grown epoch each row's regret is Auer's with N_T for N (Cesa-Bianchi &
+Lugosi 2006, Thm 2.3, for a time-varying rate in loss form; the gain form and the
+mean-weight entry term are our own argument), so Lemma 10's constant loosens by at
+most sqrt(N_T ln N_T / (N_0 ln N_0)).
+
+A quiet draw is withdrawn exactly: withdrawing the round that rolled the epoch, while it
+is the new epoch's only round, restores the closed epoch's position and rows, so its
+outstanding rounds still train.
+
+Every row keeps q_ik >= gamma_k / K, so Q is strictly positive and the stationary
+solve is unique. An off-policy learner (trained on a seat's declared propensities)
+uses X_ik = p_i * r / (pi_k + beta_k), beta_k = gamma_k / (2N): one update moves a
+logit eta_t * G_ik by at most 2, and no guarantee is claimed.
 """
 
 import math
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from fractions import Fraction
 
 from .base import (
     BanditFeedback,
     Feedback,
-    FullInfoFeedback,
-    Learner,
     _actions,
+    _center,
     _probabilities,
     _state,
     _support,
-    restore_learner,
 )
-from .exp3 import EXP3
+
+SCHEDULE = "doubling"
+
+
+class Orphaned(LookupError):
+    """The round belongs to an epoch that has closed: it trains nothing."""
 
 
 @dataclass(frozen=True)
-class BlumMansourSnapshot:
-    """Immutable round data belongs to the learner that produced it.
+class CoreRound:
+    """One opened round: its epoch, support, master policy and executed policy."""
 
-    Rows follow the fixed universe order; each row's entries and p retain the
-    feasible order. Weight state is deliberately excluded so late updates can
-    accumulate on current weights. Exactly-once delivery belongs to the adapter.
-    """
-
+    epoch: int
     support: tuple[str, ...]
     p: tuple[tuple[str, float], ...]
-    rows: tuple[tuple[tuple[str, float], ...], ...]
-    _owner: object = field(repr=False, compare=False)
+    gamma: float
     executed: tuple[tuple[str, float], ...] | None = None
+
+    def state(self) -> dict:
+        return {"epoch": self.epoch, "support": list(self.support),
+                "p": [list(x) for x in self.p], "gamma": self.gamma,
+                "executed": None if self.executed is None
+                else [list(x) for x in self.executed]}
+
+    @classmethod
+    def restore(cls, saved: dict, actions: tuple[str, ...]) -> "CoreRound":
+        support = _support(saved["support"], actions)
+        p = tuple((str(a), float(v)) for a, v in saved["p"])
+        _probabilities(dict(p), support)
+        executed = saved.get("executed")
+        if executed is not None:
+            executed = tuple((str(a), float(v)) for a, v in executed)
+            _probabilities(dict(executed), support)
+        epoch, gamma = saved["epoch"], saved["gamma"]
+        if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+            raise ValueError("invalid saved epoch")
+        if type(gamma) not in (int, float) or not 0 < gamma <= 1:
+            raise ValueError("invalid saved gamma")
+        return cls(epoch, support, p, float(gamma), executed)
 
 
 def stationary_distribution(matrix: Sequence[Sequence[float]]) -> tuple[float, ...]:
@@ -117,216 +148,238 @@ def stationary_distribution(matrix: Sequence[Sequence[float]]) -> tuple[float, .
     return result
 
 
-class BlumMansour:
-    """N independent external-regret learners supply one stationary master policy."""
+def minimum_epoch(n: int) -> int:
+    """The least horizon at which gamma_H <= 1: ceil(N ln N / (e - 1)), at least 1."""
+    return max(1, math.ceil(n * math.log(n) / (math.e - 1)))
 
-    def __init__(
-        self,
-        base_factory: Callable[[Sequence[str]], Learner],
-        actions: Sequence[str],
-        *,
-        id: str = "blum_mansour",
-    ) -> None:
-        """Create a fresh base per action; reject shared base objects and mixed EXP3 modes."""
+
+def epoch_gamma(n: int, horizon: int) -> float:
+    """gamma_H = min(1, sqrt(N ln N / ((e - 1) H))) (Auer et al. 2002, Cor. 3.2)."""
+    return min(1.0, math.sqrt(n * math.log(n) / ((math.e - 1) * horizon)))
+
+
+class BlumMansour:
+    """N Auer EXP3 rows supply one stationary master policy; epochs double."""
+
+    def __init__(self, actions: Sequence[str], *, id: str = "blum_mansour",
+                 first_epoch: int = 0, coverage: float = 1.0,
+                 off_policy: bool = False) -> None:
+        """Start epoch 0 with uniform rows; ``coverage`` is kappa >= 1, fixed for life."""
         self.actions = _actions(actions)
         self.id = id
-        self._bases = tuple(base_factory(self.actions) for _ in self.actions)
-        if any(a is b for i, a in enumerate(self._bases) for b in self._bases[i + 1 :]):
-            raise ValueError("base_factory must return independent learners")
-        bandit = tuple(isinstance(base, EXP3) for base in self._bases)
-        if any(bandit) and not all(bandit):
-            raise TypeError("EXP3 bases cannot be mixed with full-information bases")
-        self._bandit = all(bandit)
-        self._pending: (
-            tuple[tuple[str, ...], dict[str, float], tuple[dict[str, float], ...]] | None
-        ) = None
+        if (not isinstance(first_epoch, int) or isinstance(first_epoch, bool)
+                or first_epoch < 0):
+            raise ValueError("first_epoch must be a nonnegative integer")
+        if type(coverage) not in (int, float) or not math.isfinite(coverage) or coverage < 1:
+            raise ValueError("coverage must be finite and at least 1")
+        self.first_epoch = max(minimum_epoch(len(self.actions)), first_epoch)
+        self.coverage = float(coverage)
+        self.off_policy = bool(off_policy)
+        self.epoch = 0
+        self.epoch_rounds = 0
+        # The menu size the current epoch opened with: its gamma and row step are
+        # frozen at it, whatever the menu grows to before the epoch closes.
+        self.epoch_n = len(self.actions)
+        self._rows = [dict.fromkeys(self.actions, 0.0) for _ in self.actions]
+        # (epoch, epoch_rounds, rows, epoch_n) before the last open_round rolled the
+        # epoch, kept only until anything else changes the learner: what withdrawing
+        # that round restores.
+        self._rolled: tuple[int, int, list[dict[str, float]], int] | None = None
+
+    def horizon(self, epoch: int | None = None) -> int:
+        """H_k = H_0 * 2^k opened rounds."""
+        return self.first_epoch * 2 ** (self.epoch if epoch is None else epoch)
+
+    def _next(self) -> tuple[int, list[dict[str, float]]]:
+        """The epoch and rows the next opened round is drawn from (no mutation)."""
+        if self.epoch_rounds >= self.horizon():
+            return self.epoch + 1, [dict.fromkeys(self.actions, 0.0) for _ in self.actions]
+        return self.epoch, self._rows
+
+    def rate(self, epoch: int | None = None) -> float:
+        """eta_t = gamma_k / N_t: ``epoch``'s gamma over the menu's size now, the rate the
+        rows' gain estimates are played at; nonincreasing within an epoch."""
+        return self.gamma(epoch) / len(self.actions)
+
+    def gamma(self, epoch: int | None = None) -> float:
+        """gamma_k of ``epoch`` (default the current one): the current epoch's is frozen
+        at the N it opened with; a later epoch's reads the menu as it is now."""
+        n = self.epoch_n if epoch is None or epoch == self.epoch else len(self.actions)
+        return epoch_gamma(n, self.horizon(epoch))
+
+    def _solve(self, support: tuple[str, ...], epoch: int,
+               rows: list[dict[str, float]]) -> dict[str, float]:
+        gamma, eta = self.gamma(epoch), self.rate(epoch)
+        by_action = {}
+        for action, gains in zip(self.actions, rows, strict=True):
+            high = max(gains[a] for a in support)
+            w = {a: math.exp(eta * (gains[a] - high)) for a in support}
+            total = math.fsum(w.values())
+            by_action[action] = {a: (1 - gamma) * w[a] / total + gamma / len(support)
+                                 for a in support}
+        matrix = [[by_action[a][b] for b in support] for a in support]
+        return dict(zip(support, stationary_distribution(matrix), strict=True))
 
     def distribution(self, feasible: Sequence[str]) -> dict[str, float]:
-        """Solve on feasible rows/columns and preserve the saved round until feedback."""
+        """The next round's master policy on ``feasible``; changes nothing."""
         support = _support(feasible, self.actions)
-        if self._pending is not None:
-            if support != self._pending[0]:
-                raise RuntimeError("close the pending round before changing support")
-            return self._pending[1].copy()
-        rows = tuple(base.distribution(support) for base in self._bases)
-        for row in rows:
-            _probabilities(row, support)
-        by_action = dict(zip(self.actions, rows, strict=True))
-        matrix = [[by_action[a][b] for b in support] for a in support]
-        p = dict(zip(support, stationary_distribution(matrix), strict=True))
-        self._pending = support, p, rows
-        return p.copy()
+        epoch, rows = self._next()
+        return self._solve(support, epoch, rows)
 
-    def update(self, feedback: Feedback) -> None:
-        """Deliver scaled losses or SR_MAB observed gains from the saved decision round."""
-        if self._pending is None:
-            raise RuntimeError("distribution must open a round before feedback")
-        support, p, rows = self._pending
-        if isinstance(feedback, FullInfoFeedback):
-            if self._bandit:
-                raise TypeError("EXP3 bases require bandit feedback")
-            losses = FullInfoFeedback(feedback.losses).losses
-            if set(losses) != set(self.actions):
-                raise ValueError("full feedback must cover the fixed action universe")
-            updates = [
-                FullInfoFeedback({b: p.get(a, 0.0) * losses[b] for b in self.actions})
-                for a in self.actions
-            ]
-            for base, update in zip(self._bases, updates, strict=True):
-                base.update(update)
-        elif isinstance(feedback, BanditFeedback):
-            if not self._bandit:
-                raise TypeError("SR_MAB requires EXP3 bases satisfying Lemma 10")
-            k = feedback.action
-            if k not in support or not math.isclose(
-                feedback.propensity,
-                p[k],
-                rel_tol=1e-12,
-                abs_tol=0,
-            ):
-                raise ValueError("feedback must carry the saved round's executed propensity")
-            gains = [
-                p.get(a, 0.0) * feedback.reward * row[k] / feedback.propensity
-                for a, row in zip(self.actions, rows, strict=True)
-            ]
-            assert all(math.isfinite(g) and 0 <= g <= 1 for g in gains)
-            for base, row, gain in zip(self._bases, rows, gains, strict=True):
-                base.update_observed_gain(k, gain, row[k])
-        else:
-            raise TypeError("unsupported feedback")
-        self._pending = None
+    def open_round(self, feasible: Sequence[str]) -> tuple[dict[str, float], CoreRound]:
+        """Count one round (rolling the epoch when it is spent) and freeze it."""
+        support = _support(feasible, self.actions)
+        epoch, rows = self._next()
+        p = self._solve(support, epoch, rows)
+        gamma = self.gamma(epoch)
+        self._rolled = None
+        if epoch != self.epoch:
+            self._rolled = (self.epoch, self.epoch_rounds, self._rows, self.epoch_n)
+            self.epoch, self.epoch_rounds, self._rows = epoch, 0, rows
+            self.epoch_n = len(self.actions)
+        self.epoch_rounds += 1
+        return p, CoreRound(epoch, support, tuple(p.items()), gamma)
 
-    def snapshot(self) -> BlumMansourSnapshot:
-        """Detach the pending round into immutable data, permitting another query.
+    def withdraw_round(self, saved: CoreRound) -> None:
+        """Uncount a round that never became a decision (a quiet draw).
 
-        No weights change. Calling without a pending distribution raises
-        RuntimeError. Ordinary distribution/update calls remain synchronous.
+        Guarantees that withdrawing the round that rolled the epoch, while nothing else
+        has changed the learner since, restores the closed epoch exactly (Sol on
+        #189/#190, P1 4): its outstanding rounds are not orphaned by a draw that
+        never happened.
         """
-        if self._pending is None:
-            raise RuntimeError("distribution must open a round before snapshot")
-        support, p, rows = self._pending
-        snapshot = BlumMansourSnapshot(
-            support,
-            tuple(p.items()),
-            tuple(tuple(row.items()) for row in rows),
-            self,
-        )
-        self._pending = None
-        return snapshot
+        if saved.epoch == self.epoch and self.epoch_rounds > 0:
+            self.epoch_rounds -= 1
+            rolled = self._rolled
+            if (not self.epoch_rounds and rolled is not None
+                    and rolled[0] == self.epoch - 1):
+                self.epoch, self.epoch_rounds, self._rows, self.epoch_n = rolled
+        self._rolled = None
 
-    def update_from_snapshot(self, snapshot: BlumMansourSnapshot, feedback: Feedback) -> None:
-        """Train current weights using this learner's frozen round and existing validation.
+    def add_actions(self, new: Sequence[str]) -> None:
+        """Grow the menu in place without restarting the epoch (learners design §2.5).
 
-        Any ordinary pending round survives success or failure unchanged. The
-        caller owns snapshot consumption; invalid feedback can be retried.
+        Guarantees every old row keeps its gain estimates and gains each new action at
+        the row's mean weight at the pre-growth rate, each new action's row is uniform,
+        and the epoch, its count and its gamma are unchanged; except that growth from a
+        singleton epoch (gamma 0, nothing learned) restarts that epoch at the grown
+        menu: fresh rows, no rounds counted, the same index, a positive gamma. An empty
+        ``new`` changes nothing; an action already on the menu raises ValueError and
+        changes nothing.
         """
-        if not isinstance(snapshot, BlumMansourSnapshot) or snapshot._owner is not self:
-            raise ValueError("snapshot must belong to this BlumMansour learner")
-        if snapshot.executed is not None and isinstance(feedback, BanditFeedback):
-            _probabilities(dict(snapshot.executed), snapshot.support)
-            self.update_carried(dict(snapshot.p), dict(snapshot.executed), feedback)
+        if not tuple(new):
             return
-        pending = self._pending
-        self._pending = snapshot.support, dict(snapshot.p), tuple(map(dict, snapshot.rows))
-        try:
-            self.update(feedback)
-        finally:
-            self._pending = pending
+        added = _actions(new)
+        if set(added) & set(self.actions):
+            raise ValueError("an action already on the menu is not new")
+        if self.epoch_n < 2:
+            # Sol on #191: a gamma frozen at 0 learned nothing and froze snapshots no
+            # restore accepts. Every draw of a singleton menu is NOOP, so nothing it
+            # opened can train.
+            self.actions = (*self.actions, *added)
+            self.epoch_n, self.epoch_rounds = len(self.actions), 0
+            self._rows = [dict.fromkeys(self.actions, 0.0) for _ in self.actions]
+            self._rolled = None
+            return
+        eta = self.rate()  # the pre-growth rate, as the frontier's entry uses
+        rows = []
+        for gains in self._rows:
+            high = max(gains.values())
+            mean = high + math.log(math.fsum(
+                math.exp(eta * (v - high)) for v in gains.values()) / len(gains)) / eta
+            rows.append(_center({**gains, **dict.fromkeys(added, mean)}))
+        self.actions = (*self.actions, *added)
+        rows.extend(dict.fromkeys(self.actions, 0.0) for _ in added)
+        self._rows = rows
+        self._rolled = None
 
-    def update_carried(
-        self, p: dict[str, float], executed: dict[str, float], feedback: BanditFeedback
-    ) -> None:
-        """Train current base weights on a round sampled from ``executed``, owned by p.
+    def update_round(self, saved: CoreRound, feedback: Feedback) -> None:
+        """Train the current rows on a round of the current epoch.
 
-        Guarantees the off-policy estimator E[1{k=j} p_i r_k / executed_k] = p_i r_j
-        for every row i this learner holds (a row absent from ``p`` gains nothing),
-        so a round drawn by a predecessor router still trains this one without bias.
-        Raises, changing nothing, unless the drawn action is in ``executed`` and in
-        this learner's universe and the feedback carries its executed propensity.
+        Raises Orphaned (changing nothing) for a closed epoch's round, ValueError for
+        feedback that does not carry the round's executed propensity or that breaks
+        the coverage bound, and TypeError for full-information feedback.
         """
-        if not self._bandit:
-            raise TypeError("SR_MAB requires EXP3 bases satisfying Lemma 10")
         if not isinstance(feedback, BanditFeedback):
-            raise TypeError("a carried round requires bandit feedback")
+            raise TypeError("SR_MAB requires BanditFeedback")
+        if saved.epoch != self.epoch:
+            raise Orphaned(saved.epoch)
+        p = dict(saved.p)
+        executed = dict(saved.executed) if saved.executed is not None else p
         k = feedback.action
-        if k not in executed or not math.isclose(feedback.propensity, executed[k],
-                                                 rel_tol=1e-12, abs_tol=0):
+        if k not in saved.support or not math.isclose(
+                feedback.propensity, executed[k], rel_tol=1e-12, abs_tol=0):
             raise ValueError("feedback must carry the saved round's executed propensity")
-        if k not in self.actions:
-            raise ValueError("the drawn action is outside this learner's universe")
-        # The row q cancels algebraically. Supplying p_i*r (bounded by one)
-        # directly avoids mislabelling an importance gain >1 as a bounded reward.
-        # External standing mixtures do not inherit the unmodified SR_MAB theorem.
-        for action, base in zip(self.actions, self._bases, strict=True):
-            base.update(BanditFeedback(k, p.get(action, 0.) * feedback.reward,
-                                       feedback.propensity))
-
-    def reshaped(self, actions: Sequence[str], *, id: str) -> "BlumMansour":
-        """Return an independent learner over ``actions`` that keeps what this one learned.
-
-        Every surviving row keeps its surviving log-weights; an action a row never
-        held starts at that row's surviving mean, and a new row starts at the mean
-        of the surviving rows, exactly as ``EXP3.expand`` admits a new action. No
-        pending round is carried and no regret guarantee spans the change.
-        """
-        if not self._bandit:
-            raise TypeError("only EXP3 bases can be reshaped")
-        new = _actions(actions)
-        saved = {a: base.state() for a, base in zip(self.actions, self._bases, strict=True)}
-
-        def row(weights: dict[str, float]) -> dict[str, float]:
-            kept = {a: w for a, w in weights.items() if a in new}
-            mean = sum(kept.values()) / len(kept) if kept else 0.0
-            return {a: kept.get(a, mean) for a in new}
-
-        survivors = [row(saved[a]["log_weights"]) for a in new if a in saved]
-        fallback = ({a: sum(r[a] for r in survivors) / len(survivors) for a in new}
-                    if survivors else dict.fromkeys(new, 0.0))
-        first = next(iter(saved.values()))
-        bases = []
-        for action in new:
-            base = saved.get(action)
-            weights = row(base["log_weights"]) if base is not None else dict(fallback)
-            offset = max(weights.values())
-            bases.append(EXP3.restore({
-                "algorithm": "EXP3", "id": (base or first)["id"],
-                "actions": list(new), "gamma": (base or first)["gamma"],
-                "log_weights": {a: w - offset for a, w in weights.items()},
-            }))
-        source = iter(bases)
-        return BlumMansour(lambda _: next(source), new, id=id)
+        if self.off_policy:
+            denominator = feedback.propensity + saved.gamma / (2 * self.epoch_n)
+        else:
+            if p[k] > self.coverage * feedback.propensity * (1 + 1e-12):
+                raise ValueError("executed propensity below the coverage bound")
+            denominator = self.coverage * feedback.propensity
+        updated = []
+        for action, gains in zip(self.actions, self._rows, strict=True):
+            # The gain estimate alone: the rate is applied at play time (``_solve``).
+            x = p.get(action, 0.0) * feedback.reward / denominator
+            row = dict(gains)
+            row[k] += x
+            updated.append(_center(row))
+        self._rows = updated
+        self._rolled = None
 
     def state(self) -> dict:
-        """Return parameters, every base state, and the pending decision snapshot."""
-        return _state(
-            algorithm="BlumMansour",
-            id=self.id,
-            actions=self.actions,
-            bases=[base.state() for base in self._bases],
-            pending=self._pending,
-        )
+        """Parameters, epoch position, the N it opened with and every row's exact gain
+        estimates (and the closed epoch a withdrawal would restore, while kept)."""
+        rolled = {} if self._rolled is None else {"rolled": {
+            "epoch": self._rolled[0], "epoch_rounds": self._rolled[1],
+            "rows": self._rolled[2], "epoch_n": self._rolled[3]}}
+        return _state(algorithm="BlumMansour", schedule=SCHEDULE, id=self.id,
+                      actions=self.actions, first_epoch=self.first_epoch,
+                      coverage=self.coverage, off_policy=self.off_policy,
+                      epoch=self.epoch, epoch_rounds=self.epoch_rounds,
+                      epoch_n=self.epoch_n, rows=self._rows, **rolled)
 
     @classmethod
     def restore(cls, state: dict) -> "BlumMansour":
-        """Restore independent bases and the pending round without solving or rounding again."""
-        if state.get("algorithm") != "BlumMansour":
-            raise ValueError("learner algorithm mismatch")
-        bases = [restore_learner(s) for s in state["bases"]]
-        actions = _actions(state["actions"])
-        if len(bases) != len(actions) or any(b.actions != actions for b in bases):
-            raise ValueError("invalid saved base universe")
-        source = iter(bases)
-        learner = cls(lambda _: next(source), actions, id=state["id"])
-        if state["pending"] is not None:
-            support, p, rows = state["pending"]
-            support = _support(support, actions)
-            _probabilities(p, support)
-            if len(rows) != len(actions):
-                raise ValueError("invalid saved proposal rows")
-            for row in rows:
-                _probabilities(row, support)
-            learner._pending = (
-                support, {a: p[a] for a in support},
-                tuple({a: row[a] for a in support} for row in rows),
-            )
+        """Restore rows bit for bit; refuse a state from another schedule."""
+        if state.get("algorithm") != "BlumMansour" or state.get("schedule") != SCHEDULE:
+            raise ValueError("learner state from another algorithm or schedule")
+        learner = cls(state["actions"], id=state["id"], first_epoch=state["first_epoch"],
+                      coverage=state["coverage"], off_policy=state["off_policy"])
+        epoch_n = state["epoch_n"]
+        if not _count(epoch_n) or not 1 <= epoch_n <= len(learner.actions):
+            raise ValueError("invalid saved epoch menu size")
+        # H_0 is fixed for life, read at the menu it was built on: a menu grown since
+        # may have raised the least horizon of its N, never the saved H_0.
+        if not _count(state["first_epoch"]) or state["first_epoch"] < 1:
+            raise ValueError("invalid saved first epoch")
+        learner.first_epoch = state["first_epoch"]
+        epoch, used = state["epoch"], state["epoch_rounds"]
+        if not _count(epoch) or not _count(used):
+            raise ValueError("invalid saved epoch position")
+        learner.epoch, learner.epoch_rounds, learner.epoch_n = epoch, used, epoch_n
+        learner._rows = _saved_rows(state["rows"], learner.actions)
+        rolled = state.get("rolled")
+        if rolled is not None:
+            if (not _count(rolled["epoch"]) or rolled["epoch"] != epoch - 1
+                    or not _count(rolled["epoch_rounds"])
+                    or not _count(rolled["epoch_n"])
+                    or not 1 <= rolled["epoch_n"] <= len(learner.actions)):
+                raise ValueError("invalid saved rolled epoch")
+            learner._rolled = (rolled["epoch"], rolled["epoch_rounds"],
+                               _saved_rows(rolled["rows"], learner.actions),
+                               rolled["epoch_n"])
         return learner
+
+
+def _count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _saved_rows(rows: list, actions: tuple[str, ...]) -> list[dict[str, float]]:
+    if len(rows) != len(actions) or any(
+        set(row) != set(actions)
+        or any(type(v) not in (int, float) or not math.isfinite(v) for v in row.values())
+        for row in rows
+    ):
+        raise ValueError("invalid saved rows")
+    return [{a: float(row[a]) for a in actions} for row in rows]

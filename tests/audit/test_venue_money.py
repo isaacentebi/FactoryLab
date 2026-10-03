@@ -63,7 +63,7 @@ class TestD1NoLeverageOrPrincipalCap:
         from factorylab.world.scripted import ScriptedProvider
 
         rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=50_000_000,
-                     ledger_path=None, router_gamma=.1,
+                     ledger_path=None,
                      provider=ScriptedProvider(),
                      exchange=FakeExchange(start_cash_usd=Decimal(966)))
         rt._manage_reserve_window()

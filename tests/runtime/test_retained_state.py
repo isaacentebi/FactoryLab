@@ -705,11 +705,11 @@ def test_a_cap_over_half_the_free_disk_is_refused_at_genesis(monkeypatch):
     assert fits.host_disk_problem() is None
     scripted = load_manifest("scripted")  # 64 MiB, over half of this host's 100 MiB
     with pytest.raises(ValueError, match=r"exceeds 1/2 of the host's free disk"):
-        Runtime(scripted, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                router_gamma=.1)
+        Runtime(scripted, events=0, seed=1, initial_balance_micro=None, ledger_path=None)
     admitted = replace(scripted, storage=StorageSpec(50 << 20))
-    assert Runtime(admitted, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   router_gamma=.1).artifacts.private_cap == 50 << 20
+    admitted_rt = Runtime(admitted, events=0, seed=1, initial_balance_micro=None,
+                          ledger_path=None)
+    assert admitted_rt.artifacts.private_cap == 50 << 20
 
 
 def test_a_storage_price_or_an_unknown_storage_key_is_refused():

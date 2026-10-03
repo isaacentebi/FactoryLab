@@ -28,7 +28,7 @@ def _learned(rt, handle=None):
 def test_a_settled_round_writes_one_router_learned_row_and_never_a_second(monkeypatch,
                                                                           kind):
     rt = _runtime(monkeypatch)
-    rt._build_router("Tick", kind, 0.1)
+    rt._build_router("Tick", kind)
     state, handle = _drawn_at(rt, "seed-decider", at=10)
     rt.queue.settle(handle, channel="verdict", score=0.8, status=SettleStatus.SETTLED,
                     definition_version="t", sampling_ref=None)
@@ -44,7 +44,7 @@ def test_a_settled_round_writes_one_router_learned_row_and_never_a_second(monkey
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_noop_credited_at_its_windows_close_writes_one_row(monkeypatch, kind):
     rt = _runtime(monkeypatch)
-    rt._build_router("Tick", kind, 0.1)
+    rt._build_router("Tick", kind)
     _state, noop = _drawn_at(rt, NOOP, at=10)
     rt._contribution(noop, "producer")
     rt.queue.settle(noop, channel="verdict", score=0.0, status=SettleStatus.INAPPLICABLE,
@@ -65,7 +65,7 @@ def test_a_niche_round_with_a_stored_charge_is_exempt_and_charged_nothing(monkey
     """R-E as amended: a round drawn in the niche bears no thrash charge; the row says a
     stored charge was dropped, and no ``thrash.charged`` is written."""
     rt = _runtime(monkeypatch)
-    rt._build_router("Tick", "exp3", 0.1)
+    rt._build_router("Tick", "exp3")
     _state, handle = _drawn_at(rt, "seed-decider", at=10)
     rt._contribution(handle, "producer")["niche"] = True  # a protected trial's round
     rt.thrash_charges[handle] = 0.05  # its movement was recorded, positive

@@ -49,7 +49,7 @@ def _runtime(*, novelty_share=None):
             manifest, novelty=replace(manifest.novelty, share=novelty_share))
         rt = Runtime(
             manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-            ledger_path=None, router_gamma=.1,
+            ledger_path=None,
             exchange=FakeExchange(), provider=ScriptedProvider(),
         )
     rt._manage_reserve_window()

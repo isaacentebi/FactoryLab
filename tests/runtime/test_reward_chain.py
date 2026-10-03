@@ -23,6 +23,7 @@ from factorylab.runtime.feedback import consequence_score, evaluation_reward
 from factorylab.runtime.grounded import opportunity_cost
 from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE, CH_FAST
 from factorylab.world.scripted import ScriptedProvider
+from tests.helpers import freeze_round
 from tests.runtime.test_loop import (
     _consequence_decision,
     _consequence_produce,
@@ -582,6 +583,7 @@ def test_an_evaluator_decision_trains_its_router_on_the_combined_reward():
                            propensity=rt._propensity(sample), channel=CH_CONFORMITY,
                            deadline_ns=10**18, parent_handle=None,
                            cost_ceiling=rt.wallet.available)
+    freeze_round(rt, handle, state)
     rt._evaluator_step(event, handle, SimpleNamespace(chosen="eval-a"), 10**18)
     rt._settle_arrived_verdicts()
     rt._deliver_meta_verdict(Event("meta-x", EventKind.META_VERDICT, rt.clock.now_ns,
@@ -729,6 +731,7 @@ def test_a_declined_commission_is_priced_like_an_abstention_not_its_own_mean(mon
     handle = rt.queue.open(actor=state.learner.id, event_id="declined",
                            propensity=rt._propensity(sample), channel=CH_CONFORMITY,
                            deadline_ns=10**18, parent_handle=None, cost_ceiling=0)
+    freeze_round(rt, handle, state)
     rt._contribution(handle, "evaluator")["invocations"] = 1
     _commitments(rt, "eval-a", censored=4)
     rt._close_price_window()

@@ -2684,24 +2684,6 @@ def test_an_aggregate_passes_only_when_every_component_passes(statuses, expected
     assert g.aggregate("agg", parts).status == expected
 
 
-def test_the_instrumented_s8_aggregate_keeps_an_unsupported_gain_act():
-    """An unsupported gain_neutral (a router that saved no base) is not dropped: the
-    instrumented S8 reading is unsupported, never a pass."""
-    from types import SimpleNamespace
-
-    from tests.gauntlet import populations as P
-
-    base = {"actions": ["a", "b"], "gamma": 0.1, "log_weights": [1.0, 1.0]}
-    good = {"router": "router:Tick", "window": 1, "before": {"bases": [base]},
-            "after": {"bases": [dict(base, gamma=0.1 + 0.05)]}}
-    empty = {"router": "router:Tick", "window": 2, "before": {"bases": []},
-             "after": {"bases": []}}
-    run = SimpleNamespace(events=[], manifest=M, requests=[], closes=[], gains=[good])
-    assert P.assert_prices_not_steers(run)["S8-instrumented"].ok
-    run.gains = [good, empty]
-    assert P.assert_prices_not_steers(run)["S8-instrumented"].status == g.UNSUPPORTED
-
-
 def test_s5_a_row_missing_a_field_fails_as_malformed_never_raises():
     """Codex P2 (gauntlet.py:2329): a field read goes through need(), so a priced
     abstention with no reward fails S5 naming the field instead of raising KeyError."""
@@ -2765,9 +2747,9 @@ def test_s8_gamma_vectors_of_different_lengths_fail_with_a_clear_reason():
     assert result.status == g.FAIL
     assert result.evidence["uneven"] == [{"router": "router:Tick", "window": 2,
                                           "gamma_before": 2, "gamma_after": 1}]
-    names = {r.name: r for r in g.replay(_seq([_launch(), _w(1), uneven]), M)}
-    assert names["S8"].status == g.FAIL and "error" not in names["S8"].evidence
-    assert names["LD-1f"].status in (g.PASS, g.FAIL, g.UNSUPPORTED)
+    # A retired criterion: replay no longer runs it on this kernel's diaries.
+    names = {r.name for r in g.replay(_seq([_launch(), _w(1), uneven]), M)}
+    assert "S8" not in names and "LD-1f" not in names
 
 
 # --- Codex pass on 5c977be: false fails at valid boundaries ---------------------------------

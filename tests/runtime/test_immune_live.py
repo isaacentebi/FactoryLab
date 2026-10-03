@@ -162,27 +162,6 @@ def test_once_thrash_settles_its_price_leaks_to_exactly_zero():
     assert _thrash_window(rt, 0.1)["lambda"] == 0.0
 
 
-def test_stable_failure_gain_holds_at_gamma_max_and_unwinds_only_when_cleared():
-    """SF-1e (soak tier: 228 events): each act of the organ on stable failure raises
-    every router's exploration one step to ``gamma_max`` and, at it, holds it act after
-    act; only a cleared attractor steps it back down, never below the seed."""
-    rt = make_runtime()
-    spec = rt.m.immune
-    seed = [immune.gamma(s.learner) for s in rt._all_router_states()]
-    steps = ceil((spec.gamma_max - max(seed)) / spec.gain_step)
-    history = []
-    for window in range(steps + 4):
-        rt.ticks_consumed += 20
-        immune._gain(rt, "stable_failure", window)
-        history.append([immune.gamma(s.learner) for s in rt._all_router_states()])
-    assert all(g == spec.gamma_max for g in history[steps])
-    assert history[steps:] == [history[steps]] * 4  # held through four more acts
-    for window in range(steps + 4, 2 * steps + 8):
-        rt.ticks_consumed += 20
-        immune._gain(rt, "cleared", window)
-    assert [immune.gamma(s.learner) for s in rt._all_router_states()] == seed
-
-
 def _draw(state, probs):
     from factorylab.learners.router import Sample
 
@@ -453,31 +432,39 @@ def test_niche_cover_reaches_only_the_call_and_the_one_round_that_reads_it(monke
 
 def test_a_newcomer_held_at_the_exploration_floor_is_quarantined():
     """The #134 review: with gamma > 0 a quarantined newcomer still gets gamma/N, so
-    "never drawn" cannot be the test; an incumbent-locked router is flagged and a
-    healthy mixed one is not."""
+    "never drawn" cannot be the test; an incumbent-locked frontier router is flagged and
+    a healthy mixed one is not. The floor is each draw's own (learners design §2.7),
+    and a core router is never read as the frontier."""
     from factorylab.learners.router import Sample
-    from factorylab.runtime.immune import gamma
 
     rt = make_runtime()
-    state = rt.routers["Tick"][0]
+    state = next(s for s in rt._all_router_states() if not s.learner.inner.core)
     incumbent, newcomer = "seed-decider", "fresh"
     rt.assemblies[newcomer] = rt.assemblies[incumbent]
     monkeypatch_unhistoried = {newcomer}
     rt._unhistoried = lambda a: a in monkeypatch_unhistoried
-    floor = gamma(state.learner) / 3
+    gamma = 0.25  # the exploration these draws were made at
+    floor = gamma / 3
     locked = Sample((incumbent, newcomer, NOOP), (1 - 2 * floor, floor, floor), incumbent, 1,
                     state.learner.id, "h", ())
     for _ in range(4):
-        rt._watch_abstention(state, locked)
+        rt._watch_abstention(state, locked, gamma)
     (row,) = [r for r in rt.frontier_invocation() if r["router"] == state.learner.id]
     assert row["quarantined"] and not row["uninvoked"]
     state.watch = {}
     mixed = Sample((incumbent, newcomer, NOOP), (0.5, 0.4, 0.1), newcomer, 1,
                    state.learner.id, "h", ())
-    rt._watch_abstention(state, locked)
-    rt._watch_abstention(state, mixed)
+    rt._watch_abstention(state, locked, gamma)
+    rt._watch_abstention(state, mixed, gamma)
     (row,) = [r for r in rt.frontier_invocation() if r["router"] == state.learner.id]
     assert not row["quarantined"]
+    # The same locked draws on a core router are never the frontier's evidence.
+    core = next((s for s in rt._all_router_states() if s.learner.inner.core), None)
+    if core is not None:
+        for _ in range(4):
+            rt._watch_abstention(core, locked, gamma)
+        (row,) = [r for r in rt.frontier_invocation() if r["router"] == core.learner.id]
+        assert row["core"] and not row["quarantined"] and not row["uninvoked"]
 
 
 def test_the_learning_death_grant_is_gone():

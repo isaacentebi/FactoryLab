@@ -99,7 +99,7 @@ def test_i1a_release_after_saturation_is_independent_of_how_long_it_lasted():
 
 def _launched(raw, *, run_ticks):
     rt = Runtime(manifest_from_dict(raw), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     rt.events_budget = run_ticks  # the run length viability reads; nothing is run
     period = rt.cadence.consequence_period_events()
     rt._manage_reserve_window()  # launch: opens the outer loops and checks viability
@@ -212,7 +212,7 @@ def test_ld2c_at_a_tick_that_does_not_divide_h_every_derived_period_nests_over_h
     manifest = replace(base, tick_interval_ns=_non_dividing_tick(base))
     manifest.validate()
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, provider=fastloop.PolicyProvider(WORLDS / f"{name}.toml"))
+                 provider=fastloop.PolicyProvider(WORLDS / f"{name}.toml"))
     rt.events_budget = 10_000
     rt._manage_reserve_window()  # launch
     tick, horizon = tick_ns(rt.tick_clock), manifest.consequence_horizon_ns

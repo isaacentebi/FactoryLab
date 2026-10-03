@@ -493,7 +493,7 @@ def test_a_world_whose_share_cannot_cover_its_heaviest_read_is_refused():
     with pytest.raises(ValueError, match="cannot cover"):
         Runtime(replace(load_manifest("scripted"), exchange=replace(
             load_manifest("scripted").exchange, max_readers=100)), events=0, seed=1,
-            initial_balance_micro=1, ledger_path=None, router_gamma=.1)
+            initial_balance_micro=1, ledger_path=None)
 
 
 def test_the_read_share_is_published_where_the_tool_is():
@@ -660,7 +660,7 @@ def test_a_world_s_total_debits_equal_its_real_outflows():
     debited, and the wallet fell by exactly the real outflows."""
     provider = BillingProvider()
     rt = Runtime(load_manifest("scripted"), events=60, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=.1, provider=provider)
+                 ledger_path=None, provider=provider)
     items = []
     append = rt.ledger.append
 
@@ -699,7 +699,7 @@ def test_a_program_seat_s_decisions_commit_zero():
     require_jail()
     # Ten events already make four program calls, each metered through the jail.
     rt = Runtime(load_manifest("scripted"), events=10, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=.1, provider=Proposer())
+                 ledger_path=None, provider=Proposer())
     items = []
     append = rt.ledger.append
 

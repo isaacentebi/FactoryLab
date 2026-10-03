@@ -36,12 +36,13 @@ def test_twenty_thousand_draws_match_logged_probs_and_replay_exactly():
 @pytest.mark.parametrize("use_reduction", [False, True])
 def test_exclusion_changes_sampled_support_and_logs_only_feasible_probabilities(use_reduction):
     actions = ("a", "b", "NOOP")
-    learner = BlumMansour(lambda a: Hedge(a, 1), actions) if use_reduction else Hedge(actions, 1)
+    learner = BlumMansour(actions) if use_reduction else Hedge(actions, 1)
     router = Router(learner, lambda _: ["a", "b"])
     rng = Random(0)
     first = router.route("Tick", lambda _: (True, ""), rng)
     assert first.action_ids == actions
-    learner.update(FullInfoFeedback({"a": 0, "b": 0, "NOOP": 0}))
+    if not use_reduction:
+        learner.update(FullInfoFeedback({"a": 0, "b": 0, "NOOP": 0}))
     seen = set()
     for _ in range(200):
         sample = router.route("Tick", lambda a: (a != "b", "insufficient wallet"), rng)

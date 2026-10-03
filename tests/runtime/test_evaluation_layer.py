@@ -198,8 +198,7 @@ def multi_judged():
     base = load_manifest("scripted")
     # Every window is derived from the loop it commands (time audit T1).
     manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0))
-    rt = Runtime(manifest, events=40, seed=2, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
+    rt = Runtime(manifest, events=40, seed=2, initial_balance_micro=None, ledger_path=None)
     requests = []
     original = rt._request
 
@@ -283,12 +282,13 @@ def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_win
     assert any(i["graded_by"] is not None for i in settled)
 
 
-# Two seeds, since tier recursion draws on the stream; seed 2 is one whose world
+# Two seeds, since tier recursion draws on the stream; seed 12 is one whose world
 # reaches a fourth tier within 100 events (and 120), so its row proves every shallower tier
-# as well. (Seed 3 did before wave 16b floored the consequence loop at H and closed
-# settle meters at score ready; its first tier-four grade now settles after event 140.)
+# as well. (Seed 2 did until the no-regret learners, docs/architecture/learners-noregret.md,
+# changed every router's draws; seed 3 did before wave 16b floored the consequence loop
+# at H and closed settle meters at score ready.)
 @TIERS
-@pytest.mark.parametrize("seed", [1, 2])
+@pytest.mark.parametrize("seed", [2, 12])
 def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(scripted_runtime_run, seed,
                                                                   events):
     """Essay II.III.b: evaluators are graded from above, tier upon tier; II.IV.c: a
@@ -323,7 +323,7 @@ def test_a_fourth_tier_grades_the_third_and_its_grades_count(scripted_runtime_ru
     grade-window fix (dd1ee21) claimed tier four; this world reaches it: a tier-three
     grader's MetaVerdict rises through its own cascade window, the tier above grades
     it, and the grade counts."""
-    rt, items = _recursive_world(scripted_runtime_run, 2, events)
+    rt, items = _recursive_world(scripted_runtime_run, 12, events)
     assert rt.stats.meta_verdicts.get(4, 0) >= 1
     assert [i for i in items if i["kind"] == "evaluator.meta_grade" and i["tier"] == 4]
     assert any(i["tier"] == 3 for i in items if i["kind"] == "cascade.release")
@@ -472,8 +472,7 @@ def test_adversarial_judges_are_drawn_when_the_verdict_is_given():
                              role="adversary", max_tokens=128)
     manifest = replace(base, assemblies=(*base.assemblies, adversary),
                        evaluation=replace(base.evaluation, adversarial_share=0.5))
-    rt = Runtime(manifest, events=35, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
+    rt = Runtime(manifest, events=35, seed=1, initial_balance_micro=None, ledger_path=None)
     rt.run()
     items = rt.ledger._recovery_items()
     opened = [i for i in items if i["kind"] == "counter.opened"]
@@ -494,6 +493,7 @@ def test_the_adversarial_share_caps_counters_and_no_requester_can_hire_one():
 
 
 def test_the_edition6_antagonists_are_routed_by_both_learner_types():
+    from factorylab.learners.blum_mansour import BlumMansour
     from factorylab.learners.exp3 import EXP3
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.routing import _KeyedLearner
@@ -505,13 +505,14 @@ def test_the_edition6_antagonists_are_routed_by_both_learner_types():
                     models=tuple(replace(m, provider="fake") for m in world.models
                                  if m.provider != "venice"),
                     assemblies=tuple(replace(a, max_tokens=256) for a in world.assemblies))
-    rt = Runtime(world, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
+    rt = Runtime(world, events=0, seed=1, initial_balance_micro=None, ledger_path=None)
     (tick,) = rt.routers["Tick"]
     (update,) = rt.routers["WorldUpdate"]
+    # Every router is keyed (learners design §2.2): the class is the inner learner's.
     assert isinstance(tick.learner, _KeyedLearner) and "antagonist-core" in tick.universe
-    assert isinstance(update.learner, EXP3) and "antagonist" in update.universe
-    assert all(isinstance(s.learner, EXP3) for s in rt.routers["ProducerReturn"])
+    assert isinstance(tick.learner.inner.inner, BlumMansour)
+    assert isinstance(update.learner.inner.inner, EXP3) and "antagonist" in update.universe
+    assert all(isinstance(s.learner.inner.inner, EXP3) for s in rt.routers["ProducerReturn"])
 
 
 # --- the chaos actuator: real faults that cannot move money --------------------------
@@ -731,7 +732,7 @@ def test_a_world_under_chaos_resumes_mid_tick_and_replays_identically(tmp_path):
                                            tool_withheld=0.4, connector_timeout=0.4))
     path = tmp_path / "chaos.jsonl"
     rt = Runtime(manifest, events=20, seed=1, initial_balance_micro=None,
-                 ledger_path=str(path), router_gamma=.1)
+                 ledger_path=str(path))
     append = rt.ledger.append
     seen = []
 
@@ -829,7 +830,7 @@ def test_a_draw_with_every_reader_barred_is_ledgered_and_counted():
     from factorylab.runtime.loop import Runtime
 
     rt = Runtime(load_manifest("scripted"), events=40, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     # The meta off every chain retires: verdicts whose chain holds the other meta's
     # family have no reader left, and the kernel says so.
     rt._retire_assembly("meta-b", "test")
@@ -848,9 +849,8 @@ def test_two_routers_of_a_judged_kind_never_draw_two_judges_of_one_family():
 
     base = load_manifest("scripted")
     manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=0.0))
-    rt = Runtime(manifest, events=40, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.5)
-    rt._build_router("ProducerReturn", "exp3", 0.5, replace=False)
+    rt = Runtime(manifest, events=40, seed=1, initial_balance_micro=None, ledger_path=None)
+    rt._build_router("ProducerReturn", "exp3", replace=False)
     assert len(rt.routers["ProducerReturn"]) == 2
     rt.run()
     means = _rows(rt, "verdict.mean")

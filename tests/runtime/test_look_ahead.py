@@ -166,7 +166,7 @@ def test_a_tape_world_publishes_no_connector_fetch_and_refuses_one(tmp_path):
 
     manifest = _taped(allow=True)
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(),
+                 provider=ScriptedProvider(),
                  exchange=TapeVenue(TAPE, coins=manifest.exchange.coins,
                                     start_cash_usd=Decimal(100)))
     rt._ensure_connector_tool()
@@ -174,7 +174,7 @@ def test_a_tape_world_publishes_no_connector_fetch_and_refuses_one(tmp_path):
     answer, cost = rt._fetch_connector("seat", "h-1", {"id": "x", "path": "/"})
     assert cost == 0 and "no connector reads" in answer["error"]
     plain = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                    ledger_path=None, router_gamma=.1, provider=ScriptedProvider())
+                    ledger_path=None, provider=ScriptedProvider())
     plain._ensure_connector_tool()
     assert "connector.fetch" in plain.tool_specs
 
@@ -187,7 +187,7 @@ def _tape_runtime(manifest):
     from factorylab.world.tape import TapeVenue
 
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(),
+                 provider=ScriptedProvider(),
                  exchange=TapeVenue(TAPE, coins=manifest.exchange.coins,
                                     start_cash_usd=Decimal(100)))
     rt._manage_reserve_window()  # a registration spends the window's novelty receipt
@@ -224,5 +224,5 @@ def test_a_model_proposed_after_genesis_meets_the_same_cutoff_policy():
     assert waived.m.look_ahead_refusal("vendor/unlisted-model") is None
     assert "allow_unknown_cutoff waiver" in waived.PROPOSAL_SHAPES["model"]["admission"]
     plain = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                    ledger_path=None, router_gamma=.1, provider=ScriptedProvider())
+                    ledger_path=None, provider=ScriptedProvider())
     assert "admission" not in plain.PROPOSAL_SHAPES["model"]  # off a tape: unchanged

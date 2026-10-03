@@ -498,7 +498,7 @@ def test_admission_refuses_a_per_dex_read_the_share_cannot_cover():
     manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "xyz:TSLA"),
                                               public_read_weight_per_minute=640))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=FakeExchange())
+                 provider=ScriptedProvider(), exchange=FakeExchange())
     seat = next(iter(rt.assemblies))
     share = rt.venue_read_share()
     assert share == 40
@@ -535,7 +535,7 @@ def test_a_price_cross_on_a_hip3_coin_fires_through_the_real_observation_path():
     manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "xyz:TSLA"),
                                               public_read_weight_per_minute=640))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=FakeExchange())
+                 provider=ScriptedProvider(), exchange=FakeExchange())
     seat = next(iter(rt.assemblies))
     trigger = validate_trigger({"kind": "price_cross", "coin": "xyz:TSLA", "level": "100"})
     rt.subscription_book.watch(seat, owner=None, trigger=trigger)
@@ -640,7 +640,7 @@ def test_a_spot_only_universe_anchors_its_launch_account_with_the_spot_book(monk
     manifest = replace(base, exchange=replace(base.exchange, coins=("*",)),
                        assemblies=tuple(replace(a, max_tokens=1024) for a in base.assemblies))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=ex)
+                 provider=ScriptedProvider(), exchange=ex)
     (baseline,) = [item for item in rt.ledger.items()
                    if item.get("kind") == "consequence.fill_baseline"]
     assert baseline["positions"] == {"spot:PURR": "5"}
@@ -673,7 +673,7 @@ def test_a_live_listing_is_read_once_per_fee_schedule_read_not_once_a_tick(monke
     manifest = replace(base, exchange=replace(base.exchange, coins=("BTC", "*")),
                        assemblies=tuple(replace(a, max_tokens=1024) for a in base.assemblies))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=ex)
+                 provider=ScriptedProvider(), exchange=ex)
     rt._read_fee_schedule()
     reads.clear()
     for tick in range(10):

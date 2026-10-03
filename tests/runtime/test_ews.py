@@ -89,7 +89,7 @@ def test_every_close_publishes_the_table_to_evaluators_and_ledgers_it():
     and replaces the evaluators' table; its statistics are withheld from the public
     observations a producer reads."""
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
+                 ledger_path=None)
     rt._derive_regions()
     k = rt.m.immune.k
     for close in range(4 * k):

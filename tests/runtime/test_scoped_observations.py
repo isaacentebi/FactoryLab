@@ -125,8 +125,7 @@ def test_a_registered_observation_may_be_scoped_and_says_so_in_public():
 def _runtime(monkeypatch):
     monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
     seed = load_manifest("scripted")
-    rt = Runtime(seed, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1)
+    rt = Runtime(seed, events=1, seed=1, initial_balance_micro=None, ledger_path=None)
     rt.observation_runner = InProcessRunner()
     rt.registered_observations["unresolved-own"] = _entry(UNRESOLVED)
     card = _card("unresolved-own")

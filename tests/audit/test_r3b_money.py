@@ -32,7 +32,7 @@ from tests.runtime.test_fidelity import runtime as scripted_runtime
 
 def _spot_runtime(exchange):
     return Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
+                   ledger_path=None, provider=ScriptedProvider(),
                    exchange=exchange)
 
 

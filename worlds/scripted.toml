@@ -168,8 +168,6 @@ k = 3
 price_step = 0.05
 tv_threshold = 0.2
 gap_threshold = 0.8
-gain_step = 0.05
-gamma_max = 0.5
 
 [venue]
 spot_pairs = ["BTC/USDC"]

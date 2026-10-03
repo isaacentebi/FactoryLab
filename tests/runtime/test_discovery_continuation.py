@@ -24,7 +24,6 @@ def runtime():
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        router_gamma=0.1,
         provider=ScriptedProvider(),
         exchange=FakeExchange(coins=manifest.exchange.coins),
     )

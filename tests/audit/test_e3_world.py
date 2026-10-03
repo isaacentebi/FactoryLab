@@ -38,7 +38,7 @@ def _exposed_runtime(*, wind: bool, ledger_path=None) -> Runtime:
     manifest = load_manifest("scripted")
     manifest = replace(manifest, kill=KillSpec(wind_down=wind))
     rt = Runtime(manifest, events=40, seed=1, initial_balance_micro=None,
-                 ledger_path=ledger_path, router_gamma=0.1)
+                 ledger_path=ledger_path)
     exchange = rt.exchange
     mid = exchange.mids()["BTC"]
     # One resting limit order, far from the mid so it cannot cross into a fill.

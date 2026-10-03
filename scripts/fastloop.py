@@ -1460,7 +1460,7 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
     try:
         runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
                           initial_balance_micro=None,
-                          ledger_path=str(target / "ledger.jsonl"), router_gamma=0.1,
+                          ledger_path=str(target / "ledger.jsonl"),
                           provider=provider, exchange=exchange, kill_at_end=True,
                           clock_source=clock_source)
         _prepare(runtime, vault_depositor_usd, latent)

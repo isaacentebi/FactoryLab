@@ -150,7 +150,7 @@ def test_a_check_test_that_steps_a_one_event_world_fails_under_the_guard(request
     from factorylab.runtime.worlds import load_manifest
 
     rt = Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=.1)
+                 ledger_path=None)
     assert _stepped_a_world_problem(request.node) is None
     rt.run()
     assert _stepped_a_world_problem(request.node) == "stepped a world event"

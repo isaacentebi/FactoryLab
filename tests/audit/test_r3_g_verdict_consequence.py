@@ -25,8 +25,7 @@ def test_resume_after_a_verdict_consequence_item_replays_identically(tmp_path):
     m = _short_window_manifest()
     path = tmp_path / "verdict.jsonl"
     # Enough events that a verdict is scored by the world (Wave 5a moved the draws).
-    rt = Runtime(m, events=20, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 router_gamma=.1)
+    rt = Runtime(m, events=20, seed=1, initial_balance_micro=None, ledger_path=str(path))
     append = rt.ledger.append
     seen = []
 

@@ -70,8 +70,7 @@ def test_exhausted_entitlement_is_infeasible_for_routing_not_insolvency():
 def test_entitlements_restore_exactly_after_a_crash(tmp_path):
     m = load_manifest("scripted")
     path = tmp_path / "entitlement.jsonl"
-    rt = Runtime(m, events=140, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 router_gamma=.1)
+    rt = Runtime(m, events=140, seed=1, initial_balance_micro=None, ledger_path=str(path))
     rt.events_budget = 8
     stop_after(rt, lambda r, e: r.ticks_consumed == 5 and str(e.kind) == "Tick")
     before = rt.budget.state()
@@ -89,7 +88,7 @@ def test_entitlements_restore_exactly_after_a_crash(tmp_path):
 
 def test_a_stale_routing_estimate_is_bridged_by_the_pool_never_a_failed_return():
     rt = Runtime(load_manifest("scripted"), events=30, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=.1)
+                 ledger_path=None)
     items = []
     append = rt.ledger.append
 

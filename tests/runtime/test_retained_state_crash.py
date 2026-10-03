@@ -64,7 +64,7 @@ class Crash(BaseException):
 
 def _runtime(path, manifest=None, events=EVENTS):
     return Runtime(manifest or load_manifest("scripted"), events=events, seed=1,
-                   initial_balance_micro=None, ledger_path=str(path), router_gamma=.1,
+                   initial_balance_micro=None, ledger_path=str(path),
                    provider=Writer())
 
 

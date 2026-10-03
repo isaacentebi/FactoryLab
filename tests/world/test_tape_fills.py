@@ -634,7 +634,7 @@ def test_a_half_filled_limit_whose_rest_fails_margin_is_cancelled_with_its_half_
         base.exchange, tape=TapeSpec.of(tape, allow_unknown_cutoff=True), spot_pairs=()))
     venue = TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
     rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=.1, provider=ScriptedProvider(), exchange=venue)
+                 provider=ScriptedProvider(), exchange=venue)
     book = rt.consequences
     book.table = book.table.start("d-1", rt.n)
     book.order_intent("c-1", "d-1", "BTC")

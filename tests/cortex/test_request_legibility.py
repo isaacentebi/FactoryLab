@@ -33,7 +33,7 @@ from tests.runtime.test_reward_chain import Population, _unsettled_produce
 def runtime(mode):
     manifest = replace(load_manifest("worlds/scripted.toml"), prompt=PromptSpec(mode=mode))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   router_gamma=0.1, provider=ScriptedProvider(),
+                   provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
 
 
@@ -93,7 +93,7 @@ def test_the_compact_directory_names_sections_and_no_moving_sizes():
 
 def test_the_wake_request_describes_itself_as_facts(monkeypatch):
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.2, provider=Population())
+                 ledger_path=None, provider=Population())
     captured = []
     request = rt._request
     monkeypatch.setattr(rt, "_request", lambda *a, **k: captured.append(request(*a, **k))
@@ -115,7 +115,7 @@ def test_a_judge_sees_the_judged_decisions_fold_withheld_not_hollow(monkeypatch)
     from tests.runtime.test_loop import _consequence_decision
 
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.2, provider=Population(verdicts=(0.5,)))
+                 ledger_path=None, provider=Population(verdicts=(0.5,)))
     _producer, event = _unsettled_produce(rt)
     payload = json.loads(json.dumps(dict(event.payload), default=dict))
     payload["inputs"]["payload"]["since_you_last_woke"] = {"fills": []}

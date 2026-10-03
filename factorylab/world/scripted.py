@@ -179,7 +179,7 @@ class ScriptedProvider:
         if n == 35:
             reply["register"] = [{
                 "kind": "learner", "assembly_id": "seed-decider",
-                "learner": "blum_mansour", "gamma": 0.2,
+                "learner": "blum_mansour",
                 "actions": ["hold", *[
                     f"{side}:BTC:{band}" for side in ("buy", "sell")
                     for band in ("xs", "s", "m", "l", "xl")
@@ -250,12 +250,11 @@ class ScriptedProvider:
                     "kind": "router",
                     "event_kind": "Tick",
                     "learner": "exp3",
-                    "gamma": 0.3,
                     "add": True,
                 }
             ]
             reply["register"].extend([
-                {"kind": "router", "event_kind": "Finding", "learner": "exp3", "gamma": 0.3},
+                {"kind": "router", "event_kind": "Finding", "learner": "exp3"},
                 {"kind": "retire", "assembly_id": "eval-a",
                  "predicted_effect": {"card_id": "forecast_skill", "direction": "increase",
                                       "window": 1}},
@@ -341,7 +340,7 @@ class ScriptedProvider:
             reply["register"] = [{"kind": "model", "openrouter_id": "meta/muse-spark-1.3"}]
         elif n == self.register_at_calls[2]:
             reply["register"] = [
-                {"kind": "router", "event_kind": "MarketMid", "learner": "exp3", "gamma": 0.2},
+                {"kind": "router", "event_kind": "MarketMid", "learner": "exp3"},
                 {"kind": "assembly", "id": "composition-helper", "role": "producer",
                  "model_id": "fake-haiku", "system_prompt": "Answer the requested helper task.",
                  "accepts": ["CompositionRequest"], "emits": ["Finding"], "max_tokens": 128,

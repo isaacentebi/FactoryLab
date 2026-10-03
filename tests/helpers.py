@@ -41,7 +41,7 @@ def spot_venue():
 def spot_runtime(exchange):
     """A scripted runtime with no ledger file, trading on ``exchange``."""
     return Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
+                   ledger_path=None, provider=ScriptedProvider(),
                    exchange=exchange)
 
 
@@ -60,7 +60,7 @@ def spot_producer(rt):
 def venue_runtime(*, venue_usd="1000", wallet_micro=1_000_000) -> Runtime:
     """A scripted world whose venue is rich and whose compute wallet is not."""
     rt = Runtime(load_manifest("scripted"), events=0, seed=1,
-                 initial_balance_micro=wallet_micro, ledger_path=None, router_gamma=.1,
+                 initial_balance_micro=wallet_micro, ledger_path=None,
                  provider=ScriptedProvider(),
                  exchange=FakeExchange(start_cash_usd=Decimal(venue_usd)))
     rt._manage_reserve_window()
@@ -98,3 +98,27 @@ def assembly(**changes):
         "schemas": {"WeatherForecast": {"type": "object", "properties": {}}},
         **changes,
     }
+
+
+# ---- router rounds -------------------------------------------------------
+
+
+def freeze_round(rt, handle, state=None):
+    """Open the keyed learner round a test's hand-opened router decision stands for.
+
+    Every router is keyed (docs/architecture/learners-noregret.md §2.2): a decision
+    trains its router only through the snapshot its draw froze. A test that opens a
+    decision on the queue directly freezes the round here, at the decision's own
+    logged propensity, exactly as ``RoutingMixin._route_with`` would have.
+    """
+    decision = rt.queue.get(handle)
+    if state is None:
+        state = next(st for st in [*rt._all_router_states(), *rt.retired_routers.values()]
+                     if st.learner.id == decision.actor)
+    prop = decision.propensity
+    key = f"test:{handle}"
+    inner = state.learner.inner
+    inner.distribution_for(key, prop.action_ids, ordinal=rt.n)
+    inner.record_executed(key, dict(zip(prop.action_ids, prop.probs, strict=True)))
+    rt.snapshot_keys[handle] = key
+    return key

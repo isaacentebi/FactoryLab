@@ -28,7 +28,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 rt = Runtime(load_manifest("scripted"), events=int(sys.argv[1]), seed=7,
-             initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+             initial_balance_micro=None, ledger_path=None)
 rt.run()
 # The hash chain is keyed per ledger: compare what the diary says, in its order, with
 # object keys sorted as the ledger writes them (a ``$map`` keeps its own order).
@@ -67,7 +67,7 @@ class ProcessDeath(BaseException):
     pass
 
 rt = Runtime(load_manifest("scripted"), events=20, seed=7, initial_balance_micro=None,
-             ledger_path=sys.argv[1], router_gamma=0.1)
+             ledger_path=sys.argv[1])
 original = rt._process_event
 
 def interrupted(event):
