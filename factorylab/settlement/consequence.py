@@ -64,8 +64,8 @@ class ReturnConsequences:
         self.fill_ns: dict[str, int] = {}
         self.reordered: dict[str, str] = {}
         # Each instrument whose inventory a reordered fill left in arrival order, and
-        # the fill time that found it: tainted until the instrument is flat (Sol 6.1
-        # on #193), so a later closer of that inventory is censored too.
+        # how many of its lots, at the head of its FIFO, are still that inventory
+        # (Sol 6.1 on #193): a later closer of them is censored too.
         self.tainted: dict[str, int] = {}
         self.pending_orders: dict[str, dict] = {}
         # R4-C: intents the venue never answered and never will. The hold on
@@ -422,19 +422,20 @@ class ReturnConsequences:
 
     def _check_fill_order(self, at_ns: int, payload: dict, after: LotTable,
                           event: int) -> None:
-        """Censor every open return whose outcome rests on an instrument's inventory
-        matched in arrival order rather than the world's.
+        """Censor every open return whose outcome rests on lots matched in arrival
+        order rather than the world's.
 
         Guarantees the latest applied fill time per (market, instrument) is kept. A
-        fill strictly older than it taints that instrument's inventory and marks
-        ``FILL_REORDERED`` on each open return that holds, held or trades it: the
-        shared FIFO matched the fill in arrival order, so no outcome built on that
-        matching is certified as what the world did by its horizon. While the
-        instrument is tainted, every fill on it marks the same on its own return and on
-        each open return holding a lot of it before or after the fill, so a later
-        closer of the misordered lots inherits the censoring; the taint ends with the
-        fill that leaves the instrument flat. Fills of one instant keep the venue's
-        order (their order is itself a fact); other instruments are untouched.
+        fill strictly older than it taints every lot of that instrument the fill leaves
+        (the shared FIFO matched it in arrival order) and marks ``FILL_REORDERED`` on
+        each open return that holds, held or trades the instrument: no outcome built on
+        that matching is certified as what the world did by its horizon. The tainted
+        lots are the head of the instrument's FIFO (an instrument's lots are one-sided,
+        closed from the front, opened at the back), so their count is kept. Until every
+        tainted lot is gone, a later fill that closes into them marks the same on its
+        own return; a fill that only opens fresh inventory, and any fill after the last
+        tainted lot is gone, marks nothing. Fills of one instant keep the venue's order
+        (their order is itself a fact); other instruments are untouched.
         """
         coin, market = str(payload["coin"]), payload.get("market", "perp")
         key = f"{market}:{coin}"
@@ -443,28 +444,38 @@ class ReturnConsequences:
         reordered = latest is not None and at_ns < latest
         if not reordered and key not in self.tainted:
             return
-        touched = {lot.handle for table in (self.table, after) for lot in table.lots
-                   if lot.coin == coin and lot.market == market}
-        touched |= {order.handle for order in after.orders
-                    if order.order_id == str(payload["order_id"])}
+        before = [lot for lot in self.table.lots if lot.coin == coin and lot.market == market]
+        held = [lot for lot in after.lots if lot.coin == coin and lot.market == market]
+        owner = {order.handle for order in after.orders
+                 if order.order_id == str(payload["order_id"])}
         if reordered:
-            touched |= {handle for handle, entries in self.history.items()
-                        if any(entry.get("coin") == coin for entry in entries)}
-            self.tainted.setdefault(key, at_ns)
+            touched = {lot.handle for lot in (*before, *held)} | owner | {
+                handle for handle, entries in self.history.items()
+                if any(entry.get("coin") == coin for entry in entries)}
+            remaining = len(held)
+        else:
+            # Closing consumes the head of the FIFO: the lots of its side that remain
+            # are the tail, and every tainted lot past them is gone.
+            closes = bool(before) and payload["is_buy"] != before[0].is_buy
+            survivors = sum(lot.is_buy == before[0].is_buy for lot in held) if closes else len(
+                before)
+            remaining = max(0, self.tainted[key] - (len(before) - survivors))
+            touched = owner if closes else set()
         censored = sorted(handle for handle in touched
                           if handle is not None and self.account_open(handle)
                           and handle not in self.reordered)
         for handle in censored:
             self.reordered[handle] = FILL_REORDERED
-        flat = not any(lot.coin == coin and lot.market == market for lot in after.lots)
-        if flat:
+        if remaining:
+            self.tainted[key] = remaining
+        else:
             self.tainted.pop(key, None)
-        if reordered or censored or flat:
+        if reordered or censored or not remaining:
             self.ledger.append({"kind": "consequence.reordered", "event": event,
                                 "order_id": str(payload["order_id"]), "instrument": key,
                                 "fact_ns": at_ns, "applied_through_ns": latest,
                                 "handles": censored, "reordered": reordered,
-                                "tainted": not flat})
+                                "tainted_lots": remaining})
 
     def _unattributed_wind_down(self, payload: dict, event: int, before: LotTable,
                                 after: LotTable) -> None:

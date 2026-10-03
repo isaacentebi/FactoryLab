@@ -699,7 +699,7 @@ def test_a_recovered_older_fill_never_reverses_a_horizon_outcome():
             consequence_score(brier(1, chronological.y), brier(.5, chronological.y)))
 
 
-def _later_closer_run(delayed: bool):
+def _later_closer_run(delayed: bool, turnover: bool = False):
     """Sol 6.1 on #193: A buys 1 BTC at 100 (t90), B buys 1 at 200 (t110); delivered
     B first, the shared FIFO is [B, A]. C opens at t150 and sells 1 at 150 (t160): in
     the world it closed A's lot, +30 for C; in arrival order it closed B's, -21.4."""
@@ -715,15 +715,15 @@ def _later_closer_run(delayed: bool):
 
     book = Book(_Rows(), 2, horizon_ns=100)
 
-    def order(handle, oid, at):
+    def order(handle, oid, at, size="1"):
         book.clock = at
         book.start(handle, 0)
-        book.order_result(handle, {"status": "filled", "order_id": oid, "filled_size": "1"},
+        book.order_result(handle, {"status": "filled", "order_id": oid, "filled_size": size},
                           {"coin": "BTC"}, 0)
         book.finish(handle, 0)
 
-    def fill(oid, is_buy, px, at):
-        book.observe("Fill", {"order_id": oid, "coin": "BTC", "is_buy": is_buy, "size": "1",
+    def fill(oid, is_buy, px, at, size="1"):
+        book.observe("Fill", {"order_id": oid, "coin": "BTC", "is_buy": is_buy, "size": size,
                               "px": px, "fee_usd": "0", "ts_ns": at}, 1)
 
     order("A", "1", 0)
@@ -732,12 +732,19 @@ def _later_closer_run(delayed: bool):
     for args in (buys[::-1] if delayed else buys):
         fill(*args)
     book.observe("MarketMid", {"coin": "BTC", "mid": "150", "ts_ns": 100}, 2)
-    order("C", "3", 150)
-    fill("3", False, "150", 160)
+    order("C", "3", 150, size="3" if turnover else "1")
+    if turnover:
+        # C sells 3: both misordered lots are gone, and C is short 1 in both orders.
+        fill("3", False, "150", 160, size="3")
+        order("D", "4", 200)
+        fill("4", True, "140", 210)
+    else:
+        fill("3", False, "150", 160)
     book.observe("MarketMid", {"coin": "BTC", "mid": "150", "ts_ns": 300}, 3)
-    book.clock = book.tick_through_ns = 400
+    book.observe("MarketMid", {"coin": "BTC", "mid": "150", "ts_ns": 400}, 3)
+    book.clock = book.tick_through_ns = 500
     book.resolve(4)
-    return book.payoff("C")
+    return (book.payoff("C"), book.payoff("D")) if turnover else book.payoff("C")
 
 
 def test_a_later_closer_of_reordered_inventory_is_censored_too():
@@ -748,3 +755,14 @@ def test_a_later_closer_of_reordered_inventory_is_censored_too():
     assert chronological.censored is None
     assert (chronological.net_micro, chronological.y) == (30_000_000, 1)
     assert delayed.censored == "fill_reordered"
+
+
+def test_the_taint_ends_when_every_misordered_lot_is_gone():
+    """Sol 6.1 on 5154f86c: buys of 2 delivered out of order, then a sale of 3, leave
+    the same fresh short of 1 in both orders. The return that consumed the misordered
+    lots is censored; a later return trading only the fresh inventory is graded, and
+    identically in both delivery orders."""
+    (c_chrono, d_chrono), (c_delayed, d_delayed) = (_later_closer_run(False, True),
+                                                    _later_closer_run(True, True))
+    assert c_chrono.censored is None and c_delayed.censored == "fill_reordered"
+    assert d_chrono.censored is None and d_delayed == d_chrono

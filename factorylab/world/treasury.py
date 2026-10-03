@@ -787,6 +787,14 @@ class Treasury:
                 )
         except Exception:
             self._write("pending", transfer_id=state["id"], reason="submission outcome unknown")
+        # A send interrupted by a crash is resent by the recovery at its own wall time,
+        # while the replayed event's clock reads the original send's: it is recorded at
+        # that time, as any send is, so its execution falls in its own window.
+        resent = getattr(getattr(self.rail, "journal", None), "resent_ns", None)
+        if resent is not None and self.state.get("status") == "submitted":
+            self.state = {**self.state, "last_send_ns": resent,
+                          "sent_ns": [*self.state.get("sent_ns", ()), resent]}
+            self._write("resent", transfer_id=state["id"], sent_ns=resent)
 
     def reconcile(self, now_ns: int, *, observed: dict | None = None) -> list[dict]:
         """Advance at most one receipt-confirmed step per tick; never replace an ambiguous nonce.

@@ -671,3 +671,59 @@ def test_a_long_retry_run_ledgers_each_send_once_not_a_growing_list():
     assert not any("sent_ns" in r.get("state", {}) for r in rows)
     assert [r["sent_ns"] for r in rows if r["kind"] == "treasury.broadcast"] == (
         treasury.state["sent_ns"])
+
+
+def test_a_send_resent_by_recovery_is_recorded_at_its_own_time():
+    """Sol 6.1 on 5154f86c: a send interrupted by a crash at t0 is resent by the
+    recovery at t120, the replayed event's clock still reading t0. The resend is
+    recorded at its own time (the journal's io.result, and the treasury's sends), so
+    the venue's t120 execution confirms instead of falling outside every window."""
+    import hashlib
+
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal, canonical, encode
+
+    start_ns, wall_ns = 1_700_000_000_000_000_000, 1_700_000_120_000_000_000
+    rail = _RetryExecutedClassRail(executes=False)
+    plain = Ledger(clock_ns=lambda: 0)
+    journal = RecoveryJournal(plain, lambda: start_ns)
+    journal.wall_ns = lambda: wall_ns
+    wallet = Wallet(100_000_000, journal, clock_ns=lambda: 0)
+    treasury = Treasury(journal, wallet, JournalProxy(rail, journal, "treasury.rail"))
+    journal.active = True
+    # The process died after the send's io.call and before its result: the recovery
+    # finds the call in the tail and resends it, now.
+    real_call = journal.call
+
+    def interrupted(name, function, args, kwargs, **kw):
+        if name != "treasury.rail.send":
+            return real_call(name, function, args, kwargs, **kw)
+        fingerprint = hashlib.sha256(canonical(encode((args, kwargs)))).hexdigest()
+        plain.append({"kind": "io.call", "name": name, "input_hash": fingerprint,
+                      "ts": start_ns})
+        journal.tail = [plain._recovery_items()[-1]]
+        journal.position, journal._next = 0, None
+        journal.call = real_call
+        return real_call(name, function, args, kwargs, **kw)
+
+    journal.call = interrupted
+    treasury.transfer("perps_to_spot", "5", handle="h", now_ns=start_ns)
+    assert rail.sends == 1  # the recovery's resend
+    assert [r["resent_ns"] for r in plain._recovery_items()
+            if r["kind"] == "io.result" and "resent_ns" in r] == [wall_ns]
+    assert treasury.state["sent_ns"][-1] == treasury.state["last_send_ns"] == wall_ns
+    nonce = treasury.state["nonce"]
+    rail.rows.append(_unrelated_class_row(nonce, 120_000, "executed-on-recovery"))
+    journal.active = False
+    treasury.tick(wall_ns + 1_000_000_000)  # no retry yet: the resend was a second ago
+    assert rail.sends == 1 and treasury.state["status"] == "confirmed"
+    # A later replay reads the resend's time from the recorded result, sending nothing.
+    items = plain._recovery_items()
+    replay = RecoveryJournal(Ledger(clock_ns=lambda: 0), lambda: start_ns)
+    replay.active = True
+    replay.tail = [next(i for i in items if i["kind"] == "io.call"
+                        and i["name"] == "treasury.rail.send"),
+                   next(i for i in items if "resent_ns" in i)]
+    with pytest.raises(Pending):  # the resend's recorded outcome: unknown
+        replay.call("treasury.rail.send", rail.send,
+                    ("perps_to_spot", treasury.state["reference"]), {})
+    assert replay.resent_ns == wall_ns and rail.sends == 1
