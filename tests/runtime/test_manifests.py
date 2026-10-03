@@ -563,10 +563,24 @@ def test_the_funded_world_is_edition8_named_funded():
     Ratification replaces its [charter] block; this test then states that difference."""
     from factorylab.runtime.worlds import WORLDS_DIR
 
+    def without_charter(text: str) -> str:
+        lines = text.split("\n")
+        start = lines.index("[charter]")
+        end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("[")
+                   and not lines[i].startswith(("[charter", "[[charter")))
+        return "\n".join(lines[:start] + lines[end:])
+
     launch = (WORLDS_DIR / "edition8-launch.toml").read_text()
     stated = '\nname = "edition8-launch"\n'
     assert launch.count(stated) == 1
-    assert (WORLDS_DIR / "funded.toml").read_text() == launch.replace(
-        stated, '\nname = "funded"\n')
+    # Ratified 2026-10-02 (charter session on worlds/funded.toml, --launch run): the
+    # [charter] block is the exported one, so the rest is still edition 8 byte for byte.
+    assert without_charter((WORLDS_DIR / "funded.toml").read_text()) == without_charter(
+        launch.replace(stated, '\nname = "funded"\n'))
     funded = load_manifest("funded")
     assert funded.name == "funded" and not funded.exchange.mainnet
+    assert funded.charter_ratified_sha256 == funded.charter_content_sha256 == (
+        "f8c72648e3b10c1f1aa88968edb5501467d1102d7434d86a487c8e4456f20718")
+    assert funded.charter_roster_sha256 == (
+        "5683030290db3b4a9532a562a6a619becee383033600dde4e260c4e34d2f5f8b")
+    funded.check_launch("run")
