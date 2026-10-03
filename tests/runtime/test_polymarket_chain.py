@@ -26,6 +26,15 @@ from tests.runtime.test_polymarket_surface import still_fake
 from tests.world.fake_clob import live_venue
 
 
+def tick_until(rt, done, ticks=10):
+    """Tick until ``done()``, failing (never hanging) after ``ticks``."""
+    for _ in range(ticks):
+        if done():
+            return
+        polymarket.tick(rt)
+    assert done(), f"not reached in {ticks} ticks"
+
+
 def drifts(rt):
     return [row for row in items(rt, "polymarket.drift") if "chain" in row]
 
@@ -220,8 +229,7 @@ def test_an_unconfirmed_resolution_holds_buying_across_the_rotation():
     rt, server = resolved_world()
     server.chain_lag.add("fake-1")
     buy(rt, server, collateral_decision(rt), market="fake-2", price="0.10")  # rests
-    while not rt.polymarket.cursor.get("chain_pending"):
-        polymarket.tick(rt)  # until the rotation first reads fake-1
+    tick_until(rt, lambda: rt.polymarket.cursor.get("chain_pending"))  # fake-1 is read
     for _ in range(4):  # it reads fake-2 and fake-1 in turn from here on
         polymarket.tick(rt)
         assert rt.polymarket.drifting
@@ -352,6 +360,43 @@ def test_a_resolution_whose_condition_cannot_be_asked_holds_buying(condition):
     server.market_row = None
     polymarket.tick(rt)
     assert [row["payout"] for row in items(rt, "polymarket.resolution")] == ["1"]
+    assert not rt.polymarket.drifting
+
+
+def test_a_failed_payout_check_stays_owed_however_the_rotation_moves():
+    """Sol P0, round 4: a payout check that failed was rolled back with its step and
+    owed only for that poll; the rotation then read other markets and buying resumed
+    while the check was still unanswered."""
+    rt, server = resolved_world()
+    for market in ("fake-2", "fake-3"):  # more markets in the rotation
+        buy(rt, server, collateral_decision(rt), market=market, price="0.10")
+    real = server._eth_call
+    denominator = keccak(text="payoutDenominator(bytes32)")[:4]
+    lagging = bytes.fromhex(condition_of(server)[2:])
+
+    def flaky(to, data):
+        if data[:4] == denominator and data[4:36] == lagging:
+            raise clob.PolymarketUnavailable("transport: TimeoutError")
+        return real(to, data)
+
+    server._eth_call = flaky
+    # Until the rotation first reads fake-1's payout.
+    tick_until(rt, lambda: token(server) in rt.polymarket.cursor.get("chain_pending", []))
+    reads = len([c for c in server.calls if c[1].startswith("/markets/")])
+    # A candidate leaving the rotation shifts every later index (Sol's reproduction): the
+    # next polls read the other markets, not fake-1.
+    rt.polymarket.cursor["turn"] += 1
+    for _ in range(2):
+        polymarket.tick(rt)
+        assert rt.polymarket.drifting
+        assert token(server) in rt.polymarket.state()["cursor"]["chain_pending"]
+    later = [c[1] for c in server.calls if c[1].startswith("/markets/")][reads:]
+    assert {"/markets/fake-2", "/markets/fake-3"} <= set(later)
+    assert not items(rt, "polymarket.resolution")
+    server._eth_call = real
+    tick_until(rt, lambda: items(rt, "polymarket.resolution"))
+    assert rt.polymarket.cursor["chain_pending"] == []
+    polymarket.tick(rt)
     assert not rt.polymarket.drifting
 
 

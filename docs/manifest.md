@@ -2878,8 +2878,9 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
     reported is a disagreement: nothing is paid, `polymarket.drift` ("a resolution
     Polygon has not reported") is ledgered each tick, and buying waits until the chain
     reports it or Gamma no longer states it (held across the rotation of market reads,
-    while the pot holds or may hold the token); a chain that did not answer leaves the
-    read unread, and buying waits until a later poll reads it; a token the condition does not issue, a condition
+    while the pot holds or may hold the token); a payout check the chain did not
+    answer, or that cannot be asked (a malformed condition id), keeps its token pending
+    the same way, in the journaled cursor, until that token's own check is answered; a token the condition does not issue, a condition
     other than the one bound, or a payout other than `numerator / denominator` exactly
     halts buying for the world's life and pays nothing. What is paid is only what the
     chain holds: the payout of the tokens the books hold waits until the chain holds, of

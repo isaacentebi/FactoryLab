@@ -920,8 +920,14 @@ class LivePolymarket(PolymarketReader):
                 if isinstance(exc, wire.Malformed):
                     malformed.append(str(exc))
                 # A check Polygon did not answer is owed: buying waits on it (Sol P0,
-                # round 1 of #180), not only the payout.
+                # round 1 of #180), not only the payout. A payout check stays owed, in
+                # the cursor, until that token's own check is answered, however the
+                # rotation moves meanwhile (Sol P0, round 4).
                 chain_unread = chain_unread or isinstance(exc, (ChainUnread, ChainOwed))
+                owed = getattr(exc, "owed", None)
+                if chain_unread and owed is not None:
+                    state["chain_pending"] = sorted(
+                        {*state.get("chain_pending", []), owed})
                 continue
             state = trial
             events.extend(found)
@@ -1131,8 +1137,14 @@ class LivePolymarket(PolymarketReader):
                 # one; a disagreement halts buying and pays nothing, and a payout the
                 # chain has not yet reported waits (a chain that did not answer leaves
                 # this step unread).
-                reported, reason = self._chain_payout(state["bound"], token, market,
-                                                      outcome["outcome_index"], paid)
+                try:
+                    reported, reason = self._chain_payout(state["bound"], token, market,
+                                                          outcome["outcome_index"], paid)
+                except (ChainOwed, PolymarketUnavailable) as exc:
+                    # The check stays owed beyond this rolled-back step (Sol P0, round 4
+                    # of #180): ``poll`` keeps the token pending in the committed cursor.
+                    exc.owed = token
+                    raise
                 if reason:
                     contradictions[f"{token}:chain"] = reason
                     return events
