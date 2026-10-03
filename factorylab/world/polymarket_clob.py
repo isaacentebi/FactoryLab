@@ -400,6 +400,12 @@ def http_send(method: str, url: str, headers: dict[str, str], body: str | None,
         raise PolymarketUnavailable("response is not JSON") from None
 
 
+class ChainOwed(wire.Malformed):
+    """A resolution Gamma states whose Polygon check cannot even be asked (its condition
+    id is malformed): the read is malformed, and the check is owed, so buying waits on
+    it (Sol P0, round 2 of #180)."""
+
+
 class Withheld(Exception):
     """A signed order not sent: its slot had left the budget's window at the transport,
     and no slot was left to renew it. It never reached the venue."""
@@ -915,7 +921,7 @@ class LivePolymarket(PolymarketReader):
                     malformed.append(str(exc))
                 # A check Polygon did not answer is owed: buying waits on it (Sol P0,
                 # round 1 of #180), not only the payout.
-                chain_unread = chain_unread or isinstance(exc, ChainUnread)
+                chain_unread = chain_unread or isinstance(exc, (ChainUnread, ChainOwed))
                 continue
             state = trial
             events.extend(found)
@@ -1206,7 +1212,7 @@ class LivePolymarket(PolymarketReader):
         """
         condition = market.get("condition_id")
         if not isinstance(condition, str) or not _CONDITION.fullmatch(condition):
-            raise wire.Malformed("market condition id is not 32 bytes")
+            raise ChainOwed("market condition id is not 32 bytes")
         condition, neg_risk = condition.lower(), bool(market.get("neg_risk"))
         proven = token in bound.get("position", {})
         read = self.chain.resolution(condition, token=None if proven else token,

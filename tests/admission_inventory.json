@@ -26671,7 +26671,7 @@
     },
     {
       "rule": "polymarket_orders.live",
-      "enforced": "factorylab/world/polymarket_clob.py:646 (LivePolymarket.place); factorylab/runtime/polymarket.py:2054 (_on_chain); factorylab/world/polymarket_clob.py:1195 (LivePolymarket._chain_payout)",
+      "enforced": "factorylab/world/polymarket_clob.py:652 (LivePolymarket.place); factorylab/runtime/polymarket.py:2054 (_on_chain); factorylab/world/polymarket_clob.py:1201 (LivePolymarket._chain_payout)",
       "published": "factorylab/cortex/admission_tools.py:356 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26732,7 +26732,7 @@
     "factorylab/world/connector.py": "226ee503dcae74737ca857082d5341972e7397281ed2730a754483a6247999a8",
     "factorylab/world/evm.py": "2ba9bba6877e3bd40d7cf487f7feda5526ec6c565b54c3b284b64fbfa8b10360",
     "factorylab/world/exchange.py": "9a835cc008b5f33e9c1d8f0b63be8902a1eef1b0d3ee9e34a0805df4a3c8df2b",
-    "factorylab/world/polymarket_clob.py": "6a9fe262ab32522837a3d351d6a905769b24cfba7a4798b84b81741b03f904ce",
+    "factorylab/world/polymarket_clob.py": "0f35a140b61349063abecf17fe1c4c8eff8198c4733d14b315e1538fa012638f",
     "factorylab/world/tape.py": "4f311b900b9d2e74b29a87e7b33763b22ddf740e118f8307f267e8b90576e81e",
     "factorylab/world/treasury.py": "a44b2c96af9017f4ef08fc30e357246b6d2d86de0d2b9073e14a7afa14e35ae0",
     "factorylab/world/treasury_rails.py": "c40ccf679b339fbffa58d3050c95cf30c3419f9a286e34e375b9f11b76dead43",

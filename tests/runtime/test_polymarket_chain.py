@@ -312,6 +312,23 @@ def test_a_resolution_pays_only_what_polygon_holds():
         ("1", "10")]
 
 
+@pytest.mark.parametrize("condition", [None, "0x12", "0x" + "zz" * 32])
+def test_a_resolution_whose_condition_cannot_be_asked_holds_buying(condition):
+    """Sol P0, round 2: Gamma's resolved market with a missing or malformed condition id
+    stalled its payout check as malformed, but buying went on."""
+    rt, server = resolved_world()
+    server.market_row = lambda row: {**row, "conditionId": condition}
+    polymarket.tick(rt)
+    assert not items(rt, "polymarket.resolution") and rt.polymarket.drifting
+    assert items(rt, "polymarket.read_malformed") and items(rt, "polymarket.chain_unavailable")
+    refused = buy(rt, server, collateral_decision(rt), market="fake-2", price="0.20")
+    assert refused["error"] == polymarket.DRIFT_REFUSAL
+    server.market_row = None
+    polymarket.tick(rt)
+    assert [row["payout"] for row in items(rt, "polymarket.resolution")] == ["1"]
+    assert not rt.polymarket.drifting
+
+
 def test_the_installed_live_venue_reads_polygon(monkeypatch):
     monkeypatch.delenv(polygon_ctf.RPC_ENV, raising=False)
     spec = replace(load_manifest("scripted").polymarket, **vars(PolymarketSpec(
