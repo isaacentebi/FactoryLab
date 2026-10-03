@@ -259,12 +259,16 @@ class PolymarketSurface:
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
         target = self.venue.target
+        extra: dict[str, Any] = {}
         if self.paper:
             venue = self.pot.target.pot_state()
+            if self.venue.deterministic:
+                # Offline (``simulate_reads``): the simulated market the reads come from.
+                extra["simulated"] = dict(vars(target))
         else:
             venue = dict(vars(target)) if self.venue.deterministic else None
         return {**{name: getattr(self, name) for name in self.FIELDS},
-                "window_orders": list(self.window_orders), "venue": venue}
+                "window_orders": list(self.window_orders), "venue": venue, **extra}
 
     def restore(self, saved: dict[str, Any]) -> None:
         """Rebind saved state to this process's adapter."""
@@ -280,14 +284,18 @@ class PolymarketSurface:
         if self.paper:
             # As the live pot's (Codex P2 on #177): the process that died may have sent
             # the pot's whole read allowance in its last 10 s.
-            self.pot.target.reads.target.budget.spend_all()
-            saved_pot = saved.get("venue")
-            if isinstance(saved_pot, dict) and set(self.pot.target.STATE) <= set(saved_pot):
-                self.pot.target.load_pot_state(saved_pot)
-            elif saved_pot is not None:
-                # An offline run's simulated venue (``simulate_reads``), which answered
-                # this world's reads and held its pot: bound again where it is rebound.
-                self.restored_venue = saved_pot
+            budget = getattr(self.pot.target.reads.target, "budget", None)
+            if budget is not None:
+                budget.spend_all()
+            if saved.get("venue") is not None:
+                self.pot.target.load_pot_state(saved["venue"])
+            if saved.get("simulated") is not None and self.venue.deterministic:
+                self.venue.target.__dict__.clear()
+                self.venue.target.__dict__.update(saved["simulated"])
+            elif saved.get("simulated") is not None:
+                # An offline run's simulated market (``simulate_reads``): bound again
+                # where it is rebound, before anything replays.
+                self.restored_market = saved["simulated"]
         elif saved.get("venue") is not None and self.venue.deterministic:
             self.venue.target.__dict__.clear()
             self.venue.target.__dict__.update(saved["venue"])
@@ -400,11 +408,12 @@ def simulate_reads(rt: Any) -> None:
 
     For offline runs of a world whose ``venue = "live"`` or ``"paper"``
     (``scripts/fastloop.py``): the fake answers the same reads as ``PolymarketReader``
-    and moves on the world's clock; a paper world's pot is the fake's, opened with its
-    ``collateral_usd``. Guarantees the published surface is untouched (a live-read
-    world gets no write tool and no pot, a paper world keeps its own) and the manifest
-    the world was launched with, so the run is the launch path's with only the outside
-    answer simulated.
+    and moves on the world's clock. A paper world keeps its own pot and its matching
+    and accounting (``PaperPolymarket``): only the pot's reads (a market, a book) are
+    answered by the same fake, which holds no order. Guarantees the published surface
+    is untouched (a live-read world gets no write tool and no pot, a paper world keeps
+    its own) and the manifest the world was launched with, so the run is the launch
+    path's with only the outside answer simulated.
     """
     from factorylab.runtime.resume import JournalProxy
     from factorylab.world.polymarket import FakePolymarket
@@ -413,16 +422,21 @@ def simulate_reads(rt: Any) -> None:
     if surface.writes and not surface.paper:
         raise ValueError("simulate_reads replaces a live reader only")
     if surface.paper:
-        # A paper world offline: the simulated venue answers its reads and holds its
-        # pot, opened with the manifest's collateral, as a ``fake`` world's does.
-        fake = FakePolymarket(seed=surface.spec.seed,
-                              start_usdc=Decimal(surface.spec.collateral_micro) / 1_000_000)
-        restored = getattr(surface, "restored_venue", None)
+        from factorylab.world.polymarket_paper import SimulatedPaperReads
+
+        # A paper world offline: the simulated market answers the public reads and the
+        # pot's own; the pot's matching and custody stay the paper pot's (Sol P0, round
+        # 1: the fake's fills are unbounded by the ask's size).
+        fake = FakePolymarket(seed=surface.spec.seed)
+        restored = getattr(surface, "restored_market", None)
         if restored is not None:
             fake.__dict__.clear()
             fake.__dict__.update(restored)
         surface.venue = JournalProxy(fake, rt.ledger, "polymarket", deterministic=True)
-        surface.pot, surface.pot_reads, surface.paper = surface.venue, surface.venue, False
+        reads = JournalProxy(SimulatedPaperReads(fake), rt.ledger, "polymarket",
+                             deterministic=True)
+        surface.pot.target.reads = reads
+        surface.pot_reads = reads
     else:
         surface.venue = JournalProxy(FakePolymarket(seed=surface.spec.seed), rt.ledger,
                                      "polymarket", deterministic=True)
@@ -1673,6 +1687,10 @@ def tick(rt: Any) -> None:
                 # Every fill the venue confirmed through the cursor was handed over.
                 surface.through["events"] = rt.clock.now_ns
     else:
+        if surface.paper and surface.venue.deterministic:
+            # Offline (``simulate_reads``): the simulated market the paper pot reads moves
+            # on the world's clock. It holds no order, so it has no event of its own.
+            surface.venue.advance(rt.clock.now_ns)
         settle(rt, surface.pot.advance(rt.clock.now_ns))
         # Every event the venue held through now was handed over and accounted.
         surface.through["events"] = rt.clock.now_ns

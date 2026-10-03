@@ -72,6 +72,26 @@ class PaperReads(PolymarketReader):
     mark_book = LivePolymarket.mark_book
 
 
+class SimulatedPaperReads:
+    """The paper pot's reads answered by the seeded simulated venue, for an offline run
+    (``runtime/polymarket.py``, ``simulate_reads``): the same three reads, in the same
+    parsed shapes, from a ``FakePolymarket`` that holds no order and sends nothing."""
+
+    name = "polymarket-paper-simulated-reads"
+
+    def __init__(self, simulated: Any) -> None:
+        self.simulated = simulated
+
+    def write_market(self, market_id: str) -> dict[str, Any]:
+        return self.simulated.market(market_id)
+
+    def write_market_of_token(self, token_id: str) -> dict[str, Any] | None:
+        return self.simulated.market_of_token(token_id)
+
+    def mark_book(self, token_id: str) -> dict[str, Any]:
+        return self.simulated.order_book(token_id, 1)
+
+
 class PaperPolymarket:
     """The ``FakePolymarket`` contract on Polymarket's live books, with a simulated pot.
 
@@ -298,6 +318,8 @@ class PaperPolymarket:
         for order in crossing:
             quantity = min(Decimal(order["remaining"]),
                            available.quantize(SIZE_QUANTUM, rounding=ROUND_DOWN))
+            # One spelling a quantity ("1", never "1.00"), as the order's own size.
+            quantity = Decimal(format(quantity.normalize(), "f"))
             if quantity <= 0:
                 return
             self._fill(order, quantity)

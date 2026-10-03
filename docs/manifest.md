@@ -2726,8 +2726,10 @@ What is real and what is simulated:
   its whole state is in every checkpoint (`PaperPolymarket.pot_state`). A resumed world
   reaches the state the run reached, without reading again.
 * **Offline.** `scripts/fastloop.py`, the Class 2 corpus and `scripts/edition4_rehearsal.py`
-  on a simulated clock answer a paper world's reads and hold its pot on the seeded
-  simulated venue (`simulate_reads`), opened with `collateral_usd`.
+  on a simulated clock answer a paper world's reads, and its pot's own reads, from the
+  seeded simulated venue (`simulate_reads`, `SimulatedPaperReads`), which moves on the
+  world's clock and holds no order; the pot, its matching and its custody stay the paper
+  pot's, and the simulated market is checkpointed beside it (`simulated`).
 
 What the simulation cannot see, as fact: a paper order is never in Polymarket's book, so
 it moves no price, holds no queue position and meets no counterparty. A fill is inferred

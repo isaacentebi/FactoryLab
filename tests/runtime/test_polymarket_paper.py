@@ -251,20 +251,44 @@ def test_a_paper_world_reads_the_network_so_it_runs_only_on_the_wall_clock(tmp_p
     assert rt._polymarket_ip_lock is None
 
 
-def test_offline_a_paper_world_trades_on_the_simulated_venue_with_its_collateral():
+def test_offline_a_paper_world_keeps_the_paper_pot_and_reads_the_simulated_market():
+    """Sol P0, round 1: offline (``simulate_reads``) the simulated market answers the
+    reads, and the pot's matching and custody stay the paper pot's: a fill is bounded by
+    the ask's size and shared across the pot's orders, as published."""
     rt, _server = paper_world(collateral="30")
     published = json.dumps(rt.tool_specs, sort_keys=True)
     polymarket.simulate_reads(rt)
     surface = rt.polymarket
-    assert surface.venue is surface.pot and surface.venue.deterministic and not surface.paper
+    assert surface.paper and surface.venue.deterministic
+    assert isinstance(surface.pot.target, PaperPolymarket)
+    assert not isinstance(surface.venue.target, PolymarketReader)  # offline: no IP lock
     assert surface.account()["usdc"] == "30"
     assert json.dumps(rt.tool_specs, sort_keys=True) == published
-    handle = collateral_decision(rt)
     fake = surface.venue.target
-    result = rt._run_tool("seed-decider", handle, {"tool": "polymarket.place_limit", "args": {
-        "token_id": fake.market("fake-1")["outcomes"][0]["token_id"], "side": "buy",
-        "size": "10", "price": "0.30"}}, slot="tool:0")[0]
-    assert result["status"] == "resting"
+    fake.markets = tuple({**m, "resolves_after_s": None} for m in fake.markets)
+    fake.step_ticks, fake.depth_shares = 0, Decimal(1)  # one token at the ask
+    handle = collateral_decision(rt)
+    yes = fake.market("fake-1")["outcomes"][0]["token_id"]
+    placed = [rt._run_tool("seed-decider", handle, {"tool": "polymarket.place_limit", "args": {
+        "token_id": yes, "side": "buy", "size": "10", "price": price}}, slot=slot)[0]
+        for price, slot in (("0.30", "tool:0"), ("0.31", "tool:1"))]
+    assert [r["status"] for r in placed] == ["resting", "resting"]
+    fake._markets["fake-1"]["mid"] = Decimal("0.21")  # the ask, 0.22, one token deep
+    rt.clock.now_ns += 1
+    polymarket.tick(rt)
+    # One token at the ask: the higher-priced buy takes it, the other nothing.
+    assert rt.polymarket.filled == {placed[1]["order_id"]: "1"}
+    account = rt.polymarket.account()
+    assert account["usdc"] == "29.69" and account["positions"][0]["size"] == "1"
+    assert rt.polymarket.drifting is False and fake._positions == {}
+    # A resume of the offline run restores the simulated market beside the pot.
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    twin, _ = paper_world(collateral="30")
+    restore_runtime(twin, runtime_state(rt))
+    polymarket.simulate_reads(twin)
+    assert twin.polymarket.venue.target._markets == fake._markets
+    assert twin.polymarket.account() == rt.polymarket.account()
 
 
 # --- checkpoints and replay -----------------------------------------------------------------
