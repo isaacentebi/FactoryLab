@@ -395,8 +395,8 @@ def render_dynamic(name: str, *, ticks: int = 60) -> Rendered:
                           ledger_path=str(directory / "ledger.jsonl"),
                           provider=Recording(WORLDS / f"{name}.toml"), kill_at_end=True)
         surface = getattr(runtime, "polymarket", None)
-        if surface is not None and not surface.writes:
-            # As fastloop does: a live-read world's reads are answered by the simulated
+        if surface is not None and (not surface.writes or surface.paper):
+            # As fastloop does: a live-read or paper world's reads are answered by the simulated
             # venue.
             from factorylab.runtime.polymarket import simulate_reads
 

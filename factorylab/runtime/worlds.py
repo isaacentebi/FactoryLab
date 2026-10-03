@@ -290,12 +290,15 @@ class PolymarketSpec:
     tools reach: ``fake`` is the seeded simulated venue for reads and writes;
     ``live`` is the public read API, and with ``orders = true`` also signed orders
     on Polymarket's CLOB (``world/polymarket_clob.py``), real money on Polygon, so
-    admitted only in the world named ``funded`` under its ratified charter. The
+    admitted only in the world named ``funded`` under its ratified charter;
+    ``paper`` is the public read API with the pot's orders simulated against its
+    live books (``world/polymarket_paper.py``), no money on any network. The
     caps are limits the kernel refuses beyond, fixed for the world's life: one
     order's notional, the pot's open exposure (resting buys plus the cost of tokens
     held), orders a window, and the pot's principal (``principal_micro``: what the
     pot may hold beyond what it has itself settled). ``collateral_micro`` is the
-    simulated pot's opening USDC; a live pot is whatever its wallet holds.
+    simulated pot's opening USDC (the fake's or the paper pot's); a live pot is
+    whatever its wallet holds.
     """
 
     enabled: bool = False
@@ -336,8 +339,8 @@ class PolymarketSpec:
         if type(reserve) is not int or not 1 <= reserve < budget:
             raise ValueError("polymarket.kernel_reserve_per_10s must be an integer "
                              "of at least 1 below polymarket.read_requests_per_10s")
-        if self.venue not in ("fake", "live"):
-            raise ValueError("polymarket.venue must be fake or live")
+        if self.venue not in ("fake", "live", "paper"):
+            raise ValueError("polymarket.venue must be fake, live or paper")
         for name in ("collateral_micro", "max_order_micro",
                      "max_open_micro", "max_orders_per_window", "seed"):
             value = getattr(self, name)
@@ -352,6 +355,10 @@ class PolymarketSpec:
         if self.orders and self.venue != "live":
             raise ValueError("polymarket.orders names live orders; the simulated venue "
                              "always takes writes")
+        if self.venue == "paper" and self.collateral_micro <= 0:
+            # The paper pot holds simulated USDC only: what it opens with is declared.
+            raise ValueError("polymarket.venue paper needs a positive "
+                             "polymarket.collateral_usd, the paper pot's opening USDC")
         principal = self.principal_micro
         if principal is not None and (type(principal) is not int or principal <= 0):
             raise ValueError("polymarket.principal_usd must be positive exact USD")
@@ -374,11 +381,16 @@ class PolymarketSpec:
                 or any(c not in "0123456789abcdef" for c in self.funder[2:])
                 or int(self.funder, 16) == 0):
             raise ValueError("polymarket.funder must be a nonzero lower-case 0x address")
+        if self.venue == "paper" and (self.funder is not None or self.signature_type != 0):
+            # The paper pot signs nothing and holds no wallet.
+            raise ValueError("polymarket.funder and polymarket.signature_type name a live "
+                             "pot's wallet; the paper pot has none")
         if self.orders and (principal is None or self.funder is None):
             # Real money: the pot's wallet and its principal cap are declared at genesis.
             raise ValueError("polymarket live orders require polymarket.funder and "
                              "polymarket.principal_usd")
-        if self.orders and budget + self.read_requests_per_10s > PUBLISHED_REQUESTS_PER_10S:
+        if ((self.orders or self.venue == "paper")
+                and budget + self.read_requests_per_10s > PUBLISHED_REQUESTS_PER_10S):
             # The pot's own market reads land on Gamma /markets beside the public reads:
             # together they stay within its published 300 per sliding 10 s.
             raise ValueError("polymarket.read_requests_per_10s + order_requests_per_10s "

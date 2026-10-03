@@ -1215,7 +1215,7 @@ def _rehearse(
             from factorylab.runtime.live import wall_paced
 
             surface = getattr(runtime, "polymarket", None)
-            if (surface is not None and not surface.writes
+            if (surface is not None and (not surface.writes or surface.paper)
                     and not wall_paced(runtime.tick_clock)):
                 # A rehearsal on a supplied simulated clock is offline: Polymarket counts
                 # wall time, and a live reader runs only on the wall clock (``arm``), so

@@ -130,7 +130,11 @@ def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
             continue
         if world.polymarket.enabled:
             enabled.add(path.name)
-            # The public read APIs only: no world under worlds/ trades event markets.
+            # The public read APIs only: no world under worlds/ trades event markets
+            # with money; funded-paper's pot is simulated against the live books.
+            if path.name == "funded-paper.toml":
+                assert world.polymarket.venue == "paper" and not world.polymarket.orders
+                continue
             assert world.polymarket.venue == "live", path.name
             assert world.polymarket.collateral_micro == 0, path.name
             # A public read costs the factory nothing, so no world can price it (Wave 11).
@@ -141,7 +145,9 @@ def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
                        # Edition 7 re-seated, reads only: its live order rail is off.
                        "edition8-launch.toml",
                        # Edition 8 under the name the supervisor launches.
-                       "funded.toml"}
+                       "funded.toml",
+                       # Funded with Polymarket paper orders (no money on Polymarket).
+                       "funded-paper.toml"}
 
 
 def test_a_free_read_is_published_free_and_debits_nothing():

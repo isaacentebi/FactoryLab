@@ -2470,18 +2470,19 @@ one wake. A search that returned no results buys no extra round.
 still part of the manifest and are hashed like any other. The two edition 6 worlds enable
 it with `venue = "live"` (reads only); Gamma and the CLOB charge nothing for a public
 read, and every Polymarket read is free. No world under `worlds/` enables the simulated
-venue's writes. The keys, all fixed for the world's life:
+venue's writes; `worlds/funded-paper.toml` enables paper orders (`venue = "paper"`, "Paper
+orders" below). The keys, all fixed for the world's life:
 
 | key | default | meaning |
 |---|---|---|
 | `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
-| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes, with the live venue's order physics: every order is post-only, so a buy at or above the best ask is rejected before it executes (`invalid post-only order: order crosses book`), a resting buy fills at its own price once the walking ask meets it, and no fill is charged a fee (its listing states no fee schedule). A resolution pays nothing into spendable USDC: the tokens stay in the pot, resolved and worth their payout, as on the live venue, until a redemption neither venue makes by itself. The tools and the `world.read` order section render the same on both venues apart from the venue's name and `live_orders`. `live`: the public Gamma and CLOB read APIs, and with `orders = true` signed orders on the CLOB (`world/polymarket_clob.py`, `LivePolymarket`; "Live orders" below) |
-| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (a live pot is what its wallet holds); it may exceed `principal_usd`, which bounds signed commitments, never what the pot holds |
-| `orders` | `false` | live orders: registers the pot, its two reads and its two writes on the live venue. Refused with `venue = "fake"` (which always takes writes); requires `funder` and `principal_usd`; admitted only in the world named `funded`, under the same gate as a mainnet venue (`exchange.client_namespace`, the ratified charter and roster digests, `charter.launch`), because Polymarket's one network, Polygon, is real money |
+| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes, with the live venue's order physics: every order is post-only, so a buy at or above the best ask is rejected before it executes (`invalid post-only order: order crosses book`), a resting buy fills at its own price once the walking ask meets it, and no fill is charged a fee (its listing states no fee schedule). A resolution pays nothing into spendable USDC: the tokens stay in the pot, resolved and worth their payout, as on the live venue, until a redemption neither venue makes by itself. The tools and the `world.read` order section render the same on every venue kind apart from the venue's name, `live_orders` and `paper_orders`. `live`: the public Gamma and CLOB read APIs, and with `orders = true` signed orders on the CLOB (`world/polymarket_clob.py`, `LivePolymarket`; "Live orders" below). `paper`: the public Gamma and CLOB read APIs exactly as `live` reads them (the same reader, budget, journal and host lock), with the pot's orders simulated against the live books and never sent to Polymarket (`world/polymarket_paper.py`, `PaperPolymarket`; "Paper orders" below) |
+| `collateral_usd` | `"0"` | the simulated pot's opening USDC, on `fake` or `paper`; refused with `venue = "live"` (a live pot is what its wallet holds), and required positive with `venue = "paper"` (the paper pot holds nothing else); published in `world.read` as `polymarket_orders.collateral_micro`; it may exceed `principal_usd`, which bounds signed commitments, never what the pot holds |
+| `orders` | `false` | live orders: registers the pot, its two reads and its two writes on the live venue. Refused with `venue = "fake"` or `"paper"` (which always take writes); requires `funder` and `principal_usd`; admitted only in the world named `funded`, under the same gate as a mainnet venue (`exchange.client_namespace`, the ratified charter and roster digests, `charter.launch`), because Polymarket's one network, Polygon, is real money |
 | `principal_usd` | absent | the cap on the world's lifetime signed commitments: `size x limit price` of every placement the world ever signed, forever (`principal_at_risk`). Nothing gives room back: no cancel, terminal read-back, matched size, failed leg, quarantine, resolution, payout or redemption, and no venue response field enters it. The exceptions are orders that never existed: one the venue refused outright with a documented 4xx refusal (`polymarket_wire.refusal`; the simulated venue's rejection is the same evidence), and one refused locally before it was signed, because the request budget could not send it. A timeout, a 5xx or any other answer counts in full, and the order stays uncertain and a cancellation target. A buy that would take the commitment past the cap is refused before any intent ("the polymarket pot holds more principal than [polymarket] principal_usd"); a cancellation never is. No wallet balance and no listing enters it, so nobody's deposit, withdrawal or omission makes room. Positive exact USD |
-| `funder` | absent | the pot's wallet (lower-case 0x address), the orders' maker and the Data API's `user` |
-| `signature_type` | `0` | how the exchange verifies the pot's signature: 0 EOA (the key's own address must be `funder`), 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (a Deposit Wallet) |
-| `order_requests_per_10s` | `60` | the pot's own requests (orders, cancels, lookups, fills, its account, held tokens' marks and a write's market read) per sliding 10 s of wall time, each counted before it is sent; one past it is not sent. A resumed pot counts its whole allowance as sent at the resume, since the process that died may have sent it in its last 10 s. At most 200 (`/balance-allowance`'s published limit, the tightest endpoint these reach besides Gamma `/markets`), and with `orders`, `read_requests_per_10s + order_requests_per_10s` is at most 300, Gamma `/markets`' |
+| `funder` | absent | the pot's wallet (lower-case 0x address), the orders' maker and the Data API's `user`; refused with `venue = "paper"`, whose pot has no wallet |
+| `signature_type` | `0` | how the exchange verifies the pot's signature: 0 EOA (the key's own address must be `funder`), 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE, 3 POLY_1271 (a Deposit Wallet); anything but `0` is refused with `venue = "paper"`, which signs nothing |
+| `order_requests_per_10s` | `60` | the pot's own requests (orders, cancels, lookups, fills, its account, held tokens' marks and a write's market read) per sliding 10 s of wall time, each counted before it is sent; one past it is not sent. A resumed pot counts its whole allowance as sent at the resume, since the process that died may have sent it in its last 10 s. At most 200 (`/balance-allowance`'s published limit, the tightest endpoint these reach besides Gamma `/markets`), and with `orders` or `venue = "paper"`, `read_requests_per_10s + order_requests_per_10s` is at most 300, Gamma `/markets`'. On `paper` it bounds the paper pot's own reads: each placement's book, each tick's book of every token with a resting order, the tick's one market read, held tokens' marks and a write's market read |
 | `max_order_usd` | `"10"` | the most one order's notional (`price x size`) may be |
 | `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
 | `max_orders_per_window` | `20` | orders placed per reserve window |
@@ -2669,6 +2670,73 @@ The reads are the kernel's measurement and cost no seat anything. `scripts/fastl
 and `scripts/edition4_rehearsal.py` when it is handed a simulated clock, answer a
 live-read world's reads from the simulated venue (`simulate_reads`), which then moves and
 resolves on the world's clock; such a run takes no IP lock.
+
+### Paper orders
+
+`venue = "paper"` trades a simulated pot against Polymarket's real markets and real books,
+with no money on any network (`world/polymarket_paper.py`, `PaperPolymarket`). It is a
+world choice, as a venue is (AGENTS.md: a venue is the world, not architecture), made
+because Polymarket runs no test network: "All Polymarket contracts are deployed on
+**Polygon mainnet** (Chain ID: 137)" (https://docs.polymarket.com/resources/contracts,
+read 2026-10-03); its documentation names no testnet, staging host or Amoy (chain 80002)
+deployment (https://docs.polymarket.com/llms.txt, read 2026-10-03); its one CLOB host,
+`clob.polymarket.com`, lists mainnet markets, and no `clob-staging`, `amoy.clob` or
+`gamma-api-staging` host resolves (read 2026-10-03). The CLOB clients' Amoy configuration
+(`@polymarket/clob-client-v2` 1.0.6, `config.ts`) names the mainnet V2 exchange addresses
+for chain 80002, so an Amoy order would sign against contracts and books no Amoy market
+trades on.
+
+What is real and what is simulated:
+
+* **Reads are live.** The seats' three reads and the kernel's settlement reads are
+  `PolymarketReader`'s, exactly as on `venue = "live"`: the same budgets and shares, the
+  same wall-clock stamps and journal, and the same admission (`arm`: a ledger, the wall
+  clock and the host's IP lock). The forecast predicates settle on the live markets.
+* **The pot is simulated.** It opens with `collateral_usd` of simulated USDC, kept as
+  integer micro-USD, and moves only by a fill's `price x size`. It is a custody pot like
+  the others (`world.pots`, `custody_view`), and its money is never a venue's: no
+  Hyperliquid account, reserve or provider is debited or credited by it.
+* **The pot's own reads are live and budgeted.** A write's market read, the book read at
+  each placement, the books read each tick for resting orders, the tick's one market read
+  and the held tokens' marks are public GETs (`PaperReads`) counted by
+  `order_requests_per_10s` in any sliding 10 s of wall time, never a seat's share or the
+  settlement reserve; one past it is not sent, and what waited on it waits (an unread
+  book fills nothing that tick; an unread mark is `polymarket.mark_unavailable`). A
+  resumed pot counts its whole allowance as sent at the resume.
+* **Order physics are the live venue's.** BUY orders only, GTC and post-only, the
+  market's own tick and minimum size, `amount_refusal`'s exact amounts. A placement reads
+  the token's book; a buy at or above its best ask is the venue's rejection (`invalid
+  post-only order: order crosses book`), as is a closed market, a market not accepting
+  orders, an unread book or a buy the pot's available USDC cannot hold. A rejection is an
+  order that never existed (`venue_refused`), so it uses no `principal_usd`.
+* **Fills.** Each tick (`advance`) the book of every token with a resting order is read
+  once, at depth 1. While its best ask is at or below a resting buy's price, that buy
+  fills at its own price, as a maker, with no fee (makers pay none: trading/fees), for at
+  most the ask's size less what the pot's other buys on the token took at the same read
+  (higher prices first, then earlier orders), quantized down to the token's two size
+  decimals. What remains rests.
+* **Closing and resolution.** One market the pot rests or holds unresolved tokens in is
+  read a tick, in turn (`write_market`). A closed market cancels its resting orders
+  (`polymarket.cancelled`). A market with a payout (`polymarket.payout`: closed, UMA
+  `resolved` when stated, outcome prices a redemption) resolves every token the pot holds
+  in it: the tokens stay in the pot, resolved and worth their payout, as on the live
+  venue, and the runtime books the resolution as it books the simulated venue's.
+* **Replay.** The pot's reads are journaled as an outside service (a replay returns what
+  the run read); the pot itself is journaled as deterministic and re-run on those answers;
+  its whole state is in every checkpoint (`PaperPolymarket.pot_state`). A resumed world
+  reaches the state the run reached, without reading again.
+* **Offline.** `scripts/fastloop.py`, the Class 2 corpus and `scripts/edition4_rehearsal.py`
+  on a simulated clock answer a paper world's reads and hold its pot on the seeded
+  simulated venue (`simulate_reads`), opened with `collateral_usd`.
+
+What the simulation cannot see, as fact: a paper order is never in Polymarket's book, so
+it moves no price, holds no queue position and meets no counterparty. A fill is inferred
+from the best ask at the instant of a read: a price that reaches a resting order and
+leaves between two reads fills nothing, an ask still standing at the next read is counted
+again, and liquidity below the best ask level is not read. Resolution is read one market
+a tick, so a resolution reaches the pot up to as many ticks late as the markets it
+watches. These are published as `polymarket_orders.rules.paper` in `world.read`, beside
+`paper_orders` (true on a paper world) and `collateral_micro`.
 
 ### Live orders
 

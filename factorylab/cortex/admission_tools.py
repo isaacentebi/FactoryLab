@@ -327,6 +327,9 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
             "max_orders_per_window": manifest.polymarket.max_orders_per_window,
             "principal_micro": manifest.polymarket.principal_micro,
             "live_orders": manifest.polymarket.venue == "live" and manifest.polymarket.orders,
+            "paper_orders": manifest.polymarket.venue == "paper",
+            # The simulated pot's opening USDC (the paper pot's, or the simulated venue's).
+            "collateral_micro": manifest.polymarket.collateral_micro,
             "order_requests_per_10s": manifest.polymarket.order_requests_per_10s,
             "rules": {
                 "principal": "When principal_micro is set, a buy is refused when the world's "
@@ -372,6 +375,22 @@ def tool_admission_schematics(manifest: Any) -> dict[str, Any]:
                 "unavailable. A placement's submission slot is taken before its intent and"
                 " signature: a placement the budget cannot send is refused there, signs "
                 "nothing and commits nothing.",
+                "paper": "With paper_orders, an order is simulated against Polymarket's live CLOB "
+                "books and is never sent to Polymarket; the pot holds simulated USDC, opening"
+                " at collateral_micro. When it is placed, the token's book is read: a buy at or"
+                " above its best ask is rejected. Each tick, the book of each token with a "
+                "resting order is read once: while its best ask is at or below a resting "
+                "buy's price, the buy fills at its own price, as a maker with no fee, for at "
+                "most that ask's size less what this pot's other buys on the token took at "
+                "the same read (higher prices first, then earlier orders), in whole "
+                "hundredths of a token. One market the pot rests or holds unresolved tokens "
+                "in is read a tick, in turn: closed, its resting orders are cancelled; "
+                "resolved, its tokens stay in the pot at their payout. A simulated order is "
+                "not in Polymarket's book: it moves no price, has no queue position, a price "
+                "that reaches it between two reads fills nothing, and an ask still standing "
+                "at the next read is counted again. These reads and the marks are the pot's "
+                "own requests, at most order_requests_per_10s in any sliding 10 s of wall "
+                "time; one past it is not sent and reads as unavailable.",
                 "arguments": "Schema, string length and token pattern checks precede dispatch. "
                 "Size and price are finite decimals, not booleans; size is positive "
                 "and price is strictly between zero and one.",
