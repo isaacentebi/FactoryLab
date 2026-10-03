@@ -75,7 +75,8 @@ NEG_RISK_WRAPPED_COLLATERAL = "0x3A3BD7bb9528E159577F7C2e685CC81A765002E2"
 OUTCOMES = 2
 #: The requests one reader sends in any sliding 10 s of wall time, each counted before it
 #: is sent; one past it is not sent and the read is unread. The endpoint publishes no
-#: limit; one tick's reads are at most 15 (two reconciliations' 4 each, a resolution's 7).
+#: limit; a tick's reads are two reconciliations' 4 each, a resolution check's 7, and 4
+#: for each resolved token whose payout is being paid.
 CHAIN_REQUESTS_PER_10S = 30
 
 _HEX = re.compile(r"0x(?:[0-9a-fA-F]{2})*")
@@ -110,10 +111,17 @@ def rpc_url(url: str) -> str:
     """An endpoint the reader may send to: https, a host, no credentials, no fragment.
 
     Guarantees a refusal never repeats the URL (a keyed URL is a secret)."""
-    parsed = urlsplit(url) if isinstance(url, str) else None
+    try:
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        # A host or port that does not parse raises with its own text, a secret's
+        # perhaps (Sol P1, round 1 of #180): only the fixed refusal below travels.
+        _ = parsed and (parsed.hostname, parsed.port)
+    except ValueError:
+        parsed = None
     if (parsed is None or parsed.scheme != "https" or not parsed.hostname
             or parsed.username or parsed.password or parsed.fragment):
-        raise ValueError(f"{RPC_ENV} must be an https URL with no credentials or fragment")
+        raise ValueError(f"{RPC_ENV} must be an https URL with no credentials or "
+                         "fragment") from None
     return url
 
 

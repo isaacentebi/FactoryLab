@@ -273,6 +273,45 @@ def test_a_live_pot_cannot_be_built_without_its_chain():
         clob.LivePolymarket(funder="0x" + "ab" * 20, signature_type=0, budget=10, chain=None)
 
 
+def test_an_unread_payout_check_holds_buying_while_balances_still_answer():
+    """Sol P0, round 1: an endpoint answering balance reads but failing payout reads left
+    buying on while the payout check it owed went unread."""
+    rt, server = resolved_world()
+    real = server._eth_call
+    payout = keccak(text="payoutDenominator(bytes32)")[:4]
+
+    def payouts_down(to, data):
+        if data[:4] == payout:
+            raise clob.PolymarketUnavailable("transport: TimeoutError")
+        return real(to, data)
+
+    server._eth_call = payouts_down
+    polymarket.tick(rt)
+    assert not items(rt, "polymarket.resolution") and rt.polymarket.drifting
+    assert not drifts(rt) and items(rt, "polymarket.chain_unavailable")
+    refused = buy(rt, server, collateral_decision(rt), market="fake-2", price="0.20")
+    assert refused["error"] == polymarket.DRIFT_REFUSAL
+    server._eth_call = real
+    polymarket.tick(rt)
+    assert [row["payout"] for row in items(rt, "polymarket.resolution")] == ["1"]
+
+
+def test_a_resolution_pays_only_what_polygon_holds():
+    """Sol P0, round 1: the payout was proven on chain but paid on the books' quantity,
+    which only the APIs stated; the APIs and books say 10 tokens, the chain holds 7."""
+    rt, server = resolved_world()
+    server.chain_tokens[token(server)] = Decimal(7)
+    polymarket.tick(rt)
+    polymarket.tick(rt)
+    assert not items(rt, "polymarket.resolution")
+    assert token(server) in rt.polymarket.cursor["resolved"]  # proven, not yet paid
+    assert rt.polymarket.drifting
+    del server.chain_tokens[token(server)]
+    polymarket.tick(rt)
+    assert [(row["payout"], row["size"]) for row in items(rt, "polymarket.resolution")] == [
+        ("1", "10")]
+
+
 def test_the_installed_live_venue_reads_polygon(monkeypatch):
     monkeypatch.delenv(polygon_ctf.RPC_ENV, raising=False)
     spec = replace(load_manifest("scripted").polymarket, **vars(PolymarketSpec(

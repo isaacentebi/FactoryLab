@@ -2866,18 +2866,23 @@ The order path, as the Hyperliquid one (`VenueMixin._venue_write`):
     `polymarket.chain_unavailable` ("the pot was not read on Polygon") and buying
     waits. The pot's own requests to the endpoint are at most
     `CHAIN_REQUESTS_PER_10S` (30) in any sliding 10 s of wall time, each counted
-    before it is sent (the endpoint publishes no limit; one tick sends at most 15: two
-    reconciliations' 4 each and one resolution's 7); one
+    before it is sent (the endpoint publishes no limit; a tick sends two
+    reconciliations' 4 each, one resolution check's 7, and 4 for each resolved token
+    whose payout is being paid); one
     past it is not sent and the read is unread.
   * *Resolutions.* A payout Gamma states is paid only once the chain states the same
     one: the token is first proven, on chain, to be the position of the market's
     condition at its outcome index for the market's collateral (the proof binds the
     token to that condition, index and kind forever), and the condition's payout
     vector binds at its first report. A condition not yet reported waits (nothing is
-    paid, nothing halts); a chain that did not answer leaves the read unread; a token
-    the condition does not issue, a condition other than the one bound, or a payout
-    other than `numerator / denominator` exactly halts buying for the world's life and
-    pays nothing.
+    paid, nothing halts); a chain that did not answer leaves the read unread, and buying
+    waits until a later poll reads it; a token the condition does not issue, a condition
+    other than the one bound, or a payout other than `numerator / denominator` exactly
+    halts buying for the world's life and pays nothing. What is paid is only what the
+    chain holds: the payout of the tokens the books hold waits until the chain holds, of
+    that token, what the pot opened with, what it keeps resolved and unredeemed, and
+    the books' quantity (a token the operator redeemed before a late fill of it was
+    booked leaves that fill unpaid).
   * *Endpoint.* `POLYGON_RPC_URL` (environment, or `.env` in the run directory) names
     the endpoint, an https URL with no credentials in its authority; unset, it is
     `https://polygon-bor-rpc.publicnode.com` (`polygon-rpc.com`, the endpoint Polygon

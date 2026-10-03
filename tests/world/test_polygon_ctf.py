@@ -211,6 +211,14 @@ def test_an_endpoint_that_is_not_plain_https_is_refused(url):
     assert "pw" not in str(raised.value)
 
 
+@pytest.mark.parametrize("url", ["https://[SECRET_RPC_KEY]/", "https://host:SECRET_RPC_KEY/"])
+def test_an_endpoint_that_does_not_parse_is_refused_without_repeating_it(url):
+    """Sol P1, round 1: ``urlsplit`` raised with the URL's own text."""
+    with pytest.raises(ValueError) as raised:
+        ctf.PolygonCtf(rpc=url)
+    assert "SECRET" not in str(raised.value) and raised.value.__cause__ is None
+
+
 def test_the_operator_s_endpoint_is_read_from_the_environment(monkeypatch):
     monkeypatch.setenv(ctf.RPC_ENV, "https://polygon.test/rpc")
     assert ctf.PolygonCtf.from_environment()._rpc == "https://polygon.test/rpc"

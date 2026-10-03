@@ -860,7 +860,8 @@ class LivePolymarket(PolymarketReader):
     def poll(self, *, now_ns: int, cursor: dict[str, Any],
              orders: dict[str, dict[str, str]], own: Any = None) -> dict[str, Any]:
         """The pot's fills and resolutions since ``cursor``: ``{events, cursor,
-        contradictions, malformed, complete}`` (``malformed``: why a read was unread).
+        contradictions, malformed, complete, chain_unread}`` (``malformed``: why a read
+        was unread; ``chain_unread``: a check Polygon owed was not read).
 
         Guarantees each fill of one of ``orders`` (this world's orders, as their intents
         name them) is reported exactly once, when its trade is CONFIRMED, in the shape
@@ -896,6 +897,9 @@ class LivePolymarket(PolymarketReader):
         # durable intents, uncertain ones included; Sol P1, rounds 8 and 9), never only
         # the orders it settles, and trades are read while any of them may still fill.
         own = dict(own or {})
+        from factorylab.world.polygon_ctf import ChainUnread
+
+        chain_unread = False
         for step in (lambda trial: self._fills(trial, orders, contradictions, own),
                      lambda trial: self._resolutions(trial, orders, now_ns, contradictions)):
             # Each step works on a copy and commits only whole: a read that failed half
@@ -909,12 +913,16 @@ class LivePolymarket(PolymarketReader):
                 complete = False
                 if isinstance(exc, wire.Malformed):
                     malformed.append(str(exc))
+                # A check Polygon did not answer is owed: buying waits on it (Sol P0,
+                # round 1 of #180), not only the payout.
+                chain_unread = chain_unread or isinstance(exc, ChainUnread)
                 continue
             state = trial
             events.extend(found)
         # A read that stopped at the page bound resumes where it stopped (``page``).
         return {"events": events, "cursor": state, "contradictions": contradictions,
-                "malformed": malformed, "complete": complete and "page" not in state}
+                "malformed": malformed, "complete": complete and "page" not in state,
+                "chain_unread": chain_unread}
 
     def _fills(self, state: dict[str, Any], orders: dict[str, dict[str, str]],
                contradictions: dict[str, str], own: dict[str, dict]) -> list[dict]:
@@ -1092,17 +1100,6 @@ class LivePolymarket(PolymarketReader):
         events: list[dict[str, Any]] = []
         facts = state.setdefault("resolution_facts", {})
 
-        # Inventory a trade confirmed after its market resolved (Astra P0 on #177): it is
-        # paid its token's payout once, when it is booked, never lost.
-        for token, paid in sorted(state["resolved"].items()):
-            size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-            if size > 0 and token in facts:
-                state["book"][token] = ["0", str(avg)]
-                _redeemable(state, token, size)
-                events.append({**facts[token], "kind": "resolution", "token_id": token,
-                               "payout": str(paid), "size": str(size),
-                               "realized_usd": str((_dec(paid) - avg) * size),
-                               "ts_ns": now_ns})
         if candidates:
             # One market read a poll, in turn: what the pot holds or has resting.
             token = candidates[state["turn"] % len(candidates)]
@@ -1135,14 +1132,20 @@ class LivePolymarket(PolymarketReader):
                                 "condition_id": market.get("condition_id"),
                                 "outcome_index": outcome["outcome_index"],
                                 "outcome_name": outcome["outcome"]}
-                size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
-                if size > 0:
-                    state["book"][token] = ["0", str(avg)]
-                    _redeemable(state, token, size)
-                    events.append({
-                        **facts[token], "kind": "resolution", "token_id": token,
-                        "payout": str(paid), "size": str(size),
-                        "realized_usd": str((paid - avg) * size), "ts_ns": now_ns})
+        # What the books hold of a resolved token is paid its payout once: at its
+        # resolution, or when a trade confirmed after it is booked (Astra P0 on #177),
+        # never lost. Only what Polygon holds is paid (Sol P0, round 1 of #180): the
+        # chain must hold, beyond what the pot opened with and what it keeps resolved
+        # and unredeemed, the whole quantity paid, or it waits for a later poll.
+        for token, paid in sorted(state["resolved"].items()):
+            size, avg = (_dec(v) for v in state["book"].get(token, ("0", "0")))
+            if size > 0 and token in facts and self._chain_holds(state, token, size):
+                state["book"][token] = ["0", str(avg)]
+                _redeemable(state, token, size)
+                events.append({**facts[token], "kind": "resolution", "token_id": token,
+                               "payout": str(paid), "size": str(size),
+                               "realized_usd": str((_dec(paid) - avg) * size),
+                               "ts_ns": now_ns})
         # A resolution cancels what rests on the market (CANCELED_MARKET_RESOLVED): each
         # of this world's orders on a resolved token is read back, two a poll, until the
         # venue says it is terminal AND every quantity it matched is booked from a
@@ -1178,6 +1181,16 @@ class LivePolymarket(PolymarketReader):
             if complete:
                 state["terminal"].append(order_id)
         return events
+
+    def _chain_holds(self, state: dict[str, Any], token: str, size: Decimal) -> bool:
+        """Whether Polygon holds, of ``token``, what the pot opened with, what it keeps
+        resolved and unredeemed, and ``size`` more, at its finalized head (Sol P0, round
+        1 of #180: a resolution paid the books' quantity, which only the APIs stated).
+        Raises when the chain was not read."""
+        opened = ((state.get("bound") or {}).get("opening") or {}).get("tokens") or {}
+        kept = _dec(state.get("redeemable", {}).get(token, "0"))
+        units = int(self.chain.account(self.funder, [token])["tokens"][token])
+        return Decimal(units) / UNIT >= _dec(opened.get(token, "0")) + kept + size
 
     def _chain_payout(self, bound: dict, token: str, market: dict[str, Any], index: int,
                       paid: Decimal) -> tuple[bool, str | None]:

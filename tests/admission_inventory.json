@@ -24954,7 +24954,7 @@
         "rules",
         "live"
       ],
-      "value": "With live_orders, an order is signed by the pot's wallet and sent to Polymarket's CLOB; the pot's collateral is pUSD, Polymarket's USDC-backed token. Its identity is its EIP-712 order hash, recorded with the intent before it is sent, and a lost answer is looked up by that hash and never sent again. A fill is booked once, when Polymarket reports its trade CONFIRMED. No order is taken before the pot's opening (its reconciliation baseline) is read, and no fill is booked before it. A cancelled or otherwise terminal order holds only what it matched and is not yet booked. A buy's exposure and collateral also count, from the world's own records, every buy not yet booked from a confirmed trade and its booked inventory at cost; the positions listing is read to its end or the pot is unavailable; no buy is taken while the pot's last reconciliation found money, gone or arrived, that its books do not explain. Each reconciliation also reads the pot's pUSD and outcome-token balances from Polygon at its finalized head; no buy is taken while that read failed or differs from the pot's listing. A resolution is paid only once Polygon's Conditional Tokens contract reports the same payout, on a token it shows the market's condition issues; a payout, token or condition the chain contradicts is not paid, and buying stops for the world's life. The pot's own requests (orders, cancels, lookups, fills, account, marks and a write's market read) are at most order_requests_per_10s in any sliding 10 s of wall time; one past it is not sent and reads as unavailable. A placement's submission slot is taken before its intent and signature: a placement the budget cannot send is refused there, signs nothing and commits nothing.",
+      "value": "With live_orders, an order is signed by the pot's wallet and sent to Polymarket's CLOB; the pot's collateral is pUSD, Polymarket's USDC-backed token. Its identity is its EIP-712 order hash, recorded with the intent before it is sent, and a lost answer is looked up by that hash and never sent again. A fill is booked once, when Polymarket reports its trade CONFIRMED. No order is taken before the pot's opening (its reconciliation baseline) is read, and no fill is booked before it. A cancelled or otherwise terminal order holds only what it matched and is not yet booked. A buy's exposure and collateral also count, from the world's own records, every buy not yet booked from a confirmed trade and its booked inventory at cost; the positions listing is read to its end or the pot is unavailable; no buy is taken while the pot's last reconciliation found money, gone or arrived, that its books do not explain. Each reconciliation also reads the pot's pUSD and outcome-token balances from Polygon at its finalized head; no buy is taken while a Polygon read the pot owes failed or differs from the pot's listing. A resolution is paid only once Polygon's Conditional Tokens contract reports the same payout, on a token it shows the market's condition issues, and only on what the chain holds of that token beyond what the pot opened with and keeps resolved and unredeemed; a payout, token or condition the chain contradicts is not paid, and buying stops for the world's life. The pot's own requests (orders, cancels, lookups, fills, account, marks and a write's market read) are at most order_requests_per_10s in any sliding 10 s of wall time; one past it is not sent and reads as unavailable. A placement's submission slot is taken before its intent and signature: a placement the budget cannot send is refused there, signs nothing and commits nothing.",
       "enforced": [
         207
       ],
@@ -26671,7 +26671,7 @@
     },
     {
       "rule": "polymarket_orders.live",
-      "enforced": "factorylab/world/polymarket_clob.py:646 (LivePolymarket.place); factorylab/runtime/polymarket.py:2042 (_on_chain); factorylab/world/polymarket_clob.py:1182 (LivePolymarket._chain_payout)",
+      "enforced": "factorylab/world/polymarket_clob.py:646 (LivePolymarket.place); factorylab/runtime/polymarket.py:2054 (_on_chain); factorylab/world/polymarket_clob.py:1195 (LivePolymarket._chain_payout)",
       "published": "factorylab/cortex/admission_tools.py:356 (tool_admission_schematics)",
       "missing_before": true,
       "published_before": "MISSING",
@@ -26721,7 +26721,7 @@
     "factorylab/runtime/compute.py": "05fcdedc626509d8d41eb988a1d9220f366d96293f78aab93118145faf0d7443",
     "factorylab/runtime/governance.py": "e3110f16031b349d54372e204ee489154fbff19dae191767ff7eddc643078e71",
     "factorylab/runtime/observations.py": "263e8365c4dfb5a5652b0bbe38618496a6c6a12893ed677afd9e43afc521a41a",
-    "factorylab/runtime/polymarket.py": "1005ec5ac2ee3e26c5f7821a303083903166772b3d8e148047684728f0948525",
+    "factorylab/runtime/polymarket.py": "0badec3235c3ee2eaf3dbea8691b534323cc8a14ff26e2bde9b0b8eda564f940",
     "factorylab/runtime/propensity.py": "139dafef269a43b83e6b8d9c7da9181711c6ff3976d61bb69348a693e3c2a07b",
     "factorylab/runtime/routing.py": "52e0cd7a0c98e9fa3e9da5582ba180c4bac4addd641ccedfce14c0dc496abdca",
     "factorylab/runtime/subscriptions.py": "2c096e82698cc03a7f5d7af70942b522b29a00c26611bb2830a0078456d93a6c",
@@ -26732,7 +26732,7 @@
     "factorylab/world/connector.py": "226ee503dcae74737ca857082d5341972e7397281ed2730a754483a6247999a8",
     "factorylab/world/evm.py": "2ba9bba6877e3bd40d7cf487f7feda5526ec6c565b54c3b284b64fbfa8b10360",
     "factorylab/world/exchange.py": "9a835cc008b5f33e9c1d8f0b63be8902a1eef1b0d3ee9e34a0805df4a3c8df2b",
-    "factorylab/world/polymarket_clob.py": "2d2df1a54b13c18cd07bf19c20f10fd0573ec24290d0b26987e0b09e8d20fa2a",
+    "factorylab/world/polymarket_clob.py": "6a9fe262ab32522837a3d351d6a905769b24cfba7a4798b84b81741b03f904ce",
     "factorylab/world/tape.py": "4f311b900b9d2e74b29a87e7b33763b22ddf740e118f8307f267e8b90576e81e",
     "factorylab/world/treasury.py": "a44b2c96af9017f4ef08fc30e357246b6d2d86de0d2b9073e14a7afa14e35ae0",
     "factorylab/world/treasury_rails.py": "c40ccf679b339fbffa58d3050c95cf30c3419f9a286e34e375b9f11b76dead43",

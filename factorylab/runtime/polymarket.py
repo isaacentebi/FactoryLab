@@ -231,6 +231,9 @@ class PolymarketSurface:
         # A trade that contradicted the maker-only venue (a taker leg, a fee):
         # buying stops for the world's life.
         self.contradicted = False
+        # Whether the tick's poll owed a check Polygon did not answer (transient: each
+        # tick's poll sets it before the reconciliation that reads it; issue #180).
+        self.chain_owed = False
         # reason -> the tick a malformed read was last ledgered (transient).
         self.malformed_ledgered: dict[str, int] = {}
         # The tick's account read, keyed by ``_tick_key`` (transient, never checkpointed).
@@ -1606,6 +1609,12 @@ def tick(rt: Any) -> None:
         else:
             _halt_on_contradiction(rt, surface, answer.get("contradictions") or {})
             _ledger_malformed(rt, surface, answer.get("malformed") or [])
+            # A resolution check Polygon did not answer holds buying until one does
+            # (Sol P0, round 1 of #180): the reconciliation below reads this.
+            surface.chain_owed = bool(answer.get("chain_unread"))
+            if surface.chain_owed:
+                rt.ledger.append({"kind": "polymarket.chain_unavailable",
+                                  "reason": CHAIN_UNREAD, "ts": rt.clock.now_ns})
             surface.cursor = answer["cursor"]
             settle(rt, answer["events"])
             if answer.get("complete"):
@@ -2031,12 +2040,15 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     # are wrong). No allowance is made (Sol P1: a blanket one hid real losses); a drift
     # is never booked as a fee (Codex P1). A pot the chain did not confirm is not
     # reconciled either (issue #180): new risk waits on it, fail closed.
-    surface.drifting = unexplained or unread
+    surface.drifting = unexplained or unread or surface.chain_owed
     return result
 
 
 #: Six-decimal units of pUSD and of outcome tokens.
 UNITS = Decimal(1_000_000)
+#: Why a ``polymarket.chain_unavailable`` row is written, whatever failed: a replay
+#: reconstructs a recorded failure under another type, and the row must be the run's.
+CHAIN_UNREAD = "the pot was not read on Polygon"
 
 
 def _on_chain(rt: Any, surface: PolymarketSurface, account: dict,
@@ -2065,10 +2077,8 @@ def _on_chain(rt: Any, surface: PolymarketSurface, account: dict,
         if set(held) != set(tokens):
             raise ValueError("the chain did not answer the tokens asked")
     except Exception:  # noqa: BLE001 - an unread chain confirms nothing
-        # One reason whatever failed: a replay reconstructs a recorded failure under
-        # another type, and the row must be the one the run wrote.
         rt.ledger.append({"kind": "polymarket.chain_unavailable",
-                          "reason": "the pot was not read on Polygon", "ts": rt.clock.now_ns})
+                          "reason": CHAIN_UNREAD, "ts": rt.clock.now_ns})
         return False
     differs = sorted(t for t in tokens if listed.get(t, Decimal(0)) != held[t])
     if usdc != Decimal(str(account["usdc"])) or differs:

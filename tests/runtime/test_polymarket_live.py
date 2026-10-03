@@ -1547,6 +1547,9 @@ def test_a_resolution_attributes_only_what_the_decision_s_lots_realised(monkeypa
     monkeypatch.setattr(rt.consequences, "observe", observe)
     assert rt.polymarket.filled[order_id] == "10"
     before = rt.venue_deltas.get(handle, {}).get("polymarket", 0)
+    # Polygon holds the ten tokens the two trades moved: a resolution pays only what the
+    # chain holds (Sol P0, round 1 of #180).
+    server.chain_tokens[token(server)] = Decimal(10)
     rt.clock.now_ns = 10**15
     server.advance(10**15)
     for _ in range(3):
